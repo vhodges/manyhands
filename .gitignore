@@ -11,3 +11,6 @@ devenv.local.yaml
 
 # Rust
 /target/
+
+# Git worktrees
+.worktrees/
