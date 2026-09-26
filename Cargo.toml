@@ -2,6 +2,8 @@
 name = "manyhands"
 version = "0.1.0"
 edition = "2024"
+authors = ["Vince Hodges <vhodges@gmail.com>"]
+license = "MIT"
 
 [dependencies]
 gpui-kit = "0.6"
