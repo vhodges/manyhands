@@ -3,12 +3,35 @@
 {
   # https://devenv.sh/basics/
   env.GREET = "devenv";
+  env.LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
+    wayland
+    vulkan-loader
+    libxcb
+    libxkbcommon
+    atk
+    fontconfig
+    glib
+    gtk3
+  ]);
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.git ];
+  packages = with pkgs; [
+    git
+    pkg-config
+    clang
+    wayland
+    vulkan-headers
+    vulkan-loader
+    libxcb
+    libxkbcommon
+    atk
+    fontconfig
+    glib
+    gtk3
+  ];
 
   # https://devenv.sh/languages/
-  # languages.rust.enable = true;
+  languages.rust.enable = true;
 
   # https://devenv.sh/processes/
   # processes.dev.exec = "${lib.getExe pkgs.watchexec} -n -- ls -la";
