@@ -1,0 +1,93 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            os: linux
+            executable-suffix: ""
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            os: linux
+            executable-suffix: ""
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            os: windows
+            executable-suffix: .exe
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            os: windows
+            executable-suffix: .exe
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            os: macos
+            executable-suffix: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libasound2-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binaries
+        run: cargo build --locked --release --all-features --bins --target ${{ matrix.target }}
+
+      - name: Verify release binaries
+        shell: pwsh
+        run: |
+          $files = @(
+            "target/${{ matrix.target }}/release/manyhands${{ matrix.executable-suffix }}"
+            "target/${{ matrix.target }}/release/manyhands-cli${{ matrix.executable-suffix }}"
+          )
+          $missing = $files | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+          if ($missing) {
+            throw "Missing release binaries: $($missing -join ', ')"
+          }
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: manyhands-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/manyhands${{ matrix.executable-suffix }}
+            target/${{ matrix.target }}/release/manyhands-cli${{ matrix.executable-suffix }}
+          if-no-files-found: error
+          retention-days: 14
