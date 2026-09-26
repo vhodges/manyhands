@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Vince Hodges <vhodges@gmail.com>"]
 license = "MIT"
+autobins = false
+
+[features]
+default = []
+desktop = ["dep:gpui-kit"]
 
 [dependencies]
-gpui-kit = "0.6"
+gpui-kit = { version = "0.6", optional = true }
+
+[[bin]]
+name = "manyhands"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "manyhands-cli"
+path = "src/bin/manyhands-cli.rs"

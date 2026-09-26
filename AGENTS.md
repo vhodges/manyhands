@@ -2,8 +2,14 @@
 
 ## Structure
 
-- This is one root Cargo binary, not a workspace. The desktop entry point is `src/main.rs`.
-- Depend on `gpui-kit` only. It supplies the compatible GPUI API through `gpui_kit::*`; do not add a separate direct `gpui` dependency.
+- This is one root Cargo package, not a workspace. It declares two binaries:
+  `manyhands` is the desktop entry point in `src/main.rs` and requires the
+  `desktop` feature; `manyhands-cli` is the headless entry point in
+  `src/bin/manyhands-cli.rs`.
+- Put domain logic shared by both front ends in `src/lib.rs`. It must not
+  depend on GPUI or GPUI Kit; those dependencies belong only to the desktop
+  binary and desktop-only modules.
+- Desktop code depends directly on `gpui-kit` only. It supplies the compatible GPUI API through `gpui_kit::*`; a separate direct `gpui` dependency is forbidden.
 - Initialize GPUI Kit with `gpui_kit::init(cx)` inside `app.run` before using components, and make `Root` the first view created for each window.
 
 ## Development
@@ -11,12 +17,13 @@
 - Run all Rust commands through Devenv: `devenv shell -- cargo <command>`.
 - Before submitting Rust changes, run:
   ```sh
-  devenv shell -- cargo check --locked
+  devenv shell -- cargo check --all-features --locked
   devenv shell -- cargo fmt --check
-  devenv shell -- cargo clippy --all-targets --locked -- -D warnings
-  devenv shell -- cargo test --locked
+  devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+  devenv shell -- cargo test --all-features --locked
   ```
-- Smoke-test the native window with `devenv shell -- cargo run --locked`. It requires an active desktop display.
+- Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
+- Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 
 ## Linux Toolchain
 
