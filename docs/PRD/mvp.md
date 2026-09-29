@@ -1,8 +1,16 @@
+---
+title: "MVP/Dogfood PRD"
+date: 2026-09-29
+status: approved
+author: "Vince Hodges <vhodges@gmail.com> && Codex"
+manyhands_managed: true
+---
+
 # Manyhands Product Requirements Document
 
-**Status:** Draft for dogfooding
+**Status:** Aproved MVP/Dogfooding release
 
-**Version:** 0.1
+**Version:** 0.2
 
 **Owner:** The product owner maintains this document. Requirement IDs are stable once published; changes to intent or acceptance criteria require an updated version and changelog entry.
 
@@ -25,6 +33,7 @@ An enabled repository is a local Git repository that its user has opted into man
 - Boards, kanban views, scorecards, team rollups, or project rollups.
 - Templates, meta-repository propagation, multi-repository planning, or application-level authorization.
 - Replacing Git hosting, Git identity, or repository access controls.
+- Automatically uploading SSH keys to Git forges; this is deferred roadmap work.
 
 ## Target Users
 
@@ -34,7 +43,7 @@ An enabled repository is a local Git repository that its user has opted into man
 
 ## Scope
 
-The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; explicit synchronization; and explicit ticket closure that merges work and cleans up its isolated workspace.
+The dogfooding release supports enabled local repositories and trusted Git collaborators only. It includes repository onboarding; basic SSH key generation and management; managed-document and ticket creation, editing, and discovery; threaded comments on both item types; isolated branches and worktrees; an automatic checkpoint commit on save; synchronization initiated by deliberate user actions; and explicit ticket closure that merges work and cleans up its isolated workspace.
 
 ### MH-PROD-001: Git-Backed Local Collaboration
 
@@ -58,7 +67,7 @@ The dogfooding release supports enabled local repositories and trusted Git colla
 
 - A non-developer collaborator can create, discover, edit, and comment on managed documents and tickets through Manyhands without performing Git commands.
 - A user can save an item change and Manyhands creates an automatic checkpoint commit without requiring the user to compose a commit.
-- When a user explicitly requests synchronization, Manyhands reports whether the current item work was successfully published to its configured remote, was already current, or needs user recovery.
+- When a user deliberately requests synchronization directly or submits content through an RFC-defined synchronization-triggering action, Manyhands reports whether the current item work was successfully published to its configured remote, was already current, or needs user recovery.
 
 ### MH-SCOPE-001: Dogfooding Ticket Completion
 
@@ -76,7 +85,7 @@ The dogfooding release supports enabled local repositories and trusted Git colla
 
 Normative product requirements use stable identifiers in the form `MH-<AREA>-<NUMBER>`, for example `MH-PROD-001`. Each normative requirement states its priority, rationale, and observable acceptance criteria.
 
-This PRD defines product outcomes and user-observable behavior. RFCs own technical decisions, including repository opt-in configuration, managed-document recognition marker, schema, and path; Git command orchestration; merge strategy; synchronization protocol; data models; and interface implementation. RFCs may refine how a requirement is met but must not change its product intent, priority, or acceptance criteria without a corresponding PRD revision.
+This PRD defines product outcomes and user-observable behavior. RFCs own technical decisions, including repository opt-in configuration, managed-document recognition marker, schema, and path; Git command orchestration; merge strategy; synchronization protocol; data models; and interface implementation. For each content type, the synchronization RFC must identify which deliberate user actions, if any, trigger synchronization and the feedback shown before and after it. RFCs may refine how a requirement is met but must not change its product intent, priority, or acceptance criteria without a corresponding PRD revision.
 
 ## Repository Lifecycle
 
@@ -129,6 +138,26 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - A user can add a named remote to an enabled repository and can subsequently inspect it.
 - A user can remove a configured remote and it no longer appears in that repository's remote configuration.
 - A repository with no remotes remains enabled and usable locally.
+
+## SSH Credentials
+
+### MH-CRED-001: Manage SSH Keys for Git Operations
+
+**Priority:** Must
+
+**Rationale:** Users need Git-over-SSH access without requiring separate key-generation or key-configuration tooling, while retaining the ability to use their existing SSH identities.
+
+**Acceptance Criteria:**
+
+- A user can generate an SSH key for use with Manyhands and may protect the generated private key with an optional passphrase.
+- A user can add an existing SSH private key to Manyhands regardless of whether that key was generated by Manyhands or by another tool.
+- A user can list configured SSH keys using non-secret identifying information, such as a label or public-key fingerprint, and can remove a key from Manyhands.
+- Removing an externally supplied key from Manyhands does not delete its source key material. Removal and deletion behavior for a Manyhands-generated key remain RFC-owned and require explicit user confirmation before private key material is deleted.
+- A user can configure which SSH key Manyhands uses for Git operations of a repository or remote; default-selection and repository-to-remote mapping rules remain RFC-owned.
+- When the configured private key is protected by a passphrase, Manyhands prompts for that passphrase on its first use in an application session and retains it only for the remainder of that session. It does not persist the passphrase.
+- For every Git operation that authenticates over SSH, Manyhands uses the configured SSH key regardless of whether the key was generated by Manyhands or added from an existing source.
+- If a configured key is missing, inaccessible, invalid, rejected by a remote, or cannot be unlocked, Manyhands identifies the affected key, repository, remote, and operation; preserves local work; and provides an actionable recovery path.
+- Exact key algorithms, storage locations, key-generation mechanics, selection configuration, and secure deletion mechanics remain RFC-owned.
 
 ## Content
 
@@ -255,22 +284,25 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 **Acceptance Criteria:**
 
 - Creating a comment or reply invokes the applicable item-context provisioning, reuse, or selection lifecycle defined by MH-COLLAB-001 before Manyhands writes its Markdown representation and automatically creates an inspectable Git commit for that comment event, without requiring the user to create a Git commit.
+- After successfully checkpointing a newly created comment or reply, Manyhands synchronizes the comment's editing context as part of the same deliberate submit action under MH-COLLAB-004.
 - Exact comment storage layout and checkpoint commit mechanics remain RFC-owned.
 - Manyhands reports the checkpoint outcome and makes the comment or reply available when the item is reopened.
 - If checkpoint creation fails, Manyhands identifies the affected item, repository, and context; preserves the submitted discussion for recovery; and offers a retry or recovery action.
 
-### MH-COLLAB-004: Synchronize Only on Explicit Request
+### MH-COLLAB-004: Synchronize on Deliberate User Actions
 
 **Priority:** Must
 
-**Rationale:** Publishing shared work requires deliberate user consent while giving users a safe, understandable way to reconcile collaboration state.
+**Rationale:** Publishing shared work requires deliberate user consent while allowing content-specific workflows to publish at the point users intentionally submit collaboration work.
 
 **Acceptance Criteria:**
 
 - A user can deliberately initiate synchronization for an item or its editing context; Manyhands obtains relevant remote changes and, when safe, integrates those changes into the current item context and publishes current item work.
+- The synchronization RFC identifies the deliberate actions that trigger synchronization for each content type. A content action is not synchronization-triggering unless the RFC declares it as such and the interface communicates that outcome to the user.
+- Submitting a new comment or reply is a synchronization-triggering action: after its local checkpoint succeeds, Manyhands immediately synchronizes the comment's editing context and reports the combined outcome.
 - Manyhands reports whether synchronization published local work, found it already current, or requires recovery.
 - Authentication, remote availability, and conflict errors identify the affected item, repository, and context, provide actionable remediation, and do not discard local work.
-- Manyhands performs no implicit remote synchronization.
+- Manyhands performs no remote synchronization except in response to a direct synchronization request, an RFC-defined synchronization-triggering user action, or an explicitly confirmed ticket-close action.
 
 ### MH-COLLAB-005: Close Tickets Through a Confirmed Lifecycle
 
@@ -293,7 +325,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- Only a deliberate user-initiated synchronization action or an explicitly confirmed ticket-close action may obtain relevant remote changes, safely integrate them into the current item context, or publish current item work; synchronization never performs destructive branch or worktree cleanup.
+- Only a direct synchronization request, an RFC-defined synchronization-triggering user action, or an explicitly confirmed ticket-close action may obtain relevant remote changes, safely integrate them into the current item context, or publish current item work; synchronization never performs destructive branch or worktree cleanup.
 - Integration of a ticket into the configured primary branch and removal of its local or remote branch and worktree state occur only as part of an explicitly confirmed ticket-close action after its prerequisites succeed.
 - Long-running lifecycle work reports progress and outcome while keeping the interface responsive.
 - A user may cancel long-running lifecycle work only at a safe point; Manyhands reports whether cancellation completed or work must continue to a safe recovery state.
@@ -350,7 +382,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 - A desktop user can navigate enabled repositories and choose ticket and managed-document lists.
 - A desktop user can browse item folders and lists, open more than one item, and distinguish the open items and their editing contexts.
-- A desktop user can view and edit item content and metadata; create, view, and reply to comments; and invoke the save, synchronization, and ticket-close lifecycle actions permitted by the selected item.
+- A desktop user can manage SSH keys; view and edit item content and metadata; create, view, and reply to comments; and invoke the save, synchronization, and ticket-close lifecycle actions permitted by the selected item.
 - While work covered by `MH-COLLAB-001` through `MH-COLLAB-006` is in progress or needs recovery, the desktop interface provides progress, outcome, and actionable recovery feedback.
 - The interface does not require a specific dock layout, component library, or editor technology.
 
@@ -362,7 +394,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- The CLI supports the safe repository inspection and management, discovery and index refresh, content and comment lifecycle, and applicable save, synchronization, and close operations covered by the PRD.
+- The CLI supports the safe repository inspection and management, SSH key management, discovery and index refresh, content and comment lifecycle, and applicable save, synchronization, and close operations covered by the PRD.
 - Each CLI operation produces a human-readable result that identifies success, no-op, failure, or required recovery.
 - The CLI documents a machine-readable output mode and produces its documented format when that mode is requested.
 - An unsuccessful operation exits with a meaningful nonzero status, and a successful or documented no-op operation exits with status zero.
@@ -392,7 +424,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - The desktop application is supported on Windows, macOS, and Linux.
 - On Linux, the supported desktop application runs in a Wayland session.
 
-### MH-NFR-003: Protect Credentials and Secrets
+### MH-NFR-003: Protect Credentials, SSH Keys, and Secrets
 
 **Priority:** Must
 
@@ -400,7 +432,8 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- Manyhands does not persist credentials or secrets in its application data, indexes, managed Markdown, or Git metadata that it writes.
+- Manyhands does not persist passphrases, credentials, or private-key contents in its application data, indexes, managed Markdown, or Git metadata that it writes.
+- A private SSH key generated by Manyhands is stored only in an RFC-defined SSH key location protected by operating-system-appropriate owner-only access controls; its passphrase is never stored.
 - Manyhands does not include credentials or secrets in logs, progress messages, error reports, or machine-readable CLI output.
 
 ### MH-NFR-004: Keep Desktop Work Responsive
@@ -422,7 +455,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- A keyboard-only desktop user can navigate repositories and item lists, open and edit an item, save it, create and reply to a comment, invoke synchronization, and confirm or cancel ticket closure.
+- A keyboard-only desktop user can manage SSH keys, navigate repositories and item lists, open and edit an item, save it, create and reply to a comment, invoke synchronization, and confirm or cancel ticket closure.
 - Keyboard focus is visible for each interactive control in these workflows.
 
 ### MH-NFR-006: Make Lifecycle Actions Recoverable and Idempotent
@@ -478,11 +511,11 @@ This journey demonstrates `MH-COLLAB-004`, `MH-COLLAB-006`, `MH-NFR-006`, and `M
 
 ### Durable Threaded Discussion
 
-1. A user creates root comments and replies on an item, including more than one reply to the same root comment, and observes checkpoint outcomes.
+1. A user creates root comments and replies on an item, including more than one reply to the same root comment, and observes each local checkpoint and synchronization outcome.
 2. The repository index is rebuilt, the user changes worktree, and the item is reopened.
 3. The user observes every root comment in ascending creation order, every direct reply in ascending creation order beneath its parent, and the original parent-reply relationships.
 
-This journey demonstrates `MH-COMMENT-001`, `MH-COMMENT-002`, `MH-COLLAB-003`, and `MH-INDEX-001`.
+This journey demonstrates `MH-COMMENT-001`, `MH-COMMENT-002`, `MH-COLLAB-003`, `MH-COLLAB-004`, and `MH-INDEX-001`.
 
 ### Confirmed Close with Retryable Failure
 
@@ -501,7 +534,7 @@ Dogfooding success is demonstrated by completing the end-to-end acceptance journ
 - **Content schema, identifiers, paths, and managed marker:** Incompatible or unstable representations could make content undiscoverable or strand existing work. Accountable role: Technical Lead. Mitigation and decision record: canonical content schema RFC must define migration and compatibility decisions.
 - **Primary-branch discovery:** Incorrect primary-branch selection can show or integrate the wrong repository state. Accountable role: Technical Lead. Mitigation and decision record: Git workflow RFC must define discovery, ambiguity handling, and recovery.
 - **Git merge and conflict policy:** Unsafe automation can lose work or create unreviewable history. Accountable role: Technical Lead. Mitigation and decision record: Git workflow and conflict/recovery RFC must define the policy and user recovery experience.
-- **Git identity and remote authentication UX:** Missing identity or failed authentication can block checkpointing or publication and expose secrets if handled carelessly. Accountable role: Security Lead. Mitigation and decision record: authentication and credential-handling RFC must define prompts, delegation, and redaction.
+- **Git identity, SSH key, and remote authentication UX:** Missing identity, an unavailable or rejected configured key, or failed authentication can block checkpointing or publication and expose secrets if handled carelessly. Accountable role: Security Lead. Mitigation and decision record: authentication and credential-handling RFC must define key generation, import, selection, passphrase prompts and session retention, protected storage, removal, delegation, and redaction.
 - **External filesystem edits:** Out-of-band moves, deletes, or malformed edits can invalidate discovery and editing assumptions. Accountable role: Technical Lead. Mitigation and decision record: repository/index persistence and refresh RFC must define detection and recovery behavior.
 - **Interrupted worktree or cleanup:** Process interruption can leave branches, worktrees, or partial close state behind. Accountable role: Technical Lead. Mitigation and decision record: Git workflow and conflict/recovery RFC must define reconciliation and retry behavior.
 - **Index consistency, polling, and scale:** Refreshes can become stale, expensive, or misleading across large repositories and many worktrees. Accountable role: Technical Lead. Mitigation and decision record: repository/index persistence and refresh RFC must define consistency, polling, and scale strategy.
@@ -516,7 +549,7 @@ The following RFCs must resolve product-level dependencies before their correspo
 - **Canonical content and comment schema RFC:** Defines managed markers, identifiers, paths, front matter, comment representation, and compatibility.
 - **Git workflow and conflict/recovery RFC:** Defines branch and worktree lifecycle, primary-branch discovery, merge policy, synchronization orchestration, and interruption recovery.
 - **Repository/index persistence and refresh RFC:** Defines application-local state, rebuild and refresh mechanisms, external-change detection, polling, and scale behavior.
-- **Authentication and credential-handling RFC:** Defines Git identity, remote authentication interaction, credential delegation, and secret redaction.
+- **Authentication and credential-handling RFC:** Defines Git identity; SSH key generation, import, protected storage, selection, removal, and deletion; passphrase prompting and session-only retention; remote authentication interaction; credential delegation; and secret redaction. Automated SSH key upload to Git forges is explicitly deferred.
 - **Desktop information architecture and editor RFC:** Defines navigation, multi-item interaction, feedback presentation, accessibility implementation, and Markdown editing fidelity.
 - **CLI contract RFC:** Defines commands, safe operation boundaries, machine-readable output format, exit-status taxonomy, and automation behavior.
 - **Test and compatibility strategy RFC:** Defines journey testing, failure injection, supported platform coverage, Git/environment matrix, and compatibility expectations.
@@ -534,6 +567,10 @@ Follow-on work adds planning and board views, scorecards, team rollups, and proj
 ### Templates and Scaffolding
 
 Follow-on work adds templates and scaffolding for repository content and workflows.
+
+### Git Forge Key Provisioning
+
+Follow-on work adds optional automation for uploading a user's SSH public key to supported Git forges. This work must not require users to upload app-generated keys or replace existing configured SSH keys.
 
 ### Meta-Repository and Multi-Repository Management
 
