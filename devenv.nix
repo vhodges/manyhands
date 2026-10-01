@@ -12,12 +12,14 @@
     fontconfig
     glib
     gtk3
+    openssl
   ]);
 
   # https://devenv.sh/packages/
   packages = with pkgs; [
     git
     pkg-config
+    openssl
     clang
     wayland
     vulkan-headers
