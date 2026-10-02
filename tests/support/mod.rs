@@ -3,15 +3,32 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use git2::{Config, Repository, RepositoryInitOptions, Signature, Time};
+use manyhands::{
+    canonical::ItemId,
+    repository::{EnableRepositoryOutcome, EnableRepositoryRequest, RepositoryService},
+};
 
 pub struct TestRepository {
     // Fields drop in declaration order, so the repository closes before TempDir removes it.
     pub repository: Repository,
     pub root: PathBuf,
     pub tempdir: tempfile::TempDir,
+}
+
+pub struct EnabledRepository {
+    pub service: RepositoryService,
+    pub data_directory: tempfile::TempDir,
+}
+
+pub struct LinkedWorktree {
+    pub worktree: PathBuf,
+    pub head_branch: String,
+    pub head_commit: git2::Oid,
+    pub index: Vec<u8>,
 }
 
 pub fn unborn_repository() -> TestRepository {
@@ -87,6 +104,26 @@ pub fn born_repository() -> TestRepository {
     }
 }
 
+pub fn enabled_repository(fixture: &TestRepository) -> EnabledRepository {
+    let data_directory = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data_directory.path()).unwrap();
+    assert!(matches!(
+        service
+            .enable(EnableRepositoryRequest {
+                root: fixture.root.clone(),
+                primary_branch: "main".to_owned(),
+                identity: None,
+            })
+            .unwrap(),
+        EnableRepositoryOutcome::Enabled { .. },
+    ));
+
+    EnabledRepository {
+        service,
+        data_directory,
+    }
+}
+
 pub fn bare_repository() -> TestRepository {
     let tempdir = tempfile::tempdir().unwrap();
     let root = tempdir.path().to_owned();
@@ -125,26 +162,85 @@ pub fn index_bytes(repository: &Repository) -> Option<Vec<u8>> {
     fs::read(repository.path().join("index")).ok()
 }
 
+pub fn commit_tree_path(
+    repository: &Repository,
+    commit_oid: git2::Oid,
+    path: impl AsRef<Path>,
+) -> Option<Vec<u8>> {
+    let commit = repository.find_commit(commit_oid).ok()?;
+    let tree = commit.tree().ok()?;
+    let entry = tree.get_path(path.as_ref()).ok()?;
+    repository
+        .find_blob(entry.id())
+        .ok()
+        .map(|blob| blob.content().to_vec())
+}
+
+pub fn open_linked_worktree(path: &Path) -> LinkedWorktree {
+    let repository = Repository::open(path).unwrap();
+    let head = repository.head().unwrap();
+    let head_branch = head
+        .name()
+        .and_then(|name| name.strip_prefix("refs/heads/"))
+        .unwrap()
+        .to_owned();
+
+    LinkedWorktree {
+        worktree: repository.workdir().unwrap().to_owned(),
+        head_branch,
+        head_commit: head.target().unwrap(),
+        index: index_bytes(&repository).unwrap(),
+    }
+}
+
+pub fn document_id() -> ItemId {
+    ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap()
+}
+
+pub fn ticket_id() -> ItemId {
+    ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAW").unwrap()
+}
+
+pub fn root_comment_id() -> ItemId {
+    ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAX").unwrap()
+}
+
+pub fn reply_id() -> ItemId {
+    ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAY").unwrap()
+}
+
+pub fn write_document_source(root: &Path, path: impl AsRef<Path>) -> PathBuf {
+    write_source(root, path.as_ref(), &document_source())
+}
+
+pub fn write_ticket_source(root: &Path, path: impl AsRef<Path>) -> PathBuf {
+    write_source(root, path.as_ref(), &ticket_source())
+}
+
+fn write_source(root: &Path, path: &Path, source: &str) -> PathBuf {
+    let path = root.join(path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, source).unwrap();
+    path
+}
+
 pub fn conflict_primary_worktree(fixture: &TestRepository) {
-    let head = fixture.repository.head().unwrap().peel_to_commit().unwrap();
+    conflict_worktree(&fixture.repository, &fixture.root);
+}
+
+pub fn conflict_worktree(repository: &Repository, root: &Path) {
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
     let signature = Signature::new(
         "Manyhands Test",
         "manyhands-test@example.invalid",
         &Time::new(0, 0),
     )
     .unwrap();
-    let blob = fixture.repository.blob(b"other\n").unwrap();
-    let mut builder = fixture
-        .repository
-        .treebuilder(Some(&head.tree().unwrap()))
-        .unwrap();
+    let blob = repository.blob(b"other\n").unwrap();
+    let mut builder = repository.treebuilder(Some(&head.tree().unwrap())).unwrap();
     builder.insert("fixture.txt", blob, 0o100644).unwrap();
-    let tree = fixture
-        .repository
-        .find_tree(builder.write().unwrap())
-        .unwrap();
-    fixture
-        .repository
+    let tree = repository.find_tree(builder.write().unwrap()).unwrap();
+    repository
         .commit(
             Some("refs/heads/other"),
             &signature,
@@ -157,16 +253,12 @@ pub fn conflict_primary_worktree(fixture: &TestRepository) {
     drop(tree);
     drop(head);
 
-    fs::write(fixture.root.join("fixture.txt"), "local\n").unwrap();
-    let mut index = fixture.repository.index().unwrap();
+    fs::write(root.join("fixture.txt"), "local\n").unwrap();
+    let mut index = repository.index().unwrap();
     index.add_path(Path::new("fixture.txt")).unwrap();
-    let tree = fixture
-        .repository
-        .find_tree(index.write_tree().unwrap())
-        .unwrap();
-    let parent = fixture.repository.head().unwrap().peel_to_commit().unwrap();
-    fixture
-        .repository
+    let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+    let parent = repository.head().unwrap().peel_to_commit().unwrap();
+    repository
         .commit(
             Some("HEAD"),
             &signature,
@@ -179,15 +271,9 @@ pub fn conflict_primary_worktree(fixture: &TestRepository) {
     drop(tree);
     drop(parent);
 
-    let other = fixture
-        .repository
-        .find_reference("refs/heads/other")
-        .unwrap();
-    let annotated = fixture
-        .repository
-        .reference_to_annotated_commit(&other)
-        .unwrap();
-    fixture.repository.merge(&[&annotated], None, None).unwrap();
+    let other = repository.find_reference("refs/heads/other").unwrap();
+    let annotated = repository.reference_to_annotated_commit(&other).unwrap();
+    repository.merge(&[&annotated], None, None).unwrap();
 }
 
 pub fn commit_tracked_configuration(fixture: &TestRepository, source: &str) {
