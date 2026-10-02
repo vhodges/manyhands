@@ -26,6 +26,24 @@ pub fn unborn_repository() -> TestRepository {
     }
 }
 
+pub struct FailOnce {
+    point: manyhands::repository::FailurePoint,
+}
+
+impl FailOnce {
+    pub fn at(point: manyhands::repository::FailurePoint) -> Self {
+        Self { point }
+    }
+
+    pub fn open_service(self, data_directory: &Path) -> manyhands::repository::RepositoryService {
+        manyhands::repository::RepositoryService::open_at_with_failure_point_for_testing(
+            data_directory,
+            self.point,
+        )
+        .unwrap()
+    }
+}
+
 pub fn born_repository() -> TestRepository {
     let tempdir = tempfile::tempdir().unwrap();
     let root = tempdir.path().to_owned();
@@ -60,12 +78,147 @@ pub fn born_repository() -> TestRepository {
         )
         .unwrap();
     drop(tree);
+    repository.index().unwrap().write().unwrap();
 
     TestRepository {
         repository,
         root,
         tempdir,
     }
+}
+
+pub fn bare_repository() -> TestRepository {
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path().to_owned();
+    let repository = Repository::init_bare(&root).unwrap();
+
+    TestRepository {
+        repository,
+        root,
+        tempdir,
+    }
+}
+
+pub fn repository_without_local_identity() -> TestRepository {
+    let repository = born_repository();
+    let mut config = Config::open(&repository.repository.path().join("config")).unwrap();
+    config.remove("user.name").unwrap();
+    config.remove("user.email").unwrap();
+    drop(config);
+
+    repository
+}
+
+pub fn exclude_bytes(repository: &Repository) -> Option<Vec<u8>> {
+    fs::read(repository.commondir().join("info/exclude")).ok()
+}
+
+pub fn tracked_configuration(root: &Path) -> Option<Vec<u8>> {
+    fs::read(root.join(".manyhands/config.toml")).ok()
+}
+
+pub fn head_commit(repository: &Repository) -> Option<git2::Oid> {
+    repository.head().ok().and_then(|head| head.target())
+}
+
+pub fn index_bytes(repository: &Repository) -> Option<Vec<u8>> {
+    fs::read(repository.path().join("index")).ok()
+}
+
+pub fn conflict_primary_worktree(fixture: &TestRepository) {
+    let head = fixture.repository.head().unwrap().peel_to_commit().unwrap();
+    let signature = Signature::new(
+        "Manyhands Test",
+        "manyhands-test@example.invalid",
+        &Time::new(0, 0),
+    )
+    .unwrap();
+    let blob = fixture.repository.blob(b"other\n").unwrap();
+    let mut builder = fixture
+        .repository
+        .treebuilder(Some(&head.tree().unwrap()))
+        .unwrap();
+    builder.insert("fixture.txt", blob, 0o100644).unwrap();
+    let tree = fixture
+        .repository
+        .find_tree(builder.write().unwrap())
+        .unwrap();
+    fixture
+        .repository
+        .commit(
+            Some("refs/heads/other"),
+            &signature,
+            &signature,
+            "Other change",
+            &tree,
+            &[&head],
+        )
+        .unwrap();
+    drop(tree);
+    drop(head);
+
+    fs::write(fixture.root.join("fixture.txt"), "local\n").unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index.add_path(Path::new("fixture.txt")).unwrap();
+    let tree = fixture
+        .repository
+        .find_tree(index.write_tree().unwrap())
+        .unwrap();
+    let parent = fixture.repository.head().unwrap().peel_to_commit().unwrap();
+    fixture
+        .repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Local change",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    drop(tree);
+    drop(parent);
+
+    let other = fixture
+        .repository
+        .find_reference("refs/heads/other")
+        .unwrap();
+    let annotated = fixture
+        .repository
+        .reference_to_annotated_commit(&other)
+        .unwrap();
+    fixture.repository.merge(&[&annotated], None, None).unwrap();
+}
+
+pub fn commit_tracked_configuration(fixture: &TestRepository, source: &str) {
+    let path = fixture.root.join(".manyhands/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, source).unwrap();
+    let signature = Signature::new(
+        "Manyhands Test",
+        "manyhands-test@example.invalid",
+        &Time::new(0, 0),
+    )
+    .unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
+    let tree = fixture
+        .repository
+        .find_tree(index.write_tree().unwrap())
+        .unwrap();
+    let parent = fixture.repository.head().unwrap().peel_to_commit().unwrap();
+    fixture
+        .repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Existing configuration",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    index.write().unwrap();
 }
 
 pub fn config_source() -> String {

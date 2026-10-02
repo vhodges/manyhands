@@ -11,16 +11,16 @@ default = []
 desktop = ["dep:gpui-kit"]
 
 [dependencies]
+directories = "5"
+git2 = "0.20"
 gpui-kit = { version = "0.6", optional = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 ulid = "1"
-
-[dev-dependencies]
-git2 = "0.20"
-tempfile = "3"
 
 [[bin]]
 name = "manyhands"
