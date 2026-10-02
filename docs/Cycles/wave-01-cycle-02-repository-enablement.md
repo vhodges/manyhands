@@ -142,6 +142,12 @@ repository but cannot complete initialization, cleanup is limited to empty
 resources created by that failed operation; pre-existing paths are never
 removed or changed.
 
+`create_and_enable` requires the caller to provide a trusted, non-shared
+parent. Capability/descriptor filesystem containment is intentionally not part
+of this Cycle. The implementation rejects observed substituted or symlink
+targets before Git initialization, but this precondition is required to avoid
+parent-replacement races.
+
 For an existing born repository, enablement requires the selected primary
 branch to exist locally. For an existing unborn repository, the confirmed
 branch becomes its initial `HEAD` before the initialization commit. Before any
@@ -184,14 +190,23 @@ rejected until the selection is cleared or changed. A failed configuration
 checkpoint restores only state created or changed by that operation; it does
 not affect unrelated remotes, index entries, staged paths, branches, or files.
 
+Publication commits use a temporary Git index and never write the live index.
+A missing live `.manyhands/config.toml` index entry, including a staged
+deletion, blocks publication configuration as dirty. A present stale live index
+entry is accepted only when it equals a valid canonical regular-file
+configuration from a first-parent ancestor and worktree configuration exactly
+equals `HEAD`; otherwise callers must stage or reset the configuration first.
+This preserves user staged work and permits only known-safe stale entries.
+
 ## Recovery Considerations
 
-Every rejected input or preflight failure identifies the repository root and
-failed condition, preserves existing user files and Git state, and can be
-retried after correction. This includes inaccessible, non-Git, bare, dirty,
-conflicted, unwritable, and primary-branch-missing repositories; malformed or
-unsupported existing Manyhands configuration; missing identity; invalid remote
-names or URLs; and a missing selected publication remote.
+Every rejected input or preflight failure identifies the repository root when
+it is available or resolved and the failed condition, preserves existing user
+files and Git state, and can be retried after correction. This includes
+inaccessible, non-Git, bare, dirty, conflicted, unwritable, and
+primary-branch-missing repositories; malformed or unsupported existing
+Manyhands configuration; missing identity; invalid remote names or URLs; and a
+missing selected publication remote.
 
 Lifecycle tests inject failures at configuration write, initialization commit,
 publication-remote configuration checkpoint, and local registry write. If a
@@ -217,6 +232,10 @@ duplicate initialization or publication-remote commit.
 - Rejection of dirty, conflicted, unwritable, malformed-configured,
   unsupported-configured, non-bare, and missing-primary-branch states without
   changing user files, refs, commits, staged state, remotes, or registration.
+  Use real filesystem permission tests for inaccessible or unwritable states
+  when platform and process permissions can produce them; privileged
+  environments that bypass modes instead verify typed `PermissionDenied`
+  mapping deterministically and real filesystem no-mutation failure boundaries.
 - Effective identity use and identity-required behavior before any mutation,
   plus explicitly confirmed repository-local identity configuration.
 - Application-local registry persistence, canonical-root uniqueness, enablement
