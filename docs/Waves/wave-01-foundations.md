@@ -38,7 +38,7 @@ Primary PRD traceability:
 | Area | Requirements addressed in this Wave |
 | --- | --- |
 | Repository lifecycle | `MH-REPO-001` to `MH-REPO-004`, limited to local configuration and remote management without network contact |
-| Content and comments | `MH-CONTENT-001` to `MH-CONTENT-004`, `MH-COMMENT-001` to `MH-COMMENT-002` |
+| Content and comments | `MH-CONTENT-001` to `MH-CONTENT-003`, the single-local-context foundation of `MH-CONTENT-004`, and `MH-COMMENT-001` to `MH-COMMENT-002` |
 | Local collaboration | `MH-COLLAB-001`, `MH-COLLAB-002`, and the local checkpoint portion of `MH-COLLAB-003` |
 | Indexing | `MH-INDEX-001` to `MH-INDEX-003`, excluding remote polling |
 | Quality | `MH-NFR-001`, `MH-NFR-006`, `MH-NFR-007`, and `MH-NFR-008` |
@@ -177,15 +177,16 @@ without exposing Git operations to the user.
 
 **In scope:**
 
-- Create, reuse, and select item-specific branches and worktrees.
+- Create and reuse one deterministic local branch and worktree per item.
 - Create, move, validate, and edit documents; create and edit tickets; create
   root comments and replies.
 - Scoped checkpoints for documents, tickets, and comments, with no empty
   commits and no staging or committing of unrelated paths.
 - Local-only comment submission reported as publish pending when no publication
   remote is configured.
-- Recovery records for failed writes, branch/worktree creation, commits, and
-  post-commit index refresh.
+- Typed recoverable outcomes for failed writes, branch/worktree creation,
+  commits, and post-commit refresh invalidation. Durable operation records are
+  introduced in Cycle 04 and exercised across the lifecycle in Cycle 05.
 
 **Out of scope:** Remote synchronization, merge/rebase, promotion, closure, and
 automatic worktree cleanup.
@@ -194,8 +195,9 @@ automatic worktree cleanup.
 worktree state that already exists; retry performs only the incomplete step.
 
 **Exit evidence:** Real-repository tests prove deterministic context paths,
-single-context reuse, multi-context selection, scoped commits, no-op saves, and
-preservation of unrelated changes.
+single-context reuse, scoped commits, no-op saves, and preservation of
+unrelated changes. A mismatched or duplicate expected context is visible as a
+recoverable condition; multiple-context choice is deferred to Wave 2.
 
 ### Cycle 04: Discovery and Rebuild
 
@@ -212,8 +214,8 @@ a rebuildable application-local SQLite index.
 - Full per-context scans of primary and active worktrees.
 - Item metadata and activity-time extraction, nonconforming problem records,
   and deterministic comment-thread reconstruction.
-- Active-context precedence, multiple-context choice state, manual refresh,
-  local repository removal, and destructive-cache rebuild recovery.
+- Active-context presentation for the one deterministic local context, manual
+  refresh, local repository removal, and destructive-cache rebuild recovery.
 
 **Out of scope:** Filesystem watching, remote polling, remote context discovery,
 and any index action that mutates canonical state.
@@ -223,8 +225,8 @@ while canonical Markdown, Git commits, branches, worktrees, remotes, and
 configuration remain unchanged.
 
 **Exit evidence:** Tests prove primary-plus-context discovery, visible malformed
-content, choice state, equivalent rebuild results, and no canonical mutation
-during refresh or rebuild.
+content, equivalent rebuild results, and no canonical mutation during refresh or
+rebuild.
 
 ### Cycle 05: Recovery and Foundation Gate
 
@@ -239,7 +241,7 @@ and retries never lose or duplicate user work.
 
 - Failure injection at configuration write, initialization commit, context
   branch/worktree creation, item write, checkpoint commit, and SQLite refresh.
-- Cross-process repository operation lease coverage.
+- Cross-process repository operation lease implementation and coverage.
 - Retry reconciliation based on actual Git state and canonical Markdown.
 - The Wave 1 acceptance matrix and mandated Rust verification commands.
 
@@ -295,14 +297,15 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 | Existing marker-only project documents become nonconforming | Detect visibly, preserve unchanged, and require explicit repair; do not auto-migrate. |
 | Initialization or checkpoint failure leaves partial state | Persist operation steps, inspect real Git state on retry, and test every failure boundary. |
 | SQLite cache diverges from repository state | Full per-context scanning, context-scoped transactions, and rebuild equivalence tests make Git and Markdown authoritative. |
-| Desktop, CLI, or daemon processes race a repository operation | Use the repository-scoped lease; test contention locally now and expand daemon coverage in Wave 2/3. |
+| Desktop, CLI, or daemon processes race a repository operation | Cycle 03 callers serialize local authoring; Cycle 05 adds the repository-scoped lease and local contention coverage before Wave 2/3 daemon expansion. |
 | Foundation scope expands into remote collaboration | Treat SSH, fetch/push, polling, merge, promotion, and closure as explicit Wave 2 exclusions. |
 
 ## Deferred Work
 
 Wave 2 owns authentication, SSH transport, remote synchronization, polling,
-merge recovery, managed-document promotion, and ticket closure. Wave 3 owns the
-desktop information architecture, editor behavior, full CLI contract, keyboard
+remote context materialization, multi-context choice, merge recovery,
+managed-document promotion, and ticket closure. Wave 3 owns the desktop
+information architecture, editor behavior, full CLI contract, keyboard
 journeys, and dogfooding acceptance on supported platforms.
 
 No Cycle may use a deferred capability as a hidden prerequisite. If a Wave 1

@@ -39,8 +39,8 @@ canonical repository configuration.
 
 ## Required Logical Tables
 
-The exact SQL is implementation-owned, but the database MUST represent these
-logical records:
+The exact SQL is implementation-owned. Cycle 02 implements repository
+registration only; Cycle 04 adds the remaining logical records:
 
 | Record | Required information |
 | --- | --- |
@@ -94,9 +94,10 @@ For each accessible primary or active context, a refresh MUST:
 5. Replace only that context's item and problem rows in one SQLite transaction.
 
 The primary context and item contexts remain separate rows even when they
-contain the same item ULID. Query consumers apply the PRD's active-context
-precedence rule: one active editable context replaces the primary presentation;
-multiple active contexts require an explicit choice.
+contain the same item ULID. Wave 1 records at most one deterministic local item
+context for an item, which replaces the primary presentation when active. Wave
+2 extends this model for remote materialization and multiple active contexts,
+where consumers require an explicit choice.
 
 For committed files, observed activity uses the latest Git commit that touches
 the item Markdown or a managed comment for that item. For uncommitted local
@@ -118,16 +119,18 @@ replace inaccessible canonical content with cache data.
 
 ## Operation Coordination and Recovery
 
-SQLite coordinates Manyhands operations across desktop, CLI, and daemon
-processes. A repository-scoped operation lease MUST be acquired before a Git
-lifecycle action or a polling refresh changes Git state. The lease has a bounded
-wait and recoverable busy outcome.
+Cycle 03 callers serialize local authoring operations for a repository and use
+the actual Git and filesystem state for immediate retries. It writes no durable
+operation record. Cycle 04 adds operation records that advance only after their
+external Git or filesystem step is observed. On startup or retry, reconciliation
+compares a record with actual Git refs, worktrees, and commits; canonical Git
+state wins. A completed commit with a pending index refresh is retried as
+indexing only and never creates a duplicate commit.
 
-Operation records advance only after their external Git or filesystem step is
-observed. On startup or retry, reconciliation compares the record with actual
-Git refs, worktrees, and commits. Canonical Git state wins. A completed commit
-with a pending index refresh is retried as indexing only; it never creates a
-duplicate commit.
+Cycle 05 makes SQLite coordination mandatory across desktop, CLI, and daemon
+processes. A repository-scoped operation lease MUST be acquired before a Git
+lifecycle action or polling refresh changes Git state. The lease has a bounded
+wait and recoverable busy outcome.
 
 ## Polling Extension
 
@@ -149,8 +152,9 @@ Wave 1 persistence work is complete when real temporary repositories show that:
   removed without repository mutation.
 - Full refresh indexes valid primary and active-context items, comments, and
   problems while preserving distinct context rows.
-- A single active context receives discovery precedence and multiple active
-  contexts require a queryable choice state.
+- A single deterministic local active context receives discovery precedence.
+  Multiple-context choice state is deferred to the Wave 2 remote-context
+  extension.
 - Marker-only, malformed, duplicate-ID, and inaccessible content stays visible
   as a problem rather than disappearing or being rewritten.
 - Deleting or corrupting the SQLite database followed by rebuild produces the

@@ -84,28 +84,36 @@ The local worktree path is deterministic:
 <repository-root>/.manyhands/worktrees/<ULID>/
 ```
 
-The item kind and ULID come only from conforming canonical content. A branch
-that does not match this convention is never a Manyhands context. A branch that
-matches but lacks the identified conforming item is a visible recovery problem,
-not a context to reuse or materialize.
+For an existing context, the item kind and ULID come only from conforming
+canonical content. A branch that does not match this convention is never a
+Manyhands context. A matching branch that lacks the identified conforming item
+is a visible recovery problem and is not an editable context to reuse or
+materialize. Cycle 03 may resume its exact partial create request when the
+caller retains the requested kind and ULID and the observed branch and worktree
+match the deterministic expectation, including when the worktree or requested
+item write is still missing.
 
-Before creating, reusing, synchronizing, promoting, or closing a context,
-Manyhands MUST serialize the operation with other Manyhands operations for the
-same repository. The persistence RFC defines the cross-process lock and durable
-operation record. A manual lifecycle action takes precedence over polling.
+Cycle 03 callers MUST serialize authoring operations for the same repository.
+Cycle 04 adds durable operation records after observed external steps. Cycle 05
+adds the repository-scoped cross-process lease and reconciliation evidence that
+make serialization mandatory across desktop, CLI, and daemon processes. A manual
+lifecycle action takes precedence over polling once polling is introduced.
 
 When a user creates an item or starts editing an item:
 
 - With no local editable context, create the deterministic branch from the
   configured primary branch and add the deterministic worktree.
 - With exactly one local editable context, reuse it.
-- With multiple local editable contexts, return each branch and worktree label
-  and require the caller to choose one.
+- In Wave 1, a mismatched or duplicate expected local context is a recoverable
+  condition; no context choice is returned.
+- Wave 2 extends the protocol for multiple remote-materialized editable
+  contexts, returning each branch and worktree label for caller selection.
 
 Context creation MUST leave other worktrees, branches, and canonical item paths
-unchanged. A partially created branch or worktree is retained only when needed
-for recovery; otherwise cleanup is limited to resources created by the failed
-operation and is recorded for retry.
+unchanged. In Cycle 03, a partially created deterministic branch or worktree is
+retained for an exact caller retry. Cycle 04 records recovery state after
+observing it, and Cycle 05 proves durable reconciliation. No automatic cleanup
+may delete a partial resource while it remains recoverable.
 
 ## Scoped Checkpoints
 
@@ -115,7 +123,7 @@ owned by the requested event:
 | Event | Permitted staged paths |
 | --- | --- |
 | Initialization | `.manyhands/config.toml` |
-| Document save | The selected document Markdown path |
+| Document save | The selected document Markdown path, or its former and destination Markdown paths for a move |
 | Ticket save | `.manyhands/tickets/<id>/ticket.md` |
 | Comment submit | `.manyhands/comments/<item-id>/<comment-id>.md` |
 | Ticket close | The ticket Markdown path containing closure metadata |
@@ -134,11 +142,13 @@ Checkpoint comment <ULID>
 Close ticket <ULID>
 ```
 
-After a successful checkpoint, Manyhands records the commit OID in the
-operation record, requests an index refresh, and reports the outcome. If writing
-succeeds but committing fails, the files remain in the worktree for retry. If
-committing succeeds but indexing fails, the commit remains authoritative and the
-operation reports `index pending` rather than retrying the commit.
+After a successful Cycle 03 checkpoint, Manyhands returns the commit OID and
+marks the repository registration refresh-required without running discovery.
+Cycle 04 records the observed commit OID in the operation record and requests
+an index refresh. If writing succeeds but committing fails, the files remain in
+the worktree for retry. If committing succeeds but invalidation or indexing
+fails, the commit remains authoritative and the operation reports `index
+pending` rather than retrying the commit.
 
 ## Synchronization and Merge Policy
 
