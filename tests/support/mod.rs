@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
-use git2::{Config, Repository, RepositoryInitOptions, Signature, Time};
+use git2::{Config, Repository, RepositoryInitOptions, Signature, StatusOptions, Time};
 use manyhands::{
     canonical::ItemId,
     repository::{EnableRepositoryOutcome, EnableRepositoryRequest, RepositoryService},
@@ -29,6 +30,201 @@ pub struct LinkedWorktree {
     pub head_branch: String,
     pub head_commit: git2::Oid,
     pub index: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RepositoryAndWorktreeSnapshot {
+    pub root: WorktreeState,
+    pub linked_worktrees: BTreeMap<String, WorktreeState>,
+    pub references: BTreeMap<String, String>,
+    pub worktrees: BTreeMap<String, PathBuf>,
+    pub remotes: BTreeMap<String, (Option<String>, Option<String>)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorktreeState {
+    pub files: BTreeMap<PathBuf, FilesystemEntry>,
+    pub config: Option<Vec<u8>>,
+    pub head: HeadState,
+    pub index: Option<Vec<u8>>,
+    pub statuses: BTreeMap<PathBuf, u32>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FilesystemEntry {
+    File { bytes: Vec<u8> },
+    Symlink { target: PathBuf },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum HeadState {
+    Attached {
+        symbolic_target: String,
+        target: git2::Oid,
+    },
+    Detached {
+        target: git2::Oid,
+    },
+    Unborn {
+        symbolic_target: Option<String>,
+    },
+    Unavailable,
+}
+
+pub fn repository_and_worktree_snapshot(fixture: &TestRepository) -> RepositoryAndWorktreeSnapshot {
+    repository_and_worktree_snapshot_at(&fixture.root)
+}
+
+pub fn repository_and_worktree_snapshot_at(root: &Path) -> RepositoryAndWorktreeSnapshot {
+    let repository = Repository::open(root).unwrap();
+    let linked_worktrees = repository
+        .worktrees()
+        .unwrap()
+        .iter()
+        .flatten()
+        .map(|name| {
+            let worktree = repository.find_worktree(name).unwrap();
+            let path = worktree.path().canonicalize().unwrap();
+            (
+                name.to_owned(),
+                worktree_state(&Repository::open(&path).unwrap(), &path),
+            )
+        })
+        .collect();
+    let references = repository
+        .references()
+        .unwrap()
+        .map(|reference| {
+            let reference = reference.unwrap();
+            let name = reference.name().unwrap().to_owned();
+            let target = reference
+                .symbolic_target()
+                .map(str::to_owned)
+                .or_else(|| reference.target().map(|oid| oid.to_string()))
+                .unwrap_or_default();
+            (name, target)
+        })
+        .collect();
+    let worktrees = repository
+        .worktrees()
+        .unwrap()
+        .iter()
+        .flatten()
+        .map(|name| {
+            let worktree = repository.find_worktree(name).unwrap();
+            (name.to_owned(), worktree.path().canonicalize().unwrap())
+        })
+        .collect();
+    let remotes = repository
+        .remotes()
+        .unwrap()
+        .iter()
+        .flatten()
+        .map(|name| {
+            let remote = repository.find_remote(name).unwrap();
+            (
+                name.to_owned(),
+                (
+                    remote.url().map(str::to_owned),
+                    remote.pushurl().map(str::to_owned),
+                ),
+            )
+        })
+        .collect();
+
+    RepositoryAndWorktreeSnapshot {
+        root: worktree_state(&repository, root),
+        linked_worktrees,
+        references,
+        worktrees,
+        remotes,
+    }
+}
+
+fn worktree_state(repository: &Repository, worktree: &Path) -> WorktreeState {
+    let mut statuses = StatusOptions::new();
+    statuses
+        .include_untracked(true)
+        .include_ignored(true)
+        .recurse_untracked_dirs(true);
+    WorktreeState {
+        files: canonical_file_bytes(worktree, worktree),
+        config: fs::read(repository.path().join("config")).ok(),
+        head: head_state(repository),
+        index: index_bytes(repository),
+        statuses: repository
+            .statuses(Some(&mut statuses))
+            .unwrap()
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .path()
+                    .map(|path| (PathBuf::from(path), entry.status().bits()))
+            })
+            .collect(),
+    }
+}
+
+fn head_state(repository: &Repository) -> HeadState {
+    let Ok(head) = repository.find_reference("HEAD") else {
+        return HeadState::Unavailable;
+    };
+    if let Some(symbolic_target) = head.symbolic_target() {
+        return match repository.refname_to_id(symbolic_target) {
+            Ok(target) => HeadState::Attached {
+                symbolic_target: symbolic_target.to_owned(),
+                target,
+            },
+            Err(_) => HeadState::Unborn {
+                symbolic_target: Some(symbolic_target.to_owned()),
+            },
+        };
+    }
+    match head.target() {
+        Some(target) => HeadState::Detached { target },
+        None => HeadState::Unborn {
+            symbolic_target: None,
+        },
+    }
+}
+
+fn canonical_file_bytes(root: &Path, directory: &Path) -> BTreeMap<PathBuf, FilesystemEntry> {
+    let mut files = BTreeMap::new();
+    collect_canonical_file_bytes(root, directory, &mut files);
+    files
+}
+
+fn collect_canonical_file_bytes(
+    root: &Path,
+    directory: &Path,
+    files: &mut BTreeMap<PathBuf, FilesystemEntry>,
+) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap();
+        if relative == Path::new(".git") || relative == Path::new(".manyhands/worktrees") {
+            continue;
+        }
+        let file_type = entry.file_type().unwrap();
+        if file_type.is_symlink() {
+            files.insert(
+                relative.to_owned(),
+                FilesystemEntry::Symlink {
+                    target: fs::read_link(path).unwrap(),
+                },
+            );
+        } else if file_type.is_dir() {
+            collect_canonical_file_bytes(root, &path, files);
+        } else if file_type.is_file() {
+            files.insert(
+                relative.to_owned(),
+                FilesystemEntry::File {
+                    bytes: fs::read(path).unwrap(),
+                },
+            );
+        }
+    }
 }
 
 pub fn unborn_repository() -> TestRepository {
