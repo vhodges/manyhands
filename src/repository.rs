@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -9,9 +10,14 @@ use git2::{
     BranchType, Config, ConfigLevel, Index, IndexEntry, Repository, RepositoryInitOptions,
     Signature, Status, StatusOptions, WorktreeAddOptions,
 };
+use rusqlite::{OptionalExtension, TransactionBehavior};
 use time::OffsetDateTime;
 
 use crate::canonical;
+
+mod discovery;
+
+use discovery::{migrate_registry, open_registry, open_registry_read_only};
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
 const REGISTRY_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -208,6 +214,96 @@ pub enum RemoveRegistrationOutcome {
     NotRegistered,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct RepositorySnapshot {
+    pub root: PathBuf,
+    pub configuration: SnapshotConfiguration,
+    pub refresh_required: bool,
+    pub contexts: Vec<DiscoveredContext>,
+    pub items: Vec<DiscoveredItem>,
+    pub problems: Vec<DiscoveryProblem>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SnapshotConfiguration {
+    Valid {
+        primary_branch: String,
+        publication_remote: Option<String>,
+    },
+    Invalid {
+        code: canonical::ValidationCode,
+        guidance: String,
+    },
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryContextKind {
+    Primary,
+    Unverified,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryActivitySource {
+    GitCommit,
+    UncommittedFilesystem,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiscoveredContext {
+    pub kind: DiscoveryContextKind,
+    pub branch: Option<String>,
+    pub worktree: PathBuf,
+    pub item_id: Option<canonical::ItemId>,
+    pub head_oid: Option<git2::Oid>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiscoveredItem {
+    pub context: PathBuf,
+    pub id: canonical::ItemId,
+    pub kind: AuthoringKind,
+    pub path: PathBuf,
+    pub title: String,
+    pub ticket_type: Option<String>,
+    pub status: Option<String>,
+    pub project: Option<String>,
+    pub team: Option<String>,
+    pub closed_at: Option<OffsetDateTime>,
+    pub activity_at: OffsetDateTime,
+    pub activity_source: DiscoveryActivitySource,
+    pub comments: Vec<DiscoveredCommentThread>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiscoveredCommentThread {
+    pub id: canonical::ItemId,
+    pub path: PathBuf,
+    pub created_at: OffsetDateTime,
+    pub replies: Vec<DiscoveredCommentThread>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DiscoveryProblem {
+    pub context: Option<PathBuf>,
+    pub path: Option<PathBuf>,
+    pub code: String,
+    pub guidance: String,
+    pub observed_at: OffsetDateTime,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    Refreshed {
+        snapshot: RepositorySnapshot,
+    },
+    RetryRequired {
+        root: PathBuf,
+        context: Option<PathBuf>,
+    },
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistryConnectionPhase {
@@ -227,6 +323,9 @@ pub enum FailurePoint {
     BeforeItemWrite,
     BeforeCheckpointCommit,
     BeforeRegistryWrite,
+    AfterContextObservation,
+    BeforeIndexTransactionCommit,
+    BeforeCorruptCacheReplacement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +344,9 @@ pub enum RepositoryOperation {
     SaveDocument,
     SaveTicket,
     SubmitComment,
+    RefreshRepository,
+    RebuildRepository,
+    RepositorySnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,6 +366,8 @@ pub enum RepositoryErrorKind {
     SelectedRemoteRemoval,
     RemoteNameConflict,
     RegistryRefreshPending,
+    RepositoryNotRegistered,
+    IndexUnavailable,
     DirtyConfigurationPath,
     InvalidIdentity,
     RepositoryNotEnabled,
@@ -373,6 +477,45 @@ impl RepositoryService {
 
     pub fn open_at(data_directory: &Path) -> Result<Self, RepositoryError> {
         Self::open_at_with_registry_observer(data_directory, |_| {})
+    }
+
+    pub fn refresh_repository(&self, root: &Path) -> Result<RefreshOutcome, RepositoryError> {
+        Err(RepositoryError::new(
+            RepositoryOperation::RefreshRepository,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RepositoryNotRegistered,
+            "repository discovery is not yet available",
+        ))
+    }
+
+    pub fn rebuild_repository(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {
+        Err(RepositoryError::new(
+            RepositoryOperation::RebuildRepository,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RepositoryNotRegistered,
+            "repository discovery is not yet available",
+        ))
+    }
+
+    pub fn repository_snapshot(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {
+        let root_path = root.to_str().ok_or_else(|| {
+            RepositoryError::new(
+                RepositoryOperation::RepositorySnapshot,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })?;
+        let mut connection = open_registry_read_only(&self.registry_path)
+            .map_err(|error| snapshot_index_error_source(root, error))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| snapshot_index_error_source(root, error))?;
+        let snapshot = read_repository_snapshot(&transaction, root, root_path);
+        transaction
+            .rollback()
+            .map_err(|error| snapshot_index_error_source(root, error))?;
+        snapshot
     }
 
     pub fn prepare_context(
@@ -2013,6 +2156,599 @@ impl RepositoryService {
             RemoveRegistrationOutcome::Removed
         })
     }
+}
+
+struct StoredComment {
+    id: canonical::ItemId,
+    parent_id: Option<canonical::ItemId>,
+    path: PathBuf,
+    created_at: OffsetDateTime,
+}
+
+fn read_repository_snapshot(
+    connection: &rusqlite::Connection,
+    root: &Path,
+    root_path: &str,
+) -> Result<RepositorySnapshot, RepositoryError> {
+    let operation = RepositoryOperation::RepositorySnapshot;
+    let registrations = connection
+        .prepare(
+            "SELECT id, config_blob_oid, refresh_required FROM repositories WHERE root_path = ?1",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([root_path], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| snapshot_index_error_source(root, error))?;
+    let [(repository_id, config_blob_oid, refresh_required)] = registrations.as_slice() else {
+        return if registrations.is_empty() {
+            Err(RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            ))
+        } else {
+            Err(snapshot_index_error(
+                root,
+                "repository registration is not unique",
+            ))
+        };
+    };
+    if let Some(config_blob_oid) = config_blob_oid {
+        git2::Oid::from_str(config_blob_oid)
+            .map_err(|_| snapshot_index_error(root, "configuration blob OID is invalid"))?;
+    }
+    let refresh_required = match refresh_required {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(snapshot_index_error(
+                root,
+                "refresh-required flag is invalid",
+            ));
+        }
+    };
+    let configuration = connection
+        .query_row(
+            "SELECT state, primary_branch, publication_remote, invalid_code, guidance
+             FROM configuration_observations WHERE repository_id = ?1",
+            [*repository_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| snapshot_index_error_source(root, error))?
+        .map(
+            |(state, primary_branch, publication_remote, invalid_code, guidance)| {
+                stored_configuration(
+                    &state,
+                    primary_branch,
+                    publication_remote,
+                    invalid_code,
+                    guidance,
+                    root,
+                )
+            },
+        )
+        .transpose()?
+        .unwrap_or(SnapshotConfiguration::Missing);
+
+    let contexts = connection
+        .prepare(
+            "SELECT id, kind, branch, worktree_path, item_id, head_oid
+             FROM contexts WHERE repository_id = ?1
+             ORDER BY worktree_path ASC, id ASC",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([*repository_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| snapshot_index_error_source(root, error))?;
+    let contexts = contexts
+        .into_iter()
+        .map(|(id, kind, branch, worktree, item_id, head_oid)| {
+            let worktree = stored_absolute_path(&worktree, root)?;
+            let kind = stored_context_kind(&kind, root)?;
+            let item_id = item_id
+                .as_deref()
+                .map(|value| stored_item_id(value, root))
+                .transpose()?;
+            stored_context_fields(kind, branch.as_deref(), item_id.as_ref(), root)?;
+            Ok((
+                id,
+                DiscoveredContext {
+                    kind,
+                    branch,
+                    worktree,
+                    item_id,
+                    head_oid: head_oid
+                        .as_deref()
+                        .map(|value| {
+                            git2::Oid::from_str(value)
+                                .map_err(|_| snapshot_index_error(root, "head OID is invalid"))
+                        })
+                        .transpose()?,
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let items = connection
+        .prepare(
+            "SELECT discovered_items.id, contexts.worktree_path, discovered_items.item_id,
+                    discovered_items.kind, discovered_items.canonical_path, discovered_items.title,
+                    discovered_items.ticket_type, discovered_items.status, discovered_items.project,
+                    discovered_items.team, discovered_items.closed_at, discovered_items.activity_at,
+                    discovered_items.activity_source
+             FROM discovered_items JOIN contexts ON contexts.id = discovered_items.context_id
+             WHERE contexts.repository_id = ?1
+             ORDER BY contexts.worktree_path ASC, discovered_items.canonical_path ASC,
+                      discovered_items.item_id ASC, discovered_items.id ASC",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([*repository_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, String>(12)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| snapshot_index_error_source(root, error))?;
+    let items = items
+        .into_iter()
+        .map(
+            |(
+                row_id,
+                context,
+                id,
+                kind,
+                path,
+                title,
+                ticket_type,
+                status,
+                project,
+                team,
+                closed_at,
+                activity_at,
+                activity_source,
+            )| {
+                let comments = read_stored_comments(connection, root, row_id)?;
+                let kind = stored_authoring_kind(&kind, root)?;
+                stored_item_metadata(
+                    kind,
+                    &title,
+                    (&ticket_type, &status, &project, &team),
+                    closed_at,
+                    root,
+                )?;
+                Ok(DiscoveredItem {
+                    context: stored_absolute_path(&context, root)?,
+                    id: stored_item_id(&id, root)?,
+                    kind,
+                    path: stored_relative_path(&path, root)?,
+                    title,
+                    ticket_type,
+                    status,
+                    project,
+                    team,
+                    closed_at: closed_at
+                        .map(|value| stored_timestamp(value, root))
+                        .transpose()?,
+                    activity_at: stored_timestamp(activity_at, root)?,
+                    activity_source: stored_activity_source(&activity_source, root)?,
+                    comments,
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut item_ids = BTreeSet::new();
+    for item in &items {
+        if !item_ids.insert(item.id.clone()) || !insert_comment_ids(&item.comments, &mut item_ids) {
+            return Err(snapshot_index_error(
+                root,
+                "stored item ID is not globally unique",
+            ));
+        }
+    }
+
+    let problems = connection
+        .prepare(
+            "SELECT contexts.worktree_path, problems.path, problems.code, problems.guidance, problems.observed_at
+             FROM problems LEFT JOIN contexts ON contexts.id = problems.context_id
+             WHERE problems.repository_id = ?1
+             ORDER BY problems.observed_at ASC, contexts.worktree_path ASC, problems.path ASC,
+                      problems.code ASC, problems.guidance ASC, problems.id ASC",
+        )
+        .and_then(|mut statement| {
+            statement.query_map([*repository_id], |row| {
+                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?))
+            })?.collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| snapshot_index_error_source(root, error))?
+        .into_iter()
+        .map(|(context, path, code, guidance, observed_at)| Ok(DiscoveryProblem {
+            context: context.as_deref().map(|value| stored_absolute_path(value, root)).transpose()?,
+            path: path.as_deref().map(|value| stored_relative_path(value, root)).transpose()?,
+            code,
+            guidance,
+            observed_at: stored_timestamp(observed_at, root)?,
+        }))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(RepositorySnapshot {
+        root: root.to_owned(),
+        configuration,
+        refresh_required,
+        contexts: contexts.into_iter().map(|(_, context)| context).collect(),
+        items,
+        problems,
+    })
+}
+
+fn read_stored_comments(
+    connection: &rusqlite::Connection,
+    root: &Path,
+    item_row_id: i64,
+) -> Result<Vec<DiscoveredCommentThread>, RepositoryError> {
+    let comments = connection
+        .prepare(
+            "SELECT comment_id, parent_comment_id, canonical_path, created_at
+         FROM discovered_comments WHERE item_id = ?1
+         ORDER BY created_at ASC, comment_id ASC, id ASC",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([item_row_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| snapshot_index_error_source(root, error))?
+        .into_iter()
+        .map(|(id, parent_id, path, created_at)| {
+            Ok(StoredComment {
+                id: stored_item_id(&id, root)?,
+                parent_id: parent_id
+                    .as_deref()
+                    .map(|value| stored_item_id(value, root))
+                    .transpose()?,
+                path: stored_relative_path(&path, root)?,
+                created_at: stored_timestamp(created_at, root)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let ids = comments
+        .iter()
+        .map(|comment| comment.id.clone())
+        .collect::<BTreeSet<_>>();
+    if comments.iter().any(|comment| {
+        comment
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| !ids.contains(parent))
+    }) {
+        return Err(snapshot_index_error(root, "comment parent is missing"));
+    }
+    let mut ancestors = BTreeSet::new();
+    let threads = stored_comment_children(&comments, None, &mut ancestors, root)?;
+    if threads.iter().map(comment_thread_len).sum::<usize>() != comments.len() {
+        return Err(snapshot_index_error(root, "comment tree is cyclic"));
+    }
+    Ok(threads)
+}
+
+fn stored_comment_children(
+    comments: &[StoredComment],
+    parent: Option<&canonical::ItemId>,
+    ancestors: &mut BTreeSet<canonical::ItemId>,
+    root: &Path,
+) -> Result<Vec<DiscoveredCommentThread>, RepositoryError> {
+    comments
+        .iter()
+        .filter(|comment| comment.parent_id.as_ref() == parent)
+        .map(|comment| {
+            if !ancestors.insert(comment.id.clone()) {
+                return Err(snapshot_index_error(root, "comment tree is cyclic"));
+            }
+            let replies = stored_comment_children(comments, Some(&comment.id), ancestors, root)?;
+            ancestors.remove(&comment.id);
+            Ok(DiscoveredCommentThread {
+                id: comment.id.clone(),
+                path: comment.path.clone(),
+                created_at: comment.created_at,
+                replies,
+            })
+        })
+        .collect()
+}
+
+fn comment_thread_len(thread: &DiscoveredCommentThread) -> usize {
+    1 + thread.replies.iter().map(comment_thread_len).sum::<usize>()
+}
+fn insert_comment_ids(
+    comments: &[DiscoveredCommentThread],
+    ids: &mut BTreeSet<canonical::ItemId>,
+) -> bool {
+    comments
+        .iter()
+        .all(|comment| ids.insert(comment.id.clone()) && insert_comment_ids(&comment.replies, ids))
+}
+
+fn stored_item_id(value: &str, root: &Path) -> Result<canonical::ItemId, RepositoryError> {
+    value
+        .parse()
+        .map_err(|_| snapshot_index_error(root, "stored item ID is invalid"))
+}
+fn stored_configuration(
+    state: &str,
+    primary_branch: Option<String>,
+    publication_remote: Option<String>,
+    invalid_code: Option<String>,
+    guidance: Option<String>,
+    root: &Path,
+) -> Result<SnapshotConfiguration, RepositoryError> {
+    match state {
+        "missing"
+            if primary_branch.is_none()
+                && publication_remote.is_none()
+                && invalid_code.is_none()
+                && guidance.is_none() =>
+        {
+            Ok(SnapshotConfiguration::Missing)
+        }
+        "valid" if invalid_code.is_none() && guidance.is_none() => primary_branch
+            .filter(|branch| !branch.is_empty())
+            .map(|primary_branch| {
+                let mut source = format!(
+                    "format_version = 1\nprimary_branch = {}\n",
+                    toml::Value::String(primary_branch)
+                );
+                if let Some(remote) = publication_remote {
+                    source.push_str(&format!(
+                        "publication_remote = {}\n",
+                        toml::Value::String(remote)
+                    ));
+                }
+                let configuration = canonical::parse_repository_config(&source)
+                    .map_err(|_| snapshot_index_error(root, "valid configuration is invalid"))?;
+                Ok(SnapshotConfiguration::Valid {
+                    primary_branch: configuration.primary_branch,
+                    publication_remote: configuration.publication_remote,
+                })
+            })
+            .unwrap_or_else(|| {
+                Err(snapshot_index_error(
+                    root,
+                    "valid configuration is incomplete",
+                ))
+            }),
+        "invalid" if primary_branch.is_none() && publication_remote.is_none() => {
+            let code = invalid_code
+                .as_deref()
+                .and_then(stored_validation_code)
+                .ok_or_else(|| {
+                    snapshot_index_error(root, "invalid configuration code is invalid")
+                })?;
+            let guidance = guidance
+                .filter(|guidance| !guidance.is_empty())
+                .ok_or_else(|| {
+                    snapshot_index_error(root, "invalid configuration guidance is missing")
+                })?;
+            Ok(SnapshotConfiguration::Invalid { code, guidance })
+        }
+        _ => Err(snapshot_index_error(
+            root,
+            "configuration observation is invalid",
+        )),
+    }
+}
+fn stored_validation_code(value: &str) -> Option<canonical::ValidationCode> {
+    match value {
+        "invalid-path" => Some(canonical::ValidationCode::InvalidPath),
+        "missing-front-matter" => Some(canonical::ValidationCode::MissingFrontMatter),
+        "malformed-front-matter" => Some(canonical::ValidationCode::MalformedFrontMatter),
+        "malformed-configuration" => Some(canonical::ValidationCode::MalformedConfiguration),
+        "missing-field" => Some(canonical::ValidationCode::MissingField),
+        "invalid-field" => Some(canonical::ValidationCode::InvalidField),
+        "kind-path-mismatch" => Some(canonical::ValidationCode::KindPathMismatch),
+        "duplicate-id" => Some(canonical::ValidationCode::DuplicateId),
+        "missing-comment-item" => Some(canonical::ValidationCode::MissingCommentItem),
+        "missing-parent" => Some(canonical::ValidationCode::MissingParent),
+        "cross-item-parent" => Some(canonical::ValidationCode::CrossItemParent),
+        "comment-cycle" => Some(canonical::ValidationCode::CommentCycle),
+        _ => None,
+    }
+}
+fn stored_timestamp(value: i64, root: &Path) -> Result<OffsetDateTime, RepositoryError> {
+    OffsetDateTime::from_unix_timestamp(value)
+        .map_err(|_| snapshot_index_error(root, "stored timestamp is invalid"))
+}
+fn stored_absolute_path(value: &str, root: &Path) -> Result<PathBuf, RepositoryError> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(snapshot_index_error(
+            root,
+            "stored absolute path is invalid",
+        ))
+    }
+}
+fn stored_relative_path(value: &str, root: &Path) -> Result<PathBuf, RepositoryError> {
+    let path = PathBuf::from(value);
+    if !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && !value.contains('\\')
+        && !value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+        && !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        Ok(path)
+    } else {
+        Err(snapshot_index_error(
+            root,
+            "stored relative path is invalid",
+        ))
+    }
+}
+fn stored_item_metadata(
+    kind: AuthoringKind,
+    title: &str,
+    (ticket_type, status, project, team): (
+        &Option<String>,
+        &Option<String>,
+        &Option<String>,
+        &Option<String>,
+    ),
+    closed_at: Option<i64>,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    stored_text(title, root)?;
+    match kind {
+        AuthoringKind::Document
+            if ticket_type.is_none()
+                && status.is_none()
+                && project.is_none()
+                && team.is_none()
+                && closed_at.is_none() =>
+        {
+            Ok(())
+        }
+        AuthoringKind::Ticket => {
+            for value in [ticket_type, status, project, team].into_iter().flatten() {
+                stored_text(value, root)?;
+            }
+            if ticket_type.is_none() || status.is_none() {
+                return Err(snapshot_index_error(root, "ticket metadata is incomplete"));
+            }
+            Ok(())
+        }
+        AuthoringKind::Document => Err(snapshot_index_error(root, "document has ticket metadata")),
+    }
+}
+fn stored_text(value: &str, root: &Path) -> Result<(), RepositoryError> {
+    if value.is_empty() || value.contains('\0') {
+        Err(snapshot_index_error(root, "stored text is invalid"))
+    } else {
+        Ok(())
+    }
+}
+fn stored_context_kind(value: &str, root: &Path) -> Result<DiscoveryContextKind, RepositoryError> {
+    match value {
+        "primary" => Ok(DiscoveryContextKind::Primary),
+        "unverified" => Ok(DiscoveryContextKind::Unverified),
+        "active" => Ok(DiscoveryContextKind::Active),
+        _ => Err(snapshot_index_error(root, "stored context kind is invalid")),
+    }
+}
+fn stored_context_fields(
+    kind: DiscoveryContextKind,
+    branch: Option<&str>,
+    item_id: Option<&canonical::ItemId>,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    if let Some(branch) = branch {
+        let source = format!(
+            "format_version = 1\nprimary_branch = {}\n",
+            toml::Value::String(branch.to_owned())
+        );
+        canonical::parse_repository_config(&source)
+            .map_err(|_| snapshot_index_error(root, "stored context branch is invalid"))?;
+    }
+    match kind {
+        DiscoveryContextKind::Primary if branch.is_some() && item_id.is_none() => Ok(()),
+        DiscoveryContextKind::Active if branch.is_some() && item_id.is_some() => Ok(()),
+        DiscoveryContextKind::Unverified if item_id.is_none() => Ok(()),
+        _ => Err(snapshot_index_error(
+            root,
+            "stored context fields are inconsistent",
+        )),
+    }
+}
+fn stored_authoring_kind(value: &str, root: &Path) -> Result<AuthoringKind, RepositoryError> {
+    match value {
+        "document" => Ok(AuthoringKind::Document),
+        "ticket" => Ok(AuthoringKind::Ticket),
+        _ => Err(snapshot_index_error(root, "stored item kind is invalid")),
+    }
+}
+fn stored_activity_source(
+    value: &str,
+    root: &Path,
+) -> Result<DiscoveryActivitySource, RepositoryError> {
+    match value {
+        "git" => Ok(DiscoveryActivitySource::GitCommit),
+        "filesystem" => Ok(DiscoveryActivitySource::UncommittedFilesystem),
+        _ => Err(snapshot_index_error(
+            root,
+            "stored activity source is invalid",
+        )),
+    }
+}
+fn snapshot_index_error(root: &Path, message: impl fmt::Display) -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::RepositorySnapshot,
+        Some(root.to_owned()),
+        RepositoryErrorKind::IndexUnavailable,
+        message,
+    )
+}
+fn snapshot_index_error_source(
+    root: &Path,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> RepositoryError {
+    RepositoryError::with_source(
+        RepositoryOperation::RepositorySnapshot,
+        Some(root.to_owned()),
+        RepositoryErrorKind::IndexUnavailable,
+        error,
+    )
 }
 
 fn default_data_directory() -> Result<PathBuf, RepositoryError> {
@@ -4133,43 +4869,6 @@ fn registry_refresh_pending(
             .to_owned(),
         source: Some(Box::new(error)),
     }
-}
-
-fn open_registry(
-    registry_path: &Path,
-    observer: &mut impl FnMut(RegistryConnectionPhase),
-) -> Result<rusqlite::Connection, RepositoryError> {
-    let connection = rusqlite::Connection::open(registry_path).map_err(RepositoryError::sqlite)?;
-    connection
-        .busy_timeout(REGISTRY_BUSY_TIMEOUT)
-        .map_err(RepositoryError::sqlite)?;
-    connection
-        .pragma_update(None, "foreign_keys", "ON")
-        .map_err(RepositoryError::sqlite)?;
-    observer(RegistryConnectionPhase::BeforeWal);
-    connection
-        .pragma_update(None, "journal_mode", "WAL")
-        .map_err(RepositoryError::sqlite)?;
-    observer(RegistryConnectionPhase::AfterWal);
-
-    Ok(connection)
-}
-
-fn migrate_registry(connection: &mut rusqlite::Connection) -> Result<(), RepositoryError> {
-    let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
-    transaction
-        .execute_batch(
-            "CREATE TABLE IF NOT EXISTS repositories (
-                id INTEGER PRIMARY KEY,
-                root_path TEXT NOT NULL UNIQUE,
-                enabled_at INTEGER NOT NULL,
-                accessibility TEXT NOT NULL,
-                config_blob_oid TEXT NOT NULL,
-                refresh_required INTEGER NOT NULL CHECK (refresh_required IN (0, 1))
-            )",
-        )
-        .map_err(RepositoryError::sqlite)?;
-    transaction.commit().map_err(RepositoryError::sqlite)
 }
 
 fn reconcile_registration(

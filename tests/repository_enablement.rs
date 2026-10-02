@@ -377,7 +377,7 @@ fn service_reports_a_sqlite_error_when_its_registry_path_is_a_directory() {
 }
 
 #[test]
-fn registry_creates_only_the_repository_metadata_schema() {
+fn registry_creates_repository_and_discovery_metadata_schema() {
     let data = tempfile::tempdir().unwrap();
     RepositoryService::open_at(data.path()).unwrap();
 
@@ -421,7 +421,18 @@ fn registry_creates_only_the_repository_metadata_schema() {
                 == "root_path"
         });
 
-    assert_eq!(tables, ["repositories"]);
+    assert_eq!(
+        tables,
+        [
+            "configuration_observations",
+            "contexts",
+            "discovered_comments",
+            "discovered_items",
+            "index_operations",
+            "problems",
+            "repositories",
+        ]
+    );
     assert_eq!(
         columns,
         [
@@ -429,7 +440,7 @@ fn registry_creates_only_the_repository_metadata_schema() {
             ("root_path".to_owned(), "TEXT".to_owned(), 1, 0),
             ("enabled_at".to_owned(), "INTEGER".to_owned(), 1, 0),
             ("accessibility".to_owned(), "TEXT".to_owned(), 1, 0),
-            ("config_blob_oid".to_owned(), "TEXT".to_owned(), 1, 0),
+            ("config_blob_oid".to_owned(), "TEXT".to_owned(), 0, 0),
             ("refresh_required".to_owned(), "INTEGER".to_owned(), 1, 0),
         ]
     );
