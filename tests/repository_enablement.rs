@@ -428,6 +428,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "contexts",
             "discovered_comments",
             "discovered_items",
+            "index_operation_contexts",
             "index_operations",
             "problems",
             "repositories",

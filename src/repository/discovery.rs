@@ -1,6 +1,7 @@
 #![allow(dead_code)] // The private observation slice is consumed by the later persistence task.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
@@ -8,35 +9,41 @@ use std::{
 
 use git2::Repository;
 use rusqlite::{Connection, OpenFlags};
+use time::OffsetDateTime;
 
 use crate::canonical;
 
 use super::{
-    DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES,
-    MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT, RegistryConnectionPhase, RepositoryError,
+    AuthoringKind, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH,
+    MAX_DOCUMENT_DIRECTORY_ENTRIES, MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT,
+    RegistryConnectionPhase, RepositoryError,
 };
 
+const MAX_ACTIVITY_HISTORY_COMMITS: usize = 1024;
+
 #[derive(Debug)]
-enum RootConfiguration {
+pub(super) enum RootConfiguration {
     Missing,
     Valid(canonical::RepositoryConfig),
     Invalid(canonical::ValidationProblem),
 }
 
 #[derive(Debug)]
-struct RootHeadObservation {
-    branch: Option<String>,
-    oid: Option<git2::Oid>,
+pub(super) struct RootHeadObservation {
+    pub(super) branch: Option<String>,
+    pub(super) oid: Option<git2::Oid>,
 }
 
 #[derive(Debug)]
-struct RootContextObservation {
-    kind: DiscoveryContextKind,
-    branch: Option<String>,
+pub(super) struct RootContextObservation {
+    pub(super) kind: DiscoveryContextKind,
+    pub(super) branch: Option<String>,
+    pub(super) worktree: PathBuf,
+    pub(super) item_id: Option<canonical::ItemId>,
 }
 
 #[derive(Debug)]
-enum RootObservationProblem {
+pub(super) enum RootObservationProblem {
     Configuration(canonical::ValidationProblem),
     Branch { message: String },
     Source { path: PathBuf, message: String },
@@ -44,28 +51,57 @@ enum RootObservationProblem {
 }
 
 #[derive(Debug)]
-struct RootObservation {
-    configuration: RootConfiguration,
-    context: RootContextObservation,
-    head: RootHeadObservation,
-    sources: Vec<(PathBuf, String)>,
-    validation: canonical::ValidatedContext,
-    problems: Vec<RootObservationProblem>,
-    active_contexts: Vec<ActiveContextObservation>,
+pub(super) struct RootObservation {
+    pub(super) configuration: RootConfiguration,
+    pub(super) configuration_source: Option<Vec<u8>>,
+    pub(super) configuration_blob_oid: Option<git2::Oid>,
+    pub(super) context: RootContextObservation,
+    pub(super) head: RootHeadObservation,
+    pub(super) sources: Vec<(PathBuf, String)>,
+    pub(super) validation: canonical::ValidatedContext,
+    pub(super) items: Vec<ObservedItem>,
+    pub(super) problems: Vec<RootObservationProblem>,
+    pub(super) active_contexts: Vec<ActiveContextObservation>,
 }
 
 #[derive(Debug)]
-struct ActiveContextObservation {
-    context: RootContextObservation,
-    head: RootHeadObservation,
-    sources: Vec<(PathBuf, String)>,
-    validation: canonical::ValidatedContext,
-    problems: Vec<RootObservationProblem>,
+pub(super) struct ActiveContextObservation {
+    pub(super) context: RootContextObservation,
+    pub(super) head: RootHeadObservation,
+    pub(super) sources: Vec<(PathBuf, String)>,
+    pub(super) validation: canonical::ValidatedContext,
+    pub(super) items: Vec<ObservedItem>,
+    pub(super) problems: Vec<RootObservationProblem>,
 }
 
-fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
+#[derive(Debug)]
+pub(super) struct ObservedItem {
+    pub(super) id: canonical::ItemId,
+    pub(super) kind: AuthoringKind,
+    pub(super) path: PathBuf,
+    pub(super) title: String,
+    pub(super) ticket_type: Option<String>,
+    pub(super) status: Option<String>,
+    pub(super) project: Option<String>,
+    pub(super) team: Option<String>,
+    pub(super) closed_at: Option<OffsetDateTime>,
+    pub(super) comments: Vec<ObservedCommentThread>,
+    pub(super) activity_at: OffsetDateTime,
+    pub(super) activity_source: super::DiscoveryActivitySource,
+}
+
+#[derive(Debug)]
+pub(super) struct ObservedCommentThread {
+    pub(super) id: canonical::ItemId,
+    pub(super) path: PathBuf,
+    pub(super) created_at: OffsetDateTime,
+    pub(super) replies: Vec<ObservedCommentThread>,
+}
+
+pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
     let mut problems = Vec::new();
     let configuration = observe_configuration(root, &mut problems);
+    let configuration_source = fs::read(root.join(canonical::CONFIG_PATH)).ok();
     let head = observe_head(repository, &mut problems);
     let kind = match (&configuration, &head.branch) {
         (RootConfiguration::Valid(configuration), Some(branch))
@@ -95,23 +131,45 @@ fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
     let mut sources = Vec::new();
     collect_root_sources(root, &mut sources, &mut problems);
     let validation = canonical::validate_context(sources.clone());
+    let items = observe_items(repository, root, &sources, &validation);
     let active_contexts = match configuration {
         RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
         RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
     };
 
     RootObservation {
+        configuration_blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
         configuration,
+        configuration_source,
         context: RootContextObservation {
             kind,
             branch: head.branch.clone(),
+            worktree: root.to_owned(),
+            item_id: None,
         },
         head,
         sources,
         validation,
+        items,
         problems,
         active_contexts,
     }
+}
+
+fn configuration_blob_oid(
+    repository: &Repository,
+    live_source: Option<&[u8]>,
+) -> Option<git2::Oid> {
+    let entry = repository
+        .head()
+        .ok()?
+        .peel_to_tree()
+        .ok()?
+        .get_path(Path::new(canonical::CONFIG_PATH))
+        .ok()
+        .filter(|entry| entry.filemode() == 0o100644)?;
+    let blob = repository.find_blob(entry.id()).ok()?;
+    (live_source == Some(blob.content())).then_some(entry.id())
 }
 
 fn observe_active_contexts(
@@ -223,19 +281,222 @@ fn observe_active_contexts(
             ));
             continue;
         }
+        let items = observe_items(&repository, &expected_path, &sources, &validation);
         contexts.push(ActiveContextObservation {
             context: RootContextObservation {
                 kind: DiscoveryContextKind::Active,
                 branch: head.branch.clone(),
+                worktree: expected_path,
+                item_id: Some(path_id),
             },
             head,
             sources,
             validation,
+            items,
             problems: context_problems,
         });
     }
     contexts.sort_by(|left, right| left.context.branch.cmp(&right.context.branch));
     contexts
+}
+
+fn observe_items(
+    repository: &Repository,
+    root: &Path,
+    sources: &[(PathBuf, String)],
+    validation: &canonical::ValidatedContext,
+) -> Vec<ObservedItem> {
+    let valid_ids = validation
+        .items
+        .iter()
+        .map(canonical_item_id)
+        .collect::<BTreeSet<_>>();
+    let paths = sources
+        .iter()
+        .filter_map(|(path, source)| {
+            canonical::parse_item(path, source)
+                .ok()
+                .map(|item| (canonical_item_id(&item).clone(), path.clone()))
+        })
+        .filter(|(id, _)| valid_ids.contains(id))
+        .collect::<BTreeMap<_, _>>();
+
+    validation
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            canonical::CanonicalItem::Document(document) => Some(&document.id),
+            canonical::CanonicalItem::Ticket(ticket) => Some(&ticket.id),
+            canonical::CanonicalItem::Comment(_) => None,
+        })
+        .filter_map(|id| {
+            let path = paths.get(id)?.clone();
+            let metadata = validation.items.iter().find_map(|item| match item {
+                canonical::CanonicalItem::Document(document) if document.id == *id => Some((
+                    AuthoringKind::Document,
+                    document.title.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )),
+                canonical::CanonicalItem::Ticket(ticket) if ticket.id == *id => Some((
+                    AuthoringKind::Ticket,
+                    ticket.title.clone(),
+                    Some(ticket.ticket_type.clone()),
+                    Some(ticket.status.clone()),
+                    ticket.project.clone(),
+                    ticket.team.clone(),
+                    ticket.closed_at,
+                )),
+                _ => None,
+            })?;
+            let item_context = canonical::ValidatedContext {
+                items: validation
+                    .items
+                    .iter()
+                    .filter(|item| match item {
+                        canonical::CanonicalItem::Document(document) => document.id == *id,
+                        canonical::CanonicalItem::Ticket(ticket) => ticket.id == *id,
+                        canonical::CanonicalItem::Comment(comment) => comment.item_id == *id,
+                    })
+                    .cloned()
+                    .collect(),
+                problems: Vec::new(),
+            };
+            let comments = canonical::ordered_comment_threads(&item_context)
+                .into_iter()
+                .filter_map(|thread| observe_comment_thread(thread, &paths))
+                .collect::<Vec<_>>();
+            let mut owned_paths = vec![path.clone()];
+            collect_comment_paths(&comments, &mut owned_paths);
+            let (activity_at, activity_source) = observe_activity(repository, root, &owned_paths)?;
+            Some(ObservedItem {
+                id: id.clone(),
+                kind: metadata.0,
+                path,
+                title: metadata.1,
+                ticket_type: metadata.2,
+                status: metadata.3,
+                project: metadata.4,
+                team: metadata.5,
+                closed_at: metadata.6,
+                comments,
+                activity_at,
+                activity_source,
+            })
+        })
+        .collect()
+}
+
+fn canonical_item_id(item: &canonical::CanonicalItem) -> &canonical::ItemId {
+    match item {
+        canonical::CanonicalItem::Document(document) => &document.id,
+        canonical::CanonicalItem::Ticket(ticket) => &ticket.id,
+        canonical::CanonicalItem::Comment(comment) => &comment.id,
+    }
+}
+
+fn observe_comment_thread(
+    thread: canonical::CommentThread,
+    paths: &BTreeMap<canonical::ItemId, PathBuf>,
+) -> Option<ObservedCommentThread> {
+    let path = paths.get(&thread.comment.id)?.clone();
+    Some(ObservedCommentThread {
+        id: thread.comment.id,
+        path,
+        created_at: thread.comment.created_at,
+        replies: thread
+            .replies
+            .into_iter()
+            .filter_map(|reply| observe_comment_thread(reply, paths))
+            .collect(),
+    })
+}
+
+fn collect_comment_paths(comments: &[ObservedCommentThread], paths: &mut Vec<PathBuf>) {
+    for comment in comments {
+        paths.push(comment.path.clone());
+        collect_comment_paths(&comment.replies, paths);
+    }
+}
+
+fn observe_activity(
+    repository: &Repository,
+    root: &Path,
+    paths: &[PathBuf],
+) -> Option<(OffsetDateTime, super::DiscoveryActivitySource)> {
+    let commit = latest_commit_touching(repository, paths);
+    let modified = paths
+        .iter()
+        .filter_map(|path| {
+            (repository.status_file(path).ok()? != git2::Status::CURRENT)
+                .then(|| fs::metadata(root.join(path)).ok()?.modified().ok())
+                .flatten()
+        })
+        .map(OffsetDateTime::from)
+        .max();
+    match (commit, modified) {
+        (Some(commit), Some(modified)) if modified > commit => Some((
+            modified,
+            super::DiscoveryActivitySource::UncommittedFilesystem,
+        )),
+        (Some(commit), _) => Some((commit, super::DiscoveryActivitySource::GitCommit)),
+        (None, Some(modified)) => Some((
+            modified,
+            super::DiscoveryActivitySource::UncommittedFilesystem,
+        )),
+        (None, None) => None,
+    }
+}
+
+fn latest_commit_touching(repository: &Repository, paths: &[PathBuf]) -> Option<OffsetDateTime> {
+    first_parent_commits(repository, MAX_ACTIVITY_HISTORY_COMMITS)
+        .into_iter()
+        .find(|commit| commit_touches_paths(repository, commit, paths))
+        .and_then(|commit| OffsetDateTime::from_unix_timestamp(commit.time().seconds()).ok())
+}
+
+fn first_parent_commits<'repository>(
+    repository: &'repository Repository,
+    maximum: usize,
+) -> Vec<git2::Commit<'repository>> {
+    let mut next = repository
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok());
+    let mut commits = Vec::new();
+    while commits.len() < maximum {
+        let Some(commit) = next else {
+            break;
+        };
+        next = commit.parent(0).ok();
+        commits.push(commit);
+    }
+    commits
+}
+
+fn commit_touches_paths(
+    repository: &Repository,
+    commit: &git2::Commit<'_>,
+    paths: &[PathBuf],
+) -> bool {
+    let Ok(tree) = commit.tree() else {
+        return false;
+    };
+    let parent = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+    repository
+        .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
+        .ok()
+        .is_some_and(|diff| {
+            diff.deltas().any(|delta| {
+                [delta.old_file().path(), delta.new_file().path()]
+                    .into_iter()
+                    .flatten()
+                    .any(|path| paths.iter().any(|owned| owned == path))
+            })
+        })
 }
 
 fn parse_authoring_branch(
@@ -935,11 +1196,20 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
                 guidance TEXT
              );
              CREATE TABLE IF NOT EXISTS index_operations (
-                id INTEGER PRIMARY KEY,
-                repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-                operation TEXT NOT NULL,
-                observed_at INTEGER NOT NULL
-            );
+                 id INTEGER PRIMARY KEY,
+                 repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                 operation TEXT NOT NULL,
+                 state TEXT NOT NULL DEFAULT 'completed',
+                 context_path TEXT,
+                 persisted_context_count INTEGER NOT NULL DEFAULT 0,
+                 observed_at INTEGER NOT NULL
+              );
+             CREATE TABLE IF NOT EXISTS index_operation_contexts (
+                 operation_id INTEGER NOT NULL REFERENCES index_operations(id) ON DELETE CASCADE,
+                 worktree_path TEXT NOT NULL,
+                 observation_fingerprint TEXT NOT NULL DEFAULT '',
+                 PRIMARY KEY (operation_id, worktree_path)
+             );
             CREATE INDEX IF NOT EXISTS contexts_repository_id_idx
                 ON contexts(repository_id, worktree_path);
             CREATE INDEX IF NOT EXISTS discovered_items_context_id_idx
@@ -948,10 +1218,34 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
                 ON discovered_comments(item_id, created_at, comment_id);
             CREATE INDEX IF NOT EXISTS problems_repository_id_idx
                 ON problems(repository_id, context_id, observed_at);
-            CREATE INDEX IF NOT EXISTS index_operations_repository_id_idx
-                ON index_operations(repository_id, observed_at);",
+             CREATE INDEX IF NOT EXISTS index_operations_repository_id_idx
+                 ON index_operations(repository_id, observed_at);",
         )
         .map_err(RepositoryError::sqlite)?;
+    let has_state = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('index_operations') WHERE name = 'state'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(RepositoryError::sqlite)?
+        != 0;
+    if !has_state {
+        transaction
+            .execute_batch(
+                "ALTER TABLE index_operations ADD COLUMN state TEXT NOT NULL DEFAULT 'completed';
+             ALTER TABLE index_operations ADD COLUMN context_path TEXT;",
+            )
+            .map_err(RepositoryError::sqlite)?;
+    }
+    let has_persisted_context_count = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('index_operations') WHERE name = 'persisted_context_count'",
+        [], |row| row.get::<_, i64>(0),
+    ).map_err(RepositoryError::sqlite)? != 0;
+    if !has_persisted_context_count {
+        transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
+            .map_err(RepositoryError::sqlite)?;
+    }
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -962,11 +1256,12 @@ mod tests {
     use std::{fs, path::Path};
 
     use git2::{Repository, RepositoryInitOptions, Signature, Time, WorktreeAddOptions};
+    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         canonical,
-        repository::{DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
+        repository::{DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
     };
 
     fn repository_on_main() -> (tempfile::TempDir, Repository) {
@@ -1003,6 +1298,373 @@ mod tests {
 
     fn comment_source() -> &'static str {
         "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\nitem_id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ncreated_at: 2026-09-30T12:00:00Z\n---\n"
+    }
+
+    fn comment_source_with(id: &str, parent_id: Option<&str>, created_at: &str) -> String {
+        let parent_id = parent_id
+            .map(|parent_id| format!("parent_id: \"{parent_id}\"\n"))
+            .unwrap_or_default();
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"{id}\"\nitem_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n{parent_id}created_at: {created_at}\n---\n"
+        )
+    }
+
+    fn checkpoint(repository: &Repository, path: &Path, timestamp: i64) -> git2::Oid {
+        let mut index = repository.index().unwrap();
+        index.add_path(path).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repository.head().unwrap().peel_to_commit().unwrap();
+        let signature =
+            Signature::new("Test", "test@example.invalid", &Time::new(timestamp, 0)).unwrap();
+        let oid = repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Checkpoint",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        drop(tree);
+        index.write().unwrap();
+        oid
+    }
+
+    fn checkpoint_reference(
+        repository: &Repository,
+        path: &Path,
+        reference: &str,
+        parent: git2::Oid,
+        timestamp: i64,
+    ) -> git2::Oid {
+        let mut index = repository.index().unwrap();
+        index.add_path(path).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repository.find_commit(parent).unwrap();
+        let signature =
+            Signature::new("Test", "test@example.invalid", &Time::new(timestamp, 0)).unwrap();
+        let oid = repository
+            .commit(
+                Some(reference),
+                &signature,
+                &signature,
+                "Side checkpoint",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        drop(tree);
+        index.write().unwrap();
+        oid
+    }
+
+    fn observed_document(observation: &RootObservation) -> &ObservedItem {
+        observation
+            .items
+            .iter()
+            .find(|item| item.id.to_string() == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+            .unwrap()
+    }
+
+    #[test]
+    fn observation_orders_equal_time_comment_siblings_by_ulid_recursively() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        fs::create_dir_all(directory.path().join("docs")).unwrap();
+        fs::write(directory.path().join("docs/document.md"), document_source()).unwrap();
+        let comments = directory
+            .path()
+            .join(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        fs::create_dir_all(&comments).unwrap();
+        fs::write(
+            comments.join("01C00000000000000000000001.md"),
+            comment_source_with("01C00000000000000000000001", None, "2026-09-30T12:00:00Z"),
+        )
+        .unwrap();
+        fs::write(
+            comments.join("01B00000000000000000000001.md"),
+            comment_source_with("01B00000000000000000000001", None, "2026-09-30T12:00:00Z"),
+        )
+        .unwrap();
+        fs::write(
+            comments.join("01E00000000000000000000001.md"),
+            comment_source_with(
+                "01E00000000000000000000001",
+                Some("01B00000000000000000000001"),
+                "2026-09-30T12:00:00Z",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            comments.join("01D00000000000000000000001.md"),
+            comment_source_with(
+                "01D00000000000000000000001",
+                Some("01B00000000000000000000001"),
+                "2026-09-30T12:00:00Z",
+            ),
+        )
+        .unwrap();
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert_eq!(
+            item.comments[0].id.to_string(),
+            "01B00000000000000000000001"
+        );
+        assert_eq!(
+            item.comments[1].id.to_string(),
+            "01C00000000000000000000001"
+        );
+        assert_eq!(
+            item.comments[0].replies[0].id.to_string(),
+            "01D00000000000000000000001"
+        );
+        assert_eq!(
+            item.comments[0].replies[1].id.to_string(),
+            "01E00000000000000000000001"
+        );
+    }
+
+    #[test]
+    fn observation_uses_a_newer_comment_commit_for_item_activity() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let document = directory.path().join("docs/document.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, document_source()).unwrap();
+        checkpoint(&repository, Path::new("docs/document.md"), 10);
+        let comment = directory
+            .path()
+            .join(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md");
+        fs::create_dir_all(comment.parent().unwrap()).unwrap();
+        fs::write(&comment, comment_source()).unwrap();
+        checkpoint(
+            &repository,
+            Path::new(
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+            ),
+            20,
+        );
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(20).unwrap()
+        );
+        assert_eq!(item.activity_source, DiscoveryActivitySource::GitCommit);
+    }
+
+    #[test]
+    fn observation_uses_the_newer_first_parent_commit_when_its_timestamp_is_backdated() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let document = directory.path().join("docs/document.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, document_source()).unwrap();
+        checkpoint(&repository, Path::new("docs/document.md"), 100);
+        fs::write(&document, format!("{}newer revision\n", document_source())).unwrap();
+        checkpoint(&repository, Path::new("docs/document.md"), 10);
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(10).unwrap()
+        );
+        assert_eq!(item.activity_source, DiscoveryActivitySource::GitCommit);
+    }
+
+    #[test]
+    fn observation_ignores_a_newer_side_branch_only_item_change() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let document = directory.path().join("docs/document.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, document_source()).unwrap();
+        let base = checkpoint(&repository, Path::new("docs/document.md"), 10);
+        repository
+            .branch("side", &repository.find_commit(base).unwrap(), false)
+            .unwrap();
+        fs::write(&document, format!("{}side branch\n", document_source())).unwrap();
+        let side = checkpoint_reference(
+            &repository,
+            Path::new("docs/document.md"),
+            "refs/heads/side",
+            base,
+            100,
+        );
+        let base_object = repository.find_object(base, None).unwrap();
+        repository
+            .reset(&base_object, git2::ResetType::Hard, None)
+            .unwrap();
+        let main = checkpoint(&repository, Path::new("fixture.txt"), 20);
+        let main_commit = repository.find_commit(main).unwrap();
+        let side_commit = repository.find_commit(side).unwrap();
+        let tree = main_commit.tree().unwrap();
+        let signature = Signature::new("Test", "test@example.invalid", &Time::new(30, 0)).unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Merge side without its item change",
+                &tree,
+                &[&main_commit, &side_commit],
+            )
+            .unwrap();
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(10).unwrap()
+        );
+    }
+
+    #[test]
+    fn first_parent_history_respects_the_requested_inspection_bound() {
+        let (_directory, repository) = repository_on_main();
+        checkpoint(&repository, Path::new("fixture.txt"), 1);
+        checkpoint(&repository, Path::new("fixture.txt"), 2);
+        checkpoint(&repository, Path::new("fixture.txt"), 3);
+
+        let commits = first_parent_commits(&repository, 2);
+
+        assert_eq!(MAX_ACTIVITY_HISTORY_COMMITS, 1024);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].time().seconds(), 3);
+        assert_eq!(commits[1].time().seconds(), 2);
+    }
+
+    #[test]
+    fn observation_uses_newer_uncommitted_item_or_comment_mtime() {
+        for path in [
+            PathBuf::from("docs/document.md"),
+            PathBuf::from(
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+            ),
+        ] {
+            let (directory, repository) = repository_on_main();
+            write_config(
+                directory.path(),
+                "format_version = 1\nprimary_branch = \"main\"\n",
+            );
+            let document = directory.path().join("docs/document.md");
+            fs::create_dir_all(document.parent().unwrap()).unwrap();
+            fs::write(&document, document_source()).unwrap();
+            let comment = directory.path().join(
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+            );
+            fs::create_dir_all(comment.parent().unwrap()).unwrap();
+            fs::write(&comment, comment_source()).unwrap();
+            checkpoint(&repository, Path::new("docs/document.md"), 10);
+            checkpoint(
+                &repository,
+                Path::new(
+                    ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+                ),
+                20,
+            );
+            let source = if path == Path::new("docs/document.md") {
+                document_source().to_owned()
+            } else {
+                comment_source().to_owned()
+            };
+            fs::write(
+                directory.path().join(&path),
+                format!("{source}uncommitted\n"),
+            )
+            .unwrap();
+
+            let observation = observe_root(&repository, directory.path());
+            let item = observed_document(&observation);
+
+            assert_eq!(
+                item.activity_source,
+                DiscoveryActivitySource::UncommittedFilesystem
+            );
+            assert!(item.activity_at > OffsetDateTime::from_unix_timestamp(20).unwrap());
+        }
+    }
+
+    #[test]
+    fn observation_excludes_invalid_comments_from_trees_and_activity() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let document = directory.path().join("docs/document.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, document_source()).unwrap();
+        checkpoint(&repository, Path::new("docs/document.md"), 10);
+        let invalid = directory
+            .path()
+            .join(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md");
+        fs::create_dir_all(invalid.parent().unwrap()).unwrap();
+        fs::write(
+            &invalid,
+            comment_source_with(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+                Some("01ARZ3NDEKTSV4RRFFQ69G5FAY"),
+                "2026-09-30T12:00:00Z",
+            ),
+        )
+        .unwrap();
+        checkpoint(
+            &repository,
+            Path::new(
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+            ),
+            20,
+        );
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert!(item.comments.is_empty());
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(10).unwrap()
+        );
+    }
+
+    #[test]
+    fn observation_does_not_mutate_git_state() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        fs::create_dir_all(directory.path().join("docs")).unwrap();
+        fs::write(directory.path().join("docs/document.md"), document_source()).unwrap();
+        let head = repository.head().unwrap().target();
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let config = fs::read(repository.path().join("config")).unwrap();
+
+        let _ = observe_root(&repository, directory.path());
+
+        assert_eq!(repository.head().unwrap().target(), head);
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+        assert_eq!(fs::read(repository.path().join("config")).unwrap(), config);
     }
 
     fn active_worktree(repository: &Repository, root: &Path, kind: &str, item_id: &str) -> PathBuf {
