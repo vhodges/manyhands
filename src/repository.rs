@@ -126,6 +126,7 @@ pub struct RepositoryService {
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    rebuild_error_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -894,6 +895,7 @@ impl RepositoryService {
         match result {
             Ok(snapshot) => Ok(snapshot),
             Err(error) => {
+                self.run_corrupt_cache_hook(&self.rebuild_error_hook, operation, &root)?;
                 let _ = set_rebuild_operation(&self.registry_path, operation_id, "error", &root);
                 Err(error)
             }
@@ -2069,6 +2071,7 @@ impl RepositoryService {
             registration_git_hook: Mutex::new(None),
             corrupt_cache_decision_hook: Mutex::new(None),
             corrupt_cache_critical_hook: Mutex::new(None),
+            rebuild_error_hook: Mutex::new(None),
         })
     }
 
@@ -2806,6 +2809,14 @@ impl RepositoryService {
             .corrupt_cache_critical_hook
             .lock()
             .expect("test corrupt-cache critical hook lock") = Some(Box::new(hook));
+    }
+
+    #[doc(hidden)]
+    pub fn set_rebuild_error_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .rebuild_error_hook
+            .lock()
+            .expect("test rebuild error hook lock") = Some(Box::new(hook));
     }
 
     pub fn remove_registration(

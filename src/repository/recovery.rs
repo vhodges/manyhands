@@ -284,8 +284,8 @@ pub(super) fn advance_after_observation(
         .execute(
             "UPDATE operation_records
          SET state = ?2, completed_step = ?2, context_path = ?3,
-             persisted_context_count = COALESCE(?4, persisted_context_count), observed_at = ?5
-         WHERE id = ?1",
+              persisted_context_count = COALESCE(?4, persisted_context_count), observed_at = ?5
+          WHERE id = ?1 AND NOT (state = 'completed' AND ?2 = 'error')",
             params![
                 record_id,
                 state,

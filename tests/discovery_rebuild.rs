@@ -1953,6 +1953,38 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
 }
 
 #[test]
+fn rebuild_error_does_not_overwrite_a_completed_same_id_retry() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let retry = RepositoryService::open_at(data.path()).unwrap();
+    let operation_id = support::operation_id();
+    let (paused_send, paused_receive) = mpsc::sync_channel(0);
+    let (resume_send, resume_receive) = mpsc::sync_channel(0);
+    failing.set_rebuild_error_hook_for_testing(move || {
+        paused_send.send(()).unwrap();
+        resume_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let original = scope
+            .spawn(|| failing.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
+        paused_receive.recv().unwrap();
+        retry
+            .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+            .unwrap();
+        resume_send.send(()).unwrap();
+        assert_eq!(
+            original.join().unwrap().unwrap_err().kind,
+            RepositoryErrorKind::InjectedFailure
+        );
+    });
+
+    assert!(retry.recovery_inspection(&fixture.root).unwrap().is_empty());
+}
+
+#[test]
 fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
