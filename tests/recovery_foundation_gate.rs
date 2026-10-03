@@ -388,7 +388,7 @@ fn legacy_index_record_can_only_resume_with_its_matching_action() {
         })
         .unwrap_err();
 
-    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
 }
 
 #[test]
@@ -520,7 +520,7 @@ fn pending_lifecycle_record_rejects_a_same_id_different_target() {
         })
         .unwrap_err();
 
-    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
     assert_eq!(
         support::repository_and_worktree_snapshot(&fixture),
         repository_before

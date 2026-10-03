@@ -226,18 +226,14 @@ pub(super) fn begin_or_reconcile_operation(
         )
         .optional()
         .map_err(RepositoryError::sqlite)?;
-    if let Some((_, existing_root, existing_action, existing_target, existing_state)) = &existing {
+    if let Some((_, existing_root, existing_action, existing_target, _)) = &existing {
         if existing_root != root_path {
             return Err(mismatch(operation, root));
         }
         if !same_lifecycle_action(existing_action, action)
             || existing_target.as_deref() != Some(target)
         {
-            return Err(if existing_state == "completed" {
-                mismatch(operation, root)
-            } else {
-                recovery_required(operation, root)
-            });
+            return Err(mismatch(operation, root));
         }
     }
 
