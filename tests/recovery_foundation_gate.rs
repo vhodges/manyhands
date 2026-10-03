@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     fs::OpenOptions,
     path::PathBuf,
     time::{Duration, Instant},
@@ -39,6 +40,35 @@ fn common_git_lease_child() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn failed_lease_holder_is_reported_before_ready_timeout() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let start = Instant::now();
+    let panic = std::panic::catch_unwind(|| {
+        support::hold_lease_in_child(
+            &fixture.root.join("missing"),
+            data.path(),
+            LeaseKind::Repository,
+        );
+    })
+    .unwrap_err();
+
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let message = panic_message(panic.as_ref());
+    assert!(message.contains("child exited before ready"));
+    assert!(message.contains("exit status"));
+    assert!(message.contains("No such file or directory"));
+}
+
+fn panic_message(panic: &(dyn Any + Send)) -> &str {
+    panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or_default()
 }
 
 #[test]

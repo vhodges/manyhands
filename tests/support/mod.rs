@@ -3,8 +3,9 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -441,7 +442,7 @@ pub fn hold_lease_in_child(
     let synchronization = tempfile::tempdir().unwrap();
     let ready = synchronization.path().join("ready");
     let release = synchronization.path().join("release");
-    let child = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg("common_git_lease_child")
         .arg("--nocapture")
@@ -450,9 +451,11 @@ pub fn hold_lease_in_child(
         .env("MANYHANDS_LEASE_KIND", kind.as_str())
         .env("MANYHANDS_LEASE_READY", &ready)
         .env("MANYHANDS_LEASE_RELEASE", &release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    wait_for_path(&ready);
+    wait_for_path(&mut child, &ready);
     LeaseHolder {
         child,
         release,
@@ -460,12 +463,33 @@ pub fn hold_lease_in_child(
     }
 }
 
-pub fn wait_for_path(path: &Path) {
+pub fn wait_for_path(child: &mut Child, path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            let stdout = child
+                .stdout
+                .take()
+                .map(read_child_output)
+                .unwrap_or_default();
+            let stderr = child
+                .stderr
+                .take()
+                .map(read_child_output)
+                .unwrap_or_default();
+            panic!(
+                "lease holder child exited before ready ({status}):\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
         assert!(Instant::now() < deadline, "timed out waiting for {path:?}");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn read_child_output(mut output: impl Read) -> String {
+    let mut bytes = Vec::new();
+    let _ = output.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub fn enable_request(root: &Path) -> EnableRepositoryRequest {
