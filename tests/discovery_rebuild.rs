@@ -568,10 +568,11 @@ fn refresh_sqlite_context_write_failure_preserves_git_and_recovers() {
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
     let error = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap_err();
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
     assert_eq!(error.operation, RepositoryOperation::RefreshRepository);
@@ -595,7 +596,7 @@ fn refresh_sqlite_context_write_failure_preserves_git_and_recovers() {
         .unwrap();
     let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected retry recovery")
@@ -619,10 +620,11 @@ fn refresh_after_observation_failure_preserves_prior_rows_for_retry() {
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::AfterContextObservation).open_service(data.path());
+    let operation_id = support::operation_id();
 
     assert_eq!(
         failing
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::InjectedFailure
@@ -635,7 +637,7 @@ fn refresh_after_observation_failure_preserves_prior_rows_for_retry() {
     );
     assert!(matches!(
         initial
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap(),
         RefreshOutcome::Refreshed { .. }
     ));
@@ -654,11 +656,12 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
         let document = document.clone();
         move || fs::write(document, "ordinary markdown\n").unwrap()
     });
+    let operation_id = support::operation_id();
 
     assert!(matches!(
         enabled
             .service
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap(),
         RefreshOutcome::RetryRequired {
             context: Some(_),
@@ -671,7 +674,7 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
 
     let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected stable retry");
@@ -1098,17 +1101,18 @@ fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, changed_source).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
         enabled
             .service
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
 
     enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap();
     let after = root_refresh_fingerprints(&enabled.service, &fixture.root);
     assert_eq!(after.len(), 2);
@@ -1296,13 +1300,14 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed_active).unwrap());
+    let operation_id = support::operation_id();
 
     let RefreshOutcome::RetryRequired {
         context: Some(context),
         ..
     } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected active retry")
@@ -1324,7 +1329,7 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
 
     let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected stable retry")
@@ -1383,10 +1388,11 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, active_changed).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
         enabled
             .service
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
@@ -1398,7 +1404,7 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
 
     let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected retry")
@@ -1452,10 +1458,11 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
         enabled
             .service
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
@@ -1463,7 +1470,7 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
 
     let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected retry")
@@ -1956,9 +1963,10 @@ fn corrupt_rebuild_failure_preserves_diagnostics_for_retry() {
     fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
     let failing = support::FailOnce::at(FailurePoint::BeforeCorruptCacheReplacement)
         .open_service(data.path());
+    let operation_id = support::operation_id();
 
     let error = failing
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
@@ -1974,7 +1982,7 @@ fn corrupt_rebuild_failure_preserves_diagnostics_for_retry() {
     );
 
     let snapshot = failing
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap();
     assert_eq!(snapshot.root, fixture.root.canonicalize().unwrap());
     assert!(corrupt_diagnostic_exists(data.path()));
@@ -2034,9 +2042,10 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
     let error = service
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
@@ -2050,7 +2059,7 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
         .unwrap();
 
     service
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap();
 
     assert_eq!(
@@ -2066,9 +2075,10 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
     let service =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
 
     let error = service
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
@@ -2083,7 +2093,7 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     );
 
     service
-        .rebuild_repository(rebuild_request!(&fixture.root))
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         .unwrap();
 
     assert_eq!(corrupt_diagnostic_count(data.path()), diagnostics);
@@ -2121,10 +2131,11 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
     assert_eq!(
         service
-            .rebuild_repository(rebuild_request!(&first.root))
+            .rebuild_repository(rebuild_request!(&first.root, operation_id))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::Sqlite
@@ -2149,7 +2160,7 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
     );
 
     restarted
-        .rebuild_repository(rebuild_request!(&first.root))
+        .rebuild_repository(rebuild_request!(&first.root, operation_id))
         .unwrap();
 
     assert!(restarted.inspect(&second.root).is_ok());

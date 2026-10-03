@@ -1736,14 +1736,16 @@ fn document_create_retry_at_a_different_path_preserves_completed_context() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
     let request = |path| {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             path,
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, commit_oid) = saved_checkpoint(
@@ -5378,12 +5380,14 @@ fn recovery_ticket_branch_creation_failure_leaves_no_context_then_retries() {
     let branch = format!("manyhands/ticket/{}", support::ticket_id());
     let failing = support::FailOnce::at(FailurePoint::BeforeContextBranchCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Ticket,
             support::ticket_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -5428,12 +5432,14 @@ fn recovery_ticket_worktree_creation_failure_retains_branch_then_retries() {
     let branch = format!("manyhands/ticket/{}", support::ticket_id());
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Ticket,
             support::ticket_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -5489,12 +5495,14 @@ fn recovery_document_edit_worktree_creation_failure_retries_exact_primary_branch
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
             ContextIntent::Edit,
+            operation_id,
         )
     };
 
