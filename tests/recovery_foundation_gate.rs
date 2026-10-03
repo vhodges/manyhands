@@ -12,6 +12,16 @@ fn operation_ids_round_trip_in_canonical_uppercase_only() {
 }
 
 #[test]
+fn default_operation_id_is_canonical_and_parseable() {
+    let operation_id = OperationId::default();
+
+    assert_eq!(
+        OperationId::parse(&operation_id.to_string()).unwrap(),
+        operation_id
+    );
+}
+
+#[test]
 fn expected_path_observations_hash_exact_bytes() {
     assert_ne!(
         ExpectedPathObservation::from_bytes(b"before"),

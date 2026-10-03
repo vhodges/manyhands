@@ -420,14 +420,6 @@ pub fn enable_request_with_operation_id(
     }
 }
 
-pub fn fixture_operation_id() -> OperationId {
-    operation_id()
-}
-
-pub fn parse_operation_id(value: &str) -> OperationId {
-    OperationId::parse(value).unwrap()
-}
-
 pub fn ticket_id() -> ItemId {
     ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAW").unwrap()
 }

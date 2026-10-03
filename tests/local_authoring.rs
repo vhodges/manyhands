@@ -4934,6 +4934,7 @@ fn comment_request(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn comment_request_with_operation_id(
     root: &std::path::Path,
     kind: AuthoringKind,

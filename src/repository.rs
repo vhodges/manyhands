@@ -48,6 +48,12 @@ impl OperationId {
     }
 }
 
+impl Default for OperationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl fmt::Display for OperationId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
