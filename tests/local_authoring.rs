@@ -3751,13 +3751,15 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
     let operation_id = support::new_operation_id();
     let request = || {
         comment_request_with_operation_id(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Retry\n",
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Retry\n",
+            ),
             operation_id,
         )
     };
@@ -3993,13 +3995,15 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     let operation_id = support::new_operation_id();
     let request = || {
         comment_request_with_operation_id(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
             operation_id,
         )
     };
@@ -4089,13 +4093,15 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     let operation_id = support::new_operation_id();
     let request = || {
         comment_request_with_operation_id(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
             operation_id,
         )
     };
@@ -4261,13 +4267,15 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
     let operation_id = support::new_operation_id();
     let request = || {
         comment_request_with_operation_id(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
             operation_id,
         )
     };
@@ -4340,13 +4348,15 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
     let operation_id = support::new_operation_id();
     let request = || {
         comment_request_with_operation_id(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
             operation_id,
         )
     };
@@ -4922,36 +4932,21 @@ fn comment_request(
     parent_id: Option<manyhands::canonical::ItemId>,
     body: &str,
 ) -> SubmitCommentRequest {
-    comment_request_with_operation_id(
-        root,
-        kind,
-        item_id,
-        intent,
-        comment_id,
-        parent_id,
-        body,
-        support::new_operation_id(),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn comment_request_with_operation_id(
-    root: &std::path::Path,
-    kind: AuthoringKind,
-    item_id: manyhands::canonical::ItemId,
-    intent: ContextIntent,
-    comment_id: manyhands::canonical::ItemId,
-    parent_id: Option<manyhands::canonical::ItemId>,
-    body: &str,
-    operation_id: manyhands::repository::OperationId,
-) -> SubmitCommentRequest {
     SubmitCommentRequest {
-        target: target_with_operation_id(root, kind, item_id, intent, operation_id),
+        target: target(root, kind, item_id, intent),
         comment_id,
         parent_id,
         body: body.to_owned(),
         expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
     }
+}
+
+fn comment_request_with_operation_id(
+    mut request: SubmitCommentRequest,
+    operation_id: manyhands::repository::OperationId,
+) -> SubmitCommentRequest {
+    request.target.operation_id = operation_id;
+    request
 }
 
 fn canonical_ticket(title: &str, body: &str) -> String {
