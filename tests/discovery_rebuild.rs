@@ -2050,24 +2050,50 @@ fn root_scoped_incomplete_rebuild_does_not_block_other_root_discovery() {
 fn refresh_scan_releases_repository_lease_before_observation() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
-    let (observed_send, observed_receive) = mpsc::sync_channel(0);
-    let (release_send, release_receive) = mpsc::sync_channel(0);
+    let root = fixture.root.clone();
+    let data = enabled.data_directory.path().to_owned();
     enabled.service.set_observation_hook_for_testing(move || {
-        observed_send.send(()).unwrap();
-        release_receive.recv().unwrap();
+        support::hold_lease_in_child_for_test(
+            &root,
+            &data,
+            LeaseKind::Repository,
+            "cache_lease_child",
+        )
+        .release();
     });
 
-    let refresh = std::thread::scope(|scope| {
-        let refresh = scope.spawn(|| {
-            enabled
-                .service
-                .refresh_repository(refresh_request!(&fixture.root))
-        });
-        observed_receive.recv().unwrap();
-        release_send.send(()).unwrap();
-        refresh.join().unwrap()
+    assert!(
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root))
+            .is_ok()
+    );
+}
+
+#[test]
+fn registration_git_reads_release_cache_guard_for_exclusive_replacement() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    enabled.service.set_registration_git_hook_for_testing({
+        let root = fixture.root.clone();
+        let data = enabled.data_directory.path().to_owned();
+        move || {
+            support::hold_lease_in_child_for_test(
+                &root,
+                &data,
+                LeaseKind::CacheWrite,
+                "cache_lease_child",
+            )
+            .release();
+        }
     });
-    assert!(refresh.is_ok());
+
+    assert!(
+        enabled
+            .service
+            .enable(support::enable_request(&fixture.root))
+            .is_ok()
+    );
 }
 
 #[test]

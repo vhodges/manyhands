@@ -123,6 +123,7 @@ pub struct RepositoryService {
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1827,6 +1828,21 @@ impl RepositoryService {
         operation: RepositoryOperation,
     ) -> Result<(), RepositoryError> {
         self.check_failure(FailurePoint::BeforeRegistryWrite, operation, root)?;
+        if let Some(hook) = self
+            .registration_git_hook
+            .lock()
+            .map_err(|_| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::InjectedFailure,
+                    "the test registration Git hook is unavailable",
+                )
+            })?
+            .take()
+        {
+            hook();
+        }
         reconcile_registration(&self.registry_path, repository, root)
     }
 
@@ -2029,6 +2045,7 @@ impl RepositoryService {
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
             observation_hook: Mutex::new(None),
+            registration_git_hook: Mutex::new(None),
         })
     }
 
@@ -2736,6 +2753,14 @@ impl RepositoryService {
             .observation_hook
             .lock()
             .expect("test observation hook lock") = Some(Box::new(hook));
+    }
+
+    #[doc(hidden)]
+    pub fn set_registration_git_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .registration_git_hook
+            .lock()
+            .expect("test registration Git hook lock") = Some(Box::new(hook));
     }
 
     pub fn remove_registration(
@@ -6328,7 +6353,6 @@ fn reconcile_registration(
     repository: &Repository,
     root: &Path,
 ) -> Result<(), RepositoryError> {
-    let _cache_guard = cache_read_guard(registry_path, root, RepositoryOperation::Enable)?;
     let config_blob_oid = committed_configuration_blob_oid(repository, root)?;
     let enabled_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6342,6 +6366,7 @@ fn reconcile_registration(
         })?
         .as_secs() as i64;
     let root_path = registry_root_key(root, RepositoryOperation::Enable)?;
+    let _cache_guard = cache_read_guard(registry_path, root, RepositoryOperation::Enable)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::Enable, root))?;
     migrate_registry(&mut connection)
