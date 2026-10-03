@@ -41,6 +41,7 @@ const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 
 type RepositoryOperationLock = Arc<Mutex<()>>;
 type RepositoryOperationLockMap = HashMap<(PathBuf, PathBuf), Weak<Mutex<()>>>;
+type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
 
 fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> RepositoryOperationLock {
     static OPERATION_LOCKS: OnceLock<Mutex<RepositoryOperationLockMap>> = OnceLock::new();
@@ -135,6 +136,7 @@ pub struct RepositoryService {
     registry_path: PathBuf,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
+    lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -146,6 +148,13 @@ pub struct RepositoryService {
 enum IndexAvailability {
     Ready,
     Degraded,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleLeasePhase {
+    RemoveRemoteUnselected,
+    SetPublicationRemoteExisting,
 }
 
 #[derive(Clone)]
@@ -2174,6 +2183,7 @@ impl RepositoryService {
             registry_path,
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
+            lifecycle_lease_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
             corrupt_cache_decision_hook: Mutex::new(None),
@@ -2298,6 +2308,7 @@ impl RepositoryService {
                 "clear the publication remote before removing it",
             ));
         }
+        self.run_lifecycle_lease_hook(LifecycleLeasePhase::RemoveRemoteUnselected);
         match repository.find_remote(name) {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
@@ -2406,6 +2417,7 @@ impl RepositoryService {
                 ));
             }
         }
+        self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
         if config.publication_remote == request.name {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
@@ -3089,6 +3101,37 @@ impl RepositoryService {
             .observation_hook
             .lock()
             .expect("test observation hook lock") = Some(Box::new(hook));
+    }
+
+    #[doc(hidden)]
+    pub fn set_lifecycle_lease_hook_for_testing(
+        &self,
+        phase: LifecycleLeasePhase,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *self
+            .lifecycle_lease_hook
+            .lock()
+            .expect("test lifecycle lease hook lock") = Some((phase, Box::new(hook)));
+    }
+
+    fn run_lifecycle_lease_hook(&self, phase: LifecycleLeasePhase) {
+        let hook = {
+            let mut installed = self
+                .lifecycle_lease_hook
+                .lock()
+                .expect("test lifecycle lease hook lock");
+            match installed
+                .as_ref()
+                .map(|(installed_phase, _)| *installed_phase)
+            {
+                Some(installed_phase) if installed_phase == phase => installed.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, hook)) = hook {
+            hook();
+        }
     }
 
     #[doc(hidden)]

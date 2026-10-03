@@ -3,15 +3,18 @@ use std::{
     fs,
     fs::OpenOptions,
     path::PathBuf,
+    sync::mpsc,
+    thread,
     time::{Duration, Instant},
 };
 
 use manyhands::repository::{
-    AddRemoteRequest, CommitIdentity, CreateRepositoryRequest, EnableRepositoryOutcome,
-    ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, OperationId,
-    PublicationRemoteOutcome, RebuildRepositoryRequest, RecoveryInspection,
-    RefreshRepositoryRequest, RemoveRegistrationOutcome, RemoveRegistrationRequest,
-    RemoveRemoteRequest, RepositoryErrorKind, RepositoryService, SetPublicationRemoteRequest,
+    AddRemoteRequest, CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
+    EnableRepositoryOutcome, ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind,
+    LifecycleLeasePhase, OperationId, PublicationRemoteOutcome, RebuildRepositoryRequest,
+    RecoveryInspection, RefreshRepositoryRequest, RemoveRegistrationOutcome,
+    RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
+    SetPublicationRemoteRequest,
 };
 use rusqlite::{Connection, params};
 
@@ -140,6 +143,171 @@ fn root_scoped_refresh_is_busy_until_the_common_git_lease_releases() {
             })
             .is_ok()
     );
+}
+
+#[test]
+fn remove_remote_holds_the_lease_through_its_unselected_observation() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let holder = RepositoryService::open_at(data.path()).unwrap();
+    let contender = RepositoryService::open_at(data.path()).unwrap();
+    holder
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    holder
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    stage_configuration(&fixture);
+    let (observed_at, observed) = mpsc::channel();
+    let (released, release) = mpsc::channel();
+    holder.set_lifecycle_lease_hook_for_testing(
+        LifecycleLeasePhase::RemoveRemoteUnselected,
+        move || {
+            observed_at.send(()).unwrap();
+            release.recv().unwrap();
+        },
+    );
+
+    let root = fixture.root.clone();
+    let removing = thread::spawn(move || {
+        holder.remove_remote(RemoveRemoteRequest {
+            root,
+            name: "origin".to_owned(),
+            operation_id: OperationId::new(),
+        })
+    });
+    observed.recv().unwrap();
+
+    let busy = contender
+        .set_publication_remote(SetPublicationRemoteRequest {
+            root: fixture.root.clone(),
+            name: Some("origin".to_owned()),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(busy.kind, RepositoryErrorKind::RepositoryBusy);
+
+    released.send(()).unwrap();
+    assert!(removing.join().unwrap().is_ok());
+    let unavailable = contender
+        .set_publication_remote(SetPublicationRemoteRequest {
+            root: fixture.root.clone(),
+            name: Some("origin".to_owned()),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(
+        unavailable.kind,
+        RepositoryErrorKind::UnavailablePublicationRemote
+    );
+    assert_remote_configuration(&contender, &fixture.root, None, &[]);
+}
+
+#[test]
+fn publication_selection_holds_the_lease_through_its_remote_observation() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let holder = RepositoryService::open_at(data.path()).unwrap();
+    let contender = RepositoryService::open_at(data.path()).unwrap();
+    holder
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    holder
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    stage_configuration(&fixture);
+    let (observed_at, observed) = mpsc::channel();
+    let (released, release) = mpsc::channel();
+    holder.set_lifecycle_lease_hook_for_testing(
+        LifecycleLeasePhase::SetPublicationRemoteExisting,
+        move || {
+            observed_at.send(()).unwrap();
+            release.recv().unwrap();
+        },
+    );
+
+    let root = fixture.root.clone();
+    let selecting = thread::spawn(move || {
+        holder.set_publication_remote(SetPublicationRemoteRequest {
+            root,
+            name: Some("origin".to_owned()),
+            operation_id: OperationId::new(),
+        })
+    });
+    observed.recv().unwrap();
+
+    let busy = contender
+        .remove_remote(RemoveRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(busy.kind, RepositoryErrorKind::RepositoryBusy);
+
+    released.send(()).unwrap();
+    assert!(selecting.join().unwrap().is_ok());
+    let selected = contender
+        .remove_remote(RemoveRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(selected.kind, RepositoryErrorKind::SelectedRemoteRemoval);
+    contender
+        .set_publication_remote(SetPublicationRemoteRequest {
+            root: fixture.root.clone(),
+            name: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    contender
+        .remove_remote(RemoveRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert_remote_configuration(&contender, &fixture.root, None, &[]);
+}
+
+fn assert_remote_configuration(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    publication_remote: Option<&str>,
+    remotes: &[&str],
+) {
+    let inspection = service.inspect(root).unwrap();
+    assert!(matches!(
+        inspection.configuration,
+        ConfigurationInspection::Valid(ref config)
+            if config.publication_remote.as_deref() == publication_remote
+    ));
+    let names = inspection
+        .remotes
+        .iter()
+        .map(|remote| remote.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, remotes);
+}
+
+fn stage_configuration(fixture: &support::TestRepository) {
+    let mut index = fixture.repository.index().unwrap();
+    index
+        .add_path(std::path::Path::new(".manyhands/config.toml"))
+        .unwrap();
+    index.write().unwrap();
 }
 
 #[test]
