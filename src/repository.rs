@@ -74,6 +74,17 @@ impl ExpectedPathObservation {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexPending<T> {
+    pub authoritative: T,
+}
+
+impl<T> IndexPending<T> {
+    pub fn new(authoritative: T) -> Self {
+        Self { authoritative }
+    }
+}
+
 pub struct RepositoryService {
     registry_path: PathBuf,
     availability: Mutex<IndexAvailability>,

@@ -1,4 +1,4 @@
-use manyhands::repository::{ExpectedPathObservation, OperationId};
+use manyhands::repository::{ExpectedPathObservation, IndexPending, OperationId};
 
 mod support;
 
@@ -17,4 +17,11 @@ fn expected_path_observations_hash_exact_bytes() {
         ExpectedPathObservation::from_bytes(b"before"),
         ExpectedPathObservation::from_bytes(b"after")
     );
+}
+
+#[test]
+fn index_pending_retains_the_authoritative_result() {
+    let pending = IndexPending::new("authoritative result");
+
+    assert_eq!(pending.authoritative, "authoritative result");
 }

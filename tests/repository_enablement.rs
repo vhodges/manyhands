@@ -95,7 +95,7 @@ fn enable_request(root: &std::path::Path, primary_branch: &str) -> EnableReposit
         root: root.to_owned(),
         primary_branch: primary_branch.to_owned(),
         identity: None,
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
@@ -107,7 +107,7 @@ fn create_request(root: &std::path::Path, primary_branch: &str) -> CreateReposit
             name: "Created Author".to_owned(),
             email: "created@example.invalid".to_owned(),
         }),
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
@@ -116,7 +116,7 @@ fn add_remote_request(root: &std::path::Path, name: &str, url: &str) -> AddRemot
         root: root.to_owned(),
         name: name.to_owned(),
         url: url.to_owned(),
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
@@ -124,7 +124,7 @@ fn publication_request(root: &std::path::Path, name: Option<&str>) -> SetPublica
     SetPublicationRemoteRequest {
         root: root.to_owned(),
         name: name.map(str::to_owned),
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
@@ -132,14 +132,14 @@ fn remove_remote_request(root: &std::path::Path, name: &str) -> RemoveRemoteRequ
     RemoveRemoteRequest {
         root: root.to_owned(),
         name: name.to_owned(),
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
 fn remove_registration_request(root: &std::path::Path) -> RemoveRegistrationRequest {
     RemoveRegistrationRequest {
         root: root.to_owned(),
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 

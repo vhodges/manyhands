@@ -22,21 +22,36 @@ use time::OffsetDateTime;
 mod support;
 
 macro_rules! refresh_request {
-    ($root:expr) => {
+    ($root:expr, $operation_id:expr) => {
         manyhands::repository::RefreshRepositoryRequest {
             root: $root.to_owned(),
-            operation_id: support::operation_id(),
+            operation_id: $operation_id,
         }
+    };
+    ($root:expr) => {
+        refresh_request!($root, support::fixture_operation_id())
     };
 }
 
 macro_rules! rebuild_request {
-    ($root:expr) => {
+    ($root:expr, $operation_id:expr) => {
         manyhands::repository::RebuildRepositoryRequest {
             root: $root.to_owned(),
-            operation_id: support::operation_id(),
+            operation_id: $operation_id,
         }
     };
+    ($root:expr) => {
+        rebuild_request!($root, support::fixture_operation_id())
+    };
+}
+
+#[test]
+fn retry_requests_retain_the_same_operation_id() {
+    let root = PathBuf::from("/repository");
+    let initial = refresh_request!(&root);
+    let retry = refresh_request!(&root);
+
+    assert_eq!(initial.operation_id, retry.operation_id);
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -509,10 +524,11 @@ fn refresh_transaction_failure_retains_prior_rows_and_retries() {
     support::write_document_source(&fixture.root, "docs/visible.md");
     let failing =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
 
     assert_eq!(
         failing
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::InjectedFailure
@@ -525,7 +541,7 @@ fn refresh_transaction_failure_retains_prior_rows_and_retries() {
             .is_empty()
     );
     let RefreshOutcome::Refreshed { snapshot } = initial
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected stable retry");
@@ -1479,9 +1495,10 @@ fn refresh_lifecycle_failure_resumes_the_same_operation_to_completion() {
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::AfterContextObservation).open_service(data.path());
+    let operation_id = support::operation_id();
     assert_eq!(
         failing
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::InjectedFailure
@@ -1491,7 +1508,7 @@ fn refresh_lifecycle_failure_resumes_the_same_operation_to_completion() {
         vec![("failed".to_owned(), None)]
     );
     service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap();
     assert_eq!(
         refresh_operation_states(&service),

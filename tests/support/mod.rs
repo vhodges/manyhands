@@ -400,6 +400,10 @@ pub fn operation_id() -> OperationId {
     OperationId::new()
 }
 
+pub fn fixture_operation_id() -> OperationId {
+    parse_operation_id("01ARZ3NDEKTSV4RRFFQ69G5FAZ")
+}
+
 pub fn parse_operation_id(value: &str) -> OperationId {
     OperationId::parse(value).unwrap()
 }

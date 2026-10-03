@@ -4723,7 +4723,7 @@ fn target(
         kind,
         item_id,
         intent,
-        operation_id: support::operation_id(),
+        operation_id: support::fixture_operation_id(),
     }
 }
 
