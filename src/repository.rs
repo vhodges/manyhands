@@ -124,6 +124,8 @@ pub struct RepositoryService {
     failure_point: Mutex<Option<FailurePoint>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -852,22 +854,9 @@ impl RepositoryService {
         let root = &request.root;
         let operation = RepositoryOperation::RebuildRepository;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        self.synchronize_index_availability(operation, &root)?;
         if self.requires_corrupt_cache_replacement()? {
-            self.check_failure(
-                FailurePoint::BeforeCorruptCacheReplacement,
-                operation,
-                &root,
-            )?;
-            let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
-            replace_corrupt_registry(&self.registry_path, &root)?;
-            let mut connection = open_registry(&self.registry_path, &mut |_| {})
-                .map_err(|error| error.for_operation(operation, &root))?;
-            migrate_registry(&mut connection)
-                .map_err(|error| error.for_operation(operation, &root))?;
-            drop(connection);
-            drop(_cache_guard);
-            self.set_index_availability(IndexAvailability::Ready, operation, &root)?;
+            self.run_corrupt_cache_hook(&self.corrupt_cache_decision_hook, operation, &root)?;
+            self.reconcile_corrupt_cache_replacement(operation, &root)?;
         }
         let operation_id = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
@@ -1996,20 +1985,52 @@ impl RepositoryService {
         Ok(())
     }
 
-    fn synchronize_index_availability(
+    fn reconcile_corrupt_cache_replacement(
         &self,
         operation: RepositoryOperation,
         root: &Path,
     ) -> Result<(), RepositoryError> {
-        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let availability = match open_registry(&self.registry_path, &mut |_| {})
             .and_then(|mut connection| migrate_registry(&mut connection))
         {
             Ok(()) => IndexAvailability::Ready,
-            Err(error) if is_structural_sqlite_corruption(&error) => IndexAvailability::Degraded,
+            Err(error) if is_structural_sqlite_corruption(&error) => {
+                self.run_corrupt_cache_hook(&self.corrupt_cache_critical_hook, operation, root)?;
+                self.check_failure(FailurePoint::BeforeCorruptCacheReplacement, operation, root)?;
+                replace_corrupt_registry(&self.registry_path, root)?;
+                let mut connection = open_registry(&self.registry_path, &mut |_| {})
+                    .map_err(|error| error.for_operation(operation, root))?;
+                migrate_registry(&mut connection)
+                    .map_err(|error| error.for_operation(operation, root))?;
+                IndexAvailability::Ready
+            }
             Err(error) => return Err(error.for_operation(operation, root)),
         };
         self.set_index_availability(availability, operation, root)
+    }
+
+    fn run_corrupt_cache_hook(
+        &self,
+        hook: &Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        operation: RepositoryOperation,
+        root: &Path,
+    ) -> Result<(), RepositoryError> {
+        if let Some(hook) = hook
+            .lock()
+            .map_err(|_| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::InjectedFailure,
+                    "the test corrupt-cache hook is unavailable",
+                )
+            })?
+            .take()
+        {
+            hook();
+        }
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -2046,6 +2067,8 @@ impl RepositoryService {
             failure_point: Mutex::new(None),
             observation_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
+            corrupt_cache_decision_hook: Mutex::new(None),
+            corrupt_cache_critical_hook: Mutex::new(None),
         })
     }
 
@@ -2761,6 +2784,28 @@ impl RepositoryService {
             .registration_git_hook
             .lock()
             .expect("test registration Git hook lock") = Some(Box::new(hook));
+    }
+
+    #[doc(hidden)]
+    pub fn set_corrupt_cache_decision_hook_for_testing(
+        &self,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *self
+            .corrupt_cache_decision_hook
+            .lock()
+            .expect("test corrupt-cache decision hook lock") = Some(Box::new(hook));
+    }
+
+    #[doc(hidden)]
+    pub fn set_corrupt_cache_critical_hook_for_testing(
+        &self,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *self
+            .corrupt_cache_critical_hook
+            .lock()
+            .expect("test corrupt-cache critical hook lock") = Some(Box::new(hook));
     }
 
     pub fn remove_registration(

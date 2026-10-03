@@ -2192,6 +2192,58 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
 }
 
 #[test]
+fn corrupt_cache_replacement_rechecks_after_the_exclusive_guard() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
+    let first_service = RepositoryService::open_at(data.path()).unwrap();
+    let second_service = RepositoryService::open_at(data.path()).unwrap();
+    let decisions = Arc::new(std::sync::Barrier::new(2));
+    for service in [&first_service, &second_service] {
+        service.set_corrupt_cache_decision_hook_for_testing({
+            let decisions = Arc::clone(&decisions);
+            move || {
+                decisions.wait();
+            }
+        });
+    }
+    let (entered_send, entered_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    let entered = Arc::new(Mutex::new(false));
+    let release_receive = Arc::new(Mutex::new(release_receive));
+    for service in [&first_service, &second_service] {
+        service.set_corrupt_cache_critical_hook_for_testing({
+            let entered = Arc::clone(&entered);
+            let entered_send = entered_send.clone();
+            let release_receive = Arc::clone(&release_receive);
+            move || {
+                let mut entered = entered.lock().unwrap();
+                if !*entered {
+                    *entered = true;
+                    entered_send.send(()).unwrap();
+                    release_receive.lock().unwrap().recv().unwrap();
+                }
+            }
+        });
+    }
+
+    std::thread::scope(|scope| {
+        let first =
+            scope.spawn(|| first_service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let second =
+            scope.spawn(|| second_service.rebuild_repository(rebuild_request!(&fixture.root)));
+        entered_receive.recv().unwrap();
+        release_send.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+    });
+
+    assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    assert!(first_service.repository_snapshot(&fixture.root).is_ok());
+    assert!(second_service.repository_snapshot(&fixture.root).is_ok());
+}
+
+#[test]
 fn corrupt_rebuild_releases_cache_replacement_guard_before_observation() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
