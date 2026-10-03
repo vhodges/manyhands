@@ -32,9 +32,14 @@ pub(super) fn migrate_operation_records(
             redacted_error TEXT
         );
         CREATE INDEX IF NOT EXISTS operation_records_root_path_idx ON operation_records(root_path, observed_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS operation_records_root_operation_ulid_idx
-            ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);
+         CREATE UNIQUE INDEX IF NOT EXISTS operation_records_root_operation_ulid_idx
+             ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
+         CREATE TABLE IF NOT EXISTS operation_record_contexts (
+             operation_record_id INTEGER NOT NULL REFERENCES operation_records(id) ON DELETE CASCADE,
+             worktree_path TEXT NOT NULL,
+             PRIMARY KEY (operation_record_id, worktree_path)
+         );
+         CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);
         ",
     ).map_err(RepositoryError::sqlite)?;
     let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
@@ -45,30 +50,73 @@ pub(super) fn migrate_operation_records(
             |row| row.get(0),
         )
         .map_err(RepositoryError::sqlite)?;
+    let has_legacy_contexts: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operation_contexts')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
     let migrated: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name = 'cycle_05_operation_records')",
         [],
         |row| row.get(0),
     ).map_err(RepositoryError::sqlite)?;
     if !migrated && has_legacy_operations {
-        transaction
-            .execute(
-                "INSERT INTO operation_records (
-                repository_id, root_path, operation_ulid, action, state,
-                completed_step, observed_at, persisted_context_count
-              )
-              SELECT index_operations.repository_id, repositories.root_path, NULL,
-                     index_operations.operation,
-                     CASE WHEN index_operations.state = 'completed' THEN 'completed' ELSE 'created' END,
-                     CASE WHEN index_operations.state = 'completed' THEN 'completed' ELSE NULL END,
-                     index_operations.observed_at,
-                     CASE WHEN index_operations.state = 'completed' THEN index_operations.persisted_context_count ELSE 0 END
-              FROM index_operations
-              JOIN repositories ON repositories.id = index_operations.repository_id
-             WHERE index_operations.operation IN ('refresh', 'rebuild')",
-                [],
+        let legacy_operations = transaction
+            .prepare(
+                "SELECT index_operations.id, index_operations.repository_id, repositories.root_path,
+                        index_operations.operation, index_operations.state,
+                        index_operations.observed_at, index_operations.persisted_context_count
+                 FROM index_operations
+                 JOIN repositories ON repositories.id = index_operations.repository_id
+                 WHERE index_operations.operation IN ('refresh', 'rebuild')",
             )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(6)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+            })
             .map_err(RepositoryError::sqlite)?;
+        for (legacy_id, repository_id, root_path, action, state, observed_at, persisted_count) in
+            legacy_operations
+        {
+            let completed = state == "completed";
+            transaction
+                .execute(
+                    "INSERT INTO operation_records (
+                    repository_id, root_path, operation_ulid, action, state,
+                    completed_step, observed_at, persisted_context_count
+                 ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        repository_id,
+                        root_path,
+                        action,
+                        if completed { "completed" } else { "created" },
+                        completed.then_some("completed"),
+                        observed_at,
+                        if completed { persisted_count } else { 0 },
+                    ],
+                )
+                .map_err(RepositoryError::sqlite)?;
+            if has_legacy_contexts {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO operation_record_contexts (operation_record_id, worktree_path)
+                     SELECT ?1, worktree_path FROM index_operation_contexts WHERE operation_id = ?2",
+                    params![transaction.last_insert_rowid(), legacy_id],
+                ).map_err(RepositoryError::sqlite)?;
+            }
+        }
         transaction
             .execute_batch(
                 "DROP TABLE IF EXISTS index_operation_contexts;

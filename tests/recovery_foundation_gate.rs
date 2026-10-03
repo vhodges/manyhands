@@ -325,6 +325,30 @@ fn legacy_index_record_can_only_resume_with_its_matching_action() {
 }
 
 #[test]
+fn migrated_legacy_rebuild_resumes_after_structural_context_migration() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    support::create_cycle_04_registry(data.path(), &fixture.root, "rebuild", "retry");
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
+
+    let snapshot = service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+
+    assert_eq!(snapshot.root, fixture.root.canonicalize().unwrap());
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn root_operation_is_recorded_before_registration_without_content() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();

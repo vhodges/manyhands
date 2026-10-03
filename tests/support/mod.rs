@@ -747,7 +747,7 @@ pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &P
         connection
             .query_row(
                 "SELECT state, context_path, persisted_context_count
-                 FROM operation_records WHERE action = 'refresh'",
+                 FROM operation_records WHERE state != 'completed'",
                 [],
                 |row| Ok((
                     row.get::<_, String>(0)?,
@@ -758,6 +758,39 @@ pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &P
             .unwrap(),
         ("created".to_owned(), None, 0)
     );
+    let root: String = connection
+        .query_row(
+            "SELECT root_path FROM operation_records WHERE state != 'completed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let contexts = connection
+        .prepare(
+            "SELECT operation_record_contexts.worktree_path
+             FROM operation_record_contexts
+             JOIN operation_records ON operation_records.id = operation_record_contexts.operation_record_id
+             WHERE operation_records.state != 'completed'
+             ORDER BY operation_record_contexts.worktree_path",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        contexts,
+        vec![root.clone(), format!("{root}/.manyhands/worktrees/second")]
+    );
+    let context_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operation_record_contexts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!context_schema.to_ascii_lowercase().contains("fingerprint"));
+    assert!(!context_schema.to_ascii_lowercase().contains("digest"));
     for table in ["index_operations", "index_operation_contexts"] {
         assert!(
             !connection
