@@ -388,7 +388,7 @@ fn legacy_index_record_can_only_resume_with_its_matching_action() {
         })
         .unwrap_err();
 
-    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
 }
 
 #[test]
