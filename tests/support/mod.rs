@@ -4,7 +4,9 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    process::{Child, Command},
     str::FromStr,
+    time::{Duration, Instant},
 };
 
 use git2::{Config, Repository, RepositoryInitOptions, Signature, StatusOptions, Time};
@@ -402,6 +404,68 @@ pub fn operation_id() -> OperationId {
 
 pub fn new_operation_id() -> OperationId {
     operation_id()
+}
+
+pub struct LeaseHolder {
+    child: Child,
+    release: PathBuf,
+    _synchronization: tempfile::TempDir,
+}
+
+impl LeaseHolder {
+    pub fn release(mut self) {
+        fs::write(&self.release, b"release").unwrap();
+        assert!(self.child.wait().unwrap().success());
+    }
+
+    pub fn terminate(mut self) {
+        self.child.kill().unwrap();
+        assert!(!self.child.wait().unwrap().success());
+    }
+}
+
+impl Drop for LeaseHolder {
+    fn drop(&mut self) {
+        if self.child.try_wait().unwrap().is_none() {
+            let _ = fs::write(&self.release, b"release");
+            let _ = self.child.wait();
+        }
+    }
+}
+
+pub fn hold_lease_in_child(
+    root: &Path,
+    data_directory: &Path,
+    kind: manyhands::repository::LeaseKind,
+) -> LeaseHolder {
+    let synchronization = tempfile::tempdir().unwrap();
+    let ready = synchronization.path().join("ready");
+    let release = synchronization.path().join("release");
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("common_git_lease_child")
+        .arg("--nocapture")
+        .env("MANYHANDS_LEASE_ROOT", root)
+        .env("MANYHANDS_LEASE_DATA_DIRECTORY", data_directory)
+        .env("MANYHANDS_LEASE_KIND", kind.as_str())
+        .env("MANYHANDS_LEASE_READY", &ready)
+        .env("MANYHANDS_LEASE_RELEASE", &release)
+        .spawn()
+        .unwrap();
+    wait_for_path(&ready);
+    LeaseHolder {
+        child,
+        release,
+        _synchronization: synchronization,
+    }
+}
+
+pub fn wait_for_path(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "timed out waiting for {path:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 pub fn enable_request(root: &Path) -> EnableRepositoryRequest {

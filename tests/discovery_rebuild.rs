@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
 };
 
 use manyhands::{
@@ -334,6 +333,7 @@ fn snapshot_reads_a_registered_cache_without_mutating_available_state() {
         .execute_batch("PRAGMA journal_mode=DELETE")
         .unwrap();
     drop(connection);
+    fs::File::create(data.path().join("manyhands.sqlite3.recovery.lock")).unwrap();
     let before = available_state(&fixture, data.path());
 
     let snapshot = service.repository_snapshot(&fixture.root).unwrap();
@@ -686,119 +686,6 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
             .problems
             .iter()
             .any(|problem| problem.code == "retry-required")
-    );
-}
-
-#[test]
-fn refresh_and_authoring_are_serialized_across_service_instances() {
-    let fixture = support::born_repository();
-    let enabled = support::enabled_repository(&fixture);
-    let mut index = fixture.repository.index().unwrap();
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
-    index.write().unwrap();
-    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
-    let (observed_send, observed_receive) = mpsc::sync_channel(0);
-    let (release_send, release_receive) = mpsc::sync_channel(0);
-    let (saved_send, saved_receive) = mpsc::sync_channel(0);
-    enabled.service.set_observation_hook_for_testing(move || {
-        observed_send.send(()).unwrap();
-        release_receive.recv().unwrap();
-    });
-    let root = fixture.root.clone();
-
-    std::thread::scope(|scope| {
-        let refresh = scope.spawn(|| {
-            enabled
-                .service
-                .refresh_repository(refresh_request!(&fixture.root))
-        });
-        observed_receive.recv().unwrap();
-        let save = scope.spawn(|| {
-            let outcome = second_service.save_document(SaveDocumentRequest {
-                target: AuthoringTarget {
-                    root,
-                    kind: AuthoringKind::Document,
-                    item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAZ".parse().unwrap(),
-                    intent: ContextIntent::Create,
-                    operation_id: support::operation_id(),
-                },
-                source_path: None,
-                destination_path: PathBuf::from("docs/serialized.md"),
-                draft: DocumentDraft {
-                    title: "Serialized".to_owned(),
-                    body: String::new(),
-                },
-                expected_source: None,
-                expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
-            });
-            saved_send.send(outcome.is_ok()).unwrap();
-        });
-        assert!(
-            saved_receive
-                .recv_timeout(Duration::from_millis(100))
-                .is_err()
-        );
-        release_send.send(()).unwrap();
-        refresh.join().unwrap().unwrap();
-        assert!(saved_receive.recv_timeout(Duration::from_secs(2)).unwrap());
-        save.join().unwrap();
-    });
-
-    assert!(
-        enabled
-            .service
-            .repository_snapshot(&fixture.root)
-            .unwrap()
-            .refresh_required
-    );
-}
-
-#[test]
-fn concurrent_refreshes_share_one_in_process_repository_lock() {
-    let fixture = support::born_repository();
-    let enabled = support::enabled_repository(&fixture);
-    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
-    let (observed_send, observed_receive) = mpsc::sync_channel(0);
-    let (release_send, release_receive) = mpsc::sync_channel(0);
-    let (completed_send, completed_receive) = mpsc::sync_channel(0);
-    enabled.service.set_observation_hook_for_testing(move || {
-        observed_send.send(()).unwrap();
-        release_receive.recv().unwrap();
-    });
-    let root = fixture.root.clone();
-
-    std::thread::scope(|scope| {
-        let first = scope.spawn(|| {
-            enabled
-                .service
-                .refresh_repository(refresh_request!(&fixture.root))
-        });
-        observed_receive.recv().unwrap();
-        let second = scope.spawn(|| {
-            completed_send
-                .send(second_service.refresh_repository(refresh_request!(&root)))
-                .unwrap();
-        });
-        assert!(
-            completed_receive
-                .recv_timeout(Duration::from_millis(100))
-                .is_err()
-        );
-        release_send.send(()).unwrap();
-        first.join().unwrap().unwrap();
-        completed_receive
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap();
-        second.join().unwrap();
-    });
-
-    assert!(
-        !enabled
-            .service
-            .repository_snapshot(&fixture.root)
-            .unwrap()
-            .refresh_required
     );
 }
 

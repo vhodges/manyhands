@@ -15,8 +15,13 @@ use time::OffsetDateTime;
 
 use crate::canonical;
 
+mod coordination;
 mod discovery;
 
+use coordination::{
+    BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
+    cache_read_guard, cache_write_guard, repository_lease,
+};
 use discovery::{
     ObservedCommentThread, ObservedItem, RootConfiguration, RootObservation,
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
@@ -28,6 +33,23 @@ const MAX_DOCUMENT_DIRECTORY_DEPTH: usize = 16;
 const MAX_DOCUMENT_DIRECTORY_ENTRIES: usize = 1024;
 const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
+
+type RepositoryOperationLock = Arc<Mutex<()>>;
+type RepositoryOperationLockMap = HashMap<(PathBuf, PathBuf), Weak<Mutex<()>>>;
+
+fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> RepositoryOperationLock {
+    static OPERATION_LOCKS: OnceLock<Mutex<RepositoryOperationLockMap>> = OnceLock::new();
+    let locks = OPERATION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().unwrap_or_else(|error| error.into_inner());
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    let key = (registry_path.to_owned(), root.to_owned());
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OperationId(ulid::Ulid);
@@ -94,7 +116,6 @@ impl<T> IndexPending<T> {
 pub struct RepositoryService {
     registry_path: PathBuf,
     availability: Mutex<IndexAvailability>,
-    rebuild_lock: Arc<Mutex<()>>,
     failure_point: Mutex<Option<FailurePoint>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
@@ -104,36 +125,6 @@ enum IndexAvailability {
     Ready,
     Degraded,
     Recovering,
-}
-
-type RepositoryOperationLock = Arc<Mutex<()>>;
-type RepositoryOperationLockMap = HashMap<(PathBuf, PathBuf), Weak<Mutex<()>>>;
-
-fn process_rebuild_lock(registry_path: &Path) -> Arc<Mutex<()>> {
-    static REBUILD_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
-    let locks = REBUILD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks.lock().unwrap_or_else(|error| error.into_inner());
-    locks.retain(|_, lock| lock.strong_count() != 0);
-    if let Some(lock) = locks.get(registry_path).and_then(Weak::upgrade) {
-        return lock;
-    }
-    let lock = Arc::new(Mutex::new(()));
-    locks.insert(registry_path.to_owned(), Arc::downgrade(&lock));
-    lock
-}
-
-fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> RepositoryOperationLock {
-    static OPERATION_LOCKS: OnceLock<Mutex<RepositoryOperationLockMap>> = OnceLock::new();
-    let locks = OPERATION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks.lock().unwrap_or_else(|error| error.into_inner());
-    locks.retain(|_, lock| lock.strong_count() != 0);
-    let key = (registry_path.to_owned(), root.to_owned());
-    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-        return lock;
-    }
-    let lock = Arc::new(Mutex::new(()));
-    locks.insert(key, Arc::downgrade(&lock));
-    lock
 }
 
 #[derive(Clone)]
@@ -535,6 +526,60 @@ pub enum RepositoryErrorKind {
     InjectedFailure,
 }
 
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaseKind {
+    Repository,
+    Bootstrap,
+    CacheRead,
+    CacheWrite,
+}
+
+impl LeaseKind {
+    #[doc(hidden)]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "repository" => Some(Self::Repository),
+            "bootstrap" => Some(Self::Bootstrap),
+            "cache-read" => Some(Self::CacheRead),
+            "cache-write" => Some(Self::CacheWrite),
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Repository => "repository",
+            Self::Bootstrap => "bootstrap",
+            Self::CacheRead => "cache-read",
+            Self::CacheWrite => "cache-write",
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct LeaseHolderForTesting(LeaseGuardForTesting);
+
+#[allow(dead_code)]
+enum LeaseGuardForTesting {
+    Repository(RepositoryLease),
+    Bootstrap(BootstrapLease),
+    CacheRead(CacheReadGuard),
+    CacheWrite(CacheWriteGuard),
+}
+
+impl Drop for LeaseHolderForTesting {
+    fn drop(&mut self) {
+        match &self.0 {
+            LeaseGuardForTesting::Repository(_)
+            | LeaseGuardForTesting::Bootstrap(_)
+            | LeaseGuardForTesting::CacheRead(_)
+            | LeaseGuardForTesting::CacheWrite(_) => {}
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RepositoryError {
     pub root: Option<PathBuf>,
@@ -633,6 +678,38 @@ impl RepositoryService {
         Self::open_at_with_registry_observer(data_directory, |_| {})
     }
 
+    #[doc(hidden)]
+    pub fn hold_lease_for_testing(
+        root: &Path,
+        data_directory: &Path,
+        kind: LeaseKind,
+    ) -> Result<LeaseHolderForTesting, RepositoryError> {
+        let operation = RepositoryOperation::Inspect;
+        let root = std::fs::canonicalize(root)
+            .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+        let guard = match kind {
+            LeaseKind::Repository => {
+                let repository = Repository::discover(&root)
+                    .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
+                LeaseGuardForTesting::Repository(repository_lease(&repository, &root, operation)?)
+            }
+            LeaseKind::Bootstrap => {
+                LeaseGuardForTesting::Bootstrap(bootstrap_lease(data_directory, &root, operation)?)
+            }
+            LeaseKind::CacheRead => LeaseGuardForTesting::CacheRead(cache_read_guard(
+                &data_directory.join(REGISTRY_FILE),
+                &root,
+                operation,
+            )?),
+            LeaseKind::CacheWrite => LeaseGuardForTesting::CacheWrite(cache_write_guard(
+                &data_directory.join(REGISTRY_FILE),
+                &root,
+                operation,
+            )?),
+        };
+        Ok(LeaseHolderForTesting(guard))
+    }
+
     pub fn refresh_repository(
         &self,
         request: RefreshRepositoryRequest,
@@ -641,15 +718,7 @@ impl RepositoryService {
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
+        let _repository_lease = repository_lease(&repository, &root, operation)?;
         let root_path = registry_root_key(&root, operation)?;
         let (repository_id, operation_id) =
             begin_refresh_operation(&self.registry_path, &root, root_path)?;
@@ -751,24 +820,8 @@ impl RepositoryService {
     ) -> Result<RepositorySnapshot, RepositoryError> {
         let root = &request.root;
         let operation = RepositoryOperation::RebuildRepository;
-        let _rebuild_lock = self.rebuild_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.to_owned()),
-                RepositoryErrorKind::InjectedFailure,
-                "the rebuild synchronization state is unavailable",
-            )
-        })?;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
+        let _repository_lease = repository_lease(&repository, &root, operation)?;
         self.synchronize_index_availability(operation, &root)?;
         if self.requires_corrupt_cache_replacement()? {
             self.check_failure(
@@ -776,6 +829,7 @@ impl RepositoryService {
                 operation,
                 &root,
             )?;
+            let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
             replace_corrupt_registry(&self.registry_path, &root)?;
             let mut connection = open_registry(&self.registry_path, &mut |_| {})
                 .map_err(|error| error.for_operation(operation, &root))?;
@@ -845,6 +899,11 @@ impl RepositoryService {
                 ));
             }
         };
+        let _cache_guard = cache_read_guard(
+            &self.registry_path,
+            &root,
+            RepositoryOperation::RepositorySnapshot,
+        )?;
         let root_path = root.to_str().ok_or_else(|| {
             RepositoryError::new(
                 RepositoryOperation::RepositorySnapshot,
@@ -1889,6 +1948,7 @@ impl RepositoryService {
         operation: RepositoryOperation,
         root: &Path,
     ) -> Result<(), RepositoryError> {
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
         let availability =
             match open_registry(&self.registry_path, &mut |_| {}).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
@@ -1932,11 +1992,9 @@ impl RepositoryService {
                 Err(error) => return Err(error),
             };
 
-        let rebuild_lock = process_rebuild_lock(&registry_path);
         Ok(Self {
             registry_path,
             availability: Mutex::new(availability),
-            rebuild_lock,
             failure_point: Mutex::new(None),
             observation_hook: Mutex::new(None),
         })
