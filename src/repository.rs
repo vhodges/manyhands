@@ -28,8 +28,7 @@ use discovery::{
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
 };
 use recovery::{
-    advance_after_observation, begin_or_reconcile_operation,
-    has_incomplete_rebuild as recovery_has_incomplete_rebuild, pending_for_root,
+    advance_after_observation, begin_or_reconcile_operation, pending_for_root,
     record_persisted_context as record_recovery_context,
 };
 
@@ -130,7 +129,6 @@ pub struct RepositoryService {
 enum IndexAvailability {
     Ready,
     Degraded,
-    Recovering,
 }
 
 #[derive(Clone)]
@@ -742,9 +740,15 @@ impl RepositoryService {
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        let _repository_lease = repository_lease(&repository, &root, operation)?;
-        let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
-        let record = begin_operation(&self.registry_path, &root, operation, request.operation_id)?;
+        // Only establish durable recovery state while holding the common Git lease.
+        // Filesystem and Git observation intentionally happens after this scope.
+        let (repository_id, record) = {
+            let _repository_lease = repository_lease(&repository, &root, operation)?;
+            (
+                registered_repository_id(&self.registry_path, &root, operation)?,
+                begin_operation(&self.registry_path, &root, operation, request.operation_id)?,
+            )
+        };
         let operation_id = record.id;
         let before = observe_root(&repository, &root);
         if let Err(error) =
@@ -768,6 +772,8 @@ impl RepositoryService {
         {
             hook();
         }
+        // Reacquire only to close the observation window and publish its stable result.
+        let _repository_lease = repository_lease(&repository, &root, operation)?;
         let after = observe_root(&repository, &root);
         set_refresh_operation(&self.registry_path, operation_id, "observed", None, &root)?;
         if let Err(error) =
@@ -858,11 +864,14 @@ impl RepositoryService {
                 .map_err(|error| error.for_operation(operation, &root))?;
             migrate_registry(&mut connection)
                 .map_err(|error| error.for_operation(operation, &root))?;
-            self.set_index_availability(IndexAvailability::Recovering, operation, &root)?;
+            drop(connection);
+            drop(_cache_guard);
+            self.set_index_availability(IndexAvailability::Ready, operation, &root)?;
         }
-        let _repository_lease = repository_lease(&repository, &root, operation)?;
-        let operation_id =
-            begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id;
+        let operation_id = {
+            let _repository_lease = repository_lease(&repository, &root, operation)?;
+            begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id
+        };
         let result = (|| {
             let observation = observe_root(&repository, &root);
             if let Some(hook) = self
@@ -880,6 +889,7 @@ impl RepositoryService {
             {
                 hook();
             }
+            let _repository_lease = repository_lease(&repository, &root, operation)?;
             let after = observe_root(&repository, &root);
             set_rebuild_operation(&self.registry_path, operation_id, "observed", &root)?;
             if !changed_contexts(&observation, &after, &root).is_empty() {
@@ -892,20 +902,9 @@ impl RepositoryService {
             read_repository_snapshot_from_registry(&self.registry_path, &root)
         })();
         match result {
-            Ok(snapshot) => {
-                let availability =
-                    if has_incomplete_rebuild_operation_at(&self.registry_path, &root)? {
-                        IndexAvailability::Recovering
-                    } else {
-                        IndexAvailability::Ready
-                    };
-                self.set_index_availability(availability, operation, &root)?;
-                Ok(snapshot)
-            }
+            Ok(snapshot) => Ok(snapshot),
             Err(error) => {
                 let _ = set_rebuild_operation(&self.registry_path, operation_id, "error", &root);
-                let _ =
-                    self.set_index_availability(IndexAvailability::Recovering, operation, &root);
                 Err(error)
             }
         }
@@ -956,6 +955,7 @@ impl RepositoryService {
         let operation = RepositoryOperation::Inspect;
         let root = std::fs::canonicalize(root)
             .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+        let _cache_guard = cache_read_guard(&self.registry_path, &root, operation)?;
         let connection = open_registry_read_only(&self.registry_path)
             .map_err(|error| error.for_operation(operation, &root))?;
         pending_for_root(&connection, &root).map_err(|error| error.for_operation(operation, &root))
@@ -1938,7 +1938,7 @@ impl RepositoryService {
     fn index_is_unavailable(&self) -> Result<bool, RepositoryError> {
         self.availability
             .lock()
-            .map(|availability| !matches!(*availability, IndexAvailability::Ready))
+            .map(|availability| matches!(*availability, IndexAvailability::Degraded))
             .map_err(|_| {
                 RepositoryError::new(
                     RepositoryOperation::OpenRegistry,
@@ -1986,18 +1986,13 @@ impl RepositoryService {
         root: &Path,
     ) -> Result<(), RepositoryError> {
         let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
-        let availability =
-            match open_registry(&self.registry_path, &mut |_| {}).and_then(|mut connection| {
-                migrate_registry(&mut connection)?;
-                recovery_has_incomplete_rebuild(&connection)
-            }) {
-                Ok(true) => IndexAvailability::Recovering,
-                Ok(false) => IndexAvailability::Ready,
-                Err(error) if is_structural_sqlite_corruption(&error) => {
-                    IndexAvailability::Degraded
-                }
-                Err(error) => return Err(error.for_operation(operation, root)),
-            };
+        let availability = match open_registry(&self.registry_path, &mut |_| {})
+            .and_then(|mut connection| migrate_registry(&mut connection))
+        {
+            Ok(()) => IndexAvailability::Ready,
+            Err(error) if is_structural_sqlite_corruption(&error) => IndexAvailability::Degraded,
+            Err(error) => return Err(error.for_operation(operation, root)),
+        };
         self.set_index_availability(availability, operation, root)
     }
 
@@ -2016,18 +2011,18 @@ impl RepositoryService {
         std::fs::create_dir_all(data_directory)
             .map_err(|error| RepositoryError::io(RepositoryOperation::OpenRegistry, None, error))?;
         let registry_path = data_directory.join(REGISTRY_FILE);
-        let availability =
-            match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
-                migrate_registry(&mut connection)?;
-                recovery_has_incomplete_rebuild(&connection)
-            }) {
-                Ok(true) => IndexAvailability::Recovering,
-                Ok(false) => IndexAvailability::Ready,
-                Err(error) if is_structural_sqlite_corruption(&error) => {
-                    IndexAvailability::Degraded
-                }
-                Err(error) => return Err(error),
-            };
+        let _cache_guard = cache_read_guard(
+            &registry_path,
+            data_directory,
+            RepositoryOperation::OpenRegistry,
+        )?;
+        let availability = match open_registry(&registry_path, &mut observer)
+            .and_then(|mut connection| migrate_registry(&mut connection))
+        {
+            Ok(()) => IndexAvailability::Ready,
+            Err(error) if is_structural_sqlite_corruption(&error) => IndexAvailability::Degraded,
+            Err(error) => return Err(error),
+        };
 
         Ok(Self {
             registry_path,
@@ -2724,6 +2719,13 @@ impl RepositoryService {
         inspect: impl FnOnce(&rusqlite::Connection) -> T,
     ) -> Result<T, RepositoryError> {
         self.require_index_available(RepositoryOperation::OpenRegistry, None)?;
+        let _cache_guard = cache_read_guard(
+            &self.registry_path,
+            self.registry_path
+                .parent()
+                .unwrap_or_else(|| Path::new(".")),
+            RepositoryOperation::OpenRegistry,
+        )?;
         let connection = open_registry(&self.registry_path, &mut |_| {})?;
         Ok(inspect(&connection))
     }
@@ -2754,6 +2756,11 @@ impl RepositoryService {
             ));
         }
         let root_path = registry_root_key(&root, RepositoryOperation::RemoveRegistration)?;
+        let _cache_guard = cache_read_guard(
+            &self.registry_path,
+            &root,
+            RepositoryOperation::RemoveRegistration,
+        )?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         migrate_registry(&mut connection)
@@ -2849,6 +2856,7 @@ fn begin_operation(
     operation: RepositoryOperation,
     operation_id: OperationId,
 ) -> Result<recovery::RecoveryRecord, RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
     begin_or_reconcile_operation(&mut connection, root, operation, operation_id)
@@ -2860,6 +2868,7 @@ fn registered_repository_id(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<i64, RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
@@ -2881,22 +2890,14 @@ fn registered_repository_id(
         })
 }
 
-fn has_incomplete_rebuild_operation_at(
-    registry_path: &Path,
-    root: &Path,
-) -> Result<bool, RepositoryError> {
-    let connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
-    recovery_has_incomplete_rebuild(&connection)
-        .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))
-}
-
 fn set_rebuild_operation(
     registry_path: &Path,
     operation_id: i64,
     state: &str,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RebuildRepository)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
     advance_after_observation(&connection, operation_id, state, None, None)
@@ -2911,6 +2912,7 @@ fn persist_rebuild_observation(
     observation: &RootObservation,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let persisted_context_count =
         i64::try_from(1 + observation.active_contexts.len()).map_err(|_| {
@@ -2976,6 +2978,7 @@ fn persist_rebuild_retry(
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
@@ -3015,6 +3018,8 @@ fn read_repository_snapshot_from_registry(
     registry_path: &Path,
     root: &Path,
 ) -> Result<RepositorySnapshot, RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RebuildRepository)?;
     let root_path = registry_root_key(root, RepositoryOperation::RebuildRepository)?;
     let mut connection = open_registry_read_only(registry_path)
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
@@ -3039,6 +3044,8 @@ fn set_refresh_operation(
     context: Option<&Path>,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     advance_after_observation(&connection, operation_id, state, context, None)
@@ -3053,6 +3060,8 @@ fn record_persisted_context(
     context: &Path,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     record_recovery_context(&connection, operation_id, context)
@@ -3130,6 +3139,8 @@ fn persist_context_refresh(
     excluded: &BTreeSet<canonical::ItemId>,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     let transaction = connection.transaction().map_err(|error| {
@@ -3211,6 +3222,8 @@ fn persist_retry_problem(
     operation_id: i64,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     let context_id: Option<i64> = connection
@@ -3244,6 +3257,8 @@ fn reconcile_disappeared_contexts(
     operation_id: i64,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     let transaction = connection.transaction().map_err(|error| {
@@ -6255,6 +6270,7 @@ fn mark_registered_refresh_required(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| registry_refresh_pending(operation, root, error))?;
@@ -6272,6 +6288,7 @@ fn mark_document_refresh_required(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| registry_refresh_pending(operation, root, error))?;
@@ -6311,6 +6328,7 @@ fn reconcile_registration(
     repository: &Repository,
     root: &Path,
 ) -> Result<(), RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, RepositoryOperation::Enable)?;
     let config_blob_oid = committed_configuration_blob_oid(repository, root)?;
     let enabled_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)

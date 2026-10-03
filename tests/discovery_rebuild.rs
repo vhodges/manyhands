@@ -1973,7 +1973,7 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     let diagnostics = corrupt_diagnostic_count(data.path());
     assert_eq!(
         service.repository_snapshot(&fixture.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
+        RepositoryErrorKind::RepositoryNotRegistered
     );
 
     service
@@ -1988,7 +1988,7 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
 }
 
 #[test]
-fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
+fn root_scoped_incomplete_rebuild_does_not_block_other_root_discovery() {
     let first = support::born_repository();
     let second = support::born_repository();
     let data = tempfile::tempdir().unwrap();
@@ -2029,25 +2029,45 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
         .execute_batch("DROP TRIGGER fail_first_rebuild;")
         .unwrap();
 
-    service
-        .rebuild_repository(rebuild_request!(&second.root))
-        .unwrap();
-
-    assert_eq!(
-        service.inspect(&second.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
-    );
+    assert!(service.repository_snapshot(&second.root).is_ok());
+    assert!(matches!(
+        service
+            .refresh_repository(refresh_request!(&second.root))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
     let restarted = RepositoryService::open_at(data.path()).unwrap();
-    assert_eq!(
-        restarted.inspect(&second.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
-    );
+    assert!(restarted.repository_snapshot(&second.root).is_ok());
 
     restarted
         .rebuild_repository(rebuild_request!(&first.root, operation_id))
         .unwrap();
 
     assert!(restarted.inspect(&second.root).is_ok());
+}
+
+#[test]
+fn refresh_scan_releases_repository_lease_before_observation() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let (observed_send, observed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    enabled.service.set_observation_hook_for_testing(move || {
+        observed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    let refresh = std::thread::scope(|scope| {
+        let refresh = scope.spawn(|| {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root))
+        });
+        observed_receive.recv().unwrap();
+        release_send.send(()).unwrap();
+        refresh.join().unwrap()
+    });
+    assert!(refresh.is_ok());
 }
 
 #[test]

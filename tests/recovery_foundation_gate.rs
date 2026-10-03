@@ -111,6 +111,35 @@ fn common_git_lease_blocks_primary_and_linked_worktree_operations() {
 }
 
 #[test]
+fn root_scoped_refresh_is_busy_until_the_common_git_lease_releases() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let holder = support::hold_lease_in_child(&fixture.root, data.path(), LeaseKind::Repository);
+
+    let error = service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+
+    holder.release();
+    assert!(
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .is_ok()
+    );
+}
+
+#[test]
 fn legacy_migration_copies_multiple_contexts_once_without_retaining_their_fingerprints() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();

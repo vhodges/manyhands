@@ -364,13 +364,6 @@ pub(super) fn pending_for_root(
         .collect()
 }
 
-pub(super) fn has_incomplete_rebuild(connection: &Connection) -> Result<bool, RepositoryError> {
-    connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM operation_records WHERE action = 'rebuild' AND state != 'completed')",
-        [], |row| row.get(0),
-    ).map_err(RepositoryError::sqlite)
-}
-
 fn action_name(operation: RepositoryOperation) -> &'static str {
     match operation {
         RepositoryOperation::RefreshRepository => "refresh",
