@@ -407,6 +407,10 @@ fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::SetPublicationRemote => "set_publication_remote",
         RepositoryOperation::RefreshRepository => "refresh",
         RepositoryOperation::RebuildRepository => "rebuild",
+        RepositoryOperation::PrepareContext => "prepare_context",
+        RepositoryOperation::SaveDocument => "save_document",
+        RepositoryOperation::SaveTicket => "save_ticket",
+        RepositoryOperation::SubmitComment => "submit_comment",
         _ => "other",
     }
 }
@@ -421,6 +425,10 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "set_publication_remote" => Some(RepositoryOperation::SetPublicationRemote),
         "refresh" => Some(RepositoryOperation::RefreshRepository),
         "rebuild" => Some(RepositoryOperation::RebuildRepository),
+        "prepare_context" => Some(RepositoryOperation::PrepareContext),
+        "save_document" => Some(RepositoryOperation::SaveDocument),
+        "save_ticket" => Some(RepositoryOperation::SaveTicket),
+        "submit_comment" => Some(RepositoryOperation::SubmitComment),
         _ => None,
     }
 }

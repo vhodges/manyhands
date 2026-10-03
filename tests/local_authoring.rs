@@ -1762,7 +1762,9 @@ fn document_create_retry_at_a_different_path_preserves_completed_context() {
 
     assert!(matches!(
         error.kind,
-        RepositoryErrorKind::OccupiedItemPath | RepositoryErrorKind::MismatchedAuthoringContext
+        RepositoryErrorKind::OperationMismatch
+            | RepositoryErrorKind::OccupiedItemPath
+            | RepositoryErrorKind::MismatchedAuthoringContext
     ));
     assert_eq!(
         rejection_state(&fixture, &enabled.service, &context, &[&first, &second]),
@@ -1814,6 +1816,7 @@ fn document_rejects_occupied_noncanonical_mismatched_and_missing_paths_without_w
             RepositoryErrorKind::InvalidPath
                 | RepositoryErrorKind::MissingAuthoringTarget
                 | RepositoryErrorKind::OccupiedItemPath
+                | RepositoryErrorKind::RecoveryRequired
         ));
     }
     assert_eq!(fs::read(occupied).unwrap(), before);
@@ -5528,4 +5531,86 @@ fn recovery_document_edit_worktree_creation_failure_retries_exact_primary_branch
         worktree_paths(&fixture.repository),
         vec![std::fs::canonicalize(context.worktree).unwrap()]
     );
+}
+
+#[test]
+fn context_replay_worktree_interruption_uses_one_journaled_context() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let target = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(target())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let pending = enabled.service.recovery_inspection(&fixture.root).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(matches!(
+        pending.as_slice(),
+        [manyhands::repository::RecoveryInspection::Pending { operation_id: found, .. }]
+            if *found == operation_id
+    ));
+
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let context = context_from(fresh.prepare_context(target()).unwrap());
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![fs::canonicalize(&context.worktree).unwrap()]
+    );
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
+}
+
+#[test]
+fn stale_document_edit_preserves_external_replacement() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let path = context.worktree.join("docs/fixture.md");
+    let expected =
+        manyhands::repository::ExpectedPathObservation::from_bytes(&fs::read(&path).unwrap());
+    let external = canonical_document("External", "External body\n");
+    fs::write(&path, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/fixture.md"),
+        "docs/fixture.md",
+        "Replacement",
+        "Replacement body\n",
+    );
+    request.expected_source = Some(expected.clone());
+    request.expected_destination = expected;
+
+    let error = match enabled.service.save_document(request) {
+        Ok(_) => panic!("stale edit must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }

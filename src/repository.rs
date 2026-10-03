@@ -70,6 +70,24 @@ fn remote_target_matcher(action: RepositoryOperation, name: &str, url: Option<&s
     format!("remote-v1-{}", hasher.finalize().to_hex())
 }
 
+fn authoring_context_target(target: &AuthoringTarget) -> String {
+    format!(
+        "authoring-context-v1/{}/{}/{:?}",
+        authoring_kind_segment(&target.kind),
+        target.item_id,
+        target.intent
+    )
+}
+
+fn authoring_write_target(target: &AuthoringTarget, paths: &[&Path]) -> String {
+    let paths = paths
+        .iter()
+        .map(|path| path.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\0");
+    format!("{}\0{}", authoring_context_target(target), paths)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OperationId(ulid::Ulid);
 
@@ -1011,17 +1029,55 @@ impl RepositoryService {
         let _operation_lock = operation_lock.lock().map_err(|_| {
             RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::InjectedFailure,
                 "the repository operation synchronization state is unavailable",
             )
         })?;
-        self.prepare_context_unlocked(target)
+        let (repository, root) = canonical_repository_root(&target.root, operation)?;
+        match read_configuration_for(&root, operation)? {
+            ConfigurationInspection::Valid(_) => {}
+            ConfigurationInspection::Missing => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::RepositoryNotEnabled,
+                    "a Manyhands configuration is required before authoring",
+                ));
+            }
+            ConfigurationInspection::Invalid(problem) => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::InvalidConfiguration,
+                    problem.message,
+                ));
+            }
+        }
+        let (_, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            operation,
+            target.operation_id,
+            &authoring_context_target(&target),
+        )?;
+        let outcome = match self.prepare_context_unlocked(target, Some(record)) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if error.kind != RepositoryErrorKind::InjectedFailure {
+                    self.complete_lifecycle(&root, operation, record)?;
+                }
+                return Err(error);
+            }
+        };
+        self.complete_lifecycle(&root, operation, record)?;
+        Ok(outcome)
     }
 
     fn prepare_context_unlocked(
         &self,
         target: AuthoringTarget,
+        record: Option<RecoveryRecord>,
     ) -> Result<ContextProvisionOutcome, RepositoryError> {
         let operation = RepositoryOperation::PrepareContext;
         self.require_index_available(operation, Some(&target.root))?;
@@ -1048,7 +1104,7 @@ impl RepositoryService {
         if checked_out_branch(&repository, &root, operation)? != configuration.primary_branch {
             return Err(RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::WrongCheckedOutBranch,
                 "the configured primary branch must be checked out at the repository root",
             ));
@@ -1063,7 +1119,7 @@ impl RepositoryService {
         if configuration.primary_branch == branch {
             return Err(RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::MismatchedAuthoringContext,
                 "the configured primary branch cannot be an authoring branch",
             ));
@@ -1146,6 +1202,9 @@ impl RepositoryService {
                         ));
                     }
                 }
+                if let Some(record) = record {
+                    self.advance_lifecycle(&root, operation, record, "branch_observed")?;
+                }
                 branch.into_reference()
             }
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
@@ -1154,10 +1213,14 @@ impl RepositoryService {
                     .and_then(|head| head.peel_to_commit())
                     .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
                 self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
-                repository
+                let reference = repository
                     .branch(&branch, &head, false)
                     .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?
-                    .into_reference()
+                    .into_reference();
+                if let Some(record) = record {
+                    self.advance_lifecycle(&root, operation, record, "branch_observed")?;
+                }
+                reference
             }
             Err(error) => return Err(RepositoryError::git(operation, Some(root), error)),
         };
@@ -1167,6 +1230,9 @@ impl RepositoryService {
         repository
             .worktree(&item_id, &worktree, Some(&options))
             .map_err(|error| RepositoryError::git(operation, Some(root), error))?;
+        if let Some(record) = record {
+            self.advance_lifecycle(&context.root, operation, record, "worktree_observed")?;
+        }
         Ok(ContextProvisionOutcome::Created(context))
     }
 
@@ -1193,24 +1259,35 @@ impl RepositoryService {
     ) -> Result<SaveOutcome, RepositoryError> {
         let operation = RepositoryOperation::SaveDocument;
         self.require_index_available(operation, Some(&request.target.root))?;
-        let (_, root) = canonical_repository_root(&request.target.root, operation)?;
+        let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
         let _operation_lock = operation_lock.lock().map_err(|_| {
             RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::InjectedFailure,
                 "the repository operation synchronization state is unavailable",
             )
         })?;
+        let paths = [request.destination_path.as_path()];
+        let (_, record) = self.begin_lifecycle(
+            &root_repository,
+            &root,
+            operation,
+            request.target.operation_id,
+            &authoring_write_target(&request.target, &paths),
+        )?;
         let intent = request.target.intent;
-        let context = match self.prepare_context_unlocked(AuthoringTarget {
-            root: request.target.root,
-            kind: request.target.kind,
-            item_id: request.target.item_id,
-            intent: request.target.intent,
-            operation_id: request.target.operation_id,
-        })? {
+        let context = match self.prepare_context_unlocked(
+            AuthoringTarget {
+                root: request.target.root,
+                kind: request.target.kind,
+                item_id: request.target.item_id,
+                intent: request.target.intent,
+                operation_id: request.target.operation_id,
+            },
+            Some(record),
+        )? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
         };
@@ -1231,6 +1308,7 @@ impl RepositoryService {
         let Some(identity) =
             resolve_identity(&config, effective_config, &context.worktree, operation)?
         else {
+            self.complete_lifecycle(&context.root, operation, record)?;
             return Ok(SaveOutcome::IdentityRequired { context });
         };
 
@@ -1367,6 +1445,34 @@ impl RepositoryService {
                 "neither move path contains the selected document",
             ));
         }
+        if let Some(source) = &source
+            && let Some(expected) = request.expected_source.as_ref()
+        {
+            ensure_expected_owned_observation(
+                &context.worktree,
+                source,
+                expected,
+                operation,
+                &context.root,
+            )?;
+        }
+        let will_write_destination =
+            !destination_exists || source.as_deref() == Some(destination.as_path());
+        if will_write_destination
+            && (matches!(intent, ContextIntent::Create)
+                || matches!(
+                    request.expected_destination,
+                    ExpectedPathObservation::Blake3(_)
+                ))
+        {
+            ensure_expected_owned_observation(
+                &context.worktree,
+                &destination,
+                &request.expected_destination,
+                operation,
+                &context.root,
+            )?;
+        }
         let source_in_head = if moving && !source_present {
             validate_head_document_source(
                 &repository,
@@ -1377,7 +1483,7 @@ impl RepositoryService {
         } else {
             false
         };
-        if !destination_exists || source.as_deref() == Some(destination.as_path()) {
+        if will_write_destination {
             ensure_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
             self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
             write_owned_document(
@@ -1407,6 +1513,7 @@ impl RepositoryService {
                     .then(|| source.as_deref().expect("move has a source")),
             },
         )?;
+        self.complete_lifecycle(&context.root, operation, record)?;
         Ok(SaveOutcome::Saved {
             context,
             checkpoint,
@@ -1433,24 +1540,34 @@ impl RepositoryService {
     ) -> Result<SaveOutcome, RepositoryError> {
         let operation = RepositoryOperation::SaveTicket;
         self.require_index_available(operation, Some(&request.target.root))?;
-        let (_, root) = canonical_repository_root(&request.target.root, operation)?;
+        let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
         let _operation_lock = operation_lock.lock().map_err(|_| {
             RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::InjectedFailure,
                 "the repository operation synchronization state is unavailable",
             )
         })?;
+        let (_, record) = self.begin_lifecycle(
+            &root_repository,
+            &root,
+            operation,
+            request.target.operation_id,
+            &authoring_write_target(&request.target, &[]),
+        )?;
         let intent = request.target.intent;
-        let context = match self.prepare_context_unlocked(AuthoringTarget {
-            root: request.target.root,
-            kind: request.target.kind,
-            item_id: request.target.item_id,
-            intent,
-            operation_id: request.target.operation_id,
-        })? {
+        let context = match self.prepare_context_unlocked(
+            AuthoringTarget {
+                root: request.target.root,
+                kind: request.target.kind,
+                item_id: request.target.item_id,
+                intent,
+                operation_id: request.target.operation_id,
+            },
+            Some(record),
+        )? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
         };
@@ -1471,6 +1588,7 @@ impl RepositoryService {
         let Some(identity) =
             resolve_identity(&config, effective_config, &context.worktree, operation)?
         else {
+            self.complete_lifecycle(&context.root, operation, record)?;
             return Ok(SaveOutcome::IdentityRequired { context });
         };
         let path = PathBuf::from(format!(".manyhands/tickets/{}/ticket.md", context.item_id));
@@ -1578,6 +1696,18 @@ impl RepositoryService {
         } else {
             true
         };
+        if write
+            && (matches!(intent, ContextIntent::Create)
+                || matches!(request.expected_path, ExpectedPathObservation::Blake3(_)))
+        {
+            ensure_expected_owned_observation(
+                &context.worktree,
+                &path,
+                &request.expected_path,
+                operation,
+                &context.root,
+            )?;
+        }
         if write {
             ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
             self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
@@ -1600,6 +1730,7 @@ impl RepositoryService {
                 removed_source: None,
             },
         )?;
+        self.complete_lifecycle(&context.root, operation, record)?;
         Ok(SaveOutcome::Saved {
             context,
             checkpoint,
@@ -1629,16 +1760,25 @@ impl RepositoryService {
     ) -> Result<CommentSubmissionOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
         self.require_index_available(operation, Some(&request.target.root))?;
-        let (_, root) = canonical_repository_root(&request.target.root, operation)?;
+        let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
         let _operation_lock = operation_lock.lock().map_err(|_| {
             RepositoryError::new(
                 operation,
-                Some(root),
+                Some(root.clone()),
                 RepositoryErrorKind::InjectedFailure,
                 "the repository operation synchronization state is unavailable",
             )
         })?;
+        let comment_id = request.comment_id.to_string();
+        let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
+        let (_, record) = self.begin_lifecycle(
+            &root_repository,
+            &root,
+            operation,
+            request.target.operation_id,
+            &authoring_write_target(&request.target, &paths),
+        )?;
         if !matches!(request.target.intent, ContextIntent::Edit) {
             return Err(authoring_error(
                 operation,
@@ -1647,13 +1787,16 @@ impl RepositoryService {
                 "comment submission requires an edit target",
             ));
         }
-        let context = match self.prepare_context_unlocked(AuthoringTarget {
-            root: request.target.root,
-            kind: request.target.kind,
-            item_id: request.target.item_id,
-            intent: ContextIntent::Edit,
-            operation_id: request.target.operation_id,
-        })? {
+        let context = match self.prepare_context_unlocked(
+            AuthoringTarget {
+                root: request.target.root,
+                kind: request.target.kind,
+                item_id: request.target.item_id,
+                intent: ContextIntent::Edit,
+                operation_id: request.target.operation_id,
+            },
+            Some(record),
+        )? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
         };
@@ -1754,6 +1897,13 @@ impl RepositoryService {
         let mut context_sources = Vec::new();
         collect_canonical_sources(&context.worktree, &mut context_sources, operation)?;
         if !exists {
+            ensure_expected_owned_observation(
+                &context.worktree,
+                &path,
+                &request.expected_destination,
+                operation,
+                &context.root,
+            )?;
             context_sources.push((path.clone(), serialized.clone()));
         }
         let validated = canonical::validate_context(context_sources);
@@ -1789,6 +1939,7 @@ impl RepositoryService {
         let Some(identity) =
             resolve_identity(&config, effective_config, &context.worktree, operation)?
         else {
+            self.complete_lifecycle(&context.root, operation, record)?;
             return Ok(CommentSubmissionOutcome::IdentityRequired { context });
         };
         if !exists {
@@ -1813,6 +1964,7 @@ impl RepositoryService {
                 removed_source: None,
             },
         )?;
+        self.complete_lifecycle(&context.root, operation, record)?;
         Ok(CommentSubmissionOutcome::Saved {
             context,
             checkpoint,
@@ -4738,6 +4890,55 @@ fn owned_file_exists(
             error,
         )),
     }
+}
+
+fn observe_owned_regular_file(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<ExpectedPathObservation, RepositoryError> {
+    let path = root.join(relative);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            let bytes = std::fs::read(&path).map_err(|error| {
+                RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+            })?;
+            Ok(ExpectedPathObservation::from_bytes(&bytes))
+        }
+        Ok(_) => Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path must be a regular non-symlink file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ExpectedPathObservation::Missing)
+        }
+        Err(error) => Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            error,
+        )),
+    }
+}
+
+fn ensure_expected_owned_observation(
+    root: &Path,
+    relative: &Path,
+    expected: &ExpectedPathObservation,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    if observe_owned_regular_file(root, relative, operation, repository_root)? != *expected {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::ExternalChange,
+            "an owned path changed after it was observed",
+        ));
+    }
+    Ok(())
 }
 
 fn source_exists(
