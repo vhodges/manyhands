@@ -208,8 +208,10 @@ Wave 1 Git work is complete when real temporary repositories demonstrate:
   exactly one `Initialize Manyhands` commit, including on an unborn repository.
 - Missing Git identity is resolved through confirmed repository-local
   configuration before a commit.
-- Context creation uses the exact branch and worktree conventions, reuses one
-  context, and requires selection for multiple contexts.
+- Context creation uses the exact branch and worktree conventions and reuses
+  one context. A mismatched or duplicate expected local context is visible and
+  recoverable without returning a choice result; Wave 2 owns caller selection
+  among multiple remote-materialized contexts.
 - Document, ticket, and comment checkpoints stage only their permitted paths,
   preserve unrelated changes, and never create empty commits.
 - Write, commit, index, and partial-context failures retain recoverable state

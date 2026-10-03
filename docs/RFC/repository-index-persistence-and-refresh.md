@@ -121,16 +121,30 @@ replace inaccessible canonical content with cache data.
 
 Cycle 03 callers serialize local authoring operations for a repository and use
 the actual Git and filesystem state for immediate retries. It writes no durable
-operation record. Cycle 04 adds operation records that advance only after their
-external Git or filesystem step is observed. On startup or retry, reconciliation
-compares a record with actual Git refs, worktrees, and commits; canonical Git
-state wins. A completed commit with a pending index refresh is retried as
-indexing only and never creates a duplicate commit.
+operation record. Cycle 04 adds refresh and rebuild operation records that
+advance only after their external Git or filesystem step is observed. Cycle 05
+extends durable operation records to every Wave 1 lifecycle action: enablement,
+publication-remote configuration, context provisioning, canonical writes,
+checkpoints, refresh, rebuild, and registration removal. On startup or retry,
+reconciliation compares a record with actual Git refs, worktrees, commits, and
+canonical files; Git and Markdown state win. A completed commit with a pending
+index refresh is retried as indexing only and never creates a duplicate commit.
 
-Cycle 05 makes SQLite coordination mandatory across desktop, CLI, and daemon
-processes. A repository-scoped operation lease MUST be acquired before a Git
-lifecycle action or polling refresh changes Git state. The lease has a bounded
-wait and recoverable busy outcome.
+Cycle 05 makes cross-process repository coordination mandatory across desktop,
+CLI, and future daemon processes. Each repository-mutating or
+repository-refreshing Wave 1 action MUST acquire a repository-scoped exclusive
+advisory lease at the resolved common Git directory. The lease has a fixed
+bounded wait and recoverable busy outcome. Draft preparation and full read-only
+scans remain outside the lease; actions re-observe state while holding it before
+durably changing canonical, Git, or cache state. Stored snapshot reads do not
+require the repository lease.
+
+SQLite records operation and discovery state but is not the repository lease.
+Normal SQLite transactions use a short shared application-data cache-recovery
+guard. Structural-corruption recovery takes that guard exclusively only while
+preserving and replacing the database, then releases it before an explicit-root
+rebuild acquires its repository lease and scans canonical state. This prevents
+database replacement races without globally serializing Git work or scans.
 
 ## Polling Extension
 

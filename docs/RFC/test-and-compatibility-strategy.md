@@ -131,7 +131,8 @@ Wave 1 completes only with automated evidence for all of the following:
 - Create scoped checkpoints, preserve unrelated worktree changes, and avoid
   empty commits.
 - Refresh primary and active contexts, apply active-context precedence, and
-  expose a choice state for multiple contexts.
+  surface duplicate or mismatched deterministic local contexts as visible,
+  preserved recovery problems without an editable choice state.
 - Delete or corrupt the local SQLite database and rebuild equivalent discovery
   results without canonical filesystem or Git mutation.
 - Inject every required Wave 1 failure and successfully retry without duplicate
