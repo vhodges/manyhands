@@ -732,6 +732,43 @@ pub fn assert_operation_records_hold_no_content(data_directory: &Path) {
     assert!(!schema.to_ascii_lowercase().contains("draft"));
 }
 
+pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str]) {
+    assert_operation_records_hold_no_content(data_directory);
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT COALESCE(operation_ulid, ''), action, target, state, completed_step, \
+                    COALESCE(item_id, ''), COALESCE(context_path, ''), \
+                    CAST(observed_at AS TEXT), CAST(persisted_context_count AS TEXT), \
+                    COALESCE(redacted_error, '') \
+             FROM operation_records",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| {
+            Ok((0..10)
+                .map(|column| row.get::<_, String>(column))
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n"))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for value in rows {
+        for forbidden in forbidden {
+            assert!(
+                !value.contains(forbidden),
+                "operation record retained forbidden value {forbidden:?}"
+            );
+        }
+        assert!(!value.to_ascii_lowercase().contains("blake3"));
+        assert!(!value.to_ascii_lowercase().contains("credential"));
+        assert!(!value.to_ascii_lowercase().contains("password"));
+        assert!(!value.to_ascii_lowercase().contains("private key"));
+    }
+}
+
 pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &Path) {
     let connection =
         Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();

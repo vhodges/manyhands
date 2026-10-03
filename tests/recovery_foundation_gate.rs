@@ -9,11 +9,12 @@ use std::{
 };
 
 use manyhands::repository::{
-    AddRemoteRequest, CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
-    EnableRepositoryOutcome, ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind,
-    LifecycleLeasePhase, OperationId, PublicationRemoteOutcome, RebuildRepositoryRequest,
-    RecoveryInspection, RefreshRepositoryRequest, RemoveRegistrationOutcome,
-    RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
+    AddRemoteRequest, AuthoringKind, AuthoringTarget, CommitIdentity, ConfigurationInspection,
+    ContextIntent, CreateRepositoryRequest, DocumentDraft, EnableRepositoryOutcome,
+    ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, LifecycleLeasePhase,
+    OperationId, PublicationRemoteOutcome, RebuildRepositoryRequest, RecoveryInspection,
+    RefreshRepositoryRequest, RemoveRegistrationOutcome, RemoveRegistrationRequest,
+    RemoveRemoteRequest, RepositoryErrorKind, RepositoryService, SaveDocumentRequest, SaveOutcome,
     SetPublicationRemoteRequest,
 };
 use rusqlite::{Connection, params};
@@ -143,6 +144,71 @@ fn root_scoped_refresh_is_busy_until_the_common_git_lease_releases() {
             })
             .is_ok()
     );
+}
+
+#[test]
+fn authoring_context_and_save_wait_for_common_git_lease_then_replay_after_release() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    stage_configuration(&fixture);
+    let context_operation = OperationId::new();
+    let save_operation = OperationId::new();
+    let context_target = || AuthoringTarget {
+        root: fixture.root.clone(),
+        kind: AuthoringKind::Document,
+        item_id: support::document_id(),
+        intent: ContextIntent::Create,
+        operation_id: context_operation,
+    };
+    let save_request = || SaveDocumentRequest {
+        target: AuthoringTarget {
+            root: fixture.root.clone(),
+            kind: AuthoringKind::Document,
+            item_id: support::document_id(),
+            intent: ContextIntent::Create,
+            operation_id: save_operation,
+        },
+        source_path: None,
+        destination_path: PathBuf::from("docs/lease.md"),
+        draft: DocumentDraft {
+            title: "Lease replay".to_owned(),
+            body: "draft remains caller-owned\n".to_owned(),
+        },
+        expected_source: None,
+        expected_destination: ExpectedPathObservation::Missing,
+    };
+    let holder = support::hold_lease_in_child(&fixture.root, data.path(), LeaseKind::Repository);
+
+    assert_eq!(
+        match service.prepare_context(context_target()) {
+            Ok(_) => panic!("lease-held context provision must be busy"),
+            Err(error) => error.kind,
+        },
+        RepositoryErrorKind::RepositoryBusy
+    );
+    assert_eq!(
+        match service.save_document(save_request()) {
+            Ok(_) => panic!("lease-held document save must be busy"),
+            Err(error) => error.kind,
+        },
+        RepositoryErrorKind::RepositoryBusy
+    );
+
+    holder.release();
+    let context = service.prepare_context(context_target()).unwrap();
+    assert!(matches!(
+        context,
+        manyhands::repository::ContextProvisionOutcome::Created(_)
+            | manyhands::repository::ContextProvisionOutcome::Reused(_)
+    ));
+    assert!(matches!(
+        service.save_document(save_request()).unwrap(),
+        SaveOutcome::Saved { .. }
+    ));
 }
 
 #[test]
