@@ -29,10 +29,6 @@ pub(super) fn migrate_operation_records(
             completed_step TEXT,
             observed_at INTEGER NOT NULL,
             persisted_context_count INTEGER NOT NULL DEFAULT 0,
-            observation_fingerprint TEXT,
-            git_head_oid TEXT,
-            git_reference TEXT,
-            git_observed_at INTEGER,
             redacted_error TEXT
         );
         CREATE INDEX IF NOT EXISTS operation_records_root_path_idx ON operation_records(root_path, observed_at);
@@ -42,31 +38,45 @@ pub(super) fn migrate_operation_records(
         ",
     ).map_err(RepositoryError::sqlite)?;
     let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
+    let has_legacy_operations: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operations')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
     let migrated: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name = 'cycle_05_operation_records')",
         [],
         |row| row.get(0),
     ).map_err(RepositoryError::sqlite)?;
-    if !migrated {
+    if !migrated && has_legacy_operations {
         transaction
             .execute(
                 "INSERT INTO operation_records (
-                repository_id, root_path, operation_ulid, action, context_path, state,
-                completed_step, observed_at, persisted_context_count, observation_fingerprint
-             )
-             SELECT index_operations.repository_id, repositories.root_path, NULL,
-                    index_operations.operation, index_operations.context_path,
-                    index_operations.state, index_operations.state,
-                    index_operations.observed_at, index_operations.persisted_context_count,
-                    (SELECT observation_fingerprint FROM index_operation_contexts
-                     WHERE index_operation_contexts.operation_id = index_operations.id
-                     ORDER BY worktree_path LIMIT 1)
-             FROM index_operations
-             JOIN repositories ON repositories.id = index_operations.repository_id
+                repository_id, root_path, operation_ulid, action, state,
+                completed_step, observed_at, persisted_context_count
+              )
+              SELECT index_operations.repository_id, repositories.root_path, NULL,
+                     index_operations.operation,
+                     CASE WHEN index_operations.state = 'completed' THEN 'completed' ELSE 'created' END,
+                     CASE WHEN index_operations.state = 'completed' THEN 'completed' ELSE NULL END,
+                     index_operations.observed_at,
+                     CASE WHEN index_operations.state = 'completed' THEN index_operations.persisted_context_count ELSE 0 END
+              FROM index_operations
+              JOIN repositories ON repositories.id = index_operations.repository_id
              WHERE index_operations.operation IN ('refresh', 'rebuild')",
                 [],
             )
             .map_err(RepositoryError::sqlite)?;
+        transaction
+            .execute_batch(
+                "DROP TABLE IF EXISTS index_operation_contexts;
+                 DROP TABLE index_operations;",
+            )
+            .map_err(RepositoryError::sqlite)?;
+    }
+    if !migrated {
         transaction
             .execute(
                 "INSERT INTO registry_migrations (name) VALUES ('cycle_05_operation_records')",

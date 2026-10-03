@@ -2316,7 +2316,7 @@ fn migration_retains_cycle_02_registration_and_adds_discovery_tables() {
                 "discovered_items",
                 "discovered_comments",
                 "problems",
-                "index_operations",
+                "operation_records",
                 "configuration_observations",
             ] {
                 assert!(table_exists(connection, table), "missing {table}");
@@ -2376,7 +2376,7 @@ fn remove_registration_cascades_only_its_derived_rows() {
                 connection.execute("INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, activity_at, activity_source) VALUES (?1, ?2, 'document', 'docs/item.md', 'Item', 1, 'git')", params![repository_id, format!("item-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO discovered_comments (item_id, comment_id, canonical_path, created_at) VALUES (?1, ?2, 'comments/item.md', 1)", params![repository_id, format!("comment-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO problems (repository_id, code, guidance, observed_at) VALUES (?1, 'problem', 'repair', 1)", [repository_id]).unwrap();
-                connection.execute("INSERT INTO index_operations (repository_id, operation, observed_at) VALUES (?1, 'refresh', 1)", [repository_id]).unwrap();
+                connection.execute("INSERT INTO operation_records (repository_id, root_path, action, state, observed_at) VALUES (?1, ?2, 'refresh', 'completed', 1)", params![repository_id, if repository_id == 1 { first.root.to_str().unwrap() } else { second.root.to_str().unwrap() }]).unwrap();
             }
         })
         .unwrap();
@@ -2398,7 +2398,7 @@ fn remove_registration_cascades_only_its_derived_rows() {
                 "discovered_items",
                 "discovered_comments",
                 "problems",
-                "index_operations",
+                "operation_records",
             ] {
                 let count: i64 = connection
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

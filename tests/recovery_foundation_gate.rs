@@ -110,6 +110,29 @@ fn common_git_lease_blocks_primary_and_linked_worktree_operations() {
 }
 
 #[test]
+fn legacy_migration_copies_multiple_contexts_once_without_retaining_their_fingerprints() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    support::create_cycle_04_registry(data.path(), &fixture.root, "refresh", "retry");
+
+    let first = RepositoryService::open_at(data.path()).unwrap();
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
+    drop(first);
+    let second = RepositoryService::open_at(data.path()).unwrap();
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
+    assert!(matches!(
+        second
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .as_slice(),
+        [RecoveryInspection::LegacyIndexOperation {
+            operation: manyhands::repository::RepositoryOperation::RefreshRepository,
+            ..
+        }]
+    ));
+}
+
+#[test]
 fn common_git_lease_does_not_block_unrelated_roots_or_after_child_termination() {
     let first = support::born_repository();
     let second = support::born_repository();
@@ -256,6 +279,8 @@ fn migration_moves_incomplete_cycle_04_refresh_to_a_resumable_legacy_record() {
     support::create_cycle_04_registry(data.path(), &fixture.root, "refresh", "retry");
 
     let service = RepositoryService::open_at(data.path()).unwrap();
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
     assert!(matches!(
         service
             .recovery_inspection(&fixture.root)

@@ -697,8 +697,13 @@ pub fn create_cycle_04_registry(data_directory: &Path, root: &Path, operation: &
     let operation_id = connection.last_insert_rowid();
     connection.execute(
         "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint)
-         VALUES (?1, ?2, 'legacy-fingerprint')",
+          VALUES (?1, ?2, 'legacy-fingerprint-BLAKE3-PRIVATE-MARKDOWN')",
         params![operation_id, root.to_str().unwrap()],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint)
+          VALUES (?1, ?2, 'another-legacy-fingerprint-GIT-BLOB-OID')",
+        params![operation_id, root.join(".manyhands/worktrees/second").to_str().unwrap()],
     ).unwrap();
     connection
         .execute(
@@ -720,6 +725,49 @@ pub fn assert_operation_records_hold_no_content(data_directory: &Path) {
         )
         .unwrap();
     assert!(!schema.to_ascii_lowercase().contains("digest"));
+    assert!(!schema.to_ascii_lowercase().contains("fingerprint"));
+    assert!(!schema.to_ascii_lowercase().contains("blake3"));
+    assert!(!schema.to_ascii_lowercase().contains("oid"));
     assert!(!schema.to_ascii_lowercase().contains("content"));
     assert!(!schema.to_ascii_lowercase().contains("draft"));
+}
+
+pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &Path) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    assert_operation_records_hold_no_content(data_directory);
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM operation_records", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state, context_path, persisted_context_count
+                 FROM operation_records WHERE action = 'refresh'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?
+                )),
+            )
+            .unwrap(),
+        ("created".to_owned(), None, 0)
+    );
+    for table in ["index_operations", "index_operation_contexts"] {
+        assert!(
+            !connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap(),
+            "legacy table {table} remains after migration"
+        );
+    }
 }
