@@ -952,7 +952,7 @@ fn refresh_operation_states(service: &RepositoryService) -> Vec<(String, Option<
     service
         .with_registry_connection_for_testing(|connection| {
             connection
-                .prepare("SELECT state, context_path FROM index_operations WHERE operation = 'refresh' ORDER BY id")
+                .prepare("SELECT state, context_path FROM operation_records WHERE action = 'refresh' ORDER BY id")
                 .unwrap()
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .unwrap()
@@ -965,36 +965,15 @@ fn refresh_operation_states(service: &RepositoryService) -> Vec<(String, Option<
 fn refresh_operation_progress(service: &RepositoryService) -> (String, i64) {
     service.with_registry_connection_for_testing(|connection| {
         connection.query_row(
-            "SELECT state, persisted_context_count FROM index_operations WHERE operation = 'refresh' ORDER BY id DESC LIMIT 1",
+            "SELECT state, persisted_context_count FROM operation_records WHERE action = 'refresh' ORDER BY id DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap()
     }).unwrap()
 }
 
-fn root_refresh_fingerprints(service: &RepositoryService, root: &Path) -> Vec<String> {
-    service
-        .with_registry_connection_for_testing(|connection| {
-            connection
-                .prepare(
-                    "SELECT index_operation_contexts.observation_fingerprint
-                     FROM index_operation_contexts
-                     JOIN index_operations ON index_operations.id = index_operation_contexts.operation_id
-                     WHERE index_operations.operation = 'refresh'
-                       AND index_operation_contexts.worktree_path = ?1
-                     ORDER BY index_operations.id ASC",
-                )
-                .unwrap()
-                .query_map([root.to_str().unwrap()], |row| row.get(0))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-        })
-        .unwrap()
-}
-
 #[test]
-fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
+fn refresh_does_not_persist_private_markdown_while_detecting_source_races() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     let private_body = "PRIVATE-MARKDOWN-BODY-01ARZ3NDEKTSV4RRFFQ69G5FAZ";
@@ -1007,9 +986,7 @@ fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
         .service
         .refresh_repository(refresh_request!(&fixture.root))
         .unwrap();
-    let before = root_refresh_fingerprints(&enabled.service, &fixture.root);
-    assert_eq!(before.len(), 1);
-    assert!(!before[0].contains(private_body));
+    support::assert_operation_records_hold_no_content(enabled.data_directory.path());
 
     let changed_source = source.replace(private_body, "changed private Markdown body");
     enabled
@@ -1028,14 +1005,7 @@ fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
         .service
         .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap();
-    let after = root_refresh_fingerprints(&enabled.service, &fixture.root);
-    assert_eq!(after.len(), 2);
-    assert_ne!(before[0], after[1]);
-    assert!(
-        !after
-            .iter()
-            .any(|fingerprint| fingerprint.contains(private_body))
-    );
+    support::assert_operation_records_hold_no_content(enabled.data_directory.path());
 }
 
 #[test]
@@ -1907,8 +1877,8 @@ fn rebuild_operation_states(service: &RepositoryService) -> Vec<(String, i64)> {
         .with_registry_connection_for_testing(|connection| {
             connection
                 .prepare(
-                    "SELECT state, persisted_context_count FROM index_operations
-                     WHERE operation = 'rebuild' ORDER BY id",
+                    "SELECT state, persisted_context_count FROM operation_records
+                      WHERE action = 'rebuild' ORDER BY id",
                 )
                 .unwrap()
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -1923,8 +1893,8 @@ fn rebuild_operation_states_at(data: &Path) -> Vec<(String, i64)> {
     Connection::open(data.join("manyhands.sqlite3"))
         .unwrap()
         .prepare(
-            "SELECT state, persisted_context_count FROM index_operations
-             WHERE operation = 'rebuild' ORDER BY id",
+            "SELECT state, persisted_context_count FROM operation_records
+              WHERE action = 'rebuild' ORDER BY id",
         )
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))

@@ -17,6 +17,7 @@ use manyhands::{
         EnableRepositoryOutcome, EnableRepositoryRequest, OperationId, RepositoryService,
     },
 };
+use rusqlite::{Connection, params};
 
 pub struct TestRepository {
     // Fields drop in declaration order, so the repository closes before TempDir removes it.
@@ -649,4 +650,76 @@ pub fn root_comment_source() -> String {
 pub fn reply_source() -> String {
     "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAY\nitem_id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\nparent_id: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ncreated_at: 2026-09-30T12:01:00Z\n---\n"
         .to_owned()
+}
+
+pub fn create_cycle_04_registry(data_directory: &Path, root: &Path, operation: &str, state: &str) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE repositories (
+            id INTEGER PRIMARY KEY,
+            root_path TEXT NOT NULL UNIQUE,
+            enabled_at INTEGER NOT NULL,
+            accessibility TEXT NOT NULL,
+            config_blob_oid TEXT,
+            refresh_required INTEGER NOT NULL
+        );
+        CREATE TABLE index_operations (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            operation TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'completed',
+            context_path TEXT,
+            persisted_context_count INTEGER NOT NULL DEFAULT 0,
+            observed_at INTEGER NOT NULL
+        );
+        CREATE TABLE index_operation_contexts (
+            operation_id INTEGER NOT NULL REFERENCES index_operations(id) ON DELETE CASCADE,
+            worktree_path TEXT NOT NULL,
+            observation_fingerprint TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (operation_id, worktree_path)
+        );",
+        )
+        .unwrap();
+    let root = root.canonicalize().unwrap();
+    connection.execute(
+        "INSERT INTO repositories (root_path, enabled_at, accessibility, config_blob_oid, refresh_required)
+         VALUES (?1, 1, 'accessible', NULL, 1)",
+        [root.to_str().unwrap()],
+    ).unwrap();
+    let repository_id = connection.last_insert_rowid();
+    connection.execute(
+        "INSERT INTO index_operations (repository_id, operation, state, context_path, persisted_context_count, observed_at)
+         VALUES (?1, ?2, ?3, ?4, 2, 1)",
+        params![repository_id, operation, state, root.to_str().unwrap()],
+    ).unwrap();
+    let operation_id = connection.last_insert_rowid();
+    connection.execute(
+        "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint)
+         VALUES (?1, ?2, 'legacy-fingerprint')",
+        params![operation_id, root.to_str().unwrap()],
+    ).unwrap();
+    connection
+        .execute(
+            "INSERT INTO index_operations (repository_id, operation, state, observed_at)
+         VALUES (?1, 'rebuild', 'completed', 2)",
+            [repository_id],
+        )
+        .unwrap();
+}
+
+pub fn assert_operation_records_hold_no_content(data_directory: &Path) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operation_records'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!schema.to_ascii_lowercase().contains("digest"));
+    assert!(!schema.to_ascii_lowercase().contains("content"));
+    assert!(!schema.to_ascii_lowercase().contains("draft"));
 }

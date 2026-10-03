@@ -17,6 +17,7 @@ use crate::canonical;
 
 mod coordination;
 mod discovery;
+mod recovery;
 
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
@@ -25,6 +26,11 @@ use coordination::{
 use discovery::{
     ObservedCommentThread, ObservedItem, RootConfiguration, RootObservation,
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
+};
+use recovery::{
+    advance_after_observation, begin_or_reconcile_operation, clear_root,
+    has_incomplete_rebuild as recovery_has_incomplete_rebuild, pending_for_root,
+    record_persisted_context as record_recovery_context,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -187,6 +193,24 @@ pub struct RefreshRepositoryRequest {
 pub struct RebuildRepositoryRequest {
     pub root: PathBuf,
     pub operation_id: OperationId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecoveryInspection {
+    Pending {
+        operation_id: OperationId,
+        operation: RepositoryOperation,
+        root: PathBuf,
+        item_id: Option<canonical::ItemId>,
+        context: Option<PathBuf>,
+        completed_step: Option<String>,
+        next_action: RepositoryOperation,
+    },
+    LegacyIndexOperation {
+        root: PathBuf,
+        operation: RepositoryOperation,
+        next_action: RepositoryOperation,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -719,9 +743,9 @@ impl RepositoryService {
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
         let _repository_lease = repository_lease(&repository, &root, operation)?;
-        let root_path = registry_root_key(&root, operation)?;
-        let (repository_id, operation_id) =
-            begin_refresh_operation(&self.registry_path, &root, root_path)?;
+        let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
+        let record = begin_operation(&self.registry_path, &root, operation, request.operation_id)?;
+        let operation_id = record.id;
         let before = observe_root(&repository, &root);
         if let Err(error) =
             self.check_failure(FailurePoint::AfterContextObservation, operation, &root)
@@ -837,7 +861,8 @@ impl RepositoryService {
             self.set_index_availability(IndexAvailability::Recovering, operation, &root)?;
         }
         let _repository_lease = repository_lease(&repository, &root, operation)?;
-        let operation_id = begin_rebuild_operation(&self.registry_path, &root)?;
+        let operation_id =
+            begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id;
         let result = (|| {
             let observation = observe_root(&repository, &root);
             if let Some(hook) = self
@@ -922,6 +947,18 @@ impl RepositoryService {
             .rollback()
             .map_err(|error| snapshot_index_error_source(&root, error))?;
         snapshot
+    }
+
+    pub fn recovery_inspection(
+        &self,
+        root: &Path,
+    ) -> Result<Vec<RecoveryInspection>, RepositoryError> {
+        let operation = RepositoryOperation::Inspect;
+        let root = std::fs::canonicalize(root)
+            .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+        let connection = open_registry_read_only(&self.registry_path)
+            .map_err(|error| error.for_operation(operation, &root))?;
+        pending_for_root(&connection, &root).map_err(|error| error.for_operation(operation, &root))
     }
 
     pub fn prepare_context(
@@ -1952,7 +1989,7 @@ impl RepositoryService {
         let availability =
             match open_registry(&self.registry_path, &mut |_| {}).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
-                has_incomplete_rebuild_operation(&connection)
+                recovery_has_incomplete_rebuild(&connection)
             }) {
                 Ok(true) => IndexAvailability::Recovering,
                 Ok(false) => IndexAvailability::Ready,
@@ -1982,7 +2019,7 @@ impl RepositoryService {
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
-                has_incomplete_rebuild_operation(&connection)
+                recovery_has_incomplete_rebuild(&connection)
             }) {
                 Ok(true) => IndexAvailability::Recovering,
                 Ok(false) => IndexAvailability::Ready,
@@ -2721,6 +2758,8 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         migrate_registry(&mut connection)
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
+        clear_root(&connection, &root)
+            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         let deleted = connection
             .execute("DELETE FROM repositories WHERE root_path = ?1", [root_path])
             .map_err(|error| {
@@ -2789,16 +2828,42 @@ fn replace_corrupt_registry(registry_path: &Path, root: &Path) -> Result<(), Rep
     Ok(())
 }
 
-fn has_incomplete_rebuild_operation(
-    connection: &rusqlite::Connection,
-) -> Result<bool, RepositoryError> {
+fn begin_operation(
+    registry_path: &Path,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+) -> Result<recovery::RecoveryRecord, RepositoryError> {
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    begin_or_reconcile_operation(&connection, root, operation, operation_id)
+        .map_err(|error| error.for_operation(operation, root))
+}
+
+fn registered_repository_id(
+    registry_path: &Path,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<i64, RepositoryError> {
+    let root_path = registry_root_key(root, operation)?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
     connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM index_operations WHERE operation = 'rebuild' AND state != 'completed')",
-            [],
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root_path],
             |row| row.get(0),
         )
-        .map_err(RepositoryError::sqlite)
+        .optional()
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })
 }
 
 fn has_incomplete_rebuild_operation_at(
@@ -2807,55 +2872,8 @@ fn has_incomplete_rebuild_operation_at(
 ) -> Result<bool, RepositoryError> {
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
-    has_incomplete_rebuild_operation(&connection)
+    recovery_has_incomplete_rebuild(&connection)
         .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))
-}
-
-fn begin_rebuild_operation(registry_path: &Path, root: &Path) -> Result<i64, RepositoryError> {
-    let operation = RepositoryOperation::RebuildRepository;
-    let root_path = registry_root_key(root, operation)?;
-    let mut connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(operation, root))?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    transaction.execute(
-        "INSERT INTO repositories (root_path, enabled_at, accessibility, config_blob_oid, refresh_required)
-         VALUES (?1, ?2, 'accessible', NULL, 1)
-         ON CONFLICT(root_path) DO UPDATE SET accessibility = 'accessible', refresh_required = 1",
-        params![root_path, OffsetDateTime::now_utc().unix_timestamp()],
-    ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    let repository_id: i64 = transaction
-        .query_row(
-            "SELECT id FROM repositories WHERE root_path = ?1",
-            [root_path],
-            |row| row.get(0),
-        )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    let operation_id = transaction.query_row(
-        "SELECT id FROM index_operations WHERE repository_id = ?1 AND operation = 'rebuild' AND state != 'completed' ORDER BY id DESC LIMIT 1",
-        [repository_id], |row| row.get(0),
-    ).optional().map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    let operation_id = match operation_id {
-        Some(operation_id) => {
-            transaction.execute(
-                "UPDATE index_operations SET state = 'created', context_path = NULL, observed_at = ?2 WHERE id = ?1",
-                params![operation_id, OffsetDateTime::now_utc().unix_timestamp()],
-            ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-            operation_id
-        }
-        None => {
-            transaction.execute(
-                "INSERT INTO index_operations (repository_id, operation, state, observed_at) VALUES (?1, 'rebuild', 'created', ?2)",
-                params![repository_id, OffsetDateTime::now_utc().unix_timestamp()],
-            ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-            transaction.last_insert_rowid()
-        }
-    };
-    transaction
-        .commit()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    Ok(operation_id)
 }
 
 fn set_rebuild_operation(
@@ -2864,13 +2882,10 @@ fn set_rebuild_operation(
     state: &str,
     root: &Path,
 ) -> Result<(), RepositoryError> {
-    open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?
-        .execute(
-            "UPDATE index_operations SET state = ?2, context_path = NULL, observed_at = ?3 WHERE id = ?1",
-            params![operation_id, state, OffsetDateTime::now_utc().unix_timestamp()],
-        )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RebuildRepository, root))?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
+    advance_after_observation(&connection, operation_id, state, None, None)
+        .map_err(|error| error.for_operation(RepositoryOperation::RebuildRepository, root))?;
     Ok(())
 }
 
@@ -2913,8 +2928,6 @@ fn persist_rebuild_observation(
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     persist_observation(&transaction, repository_id, observation, root)
         .map_err(|error| error.for_operation(operation, root))?;
-    transaction.execute("UPDATE index_operations SET state = 'persisted', context_path = NULL, persisted_context_count = ?2, observed_at = ?3 WHERE id = ?1", params![operation_id, persisted_context_count, OffsetDateTime::now_utc().unix_timestamp()])
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
         .execute(
             "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1",
@@ -2923,7 +2936,17 @@ fn persist_rebuild_observation(
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
         .commit()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    advance_after_observation(
+        &connection,
+        operation_id,
+        "persisted",
+        None,
+        Some(persisted_context_count),
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn persist_rebuild_retry(
@@ -2959,14 +2982,12 @@ fn persist_rebuild_retry(
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
-        .execute(
-            "UPDATE index_operations SET state = 'retry', context_path = NULL, observed_at = ?2 WHERE id = ?1",
-            params![operation_id, OffsetDateTime::now_utc().unix_timestamp()],
-        )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    transaction
         .commit()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    advance_after_observation(&connection, operation_id, "retry", None, None)
+        .map_err(|error| error.for_operation(operation, root))
 }
 
 fn read_repository_snapshot_from_registry(
@@ -2990,61 +3011,6 @@ fn read_repository_snapshot_from_registry(
     snapshot
 }
 
-fn begin_refresh_operation(
-    registry_path: &Path,
-    root: &Path,
-    root_path: &str,
-) -> Result<(i64, i64), RepositoryError> {
-    let mut connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    let transaction = connection.transaction().map_err(|error| {
-        RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })?;
-    let repository_id: i64 = transaction
-        .query_row(
-            "SELECT id FROM repositories WHERE root_path = ?1",
-            [root_path],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RefreshRepository, root)
-        })?
-        .ok_or_else(|| {
-            RepositoryError::new(
-                RepositoryOperation::RefreshRepository,
-                Some(root.to_owned()),
-                RepositoryErrorKind::RepositoryNotRegistered,
-                "the repository is not registered",
-            )
-        })?;
-    let operation_id = transaction.query_row("SELECT id FROM index_operations WHERE repository_id = ?1 AND operation = 'refresh' AND state != 'completed' ORDER BY id DESC LIMIT 1", [repository_id], |row| row.get(0)).optional().map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    let operation_id = match operation_id {
-        Some(id) => {
-            transaction.execute("UPDATE index_operations SET state = 'observing', context_path = NULL, observed_at = ?2 WHERE id = ?1", params![id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-            id
-        }
-        None => {
-            transaction.execute("INSERT INTO index_operations (repository_id, operation, state, observed_at) VALUES (?1, 'refresh', 'observing', ?2)", params![repository_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-            transaction.last_insert_rowid()
-        }
-    };
-    transaction
-        .execute(
-            "UPDATE repositories SET refresh_required = 1 WHERE id = ?1",
-            [repository_id],
-        )
-        .map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RefreshRepository, root)
-        })?;
-    transaction.commit().map_err(|error| {
-        RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })?;
-    Ok((repository_id, operation_id))
-}
-
 fn set_refresh_operation(
     registry_path: &Path,
     operation_id: i64,
@@ -3054,7 +3020,8 @@ fn set_refresh_operation(
 ) -> Result<(), RepositoryError> {
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    connection.execute("UPDATE index_operations SET state = ?2, context_path = ?3, observed_at = ?4 WHERE id = ?1", params![operation_id, state, context.and_then(Path::to_str), OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    advance_after_observation(&connection, operation_id, state, context, None)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     Ok(())
 }
 
@@ -3067,8 +3034,8 @@ fn record_persisted_context(
 ) -> Result<(), RepositoryError> {
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    connection.execute("UPDATE index_operations SET state = 'persisted', context_path = ?2, persisted_context_count = persisted_context_count + 1, observed_at = ?3 WHERE id = ?1", params![operation_id, context.to_str(), OffsetDateTime::now_utc().unix_timestamp()])
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    record_recovery_context(&connection, operation_id, context)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     Ok(())
 }
 
@@ -3147,31 +3114,6 @@ fn persist_context_refresh(
     let transaction = connection.transaction().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
     })?;
-    let fingerprint = observation_fingerprint(
-        root_observation,
-        context,
-        head,
-        items,
-        problems,
-        validation,
-        root,
-    )?;
-    let previous: Option<String> = transaction.query_row(
-        "SELECT observation_fingerprint FROM index_operation_contexts WHERE operation_id = ?1 AND worktree_path = ?2",
-        params![operation_id, context.worktree.to_str()], |row| row.get(0),
-    ).optional().map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    if previous.as_deref() == Some(&fingerprint) {
-        return transaction.commit().map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RefreshRepository, root)
-        });
-    }
-    let is_new = previous.is_none();
-    transaction.execute(
-        "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint) VALUES (?1, ?2, ?3)
-         ON CONFLICT(operation_id, worktree_path) DO UPDATE SET observation_fingerprint = excluded.observation_fingerprint",
-        params![operation_id, context.worktree.to_str(), fingerprint],
-    ).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     transaction
         .execute(
             "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -3232,13 +3174,16 @@ fn persist_context_refresh(
         },
         root,
     )?;
-    transaction.execute("UPDATE index_operations SET state = 'persisted', context_path = ?2, persisted_context_count = persisted_context_count + ?3, observed_at = ?4 WHERE id = ?1", params![operation_id, context.worktree.to_str(), i64::from(is_new), OffsetDateTime::now_utc().unix_timestamp()])
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     transaction.commit().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })
+    })?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
+    record_recovery_context(&connection, operation_id, &context.worktree)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))
 }
 
+#[allow(dead_code)]
 fn observation_fingerprint(
     root_observation: &RootObservation,
     context: &discovery::RootContextObservation,
@@ -3288,6 +3233,7 @@ fn observation_fingerprint(
     ))
 }
 
+#[allow(dead_code)]
 fn source_fingerprints(
     sources: &[(PathBuf, String)],
     root: &Path,
@@ -3298,6 +3244,7 @@ fn source_fingerprints(
         .collect()
 }
 
+#[allow(dead_code)]
 fn source_fingerprint(source: &[u8], root: &Path) -> Result<String, RepositoryError> {
     git2::Oid::hash_object(git2::ObjectType::Blob, source)
         .map(|oid| oid.to_string())
@@ -3398,10 +3345,13 @@ fn reconcile_disappeared_contexts(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1", [repository_id]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    transaction.execute("UPDATE index_operations SET state = 'completed', context_path = NULL, observed_at = ?2 WHERE id = ?1", params![operation_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     transaction.commit().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })
+    })?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
+    advance_after_observation(&connection, operation_id, "completed", None, None)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))
 }
 
 #[allow(dead_code)]
@@ -3421,54 +3371,6 @@ fn observations_match(before: &RootObservation, after: &RootObservation) -> bool
                     && left.head.branch == right.head.branch
                     && left.sources == right.sources
             })
-}
-
-#[allow(dead_code)]
-fn persist_refresh_race(
-    registry_path: &Path,
-    root: &Path,
-    root_path: &str,
-    context: Option<&Path>,
-) -> Result<(), RepositoryError> {
-    let operation = RepositoryOperation::RefreshRepository;
-    let mut connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(operation, root))?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    let repository_id: i64 = transaction
-        .query_row(
-            "SELECT id FROM repositories WHERE root_path = ?1",
-            [root_path],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?
-        .ok_or_else(|| {
-            RepositoryError::new(
-                operation,
-                Some(root.to_owned()),
-                RepositoryErrorKind::RepositoryNotRegistered,
-                "the repository is not registered",
-            )
-        })?;
-    transaction
-        .execute(
-            "UPDATE repositories SET refresh_required = 1 WHERE id = ?1",
-            [repository_id],
-        )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    transaction.execute(
-        "INSERT INTO problems (repository_id, path, code, guidance, observed_at) VALUES (?1, ?2, 'retry-required', 'the repository changed while it was being observed; refresh again', ?3)",
-        params![repository_id, context.and_then(Path::to_str), OffsetDateTime::now_utc().unix_timestamp()],
-    ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    transaction.execute(
-        "INSERT INTO index_operations (repository_id, operation, observed_at) VALUES (?1, 'refresh', ?2)",
-        params![repository_id, OffsetDateTime::now_utc().unix_timestamp()],
-    ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    transaction
-        .commit()
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
 }
 
 #[allow(dead_code)]

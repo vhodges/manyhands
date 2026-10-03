@@ -6,8 +6,9 @@ use std::{
 };
 
 use manyhands::repository::{
-    ExpectedPathObservation, IndexPending, LeaseKind, OperationId, RebuildRepositoryRequest,
-    RefreshRepositoryRequest, RepositoryErrorKind, RepositoryService,
+    ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, OperationId,
+    RebuildRepositoryRequest, RecoveryInspection, RefreshRepositoryRequest,
+    RemoveRegistrationRequest, RepositoryErrorKind, RepositoryService,
 };
 
 mod support;
@@ -100,14 +101,12 @@ fn common_git_lease_blocks_primary_and_linked_worktree_operations() {
 
     assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
     holder.release();
-    assert!(
-        service
-            .refresh_repository(RefreshRepositoryRequest {
-                root: fixture.root.clone(),
-                operation_id: OperationId::new()
-            })
-            .is_ok()
-    );
+    service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
 }
 
 #[test]
@@ -247,5 +246,119 @@ fn reconstructed_enable_retry_requires_a_shared_operation_id() {
     assert_eq!(
         support::enable_request_with_operation_id(root, operation_id).operation_id,
         support::enable_request_with_operation_id(root, operation_id).operation_id
+    );
+}
+
+#[test]
+fn migration_moves_incomplete_cycle_04_refresh_to_a_resumable_legacy_record() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    support::create_cycle_04_registry(data.path(), &fixture.root, "refresh", "retry");
+
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .as_slice(),
+        [RecoveryInspection::LegacyIndexOperation {
+            operation: manyhands::repository::RepositoryOperation::RefreshRepository,
+            next_action: manyhands::repository::RepositoryOperation::RefreshRepository,
+            ..
+        }]
+    ));
+
+    service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn legacy_index_record_can_only_resume_with_its_matching_action() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    support::create_cycle_04_registry(data.path(), &fixture.root, "refresh", "retry");
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    let error = service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+}
+
+#[test]
+fn root_operation_is_recorded_before_registration_without_content() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = OperationId::new();
+
+    assert!(
+        service
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id,
+            })
+            .is_err()
+    );
+    assert!(matches!(
+        service.recovery_inspection(&fixture.root).unwrap().as_slice(),
+        [RecoveryInspection::Pending {
+            operation_id: found,
+            operation: manyhands::repository::RepositoryOperation::RebuildRepository,
+            ..
+        }] if *found == operation_id
+    ));
+    support::assert_operation_records_hold_no_content(data.path());
+}
+
+#[test]
+fn removing_registration_clears_root_recovery_records() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    service
+        .with_registry_connection_for_testing(|connection| {
+            connection.execute(
+                "INSERT INTO operation_records (root_path, operation_ulid, action, state, observed_at)
+                 VALUES (?1, ?2, 'refresh', 'observed', 1)",
+                [
+                    fixture.root.canonicalize().unwrap().to_str().unwrap(),
+                    OperationId::new().to_string().as_str(),
+                ],
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    service
+        .remove_registration(RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
     );
 }
