@@ -230,15 +230,17 @@ pub(super) fn begin_or_reconcile_operation(
         transaction.commit().map_err(RepositoryError::sqlite)?;
         return Ok(RecoveryRecord { id });
     }
-    if let Some((id, existing_action)) = transaction
-        .query_row(
-            "SELECT id, action FROM operation_records
+    if !is_lifecycle_operation(operation)
+        && operation != RepositoryOperation::RemoveRegistration
+        && let Some((id, existing_action)) = transaction
+            .query_row(
+                "SELECT id, action FROM operation_records
          WHERE root_path = ?1 AND state != 'completed' ORDER BY id DESC LIMIT 1",
-            [root_path],
-            |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(RepositoryError::sqlite)?
+                [root_path],
+                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(RepositoryError::sqlite)?
     {
         if existing_action == action {
             let legacy: Option<String> = transaction
@@ -263,14 +265,28 @@ pub(super) fn begin_or_reconcile_operation(
         )
         .optional()
         .map_err(RepositoryError::sqlite)?;
-    transaction.execute(
-        "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, state, observed_at)
+    transaction
+        .execute(
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, state, observed_at)
          VALUES (?1, ?2, ?3, ?4, 'created', ?5)",
-        params![repository_id, root_path, requested, action, now()],
-    ).map_err(RepositoryError::sqlite)?;
+            params![repository_id, root_path, requested, action, now()],
+        )
+        .map_err(RepositoryError::sqlite)?;
     let id = transaction.last_insert_rowid();
     transaction.commit().map_err(RepositoryError::sqlite)?;
     Ok(RecoveryRecord { id })
+}
+
+fn is_lifecycle_operation(operation: RepositoryOperation) -> bool {
+    matches!(
+        operation,
+        RepositoryOperation::CreateAndEnable
+            | RepositoryOperation::Enable
+            | RepositoryOperation::RemoveRegistration
+            | RepositoryOperation::AddRemote
+            | RepositoryOperation::RemoveRemote
+            | RepositoryOperation::SetPublicationRemote
+    )
 }
 
 pub(super) fn advance_after_observation(
@@ -366,6 +382,12 @@ pub(super) fn pending_for_root(
 
 fn action_name(operation: RepositoryOperation) -> &'static str {
     match operation {
+        RepositoryOperation::CreateAndEnable => "create_and_enable",
+        RepositoryOperation::Enable => "enable",
+        RepositoryOperation::RemoveRegistration => "remove_registration",
+        RepositoryOperation::AddRemote => "add_remote",
+        RepositoryOperation::RemoveRemote => "remove_remote",
+        RepositoryOperation::SetPublicationRemote => "set_publication_remote",
         RepositoryOperation::RefreshRepository => "refresh",
         RepositoryOperation::RebuildRepository => "rebuild",
         _ => "other",
@@ -374,6 +396,12 @@ fn action_name(operation: RepositoryOperation) -> &'static str {
 
 fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
     match action {
+        "create_and_enable" => Some(RepositoryOperation::CreateAndEnable),
+        "enable" => Some(RepositoryOperation::Enable),
+        "remove_registration" => Some(RepositoryOperation::RemoveRegistration),
+        "add_remote" => Some(RepositoryOperation::AddRemote),
+        "remove_remote" => Some(RepositoryOperation::RemoveRemote),
+        "set_publication_remote" => Some(RepositoryOperation::SetPublicationRemote),
         "refresh" => Some(RepositoryOperation::RefreshRepository),
         "rebuild" => Some(RepositoryOperation::RebuildRepository),
         _ => None,

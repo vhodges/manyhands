@@ -28,7 +28,7 @@ use discovery::{
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
 };
 use recovery::{
-    advance_after_observation, begin_or_reconcile_operation, pending_for_root,
+    RecoveryRecord, advance_after_observation, begin_or_reconcile_operation, pending_for_root,
     record_persisted_context as record_recovery_context,
 };
 
@@ -1837,6 +1837,44 @@ impl RepositoryService {
         reconcile_registration(&self.registry_path, repository, root)
     }
 
+    fn begin_lifecycle(
+        &self,
+        repository: &Repository,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+    ) -> Result<(RepositoryLease, RecoveryRecord), RepositoryError> {
+        let lease = repository_lease(repository, root, operation)?;
+        // Preserve authoritative local-Git behavior when the optional cache is unavailable.
+        if self.registry_path.is_dir() {
+            return Ok((lease, RecoveryRecord { id: 0 }));
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        let record = begin_or_reconcile_operation(&mut connection, root, operation, operation_id)
+            .map_err(|error| error.for_operation(operation, root))?;
+        Ok((lease, record))
+    }
+
+    fn complete_lifecycle(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+    ) -> Result<(), RepositoryError> {
+        if record.id == 0 {
+            return Ok(());
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        advance_after_observation(&connection, record.id, "completed", None, None)
+            .map_err(|error| error.for_operation(operation, root))
+    }
+
     fn checkpoint_owned_paths(
         &self,
         repository: &Repository,
@@ -2099,8 +2137,20 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::AddRemote)?;
         registry_root_key(&root, RepositoryOperation::AddRemote)?;
+        let (_lease, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            RepositoryOperation::AddRemote,
+            request.operation_id,
+        )?;
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
+                mark_registered_refresh_required(
+                    &self.registry_path,
+                    &root,
+                    RepositoryOperation::AddRemote,
+                )?;
+                self.complete_lifecycle(&root, RepositoryOperation::AddRemote, record)?;
                 return Ok(RemoteOutcome::NoChange);
             }
             Ok(_) => {
@@ -2130,6 +2180,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::AddRemote,
         )?;
+        self.complete_lifecycle(&root, RepositoryOperation::AddRemote, record)?;
         Ok(RemoteOutcome::Changed)
     }
 
@@ -2143,6 +2194,12 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(selected, RepositoryOperation::RemoveRemote)?;
         registry_root_key(&root, RepositoryOperation::RemoveRemote)?;
+        let (_lease, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            RepositoryOperation::RemoveRemote,
+            request.operation_id,
+        )?;
         let configuration = read_configuration_for(&root, RepositoryOperation::RemoveRemote)?;
         if matches!(configuration, ConfigurationInspection::Valid(ref config) if config.publication_remote.as_deref() == Some(name))
         {
@@ -2156,6 +2213,12 @@ impl RepositoryService {
         match repository.find_remote(name) {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                mark_registered_refresh_required(
+                    &self.registry_path,
+                    &root,
+                    RepositoryOperation::RemoveRemote,
+                )?;
+                self.complete_lifecycle(&root, RepositoryOperation::RemoveRemote, record)?;
                 return Ok(RemoteOutcome::NoChange);
             }
             Err(error) => {
@@ -2174,6 +2237,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::RemoveRemote,
         )?;
+        self.complete_lifecycle(&root, RepositoryOperation::RemoveRemote, record)?;
         Ok(RemoteOutcome::Changed)
     }
 
@@ -2184,6 +2248,8 @@ impl RepositoryService {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
+        let (_lease, record) =
+            self.begin_lifecycle(&repository, &root, operation, request.operation_id)?;
         let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
         else {
             return Err(RepositoryError::new(
@@ -2231,6 +2297,7 @@ impl RepositoryService {
         if config.publication_remote == request.name {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
+            self.complete_lifecycle(&root, operation, record)?;
             return Ok(PublicationRemoteOutcome::NoChange);
         }
         let local_config = repository
@@ -2310,8 +2377,14 @@ impl RepositoryService {
             }
         };
         match self.reconcile_registration(&repository, &root, operation) {
-            Ok(()) => Ok(PublicationRemoteOutcome::Changed { commit_oid }),
-            Err(_) => Ok(PublicationRemoteOutcome::RegistrationPending { commit_oid }),
+            Ok(()) => {
+                self.complete_lifecycle(&root, operation, record)?;
+                Ok(PublicationRemoteOutcome::Changed { commit_oid })
+            }
+            Err(_) => {
+                self.complete_lifecycle(&root, operation, record)?;
+                Ok(PublicationRemoteOutcome::RegistrationPending { commit_oid })
+            }
         }
     }
 
@@ -2382,6 +2455,13 @@ impl RepositoryService {
         }
         let root = parent.join(name);
         registry_root_key(&root, RepositoryOperation::CreateAndEnable)?;
+        let bootstrap = bootstrap_lease(
+            self.registry_path
+                .parent()
+                .unwrap_or_else(|| Path::new(".")),
+            &root,
+            RepositoryOperation::CreateAndEnable,
+        )?;
         let created_target = match std::fs::symlink_metadata(&root) {
             Ok(metadata) if !metadata.is_dir() => {
                 return Err(RepositoryError::new(
@@ -2466,6 +2546,17 @@ impl RepositoryService {
                     error,
                 )
             })?;
+            // Serialize the handoff from path bootstrap to the common Git lease.
+            let repository = Repository::open(&root).map_err(|error| {
+                RepositoryError::git(
+                    RepositoryOperation::CreateAndEnable,
+                    Some(root.clone()),
+                    error,
+                )
+            })?;
+            let lease = repository_lease(&repository, &root, RepositoryOperation::CreateAndEnable)?;
+            drop(bootstrap);
+            drop(lease);
             self.enable(EnableRepositoryRequest {
                 root: root.clone(),
                 primary_branch: request.primary_branch,
@@ -2506,6 +2597,12 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::Enable)?;
         registry_root_key(&root, RepositoryOperation::Enable)?;
+        let (_lease, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            RepositoryOperation::Enable,
+            request.operation_id,
+        )?;
         let requested_config =
             canonical_configuration(&request.primary_branch, &root, RepositoryOperation::Enable)?;
         let unborn = repository.is_empty().map_err(|error| {
@@ -2573,6 +2670,7 @@ impl RepositoryService {
                 }
                 ensure_worktree_exclusion(&repository, &root)?;
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
+                self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                 return Ok(EnableRepositoryOutcome::AlreadyEnabled);
             }
             ConfigurationInspection::Missing => {}
@@ -2599,6 +2697,7 @@ impl RepositoryService {
                     RepositoryOperation::Enable,
                 )?
                 else {
+                    self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                     return Ok(EnableRepositoryOutcome::IdentityRequired);
                 };
                 (identity, false)
@@ -2703,8 +2802,14 @@ impl RepositoryService {
             }
         };
         match self.reconcile_registration(&repository, &root, RepositoryOperation::Enable) {
-            Ok(()) => Ok(EnableRepositoryOutcome::Enabled { commit_oid }),
-            Err(_) => Ok(EnableRepositoryOutcome::RegistrationPending { commit_oid }),
+            Ok(()) => {
+                self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
+                Ok(EnableRepositoryOutcome::Enabled { commit_oid })
+            }
+            Err(_) => {
+                self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
+                Ok(EnableRepositoryOutcome::RegistrationPending { commit_oid })
+            }
         }
     }
 
@@ -2837,7 +2942,15 @@ impl RepositoryService {
             ));
         }
         let root_path = registry_root_key(&root, RepositoryOperation::RemoveRegistration)?;
-        let _cache_guard = cache_read_guard(
+        let repository = Repository::open(&root).map_err(|error| {
+            RepositoryError::git(
+                RepositoryOperation::RemoveRegistration,
+                Some(root.clone()),
+                error,
+            )
+        })?;
+        let _lease = repository_lease(&repository, &root, RepositoryOperation::RemoveRegistration)?;
+        let _cache_guard = cache_write_guard(
             &self.registry_path,
             &root,
             RepositoryOperation::RemoveRegistration,
@@ -2846,6 +2959,13 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         migrate_registry(&mut connection)
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
+        let _record = begin_or_reconcile_operation(
+            &mut connection,
+            &root,
+            RepositoryOperation::RemoveRegistration,
+            request.operation_id,
+        )
+        .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         let transaction = connection.transaction().map_err(|error| {
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RemoveRegistration, &root)

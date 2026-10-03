@@ -613,7 +613,7 @@ fn failed_registration_removal_keeps_root_recovery_records() {
             })
             .is_err()
     );
-    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 1);
+    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 2);
 }
 
 #[test]
@@ -651,4 +651,97 @@ fn removing_registration_clears_root_recovery_records() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn enable_replay_records_completed_lifecycle_once() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let operation_id = OperationId::new();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    service
+        .enable(support::enable_request_with_operation_id(
+            &fixture.root,
+            operation_id,
+        ))
+        .unwrap();
+    drop(service);
+
+    let replay = RepositoryService::open_at(data.path()).unwrap();
+    assert!(
+        replay
+            .enable(support::enable_request_with_operation_id(
+                &fixture.root,
+                operation_id
+            ))
+            .is_ok()
+    );
+    let records = replay
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM operation_records
+                     WHERE root_path = ?1 AND operation_ulid = ?2 AND action = 'enable'
+                       AND state = 'completed'",
+                    [
+                        fixture.root.canonicalize().unwrap().to_str().unwrap(),
+                        operation_id.to_string().as_str(),
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(records, 1);
+}
+
+#[test]
+fn remote_replay_records_completed_lifecycle_once() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let operation_id = OperationId::new();
+
+    service
+        .add_remote(manyhands::repository::AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id,
+        })
+        .unwrap();
+    drop(service);
+
+    let replay = RepositoryService::open_at(data.path()).unwrap();
+    assert!(
+        replay
+            .add_remote(manyhands::repository::AddRemoteRequest {
+                root: fixture.root.clone(),
+                name: "origin".to_owned(),
+                url: "git@example.invalid:project.git".to_owned(),
+                operation_id,
+            })
+            .is_ok()
+    );
+    let records = replay
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM operation_records
+                     WHERE root_path = ?1 AND operation_ulid = ?2 AND action = 'add_remote'
+                       AND state = 'completed'",
+                    [
+                        fixture.root.canonicalize().unwrap().to_str().unwrap(),
+                        operation_id.to_string().as_str(),
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(records, 1);
 }
