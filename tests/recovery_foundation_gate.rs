@@ -6,10 +6,10 @@ use std::{
 };
 
 use manyhands::repository::{
-    CommitIdentity, CreateRepositoryRequest, EnableRepositoryOutcome, ExpectedPathObservation,
-    FailurePoint, IndexPending, LeaseKind, OperationId, RebuildRepositoryRequest,
-    RecoveryInspection, RefreshRepositoryRequest, RemoveRegistrationRequest, RepositoryErrorKind,
-    RepositoryService,
+    AddRemoteRequest, CommitIdentity, CreateRepositoryRequest, EnableRepositoryOutcome,
+    ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, OperationId,
+    RebuildRepositoryRequest, RecoveryInspection, RefreshRepositoryRequest,
+    RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
 };
 use rusqlite::Connection;
 
@@ -818,4 +818,76 @@ fn create_replay_after_registration_failure_resumes_the_create_action() {
         EnableRepositoryOutcome::AlreadyEnabled
     );
     assert_eq!(support::head_commit(&repository), Some(commit_oid));
+}
+
+#[test]
+fn add_remote_replay_after_authoritative_mutation_uses_one_remote() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let request = AddRemoteRequest {
+        root: fixture.root.clone(),
+        name: "origin".to_owned(),
+        url: "git@example.invalid:project.git".to_owned(),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::AfterRemoteMutation).open_service(data.path());
+    assert_eq!(
+        failing.add_remote(request.clone()).unwrap_err().kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    drop(failing);
+
+    RepositoryService::open_at(data.path())
+        .unwrap()
+        .add_remote(request)
+        .unwrap();
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(
+        fixture.repository.find_remote("origin").unwrap().url(),
+        Some("git@example.invalid:project.git")
+    );
+}
+
+#[test]
+fn remove_remote_replay_after_authoritative_mutation_keeps_it_absent() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    setup
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let request = RemoveRemoteRequest {
+        root: fixture.root.clone(),
+        name: "origin".to_owned(),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::AfterRemoteMutation).open_service(data.path());
+    assert_eq!(
+        failing.remove_remote(request.clone()).unwrap_err().kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    drop(failing);
+
+    RepositoryService::open_at(data.path())
+        .unwrap()
+        .remove_remote(request)
+        .unwrap();
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert!(fixture.repository.find_remote("origin").is_err());
 }

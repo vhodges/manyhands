@@ -490,6 +490,7 @@ pub enum FailurePoint {
     BeforeItemWrite,
     BeforeCheckpointCommit,
     BeforeRegistryWrite,
+    AfterRemoteMutation,
     AfterContextObservation,
     BeforeIndexTransactionCommit,
     BeforeCorruptCacheReplacement,
@@ -2213,6 +2214,11 @@ impl RepositoryService {
             record,
             "remote_changed",
         )?;
+        self.check_failure(
+            FailurePoint::AfterRemoteMutation,
+            RepositoryOperation::AddRemote,
+            &root,
+        )?;
         mark_registered_refresh_required(
             &self.registry_path,
             &root,
@@ -2276,6 +2282,11 @@ impl RepositoryService {
             RepositoryOperation::RemoveRemote,
             record,
             "remote_changed",
+        )?;
+        self.check_failure(
+            FailurePoint::AfterRemoteMutation,
+            RepositoryOperation::RemoveRemote,
+            &root,
         )?;
         mark_registered_refresh_required(
             &self.registry_path,
