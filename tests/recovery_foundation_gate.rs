@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    fs,
     fs::OpenOptions,
     path::PathBuf,
     time::{Duration, Instant},
@@ -12,7 +13,7 @@ use manyhands::repository::{
     RefreshRepositoryRequest, RemoveRegistrationOutcome, RemoveRegistrationRequest,
     RemoveRemoteRequest, RepositoryErrorKind, RepositoryService, SetPublicationRemoteRequest,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 mod support;
 
@@ -391,6 +392,143 @@ fn legacy_index_record_can_only_resume_with_its_matching_action() {
 }
 
 #[test]
+fn pending_lifecycle_records_block_differently_identified_mutations_without_side_effects() {
+    for action in [
+        "create_and_enable",
+        "enable",
+        "set_publication_remote",
+        "remove_registration",
+        "add_remote",
+        "remove_remote",
+        "refresh",
+        "rebuild",
+    ] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .enable(support::enable_request(&fixture.root))
+            .unwrap();
+        let root = fixture.root.canonicalize().unwrap();
+        service
+            .with_registry_connection_for_testing(|connection| {
+                connection
+                    .execute(
+                        "INSERT INTO operation_records (
+                            root_path, operation_ulid, action, target, state, observed_at
+                         ) VALUES (?1, ?2, ?3, 'pending-target', 'created', 0)",
+                        params![
+                            root.to_str().unwrap(),
+                            OperationId::new().to_string(),
+                            action
+                        ],
+                    )
+                    .unwrap();
+            })
+            .unwrap();
+        let repository_before = support::repository_and_worktree_snapshot(&fixture);
+        let cache_before = cache_snapshot(data.path());
+
+        let error = service
+            .enable(support::enable_request_with_operation_id(
+                &fixture.root,
+                OperationId::new(),
+            ))
+            .unwrap_err();
+
+        assert_eq!(
+            error.kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "{action}"
+        );
+        assert_eq!(
+            support::repository_and_worktree_snapshot(&fixture),
+            repository_before
+        );
+        assert_eq!(cache_snapshot(data.path()), cache_before, "{action}");
+    }
+}
+
+#[test]
+fn pending_create_blocks_a_different_create_before_repository_initialization() {
+    let data = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("created");
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO operation_records (
+                        root_path, operation_ulid, action, target, state, observed_at
+                     ) VALUES (?1, ?2, 'create_and_enable', 'main', 'created', 0)",
+                    params![root.to_str().unwrap(), OperationId::new().to_string()],
+                )
+                .unwrap();
+        })
+        .unwrap();
+    let cache_before = cache_snapshot(data.path());
+
+    let error = service
+        .create_and_enable(CreateRepositoryRequest {
+            root: root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Created Author".to_owned(),
+                email: "created@example.invalid".to_owned(),
+            }),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert!(!root.exists());
+    assert_eq!(cache_snapshot(data.path()), cache_before);
+}
+
+#[test]
+fn pending_lifecycle_record_rejects_a_same_id_different_target() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let operation_id = OperationId::new();
+    let root = fixture.root.canonicalize().unwrap();
+    service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .execute(
+                    "INSERT INTO operation_records (
+                        root_path, operation_ulid, action, target, state, observed_at
+                     ) VALUES (?1, ?2, 'add_remote', 'origin\u{1f}git@example.invalid:first.git', 'created', 0)",
+                    params![root.to_str().unwrap(), operation_id.to_string()],
+                )
+                .unwrap();
+        })
+        .unwrap();
+    let repository_before = support::repository_and_worktree_snapshot(&fixture);
+    let cache_before = cache_snapshot(data.path());
+
+    let error = service
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:second.git".to_owned(),
+            operation_id,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        repository_before
+    );
+    assert_eq!(cache_snapshot(data.path()), cache_before);
+}
+
+#[test]
 fn migrated_legacy_rebuild_resumes_after_structural_context_migration() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
@@ -620,7 +758,7 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
 }
 
 #[test]
-fn failed_registration_removal_keeps_root_recovery_records() {
+fn registration_removal_does_not_delete_a_different_pending_record() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
@@ -641,19 +779,18 @@ fn failed_registration_removal_keeps_root_recovery_records() {
         })
         .unwrap();
 
-    assert!(
-        service
-            .remove_registration(RemoveRegistrationRequest {
-                root: fixture.root.clone(),
-                operation_id: OperationId::new(),
-            })
-            .is_err()
-    );
-    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 2);
+    let error = service
+        .remove_registration(RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 1);
 }
 
 #[test]
-fn removing_registration_clears_root_recovery_records() {
+fn registration_removal_requires_its_own_pending_record() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
@@ -674,19 +811,15 @@ fn removing_registration_clears_root_recovery_records() {
         .unwrap()
         .unwrap();
 
-    service
+    let error = service
         .remove_registration(RemoveRegistrationRequest {
             root: fixture.root.clone(),
             operation_id: OperationId::new(),
         })
-        .unwrap();
+        .unwrap_err();
 
-    assert!(
-        service
-            .recovery_inspection(&fixture.root)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 1);
 }
 
 #[test]
@@ -1026,6 +1159,20 @@ fn commit_count(repository: &git2::Repository) -> usize {
     let mut commits = repository.revwalk().unwrap();
     commits.push_head().unwrap();
     commits.count()
+}
+
+fn cache_snapshot(data_directory: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    [
+        manyhands::repository::REGISTRY_FILE.to_owned(),
+        format!("{}-wal", manyhands::repository::REGISTRY_FILE),
+        format!("{}-shm", manyhands::repository::REGISTRY_FILE),
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let path = data_directory.join(name);
+        fs::read(&path).ok().map(|bytes| (path, bytes))
+    })
+    .collect()
 }
 
 fn registered_rows(data_directory: &std::path::Path, root: &std::path::Path) -> i64 {

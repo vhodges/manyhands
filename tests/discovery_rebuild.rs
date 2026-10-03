@@ -2179,11 +2179,14 @@ fn concurrent_corrupt_rebuilds_replace_the_cache_once() {
         observed_send.send(()).unwrap();
         release_receive.recv().unwrap();
     });
+    let operation_id = support::operation_id();
 
     std::thread::scope(|scope| {
-        let first = scope.spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let first = scope
+            .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         observed_receive.recv().unwrap();
-        let second = scope.spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let second = scope
+            .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         release_send.send(()).unwrap();
         first.join().unwrap().unwrap();
         second.join().unwrap().unwrap();
@@ -2206,13 +2209,16 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
         observed_send.send(()).unwrap();
         release_receive.recv().unwrap();
     });
+    let operation_id = support::operation_id();
 
     std::thread::scope(|scope| {
-        let first =
-            scope.spawn(|| first_service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let first = scope.spawn(|| {
+            first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
         observed_receive.recv().unwrap();
-        let second =
-            scope.spawn(|| second_service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let second = scope.spawn(|| {
+            second_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
         release_send.send(()).unwrap();
         first.join().unwrap().unwrap();
         second.join().unwrap().unwrap();
@@ -2258,12 +2264,15 @@ fn corrupt_cache_replacement_rechecks_after_the_exclusive_guard() {
             }
         });
     }
+    let operation_id = support::operation_id();
 
     std::thread::scope(|scope| {
-        let first =
-            scope.spawn(|| first_service.rebuild_repository(rebuild_request!(&fixture.root)));
-        let second =
-            scope.spawn(|| second_service.rebuild_repository(rebuild_request!(&fixture.root)));
+        let first = scope.spawn(|| {
+            first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
+        let second = scope.spawn(|| {
+            second_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
         entered_receive.recv().unwrap();
         release_send.send(()).unwrap();
         first.join().unwrap().unwrap();

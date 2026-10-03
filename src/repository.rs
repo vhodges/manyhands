@@ -2263,13 +2263,6 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(selected, RepositoryOperation::RemoveRemote)?;
         registry_root_key(&root, RepositoryOperation::RemoveRemote)?;
-        let (_lease, record) = self.begin_lifecycle(
-            &repository,
-            &root,
-            RepositoryOperation::RemoveRemote,
-            request.operation_id,
-            name,
-        )?;
         let configuration = read_configuration_for(&root, RepositoryOperation::RemoveRemote)?;
         if matches!(configuration, ConfigurationInspection::Valid(ref config) if config.publication_remote.as_deref() == Some(name))
         {
@@ -2280,6 +2273,13 @@ impl RepositoryService {
                 "clear the publication remote before removing it",
             ));
         }
+        let (_lease, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            RepositoryOperation::RemoveRemote,
+            request.operation_id,
+            name,
+        )?;
         match repository.find_remote(name) {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
@@ -2329,13 +2329,6 @@ impl RepositoryService {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
-        let (_lease, record) = self.begin_lifecycle(
-            &repository,
-            &root,
-            operation,
-            request.operation_id,
-            request.name.as_deref().unwrap_or(""),
-        )?;
         let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
         else {
             return Err(RepositoryError::new(
@@ -2380,6 +2373,13 @@ impl RepositoryService {
                 ));
             }
         }
+        let (_lease, record) = self.begin_lifecycle(
+            &repository,
+            &root,
+            operation,
+            request.operation_id,
+            request.name.as_deref().unwrap_or(""),
+        )?;
         if config.publication_remote == request.name {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;

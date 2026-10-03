@@ -210,9 +210,9 @@ pub(super) fn begin_or_reconcile_operation(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    if let Some((id, existing_root, existing_action, existing_target)) = transaction
+    let existing = transaction
         .query_row(
-            "SELECT id, root_path, action, target FROM operation_records WHERE operation_ulid = ?1",
+            "SELECT id, root_path, action, target, state FROM operation_records WHERE operation_ulid = ?1",
             [&requested],
             |row| {
                 Ok((
@@ -220,51 +220,71 @@ pub(super) fn begin_or_reconcile_operation(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()
-        .map_err(RepositoryError::sqlite)?
-    {
-        if existing_root != root_path
-            || !same_lifecycle_action(&existing_action, action)
-            || existing_target.as_deref() != Some(target)
-        {
+        .map_err(RepositoryError::sqlite)?;
+    if let Some((_, existing_root, existing_action, existing_target, existing_state)) = &existing {
+        if existing_root != root_path {
             return Err(mismatch(operation, root));
         }
-        transaction.commit().map_err(RepositoryError::sqlite)?;
-        return Ok(RecoveryRecord { id });
+        if !same_lifecycle_action(existing_action, action)
+            || existing_target.as_deref() != Some(target)
+        {
+            return Err(if existing_state == "completed" {
+                mismatch(operation, root)
+            } else {
+                recovery_required(operation, root)
+            });
+        }
     }
-    if matches!(
-        operation,
-        RepositoryOperation::AddRemote
-            | RepositoryOperation::RemoveRemote
-            | RepositoryOperation::RefreshRepository
-            | RepositoryOperation::RebuildRepository
-    ) && let Some((id, existing_action)) = transaction
-        .query_row(
-            "SELECT id, action FROM operation_records
-         WHERE root_path = ?1 AND state != 'completed' ORDER BY id DESC LIMIT 1",
-            [root_path],
-            |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+
+    let pending = transaction
+        .prepare(
+            "SELECT id, operation_ulid, action, target FROM operation_records
+             WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
         )
-        .optional()
-        .map_err(RepositoryError::sqlite)?
-    {
-        if existing_action == action {
-            let legacy: Option<String> = transaction
-                .query_row(
-                    "SELECT operation_ulid FROM operation_records WHERE id = ?1",
-                    [id],
-                    |row| row.get(0),
-                )
-                .map_err(RepositoryError::sqlite)?;
-            if legacy.is_none() {
-                transaction.commit().map_err(RepositoryError::sqlite)?;
-                return Ok(RecoveryRecord { id });
+        .and_then(|mut statement| {
+            statement
+                .query_map([root_path], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(RepositoryError::sqlite)?;
+    if !pending.is_empty() {
+        let mut matching = None;
+        for (id, existing_id, existing_action, existing_target) in pending {
+            if existing_id.as_deref() == Some(&requested)
+                && same_lifecycle_action(&existing_action, action)
+                && existing_target.as_deref() == Some(target)
+                || existing_id.is_none()
+                    && matches!(
+                        (existing_action.as_str(), action),
+                        ("refresh", "refresh") | ("rebuild", "rebuild")
+                    )
+            {
+                matching = Some(id);
+            } else {
+                return Err(recovery_required(operation, root));
             }
         }
+        if let Some(id) = matching {
+            transaction.commit().map_err(RepositoryError::sqlite)?;
+            return Ok(RecoveryRecord { id });
+        }
         return Err(recovery_required(operation, root));
+    }
+    if let Some((id, ..)) = existing {
+        transaction.commit().map_err(RepositoryError::sqlite)?;
+        return Ok(RecoveryRecord { id });
     }
     let repository_id: Option<i64> = transaction
         .query_row(
