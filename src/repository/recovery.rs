@@ -200,6 +200,7 @@ pub(super) fn begin_or_reconcile_operation(
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
+    target: &str,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
@@ -209,22 +210,26 @@ pub(super) fn begin_or_reconcile_operation(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    if let Some((id, existing_root, existing_action)) = transaction
+    if let Some((id, existing_root, existing_action, existing_target)) = transaction
         .query_row(
-            "SELECT id, root_path, action FROM operation_records WHERE operation_ulid = ?1",
+            "SELECT id, root_path, action, target FROM operation_records WHERE operation_ulid = ?1",
             [&requested],
             |row| {
                 Ok((
                     row.get(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )
         .optional()
         .map_err(RepositoryError::sqlite)?
     {
-        if existing_root != root_path || existing_action != action {
+        if existing_root != root_path
+            || !same_lifecycle_action(&existing_action, action)
+            || existing_target.as_deref() != Some(target)
+        {
             return Err(mismatch(operation, root));
         }
         transaction.commit().map_err(RepositoryError::sqlite)?;
@@ -267,14 +272,18 @@ pub(super) fn begin_or_reconcile_operation(
         .map_err(RepositoryError::sqlite)?;
     transaction
         .execute(
-            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, state, observed_at)
-         VALUES (?1, ?2, ?3, ?4, 'created', ?5)",
-            params![repository_id, root_path, requested, action, now()],
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, state, observed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'created', ?6)",
+            params![repository_id, root_path, requested, action, target, now()],
         )
         .map_err(RepositoryError::sqlite)?;
     let id = transaction.last_insert_rowid();
     transaction.commit().map_err(RepositoryError::sqlite)?;
     Ok(RecoveryRecord { id })
+}
+
+fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
+    existing == requested || (existing == "create_and_enable" && requested == "enable")
 }
 
 fn is_lifecycle_operation(operation: RepositoryOperation) -> bool {

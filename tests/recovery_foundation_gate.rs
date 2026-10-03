@@ -745,3 +745,33 @@ fn remote_replay_records_completed_lifecycle_once() {
         .unwrap();
     assert_eq!(records, 1);
 }
+
+#[test]
+fn remote_replay_rejects_a_different_url_for_the_same_operation_id() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let operation_id = OperationId::new();
+
+    service
+        .add_remote(manyhands::repository::AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:first.git".to_owned(),
+            operation_id,
+        })
+        .unwrap();
+
+    let error = service
+        .add_remote(manyhands::repository::AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:second.git".to_owned(),
+            operation_id,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
