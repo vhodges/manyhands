@@ -56,6 +56,19 @@ fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> Repos
     lock
 }
 
+fn remote_target_matcher(action: RepositoryOperation, name: &str, url: Option<&str>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"manyhands.lifecycle.remote-target.v1\0");
+    hasher.update(format!("{action:?}").as_bytes());
+    hasher.update(&[0]);
+    hasher.update(name.as_bytes());
+    if let Some(url) = url {
+        hasher.update(&[0]);
+        hasher.update(url.as_bytes());
+    }
+    format!("remote-v1-{}", hasher.finalize().to_hex())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OperationId(ulid::Ulid);
 
@@ -2198,7 +2211,11 @@ impl RepositoryService {
             &root,
             RepositoryOperation::AddRemote,
             request.operation_id,
-            &format!("{}\u{1f}{}", request.name, request.url),
+            &remote_target_matcher(
+                RepositoryOperation::AddRemote,
+                &request.name,
+                Some(&request.url),
+            ),
         )?;
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
@@ -2278,7 +2295,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::RemoveRemote,
             request.operation_id,
-            name,
+            &remote_target_matcher(RepositoryOperation::RemoveRemote, name, None),
         )?;
         match repository.find_remote(name) {
             Ok(_) => {}
