@@ -1971,12 +1971,12 @@ fn rebuild_error_does_not_overwrite_a_completed_same_id_retry() {
         let original = scope
             .spawn(|| failing.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         paused_receive.recv().unwrap();
-        retry
-            .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
-            .unwrap();
+        let retried = retry.rebuild_repository(rebuild_request!(&fixture.root, operation_id));
         resume_send.send(()).unwrap();
+        let original = original.join().unwrap();
+        retried.unwrap();
         assert_eq!(
-            original.join().unwrap().unwrap_err().kind,
+            original.unwrap_err().kind,
             RepositoryErrorKind::InjectedFailure
         );
     });
