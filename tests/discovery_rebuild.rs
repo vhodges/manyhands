@@ -1532,9 +1532,10 @@ fn refresh_lifecycle_marks_transaction_failure_then_resumes_without_duplicate_re
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
     assert_eq!(
         failing
-            .refresh_repository(refresh_request!(&fixture.root))
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::InjectedFailure
@@ -1544,7 +1545,7 @@ fn refresh_lifecycle_marks_transaction_failure_then_resumes_without_duplicate_re
         vec![("failed".to_owned(), None)]
     );
     service
-        .refresh_repository(refresh_request!(&fixture.root))
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap();
     assert_eq!(
         refresh_operation_states(&service),

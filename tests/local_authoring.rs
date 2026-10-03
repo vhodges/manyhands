@@ -1690,28 +1690,31 @@ fn document_exact_create_retry_checkpoints_once_then_is_a_no_op() {
     )
     .unwrap();
 
+    let operation_id = support::operation_id();
     let (_, first) = saved_checkpoint(
         enabled
             .service
-            .save_document(document_request(
+            .save_document(document_request_with_operation_id(
                 &fixture.root,
                 ContextIntent::Create,
                 None,
                 "docs/new.md",
                 "Retry",
                 "Retry body\n",
+                operation_id,
             ))
             .unwrap(),
     );
     let outcome = enabled
         .service
-        .save_document(document_request(
+        .save_document(document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Retry",
             "Retry body\n",
+            operation_id,
         ))
         .unwrap();
     assert!(matches!(
@@ -2059,14 +2062,16 @@ fn document_completed_move_retry_is_a_noop_without_its_old_source() {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Moved body\n",
+            operation_id,
         )
     };
 
@@ -2547,14 +2552,16 @@ fn recovery_document_before_checkpoint_commit_preserves_written_file_for_exact_r
     let unrelated_before = unrelated_status_entries(&Repository::open(&context.worktree).unwrap());
     let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2615,14 +2622,16 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     enabled
@@ -4749,12 +4758,33 @@ fn document_request(
     title: &str,
     body: &str,
 ) -> SaveDocumentRequest {
+    document_request_with_operation_id(
+        root,
+        intent,
+        source_path,
+        destination_path,
+        title,
+        body,
+        support::operation_id(),
+    )
+}
+
+fn document_request_with_operation_id(
+    root: &std::path::Path,
+    intent: ContextIntent,
+    source_path: Option<&str>,
+    destination_path: &str,
+    title: &str,
+    body: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> SaveDocumentRequest {
     SaveDocumentRequest {
-        target: target(
+        target: target_with_operation_id(
             root,
             AuthoringKind::Document,
             support::document_id(),
             intent,
+            operation_id,
         ),
         source_path: source_path.map(std::path::PathBuf::from),
         destination_path: std::path::PathBuf::from(destination_path),

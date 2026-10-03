@@ -28,13 +28,13 @@ fn index_pending_retains_the_authoritative_result() {
 
 #[test]
 fn default_fixture_ids_are_unique_and_retry_ids_are_explicitly_shared() {
-    assert_ne!(
-        support::fixture_operation_id(),
-        support::fixture_operation_id()
-    );
-
     let operation_id = support::operation_id();
-    let initial = operation_id;
-    let retry = operation_id;
-    assert_eq!(initial, retry);
+    let root = std::path::Path::new("/repository");
+    let first_default = support::enable_request(root);
+    let second_default = support::enable_request(root);
+    let initial = support::enable_request_with_operation_id(root, operation_id);
+    let retry = support::enable_request_with_operation_id(root, operation_id);
+
+    assert_ne!(first_default.operation_id, second_default.operation_id);
+    assert_eq!(initial.operation_id, retry.operation_id);
 }

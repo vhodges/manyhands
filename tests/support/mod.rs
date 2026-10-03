@@ -400,6 +400,22 @@ pub fn operation_id() -> OperationId {
     OperationId::new()
 }
 
+pub fn enable_request(root: &Path) -> EnableRepositoryRequest {
+    enable_request_with_operation_id(root, operation_id())
+}
+
+pub fn enable_request_with_operation_id(
+    root: &Path,
+    operation_id: OperationId,
+) -> EnableRepositoryRequest {
+    EnableRepositoryRequest {
+        root: root.to_owned(),
+        primary_branch: "main".to_owned(),
+        identity: None,
+        operation_id,
+    }
+}
+
 pub fn fixture_operation_id() -> OperationId {
     operation_id()
 }
