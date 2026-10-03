@@ -6400,6 +6400,80 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_cross_root_operation_ids_yield_one_mismatch() {
+        let first_directory = tempfile::tempdir().unwrap();
+        let second_directory = tempfile::tempdir().unwrap();
+        let first_root = create_born_repository(first_directory.path());
+        let second_root = create_born_repository(second_directory.path());
+        let data = tempfile::tempdir().unwrap();
+        let first_service = RepositoryService::open_at(data.path()).unwrap();
+        let second_service = RepositoryService::open_at(data.path()).unwrap();
+        let operation_id = OperationId::new();
+        let _barrier = recovery::pause_before_begin_for_testing(
+            operation_id,
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+
+        let results = std::thread::scope(|scope| {
+            let first_call = scope.spawn(|| {
+                first_service.rebuild_repository(RebuildRepositoryRequest {
+                    root: first_root,
+                    operation_id,
+                })
+            });
+            let second_call = scope.spawn(|| {
+                second_service.rebuild_repository(RebuildRepositoryRequest {
+                    root: second_root,
+                    operation_id,
+                })
+            });
+            [first_call.join().unwrap(), second_call.join().unwrap()]
+        });
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .map(|error| error.kind)
+                .collect::<Vec<_>>(),
+            vec![RepositoryErrorKind::OperationMismatch]
+        );
+    }
+
+    fn create_born_repository(root: &Path) -> PathBuf {
+        let mut options = RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repository = Repository::init_opts(root, &options).unwrap();
+        let mut config = Config::open(&repository.path().join("config")).unwrap();
+        config.set_str("user.name", "Manyhands Test").unwrap();
+        config
+            .set_str("user.email", "manyhands-test@example.invalid")
+            .unwrap();
+        std::fs::write(root.join("fixture.txt"), "fixture\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("fixture.txt")).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::new(
+            "Manyhands Test",
+            "manyhands-test@example.invalid",
+            &git2::Time::new(0, 0),
+        )
+        .unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Initial fixture commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
+        root.to_owned()
+    }
+
+    #[test]
     fn permission_denied_error_mappers_preserve_kind_operation_and_root() {
         let root = Path::new("/repository");
 

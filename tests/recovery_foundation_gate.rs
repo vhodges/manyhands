@@ -10,6 +10,7 @@ use manyhands::repository::{
     RebuildRepositoryRequest, RecoveryInspection, RefreshRepositoryRequest,
     RemoveRegistrationRequest, RepositoryErrorKind, RepositoryService,
 };
+use rusqlite::Connection;
 
 mod support;
 
@@ -439,6 +440,118 @@ fn shared_operation_id_across_roots_returns_operation_mismatch() {
         })
         .unwrap_err();
     assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
+
+#[test]
+fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    support::create_cycle_04_registry(data.path(), &fixture.root, "refresh", "retry");
+    let database = data.path().join(manyhands::repository::REGISTRY_FILE);
+    let connection = Connection::open(&database).unwrap();
+    connection.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+    connection
+        .execute(
+            "ALTER TABLE index_operations RENAME TO broken_index_operations",
+            [],
+        )
+        .unwrap();
+    connection.execute_batch("CREATE TABLE index_operations (id INTEGER PRIMARY KEY, repository_id INTEGER NOT NULL, operation TEXT NOT NULL, state TEXT, context_path TEXT, persisted_context_count INTEGER, observed_at INTEGER);") .unwrap();
+    connection
+        .execute(
+            "INSERT INTO index_operations SELECT * FROM broken_index_operations",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute("UPDATE index_operations SET observed_at = NULL", [])
+        .unwrap();
+    connection
+        .execute("DROP TABLE broken_index_operations", [])
+        .unwrap();
+    drop(connection);
+
+    assert!(RepositoryService::open_at(data.path()).is_err());
+    let connection = Connection::open(&database).unwrap();
+    for table in [
+        "operation_records",
+        "operation_record_contexts",
+        "registry_migrations",
+    ] {
+        assert!(
+            !connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0)
+                )
+                .unwrap()
+        );
+    }
+    let legacy_columns = connection
+        .prepare("SELECT name FROM pragma_table_info('index_operations') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        legacy_columns,
+        vec![
+            "id",
+            "repository_id",
+            "operation",
+            "state",
+            "context_path",
+            "persisted_context_count",
+            "observed_at",
+        ]
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM index_operations", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM index_operation_contexts", [], |row| {
+                row.get::<_, i64>(0)
+            },)
+            .unwrap(),
+        2
+    );
+    connection
+        .execute("UPDATE index_operations SET observed_at = 1", [])
+        .unwrap();
+    drop(connection);
+    RepositoryService::open_at(data.path()).unwrap();
+    support::assert_legacy_operation_records_are_redacted_and_reset(data.path());
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations WHERE name = 'cycle_05_operation_records'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    drop(connection);
+    RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations WHERE name = 'cycle_05_operation_records'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[test]

@@ -12,6 +12,66 @@ pub(super) struct RecoveryRecord {
     pub(super) id: i64,
 }
 
+#[cfg(test)]
+static BEGIN_OPERATION_BARRIER: std::sync::OnceLock<std::sync::Mutex<Option<BeginOperationPause>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(super) struct BeginOperationBarrierGuard;
+
+#[cfg(test)]
+struct BeginOperationPause {
+    operation_id: String,
+    barrier: std::sync::Arc<std::sync::Barrier>,
+}
+
+#[cfg(test)]
+pub(super) fn pause_before_begin_for_testing(
+    operation_id: OperationId,
+    barrier: std::sync::Arc<std::sync::Barrier>,
+) -> BeginOperationBarrierGuard {
+    let mut installed = BEGIN_OPERATION_BARRIER
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert!(
+        installed
+            .replace(BeginOperationPause {
+                operation_id: operation_id.to_string(),
+                barrier,
+            })
+            .is_none(),
+        "test barrier is already installed"
+    );
+    BeginOperationBarrierGuard
+}
+
+#[cfg(test)]
+impl Drop for BeginOperationBarrierGuard {
+    fn drop(&mut self) {
+        *BEGIN_OPERATION_BARRIER
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+fn pause_before_begin_for_testing_if_installed(operation_id: &str) {
+    let barrier = BEGIN_OPERATION_BARRIER.get().and_then(|installed| {
+        installed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|pause| pause.operation_id == operation_id)
+            .map(|pause| pause.barrier.clone())
+    });
+    if let Some(barrier) = barrier {
+        barrier.wait();
+    }
+}
+
 pub(super) fn migrate_operation_records(
     connection: &mut Connection,
 ) -> Result<(), RepositoryError> {
@@ -144,6 +204,8 @@ pub(super) fn begin_or_reconcile_operation(
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
     let requested = operation_id.to_string();
+    #[cfg(test)]
+    pause_before_begin_for_testing_if_installed(&requested);
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
