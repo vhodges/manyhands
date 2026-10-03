@@ -1054,7 +1054,7 @@ impl RepositoryService {
                 ));
             }
         }
-        let (_, record) = self.begin_lifecycle(
+        let (_lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             operation,
@@ -1269,8 +1269,12 @@ impl RepositoryService {
                 "the repository operation synchronization state is unavailable",
             )
         })?;
-        let paths = [request.destination_path.as_path()];
-        let (_, record) = self.begin_lifecycle(
+        let source_target_path = request.source_path.clone().unwrap_or_default();
+        let paths = [
+            source_target_path.as_path(),
+            request.destination_path.as_path(),
+        ];
+        let (_lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,
@@ -1550,7 +1554,7 @@ impl RepositoryService {
                 "the repository operation synchronization state is unavailable",
             )
         })?;
-        let (_, record) = self.begin_lifecycle(
+        let (_lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,
@@ -1772,7 +1776,7 @@ impl RepositoryService {
         })?;
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
-        let (_, record) = self.begin_lifecycle(
+        let (_lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,

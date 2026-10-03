@@ -5614,3 +5614,28 @@ fn stale_document_edit_preserves_external_replacement() {
     assert_eq!(fs::read_to_string(&path).unwrap(), external);
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }
+
+#[test]
+fn document_same_id_different_move_source_is_an_operation_mismatch() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/one.md", &support::document_source());
+    commit_source(&fixture, "docs/two.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let request = |source| {
+        document_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Edit,
+            Some(source),
+            "docs/destination.md",
+            "Moved",
+            "Body\n",
+            operation_id,
+        )
+    };
+
+    let _ = enabled.service.save_document(request("docs/one.md"));
+    let error = document_error(enabled.service.save_document(request("docs/two.md")));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
