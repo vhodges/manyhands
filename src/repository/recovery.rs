@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use super::{
@@ -15,7 +15,8 @@ pub(super) struct RecoveryRecord {
 pub(super) fn migrate_operation_records(
     connection: &mut Connection,
 ) -> Result<(), RepositoryError> {
-    connection.execute_batch(
+    let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
+    transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS operation_records (
             id INTEGER PRIMARY KEY,
             repository_id INTEGER REFERENCES repositories(id) ON DELETE SET NULL,
@@ -42,7 +43,6 @@ pub(super) fn migrate_operation_records(
          CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);
         ",
     ).map_err(RepositoryError::sqlite)?;
-    let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
     let has_legacy_operations: bool = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operations')",
@@ -136,7 +136,7 @@ pub(super) fn migrate_operation_records(
 }
 
 pub(super) fn begin_or_reconcile_operation(
-    connection: &Connection,
+    connection: &mut Connection,
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
@@ -144,7 +144,10 @@ pub(super) fn begin_or_reconcile_operation(
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
     let requested = operation_id.to_string();
-    if let Some((id, existing_root, existing_action)) = connection
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    if let Some((id, existing_root, existing_action)) = transaction
         .query_row(
             "SELECT id, root_path, action FROM operation_records WHERE operation_ulid = ?1",
             [&requested],
@@ -162,9 +165,10 @@ pub(super) fn begin_or_reconcile_operation(
         if existing_root != root_path || existing_action != action {
             return Err(mismatch(operation, root));
         }
-        return record(connection, id);
+        transaction.commit().map_err(RepositoryError::sqlite)?;
+        return Ok(RecoveryRecord { id });
     }
-    if let Some((id, existing_action)) = connection
+    if let Some((id, existing_action)) = transaction
         .query_row(
             "SELECT id, action FROM operation_records
          WHERE root_path = ?1 AND state != 'completed' ORDER BY id DESC LIMIT 1",
@@ -175,7 +179,7 @@ pub(super) fn begin_or_reconcile_operation(
         .map_err(RepositoryError::sqlite)?
     {
         if existing_action == action {
-            let legacy: Option<String> = connection
+            let legacy: Option<String> = transaction
                 .query_row(
                     "SELECT operation_ulid FROM operation_records WHERE id = ?1",
                     [id],
@@ -183,12 +187,13 @@ pub(super) fn begin_or_reconcile_operation(
                 )
                 .map_err(RepositoryError::sqlite)?;
             if legacy.is_none() {
-                return record(connection, id);
+                transaction.commit().map_err(RepositoryError::sqlite)?;
+                return Ok(RecoveryRecord { id });
             }
         }
         return Err(recovery_required(operation, root));
     }
-    let repository_id: Option<i64> = connection
+    let repository_id: Option<i64> = transaction
         .query_row(
             "SELECT id FROM repositories WHERE root_path = ?1",
             [root_path],
@@ -196,12 +201,14 @@ pub(super) fn begin_or_reconcile_operation(
         )
         .optional()
         .map_err(RepositoryError::sqlite)?;
-    connection.execute(
+    transaction.execute(
         "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, state, observed_at)
          VALUES (?1, ?2, ?3, ?4, 'created', ?5)",
         params![repository_id, root_path, requested, action, now()],
     ).map_err(RepositoryError::sqlite)?;
-    record(connection, connection.last_insert_rowid())
+    let id = transaction.last_insert_rowid();
+    transaction.commit().map_err(RepositoryError::sqlite)?;
+    Ok(RecoveryRecord { id })
 }
 
 pub(super) fn advance_after_observation(
@@ -295,34 +302,11 @@ pub(super) fn pending_for_root(
         .collect()
 }
 
-pub(super) fn clear_root(connection: &Connection, root: &Path) -> Result<(), RepositoryError> {
-    let root_path = root
-        .to_str()
-        .ok_or_else(|| invalid_path(RepositoryOperation::RemoveRegistration, root))?;
-    connection
-        .execute(
-            "DELETE FROM operation_records WHERE root_path = ?1",
-            [root_path],
-        )
-        .map_err(RepositoryError::sqlite)?;
-    Ok(())
-}
-
 pub(super) fn has_incomplete_rebuild(connection: &Connection) -> Result<bool, RepositoryError> {
     connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM operation_records WHERE action = 'rebuild' AND state != 'completed')",
         [], |row| row.get(0),
     ).map_err(RepositoryError::sqlite)
-}
-
-fn record(connection: &Connection, id: i64) -> Result<RecoveryRecord, RepositoryError> {
-    connection
-        .query_row(
-            "SELECT id, repository_id FROM operation_records WHERE id = ?1",
-            [id],
-            |row| Ok(RecoveryRecord { id: row.get(0)? }),
-        )
-        .map_err(RepositoryError::sqlite)
 }
 
 fn action_name(operation: RepositoryOperation) -> &'static str {

@@ -28,7 +28,7 @@ use discovery::{
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
 };
 use recovery::{
-    advance_after_observation, begin_or_reconcile_operation, clear_root,
+    advance_after_observation, begin_or_reconcile_operation,
     has_incomplete_rebuild as recovery_has_incomplete_rebuild, pending_for_root,
     record_persisted_context as record_recovery_context,
 };
@@ -2758,14 +2758,29 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
         migrate_registry(&mut connection)
             .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        clear_root(&connection, &root)
-            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        let deleted = connection
+        let transaction = connection.transaction().map_err(|error| {
+            RepositoryError::sqlite(error)
+                .for_operation(RepositoryOperation::RemoveRegistration, &root)
+        })?;
+        transaction
+            .execute(
+                "DELETE FROM operation_records WHERE root_path = ?1",
+                [root_path],
+            )
+            .map_err(|error| {
+                RepositoryError::sqlite(error)
+                    .for_operation(RepositoryOperation::RemoveRegistration, &root)
+            })?;
+        let deleted = transaction
             .execute("DELETE FROM repositories WHERE root_path = ?1", [root_path])
             .map_err(|error| {
                 RepositoryError::sqlite(error)
                     .for_operation(RepositoryOperation::RemoveRegistration, &root)
             })?;
+        transaction.commit().map_err(|error| {
+            RepositoryError::sqlite(error)
+                .for_operation(RepositoryOperation::RemoveRegistration, &root)
+        })?;
         Ok(if deleted == 0 {
             RemoveRegistrationOutcome::NotRegistered
         } else {
@@ -2834,9 +2849,9 @@ fn begin_operation(
     operation: RepositoryOperation,
     operation_id: OperationId,
 ) -> Result<recovery::RecoveryRecord, RepositoryError> {
-    let connection = open_registry(registry_path, &mut |_| {})
+    let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
-    begin_or_reconcile_operation(&connection, root, operation, operation_id)
+    begin_or_reconcile_operation(&mut connection, root, operation, operation_id)
         .map_err(|error| error.for_operation(operation, root))
 }
 
@@ -2924,6 +2939,12 @@ fn persist_rebuild_observation(
             "SELECT id FROM repositories WHERE root_path = ?1",
             [root_path],
             |row| row.get(0),
+        )
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    transaction
+        .execute(
+            "UPDATE operation_records SET repository_id = ?2 WHERE id = ?1 AND root_path = ?3",
+            params![operation_id, repository_id, root_path],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     persist_observation(&transaction, repository_id, observation, root)

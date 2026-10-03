@@ -376,6 +376,105 @@ fn root_operation_is_recorded_before_registration_without_content() {
 }
 
 #[test]
+fn successful_rebuild_attaches_a_pre_registration_record() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let operation_id = OperationId::new();
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    assert!(
+        failing
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id,
+            })
+            .is_err()
+    );
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id,
+        })
+        .unwrap();
+
+    let attached = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row(
+                    "SELECT operation_records.repository_id = repositories.id
+                     FROM operation_records
+                     JOIN repositories ON repositories.root_path = operation_records.root_path
+                     WHERE operation_records.operation_ulid = ?1",
+                    [operation_id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        })
+        .unwrap();
+    assert!(attached);
+}
+
+#[test]
+fn shared_operation_id_across_roots_returns_operation_mismatch() {
+    let first = support::born_repository();
+    let second = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let operation_id = OperationId::new();
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    assert!(
+        failing
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: first.root.clone(),
+                operation_id,
+            })
+            .is_err()
+    );
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let error = service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: second.root.clone(),
+            operation_id,
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
+
+#[test]
+fn failed_registration_removal_keeps_root_recovery_records() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    service
+        .with_registry_connection_for_testing(|connection| {
+            connection.execute(
+                "INSERT INTO operation_records (root_path, operation_ulid, action, state, observed_at)
+                 VALUES (?1, ?2, 'refresh', 'observed', 1)",
+                [fixture.root.canonicalize().unwrap().to_str().unwrap(), OperationId::new().to_string().as_str()],
+            ).unwrap();
+            connection.execute_batch(
+                "CREATE TRIGGER fail_registration_removal BEFORE DELETE ON repositories
+                 BEGIN SELECT RAISE(ABORT, 'injected registration removal failure'); END;",
+            ).unwrap();
+        })
+        .unwrap();
+
+    assert!(
+        service
+            .remove_registration(RemoveRegistrationRequest {
+                root: fixture.root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .is_err()
+    );
+    assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 1);
+}
+
+#[test]
 fn removing_registration_clears_root_recovery_records() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
