@@ -10,7 +10,9 @@ use std::{
 use git2::{Config, Repository, RepositoryInitOptions, Signature, StatusOptions, Time};
 use manyhands::{
     canonical::ItemId,
-    repository::{EnableRepositoryOutcome, EnableRepositoryRequest, RepositoryService},
+    repository::{
+        EnableRepositoryOutcome, EnableRepositoryRequest, OperationId, RepositoryService,
+    },
 };
 
 pub struct TestRepository {
@@ -309,6 +311,7 @@ pub fn enabled_repository(fixture: &TestRepository) -> EnabledRepository {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -391,6 +394,14 @@ pub fn open_linked_worktree(path: &Path) -> LinkedWorktree {
 
 pub fn document_id() -> ItemId {
     ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap()
+}
+
+pub fn operation_id() -> OperationId {
+    OperationId::new()
+}
+
+pub fn parse_operation_id(value: &str) -> OperationId {
+    OperationId::parse(value).unwrap()
 }
 
 pub fn ticket_id() -> ItemId {

@@ -69,6 +69,7 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -82,6 +83,7 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
             kind: AuthoringKind::Document,
             item_id,
             intent: ContextIntent::Create,
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -288,6 +290,7 @@ fn context_rejects_an_authoring_branch_that_is_the_primary_branch_without_mutati
                 root: fixture.root.clone(),
                 primary_branch: branch.clone(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -2501,7 +2504,13 @@ fn document_missing_registration_reports_refresh_pending_without_duplicate_commi
         )
     };
     let (context, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
     let outcome = enabled.service.save_document(request()).unwrap();
     assert!(
@@ -3104,7 +3113,13 @@ fn ticket_missing_registration_is_refresh_pending_without_another_commit() {
     clean_configuration_index(&fixture);
     let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_ticket(request()).unwrap());
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
     let outcome = enabled.service.save_ticket(request()).unwrap();
     assert!(
@@ -3634,6 +3649,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
             root: fixture.root.clone(),
             name: "origin".to_owned(),
             url: "ssh://example.invalid/manyhands".to_owned(),
+            operation_id: support::operation_id(),
         })
         .unwrap();
     enabled
@@ -3641,6 +3657,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
         .set_publication_remote(manyhands::repository::SetPublicationRemoteRequest {
             root: fixture.root.clone(),
             name: Some("origin".to_owned()),
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -4190,7 +4207,13 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
             "Body\n",
         )
     };
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
     let CommentSubmissionOutcome::Saved {
         context,
@@ -4207,6 +4230,7 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::AlreadyEnabled
@@ -4699,6 +4723,7 @@ fn target(
         kind,
         item_id,
         intent,
+        operation_id: support::operation_id(),
     }
 }
 
@@ -4723,6 +4748,8 @@ fn document_request(
             title: title.to_owned(),
             body: body.to_owned(),
         },
+        expected_source: None,
+        expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
     }
 }
 
@@ -4753,6 +4780,7 @@ fn ticket_request(
             team: Some("core".to_owned()),
             body: body.to_owned(),
         },
+        expected_path: manyhands::repository::ExpectedPathObservation::Missing,
     }
 }
 
@@ -4786,6 +4814,7 @@ fn comment_request(
         comment_id,
         parent_id,
         body: body.to_owned(),
+        expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
     }
 }
 

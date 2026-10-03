@@ -29,6 +29,51 @@ const MAX_DOCUMENT_DIRECTORY_ENTRIES: usize = 1024;
 const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OperationId(ulid::Ulid);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperationIdParseError;
+
+impl OperationId {
+    pub fn new() -> Self {
+        Self(ulid::Ulid::new())
+    }
+
+    pub fn parse(value: &str) -> Result<Self, OperationIdParseError> {
+        let id: ulid::Ulid = value.parse().map_err(|_| OperationIdParseError)?;
+        (id.to_string() == value)
+            .then_some(Self(id))
+            .ok_or(OperationIdParseError)
+    }
+}
+
+impl fmt::Display for OperationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl fmt::Display for OperationIdParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("operation ID must be a canonical uppercase ULID")
+    }
+}
+
+impl std::error::Error for OperationIdParseError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExpectedPathObservation {
+    Missing,
+    Blake3([u8; 32]),
+}
+
+impl ExpectedPathObservation {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self::Blake3(*blake3::hash(bytes).as_bytes())
+    }
+}
+
 pub struct RepositoryService {
     registry_path: PathBuf,
     availability: Mutex<IndexAvailability>,
@@ -74,32 +119,66 @@ fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> Repos
     lock
 }
 
+#[derive(Clone)]
 pub struct CommitIdentity {
     pub name: String,
     pub email: String,
 }
 
+#[derive(Clone)]
 pub struct CreateRepositoryRequest {
     pub root: PathBuf,
     pub primary_branch: String,
     pub identity: Option<CommitIdentity>,
+    pub operation_id: OperationId,
 }
 
+#[derive(Clone)]
 pub struct EnableRepositoryRequest {
     pub root: PathBuf,
     pub primary_branch: String,
     pub identity: Option<CommitIdentity>,
+    pub operation_id: OperationId,
 }
 
+#[derive(Clone)]
 pub struct AddRemoteRequest {
     pub root: PathBuf,
     pub name: String,
     pub url: String,
+    pub operation_id: OperationId,
 }
 
+#[derive(Clone)]
 pub struct SetPublicationRemoteRequest {
     pub root: PathBuf,
     pub name: Option<String>,
+    pub operation_id: OperationId,
+}
+
+#[derive(Clone)]
+pub struct RemoveRemoteRequest {
+    pub root: PathBuf,
+    pub name: String,
+    pub operation_id: OperationId,
+}
+
+#[derive(Clone)]
+pub struct RemoveRegistrationRequest {
+    pub root: PathBuf,
+    pub operation_id: OperationId,
+}
+
+#[derive(Clone)]
+pub struct RefreshRepositoryRequest {
+    pub root: PathBuf,
+    pub operation_id: OperationId,
+}
+
+#[derive(Clone)]
+pub struct RebuildRepositoryRequest {
+    pub root: PathBuf,
+    pub operation_id: OperationId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,11 +193,13 @@ pub enum ContextIntent {
     Edit,
 }
 
+#[derive(Clone)]
 pub struct AuthoringTarget {
     pub root: PathBuf,
     pub kind: AuthoringKind,
     pub item_id: canonical::ItemId,
     pub intent: ContextIntent,
+    pub operation_id: OperationId,
 }
 
 pub struct ItemContext {
@@ -134,11 +215,13 @@ pub enum ContextProvisionOutcome {
     Reused(ItemContext),
 }
 
+#[derive(Clone)]
 pub struct DocumentDraft {
     pub title: String,
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct TicketDraft {
     pub title: String,
     pub ticket_type: String,
@@ -148,23 +231,30 @@ pub struct TicketDraft {
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct SaveDocumentRequest {
     pub target: AuthoringTarget,
     pub source_path: Option<PathBuf>,
     pub destination_path: PathBuf,
     pub draft: DocumentDraft,
+    pub expected_source: Option<ExpectedPathObservation>,
+    pub expected_destination: ExpectedPathObservation,
 }
 
+#[derive(Clone)]
 pub struct SaveTicketRequest {
     pub target: AuthoringTarget,
     pub draft: TicketDraft,
+    pub expected_path: ExpectedPathObservation,
 }
 
+#[derive(Clone)]
 pub struct SubmitCommentRequest {
     pub target: AuthoringTarget,
     pub comment_id: canonical::ItemId,
     pub parent_id: Option<canonical::ItemId>,
     pub body: String,
+    pub expected_destination: ExpectedPathObservation,
 }
 
 pub enum LocalCheckpoint {
@@ -411,6 +501,10 @@ pub enum RepositoryErrorKind {
     RegistryRefreshPending,
     RepositoryNotRegistered,
     IndexUnavailable,
+    RepositoryBusy,
+    OperationMismatch,
+    RecoveryRequired,
+    ExternalChange,
     DirtyConfigurationPath,
     InvalidIdentity,
     RepositoryNotEnabled,
@@ -522,7 +616,11 @@ impl RepositoryService {
         Self::open_at_with_registry_observer(data_directory, |_| {})
     }
 
-    pub fn refresh_repository(&self, root: &Path) -> Result<RefreshOutcome, RepositoryError> {
+    pub fn refresh_repository(
+        &self,
+        request: RefreshRepositoryRequest,
+    ) -> Result<RefreshOutcome, RepositoryError> {
+        let root = &request.root;
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
@@ -630,7 +728,11 @@ impl RepositoryService {
         Ok(RefreshOutcome::Refreshed { snapshot })
     }
 
-    pub fn rebuild_repository(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {
+    pub fn rebuild_repository(
+        &self,
+        request: RebuildRepositoryRequest,
+    ) -> Result<RepositorySnapshot, RepositoryError> {
+        let root = &request.root;
         let operation = RepositoryOperation::RebuildRepository;
         let _rebuild_lock = self.rebuild_lock.lock().map_err(|_| {
             RepositoryError::new(
@@ -955,6 +1057,7 @@ impl RepositoryService {
             kind: request.target.kind,
             item_id: request.target.item_id,
             intent: request.target.intent,
+            operation_id: request.target.operation_id,
         })? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
@@ -1194,6 +1297,7 @@ impl RepositoryService {
             kind: request.target.kind,
             item_id: request.target.item_id,
             intent,
+            operation_id: request.target.operation_id,
         })? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
@@ -1396,6 +1500,7 @@ impl RepositoryService {
             kind: request.target.kind,
             item_id: request.target.item_id,
             intent: ContextIntent::Edit,
+            operation_id: request.target.operation_id,
         })? {
             ContextProvisionOutcome::Created(context)
             | ContextProvisionOutcome::Reused(context) => context,
@@ -1880,9 +1985,10 @@ impl RepositoryService {
 
     pub fn remove_remote(
         &self,
-        selected: &Path,
-        name: &str,
+        request: RemoveRemoteRequest,
     ) -> Result<RemoteOutcome, RepositoryError> {
+        let selected = &request.root;
+        let name = &request.name;
         self.require_index_available(RepositoryOperation::RemoveRemote, Some(selected))?;
         let (repository, root) =
             canonical_repository_root(selected, RepositoryOperation::RemoveRemote)?;
@@ -2214,6 +2320,7 @@ impl RepositoryService {
                 root: root.clone(),
                 primary_branch: request.primary_branch,
                 identity: Some(identity),
+                operation_id: request.operation_id,
             })
             .map_err(|error| error.for_operation(RepositoryOperation::CreateAndEnable, &root))
         })();
@@ -2519,8 +2626,9 @@ impl RepositoryService {
 
     pub fn remove_registration(
         &self,
-        root: &Path,
+        request: RemoveRegistrationRequest,
     ) -> Result<RemoveRegistrationOutcome, RepositoryError> {
+        let root = &request.root;
         self.require_index_available(RepositoryOperation::RemoveRegistration, Some(root))?;
         let root = std::fs::canonicalize(root).map_err(|error| {
             canonicalization_error(RepositoryOperation::RemoveRegistration, error)
