@@ -821,7 +821,6 @@ impl RepositoryService {
         let root = &request.root;
         let operation = RepositoryOperation::RebuildRepository;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        let _repository_lease = repository_lease(&repository, &root, operation)?;
         self.synchronize_index_availability(operation, &root)?;
         if self.requires_corrupt_cache_replacement()? {
             self.check_failure(
@@ -837,6 +836,7 @@ impl RepositoryService {
                 .map_err(|error| error.for_operation(operation, &root))?;
             self.set_index_availability(IndexAvailability::Recovering, operation, &root)?;
         }
+        let _repository_lease = repository_lease(&repository, &root, operation)?;
         let operation_id = begin_rebuild_operation(&self.registry_path, &root)?;
         let result = (|| {
             let observation = observe_root(&repository, &root);

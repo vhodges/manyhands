@@ -10,15 +10,42 @@ use manyhands::{
     repository::{
         AuthoringKind, AuthoringTarget, ContextIntent, DiscoveredCommentThread, DiscoveredContext,
         DiscoveredItem, DiscoveryActivitySource, DiscoveryContextKind, DiscoveryProblem,
-        DocumentDraft, FailurePoint, LocalCheckpoint, RefreshOutcome, RepositoryErrorKind,
-        RepositoryOperation, RepositoryService, RepositorySnapshot, SaveDocumentRequest,
-        SaveOutcome, SnapshotConfiguration,
+        DocumentDraft, FailurePoint, LeaseKind, LocalCheckpoint, RefreshOutcome,
+        RepositoryErrorKind, RepositoryOperation, RepositoryService, RepositorySnapshot,
+        SaveDocumentRequest, SaveOutcome, SnapshotConfiguration,
     },
 };
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 
 mod support;
+
+#[test]
+fn cache_lease_child() {
+    let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
+        return;
+    };
+    let data_directory = PathBuf::from(std::env::var("MANYHANDS_LEASE_DATA_DIRECTORY").unwrap());
+    let kind = LeaseKind::parse(&std::env::var("MANYHANDS_LEASE_KIND").unwrap()).unwrap();
+    let ready = PathBuf::from(std::env::var("MANYHANDS_LEASE_READY").unwrap());
+    let release = PathBuf::from(std::env::var("MANYHANDS_LEASE_RELEASE").unwrap());
+    let _holder = RepositoryService::hold_lease_for_testing(
+        std::path::Path::new(&root),
+        &data_directory,
+        kind,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(ready)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !release.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
 macro_rules! refresh_request {
     ($root:expr, $operation_id:expr) => {
@@ -2146,6 +2173,34 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
     assert_eq!(corrupt_diagnostic_count(data.path()), 1);
     assert!(first_service.repository_snapshot(&fixture.root).is_ok());
     assert!(second_service.repository_snapshot(&fixture.root).is_ok());
+}
+
+#[test]
+fn corrupt_rebuild_releases_cache_replacement_guard_before_observation() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let (observed_send, observed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    service.set_observation_hook_for_testing(move || {
+        observed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let rebuild = scope.spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root)));
+        observed_receive.recv().unwrap();
+        let reader = support::hold_lease_in_child_for_test(
+            &fixture.root,
+            data.path(),
+            LeaseKind::CacheRead,
+            "cache_lease_child",
+        );
+        reader.release();
+        release_send.send(()).unwrap();
+        rebuild.join().unwrap().unwrap();
+    });
 }
 
 #[test]

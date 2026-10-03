@@ -439,12 +439,21 @@ pub fn hold_lease_in_child(
     data_directory: &Path,
     kind: manyhands::repository::LeaseKind,
 ) -> LeaseHolder {
+    hold_lease_in_child_for_test(root, data_directory, kind, "common_git_lease_child")
+}
+
+pub fn hold_lease_in_child_for_test(
+    root: &Path,
+    data_directory: &Path,
+    kind: manyhands::repository::LeaseKind,
+    child_test: &str,
+) -> LeaseHolder {
     let synchronization = tempfile::tempdir().unwrap();
     let ready = synchronization.path().join("ready");
     let release = synchronization.path().join("release");
     let mut child = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
-        .arg("common_git_lease_child")
+        .arg(child_test)
         .arg("--nocapture")
         .env("MANYHANDS_LEASE_ROOT", root)
         .env("MANYHANDS_LEASE_DATA_DIRECTORY", data_directory)
