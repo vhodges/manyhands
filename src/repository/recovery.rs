@@ -235,17 +235,21 @@ pub(super) fn begin_or_reconcile_operation(
         transaction.commit().map_err(RepositoryError::sqlite)?;
         return Ok(RecoveryRecord { id });
     }
-    if !is_lifecycle_operation(operation)
-        && operation != RepositoryOperation::RemoveRegistration
-        && let Some((id, existing_action)) = transaction
-            .query_row(
-                "SELECT id, action FROM operation_records
+    if matches!(
+        operation,
+        RepositoryOperation::AddRemote
+            | RepositoryOperation::RemoveRemote
+            | RepositoryOperation::RefreshRepository
+            | RepositoryOperation::RebuildRepository
+    ) && let Some((id, existing_action)) = transaction
+        .query_row(
+            "SELECT id, action FROM operation_records
          WHERE root_path = ?1 AND state != 'completed' ORDER BY id DESC LIMIT 1",
-                [root_path],
-                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()
-            .map_err(RepositoryError::sqlite)?
+            [root_path],
+            |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
     {
         if existing_action == action {
             let legacy: Option<String> = transaction
@@ -284,18 +288,6 @@ pub(super) fn begin_or_reconcile_operation(
 
 fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
     existing == requested || (existing == "create_and_enable" && requested == "enable")
-}
-
-fn is_lifecycle_operation(operation: RepositoryOperation) -> bool {
-    matches!(
-        operation,
-        RepositoryOperation::CreateAndEnable
-            | RepositoryOperation::Enable
-            | RepositoryOperation::RemoveRegistration
-            | RepositoryOperation::AddRemote
-            | RepositoryOperation::RemoveRemote
-            | RepositoryOperation::SetPublicationRemote
-    )
 }
 
 pub(super) fn advance_after_observation(

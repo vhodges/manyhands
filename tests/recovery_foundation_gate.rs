@@ -1112,3 +1112,43 @@ fn remove_remote_replay_after_authoritative_mutation_keeps_it_absent() {
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
     assert!(fixture.repository.find_remote("origin").is_err());
 }
+
+#[test]
+fn pending_remote_removal_blocks_a_different_lifecycle_request_until_replayed() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    setup
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let remove = RemoveRemoteRequest {
+        root: fixture.root.clone(),
+        name: "origin".to_owned(),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::AfterRemoteMutation).open_service(data.path());
+    assert!(failing.remove_remote(remove.clone()).is_err());
+    drop(failing);
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let fresh = RepositoryService::open_at(data.path()).unwrap();
+    let error = fresh
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "other".to_owned(),
+            url: "git@example.invalid:other.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    fresh.remove_remote(remove).unwrap();
+}

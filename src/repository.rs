@@ -2210,6 +2210,7 @@ impl RepositoryService {
                 return Ok(RemoteOutcome::NoChange);
             }
             Ok(_) => {
+                self.complete_lifecycle(&root, RepositoryOperation::AddRemote, record)?;
                 return Err(RepositoryError::new(
                     RepositoryOperation::AddRemote,
                     Some(root),
@@ -2564,7 +2565,13 @@ impl RepositoryService {
                     } if *pending_id == request.operation_id
                 )
             });
-        if resumes_create {
+        self.begin_lifecycle_record(
+            &root,
+            RepositoryOperation::CreateAndEnable,
+            request.operation_id,
+            &request.primary_branch,
+        )?;
+        if resumes_create && Repository::open(&root).is_ok() {
             let repository = Repository::open(&root).map_err(|error| {
                 RepositoryError::git(
                     RepositoryOperation::CreateAndEnable,
