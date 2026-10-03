@@ -8,8 +8,9 @@ use std::{
 use manyhands::repository::{
     AddRemoteRequest, CommitIdentity, CreateRepositoryRequest, EnableRepositoryOutcome,
     ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, OperationId,
-    RebuildRepositoryRequest, RecoveryInspection, RefreshRepositoryRequest,
-    RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
+    PublicationRemoteOutcome, RebuildRepositoryRequest, RecoveryInspection,
+    RefreshRepositoryRequest, RemoveRegistrationOutcome, RemoveRegistrationRequest,
+    RemoveRemoteRequest, RepositoryErrorKind, RepositoryService, SetPublicationRemoteRequest,
 };
 use rusqlite::Connection;
 
@@ -217,6 +218,40 @@ fn bootstrap_lease_is_bounded_and_releases() {
         RepositoryService::hold_lease_for_testing(&fixture.root, data.path(), LeaseKind::Bootstrap)
             .is_ok()
     );
+}
+
+#[test]
+fn create_and_enable_reports_busy_while_the_root_bootstrap_lease_is_held_then_replays() {
+    let data = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("created");
+    let request = CreateRepositoryRequest {
+        root: root.clone(),
+        primary_branch: "main".to_owned(),
+        identity: Some(CommitIdentity {
+            name: "Created Author".to_owned(),
+            email: "created@example.invalid".to_owned(),
+        }),
+        operation_id: OperationId::new(),
+    };
+    let holder = support::hold_lease_in_child(&root, data.path(), LeaseKind::Bootstrap);
+
+    let error = RepositoryService::open_at(data.path())
+        .unwrap()
+        .create_and_enable(request.clone())
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+    assert!(!root.exists());
+    assert_eq!(registered_repository_count(data.path()), 0);
+    assert_eq!(operation_record_count(data.path()), 0);
+
+    holder.release();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        service.create_and_enable(request).unwrap(),
+        EnableRepositoryOutcome::Enabled { .. }
+    ));
+    assert_eq!(commit_count(&git2::Repository::open(&root).unwrap()), 1);
 }
 
 #[test]
@@ -818,6 +853,192 @@ fn create_replay_after_registration_failure_resumes_the_create_action() {
         EnableRepositoryOutcome::AlreadyEnabled
     );
     assert_eq!(support::head_commit(&repository), Some(commit_oid));
+}
+
+#[test]
+fn enable_replay_after_initialization_commit_retains_commit_and_registers_once() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let request = support::enable_request_with_operation_id(&fixture.root, OperationId::new());
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeRegistryWrite).open_service(data.path());
+
+    let EnableRepositoryOutcome::RegistrationPending { commit_oid } =
+        failing.enable(request.clone()).unwrap()
+    else {
+        panic!("expected registration to remain pending");
+    };
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    assert_eq!(commit_count(&fixture.repository), 2);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 0);
+    assert_eq!(operation_rows(data.path(), &fixture.root), 1);
+    drop(failing);
+
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .enable(request)
+            .unwrap(),
+        EnableRepositoryOutcome::AlreadyEnabled
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
+    assert_eq!(commit_count(&fixture.repository), 2);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 1);
+}
+
+#[test]
+fn publication_remote_replay_after_configuration_commit_retains_selection_and_registers_once() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    setup
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index
+        .add_path(std::path::Path::new(".manyhands/config.toml"))
+        .unwrap();
+    index.write().unwrap();
+    setup
+        .remove_registration(RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let request = SetPublicationRemoteRequest {
+        root: fixture.root.clone(),
+        name: Some("origin".to_owned()),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeRegistryWrite).open_service(data.path());
+
+    let PublicationRemoteOutcome::RegistrationPending { commit_oid } =
+        failing.set_publication_remote(request.clone()).unwrap()
+    else {
+        panic!("expected registration to remain pending");
+    };
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    assert_eq!(commit_count(&fixture.repository), 3);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 0);
+    assert!(
+        String::from_utf8(support::tracked_configuration(&fixture.root).unwrap())
+            .unwrap()
+            .contains("publication_remote = \"origin\"")
+    );
+    drop(failing);
+
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .set_publication_remote(request)
+            .unwrap(),
+        PublicationRemoteOutcome::NoChange
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
+    assert_eq!(commit_count(&fixture.repository), 3);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 1);
+}
+
+#[test]
+fn registration_removal_replay_preserves_failed_state_then_removes_once_and_noops() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let request = RemoveRegistrationRequest {
+        root: fixture.root.clone(),
+        operation_id: OperationId::new(),
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeRegistrationRemovalTransaction)
+        .open_service(data.path());
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    assert_eq!(
+        failing
+            .remove_registration(request.clone())
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 1);
+    assert_eq!(operation_rows(data.path(), &fixture.root), 2);
+    drop(failing);
+
+    let replay = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        replay.remove_registration(request.clone()).unwrap(),
+        RemoveRegistrationOutcome::Removed
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(registered_rows(data.path(), &fixture.root), 0);
+    assert_eq!(operation_rows(data.path(), &fixture.root), 0);
+    assert_eq!(
+        replay.remove_registration(request).unwrap(),
+        RemoveRegistrationOutcome::NotRegistered
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+fn commit_count(repository: &git2::Repository) -> usize {
+    let mut commits = repository.revwalk().unwrap();
+    commits.push_head().unwrap();
+    commits.count()
+}
+
+fn registered_rows(data_directory: &std::path::Path, root: &std::path::Path) -> i64 {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM repositories WHERE root_path = ?1",
+            [root.canonicalize().unwrap().to_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn operation_rows(data_directory: &std::path::Path, root: &std::path::Path) -> i64 {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM operation_records WHERE root_path = ?1",
+            [root.canonicalize().unwrap().to_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn registered_repository_count(data_directory: &std::path::Path) -> i64 {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn operation_record_count(data_directory: &std::path::Path) -> i64 {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .query_row("SELECT COUNT(*) FROM operation_records", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
 }
 
 #[test]

@@ -490,6 +490,7 @@ pub enum FailurePoint {
     BeforeItemWrite,
     BeforeCheckpointCommit,
     BeforeRegistryWrite,
+    BeforeRegistrationRemovalTransaction,
     AfterRemoteMutation,
     AfterContextObservation,
     BeforeIndexTransactionCommit,
@@ -712,8 +713,30 @@ impl RepositoryService {
         kind: LeaseKind,
     ) -> Result<LeaseHolderForTesting, RepositoryError> {
         let operation = RepositoryOperation::Inspect;
-        let root = std::fs::canonicalize(root)
-            .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+        let root = if kind == LeaseKind::Bootstrap {
+            let parent = root.parent().ok_or_else(|| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::InvalidPath,
+                    "the bootstrap target has no parent directory",
+                )
+            })?;
+            let name = root.file_name().ok_or_else(|| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::InvalidPath,
+                    "the bootstrap target must name a directory",
+                )
+            })?;
+            std::fs::canonicalize(parent)
+                .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?
+                .join(name)
+        } else {
+            std::fs::canonicalize(root)
+                .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?
+        };
         let guard = match kind {
             LeaseKind::Repository => {
                 let repository = Repository::discover(&root)
@@ -3090,6 +3113,11 @@ impl RepositoryService {
             "",
         )
         .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
+        self.check_failure(
+            FailurePoint::BeforeRegistrationRemovalTransaction,
+            RepositoryOperation::RemoveRegistration,
+            &root,
+        )?;
         let transaction = connection.transaction().map_err(|error| {
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RemoveRegistration, &root)
