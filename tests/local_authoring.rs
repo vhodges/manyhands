@@ -923,12 +923,14 @@ fn recovery_branch_creation_failure_leaves_no_context_and_retry_creates_one() {
     let before = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let failing = support::FailOnce::at(FailurePoint::BeforeContextBranchCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -977,12 +979,14 @@ fn recovery_worktree_creation_failure_retains_branch_and_retry_adds_one_worktree
     let pre_state = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             item_id.clone(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -4718,12 +4722,22 @@ fn target(
     item_id: manyhands::canonical::ItemId,
     intent: ContextIntent,
 ) -> AuthoringTarget {
+    target_with_operation_id(root, kind, item_id, intent, support::operation_id())
+}
+
+fn target_with_operation_id(
+    root: &std::path::Path,
+    kind: AuthoringKind,
+    item_id: manyhands::canonical::ItemId,
+    intent: ContextIntent,
+    operation_id: manyhands::repository::OperationId,
+) -> AuthoringTarget {
     AuthoringTarget {
         root: root.to_owned(),
         kind,
         item_id,
         intent,
-        operation_id: support::fixture_operation_id(),
+        operation_id,
     }
 }
 

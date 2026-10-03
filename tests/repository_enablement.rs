@@ -91,11 +91,19 @@ fn registry_row(
 }
 
 fn enable_request(root: &std::path::Path, primary_branch: &str) -> EnableRepositoryRequest {
+    enable_request_with_operation_id(root, primary_branch, support::operation_id())
+}
+
+fn enable_request_with_operation_id(
+    root: &std::path::Path,
+    primary_branch: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> EnableRepositoryRequest {
     EnableRepositoryRequest {
         root: root.to_owned(),
         primary_branch: primary_branch.to_owned(),
         identity: None,
-        operation_id: support::fixture_operation_id(),
+        operation_id,
     }
 }
 
@@ -107,7 +115,7 @@ fn create_request(root: &std::path::Path, primary_branch: &str) -> CreateReposit
             name: "Created Author".to_owned(),
             email: "created@example.invalid".to_owned(),
         }),
-        operation_id: support::fixture_operation_id(),
+        operation_id: support::operation_id(),
     }
 }
 
@@ -116,15 +124,23 @@ fn add_remote_request(root: &std::path::Path, name: &str, url: &str) -> AddRemot
         root: root.to_owned(),
         name: name.to_owned(),
         url: url.to_owned(),
-        operation_id: support::fixture_operation_id(),
+        operation_id: support::operation_id(),
     }
 }
 
 fn publication_request(root: &std::path::Path, name: Option<&str>) -> SetPublicationRemoteRequest {
+    publication_request_with_operation_id(root, name, support::operation_id())
+}
+
+fn publication_request_with_operation_id(
+    root: &std::path::Path,
+    name: Option<&str>,
+    operation_id: manyhands::repository::OperationId,
+) -> SetPublicationRemoteRequest {
     SetPublicationRemoteRequest {
         root: root.to_owned(),
         name: name.map(str::to_owned),
-        operation_id: support::fixture_operation_id(),
+        operation_id,
     }
 }
 
@@ -132,14 +148,14 @@ fn remove_remote_request(root: &std::path::Path, name: &str) -> RemoveRemoteRequ
     RemoveRemoteRequest {
         root: root.to_owned(),
         name: name.to_owned(),
-        operation_id: support::fixture_operation_id(),
+        operation_id: support::operation_id(),
     }
 }
 
 fn remove_registration_request(root: &std::path::Path) -> RemoveRegistrationRequest {
     RemoveRegistrationRequest {
         root: root.to_owned(),
-        operation_id: support::fixture_operation_id(),
+        operation_id: support::operation_id(),
     }
 }
 
@@ -1444,9 +1460,14 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
     let registry = data.path().join(REGISTRY_FILE);
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
+    let operation_id = support::operation_id();
 
     let PublicationRemoteOutcome::RegistrationPending { commit_oid } = service
-        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .set_publication_remote(publication_request_with_operation_id(
+            &fixture.root,
+            Some("origin"),
+            operation_id,
+        ))
         .unwrap()
     else {
         panic!("expected pending registration");
@@ -1468,7 +1489,11 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
     let retry_service = RepositoryService::open_at(data.path()).unwrap();
     assert_eq!(
         retry_service
-            .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+            .set_publication_remote(publication_request_with_operation_id(
+                &fixture.root,
+                Some("origin"),
+                operation_id,
+            ))
             .unwrap(),
         PublicationRemoteOutcome::NoChange
     );
@@ -1853,9 +1878,14 @@ fn registration_failure_after_commit_is_pending_and_a_retry_registers_without_co
     let registry = data.path().join(REGISTRY_FILE);
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
+    let operation_id = support::operation_id();
 
     let first = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap();
     let EnableRepositoryOutcome::RegistrationPending { commit_oid } = first else {
         panic!("expected the committed initialization to remain pending registration");
@@ -1863,14 +1893,22 @@ fn registration_failure_after_commit_is_pending_and_a_retry_registers_without_co
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
 
     let error = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap_err();
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
 
     std::fs::remove_dir(&registry).unwrap();
     let retry = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap();
 
     assert_eq!(retry, EnableRepositoryOutcome::AlreadyEnabled);

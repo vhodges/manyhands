@@ -29,7 +29,7 @@ macro_rules! refresh_request {
         }
     };
     ($root:expr) => {
-        refresh_request!($root, support::fixture_operation_id())
+        refresh_request!($root, support::operation_id())
     };
 }
 
@@ -41,15 +41,16 @@ macro_rules! rebuild_request {
         }
     };
     ($root:expr) => {
-        rebuild_request!($root, support::fixture_operation_id())
+        rebuild_request!($root, support::operation_id())
     };
 }
 
 #[test]
 fn retry_requests_retain_the_same_operation_id() {
     let root = PathBuf::from("/repository");
-    let initial = refresh_request!(&root);
-    let retry = refresh_request!(&root);
+    let operation_id = support::operation_id();
+    let initial = refresh_request!(&root, operation_id);
+    let retry = refresh_request!(&root, operation_id);
 
     assert_eq!(initial.operation_id, retry.operation_id);
 }

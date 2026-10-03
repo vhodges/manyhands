@@ -401,7 +401,7 @@ pub fn operation_id() -> OperationId {
 }
 
 pub fn fixture_operation_id() -> OperationId {
-    parse_operation_id("01ARZ3NDEKTSV4RRFFQ69G5FAZ")
+    operation_id()
 }
 
 pub fn parse_operation_id(value: &str) -> OperationId {

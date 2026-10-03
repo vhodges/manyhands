@@ -25,3 +25,16 @@ fn index_pending_retains_the_authoritative_result() {
 
     assert_eq!(pending.authoritative, "authoritative result");
 }
+
+#[test]
+fn default_fixture_ids_are_unique_and_retry_ids_are_explicitly_shared() {
+    assert_ne!(
+        support::fixture_operation_id(),
+        support::fixture_operation_id()
+    );
+
+    let operation_id = support::operation_id();
+    let initial = operation_id;
+    let retry = operation_id;
+    assert_eq!(initial, retry);
+}
