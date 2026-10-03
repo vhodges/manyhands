@@ -482,6 +482,7 @@ pub enum RegistryConnectionPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
     BeforeRepositoryInitialization,
+    AfterRepositoryInitialization,
     BeforeConfigurationWrite,
     BeforeInitializationCommit,
     BeforePublicationConfigurationCommit,
@@ -2561,8 +2562,15 @@ impl RepositoryService {
                     RecoveryInspection::Pending {
                         operation: RepositoryOperation::CreateAndEnable,
                         operation_id: pending_id,
+                        completed_step: Some(step),
                         ..
                     } if *pending_id == request.operation_id
+                        && matches!(
+                            step.as_str(),
+                            "repository_initialized"
+                                | "configuration_written"
+                                | "initialization_committed"
+                        )
                 )
             });
         self.begin_lifecycle_record(
@@ -2683,14 +2691,31 @@ impl RepositoryService {
                     error,
                 )
             })?;
-            // Serialize the handoff from path bootstrap to the common Git lease.
-            let repository = Repository::open(&root).map_err(|error| {
+            let initialized = Repository::open(&root).map_err(|error| {
                 RepositoryError::git(
                     RepositoryOperation::CreateAndEnable,
                     Some(root.clone()),
                     error,
                 )
             })?;
+            self.advance_lifecycle(
+                &root,
+                RepositoryOperation::CreateAndEnable,
+                self.begin_lifecycle_record(
+                    &root,
+                    RepositoryOperation::CreateAndEnable,
+                    request.operation_id,
+                    &request.primary_branch,
+                )?,
+                "repository_initialized",
+            )?;
+            self.check_failure(
+                FailurePoint::AfterRepositoryInitialization,
+                RepositoryOperation::CreateAndEnable,
+                &root,
+            )?;
+            // Serialize the handoff from path bootstrap to the common Git lease.
+            let repository = initialized;
             let lease = repository_lease(&repository, &root, RepositoryOperation::CreateAndEnable)?;
             self.begin_lifecycle_record(
                 &root,

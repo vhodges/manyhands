@@ -856,6 +856,35 @@ fn create_replay_after_registration_failure_resumes_the_create_action() {
 }
 
 #[test]
+fn create_replay_after_repository_initialization_uses_the_observed_step() {
+    let data = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("created");
+    let request = CreateRepositoryRequest {
+        root: root.clone(),
+        primary_branch: "main".to_owned(),
+        identity: Some(CommitIdentity {
+            name: "Created Author".to_owned(),
+            email: "created@example.invalid".to_owned(),
+        }),
+        operation_id: OperationId::new(),
+    };
+    let failing = support::FailOnce::at(FailurePoint::AfterRepositoryInitialization)
+        .open_service(data.path());
+    assert!(failing.create_and_enable(request.clone()).is_err());
+    drop(failing);
+    let repository = git2::Repository::open(&root).unwrap();
+    assert!(repository.is_empty().unwrap());
+
+    let replay = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        replay.create_and_enable(request).unwrap(),
+        EnableRepositoryOutcome::Enabled { .. }
+    ));
+    assert!(repository.head().unwrap().peel_to_commit().is_ok());
+}
+
+#[test]
 fn enable_replay_after_initialization_commit_retains_commit_and_registers_once() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
