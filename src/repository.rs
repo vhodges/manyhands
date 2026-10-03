@@ -2516,6 +2516,48 @@ impl RepositoryService {
             &root,
             RepositoryOperation::CreateAndEnable,
         )?;
+        let resumes_create = self
+            .recovery_inspection(&root)
+            .unwrap_or_default()
+            .iter()
+            .any(|inspection| {
+                matches!(
+                    inspection,
+                    RecoveryInspection::Pending {
+                        operation: RepositoryOperation::CreateAndEnable,
+                        operation_id: pending_id,
+                        ..
+                    } if *pending_id == request.operation_id
+                )
+            });
+        if resumes_create {
+            let repository = Repository::open(&root).map_err(|error| {
+                RepositoryError::git(
+                    RepositoryOperation::CreateAndEnable,
+                    Some(root.clone()),
+                    error,
+                )
+            })?;
+            let lease = repository_lease(&repository, &root, RepositoryOperation::CreateAndEnable)?;
+            self.begin_lifecycle_record(
+                &root,
+                RepositoryOperation::CreateAndEnable,
+                request.operation_id,
+                &request.primary_branch,
+            )?;
+            drop(bootstrap);
+            drop(lease);
+            return self
+                .enable(EnableRepositoryRequest {
+                    root,
+                    primary_branch: request.primary_branch,
+                    identity: Some(identity),
+                    operation_id: request.operation_id,
+                })
+                .map_err(|error| {
+                    error.for_operation(RepositoryOperation::CreateAndEnable, &request.root)
+                });
+        }
         let created_target = match std::fs::symlink_metadata(&root) {
             Ok(metadata) if !metadata.is_dir() => {
                 return Err(RepositoryError::new(

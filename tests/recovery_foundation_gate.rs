@@ -6,9 +6,10 @@ use std::{
 };
 
 use manyhands::repository::{
-    ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, OperationId,
-    RebuildRepositoryRequest, RecoveryInspection, RefreshRepositoryRequest,
-    RemoveRegistrationRequest, RepositoryErrorKind, RepositoryService,
+    CommitIdentity, CreateRepositoryRequest, EnableRepositoryOutcome, ExpectedPathObservation,
+    FailurePoint, IndexPending, LeaseKind, OperationId, RebuildRepositoryRequest,
+    RecoveryInspection, RefreshRepositoryRequest, RemoveRegistrationRequest, RepositoryErrorKind,
+    RepositoryService,
 };
 use rusqlite::Connection;
 
@@ -774,4 +775,47 @@ fn remote_replay_rejects_a_different_url_for_the_same_operation_id() {
         })
         .unwrap_err();
     assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
+
+#[test]
+fn create_replay_after_registration_failure_resumes_the_create_action() {
+    let data = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("created");
+    let operation_id = OperationId::new();
+    let request = CreateRepositoryRequest {
+        root: root.clone(),
+        primary_branch: "main".to_owned(),
+        identity: Some(CommitIdentity {
+            name: "Created Author".to_owned(),
+            email: "created@example.invalid".to_owned(),
+        }),
+        operation_id,
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeRegistryWrite).open_service(data.path());
+
+    let EnableRepositoryOutcome::RegistrationPending { commit_oid } =
+        failing.create_and_enable(request.clone()).unwrap()
+    else {
+        panic!("expected registration to remain pending");
+    };
+    drop(failing);
+    let repository = git2::Repository::open(&root).unwrap();
+    assert_eq!(support::head_commit(&repository), Some(commit_oid));
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .recovery_inspection(&root)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let replay = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        replay.create_and_enable(request).unwrap(),
+        EnableRepositoryOutcome::AlreadyEnabled
+    );
+    assert_eq!(support::head_commit(&repository), Some(commit_oid));
 }
