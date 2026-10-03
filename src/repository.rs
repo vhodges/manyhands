@@ -133,6 +133,22 @@ pub enum ExpectedPathObservation {
     Blake3([u8; 32]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExternalChangeExpectation {
+    Missing,
+    Changed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalChangeDiagnostic {
+    pub root: PathBuf,
+    pub operation: RepositoryOperation,
+    pub item_id: canonical::ItemId,
+    pub context: PathBuf,
+    pub path: PathBuf,
+    pub expectation: ExternalChangeExpectation,
+}
+
 impl ExpectedPathObservation {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self::Blake3(*blake3::hash(bytes).as_bytes())
@@ -656,6 +672,7 @@ pub struct RepositoryError {
     pub kind: RepositoryErrorKind,
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    external_change: Option<Box<ExternalChangeDiagnostic>>,
 }
 
 impl RepositoryError {
@@ -688,6 +705,7 @@ impl RepositoryError {
             kind,
             message: error.to_string(),
             source: None,
+            external_change: None,
         }
     }
 
@@ -703,6 +721,7 @@ impl RepositoryError {
             kind,
             message: error.to_string(),
             source: Some(Box::new(error)),
+            external_change: None,
         }
     }
 
@@ -710,6 +729,21 @@ impl RepositoryError {
         self.operation = operation;
         self.root = Some(root.to_owned());
         self
+    }
+
+    fn external_change_error(diagnostic: ExternalChangeDiagnostic) -> Self {
+        Self {
+            root: Some(diagnostic.root.clone()),
+            operation: diagnostic.operation,
+            kind: RepositoryErrorKind::ExternalChange,
+            message: "an owned path changed after it was observed".to_owned(),
+            source: None,
+            external_change: Some(Box::new(diagnostic)),
+        }
+    }
+
+    pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
+        self.external_change.as_deref()
     }
 }
 
@@ -1281,247 +1315,250 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
-        let intent = request.target.intent;
-        let context = match self.prepare_context_unlocked(
-            AuthoringTarget {
-                root: request.target.root,
-                kind: request.target.kind,
-                item_id: request.target.item_id,
-                intent: request.target.intent,
-                operation_id: request.target.operation_id,
-            },
-            Some(record),
-        )? {
-            ContextProvisionOutcome::Created(context)
-            | ContextProvisionOutcome::Reused(context) => context,
-        };
-        if !matches!(context.kind, AuthoringKind::Document) {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "document saves require a document target",
-            ));
-        }
-        let repository = Repository::open(&context.worktree)
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let config = repository
-            .config()
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let effective_config = effective_config.unwrap_or(&config);
-        let Some(identity) =
-            resolve_identity(&config, effective_config, &context.worktree, operation)?
-        else {
-            self.complete_lifecycle(&context.root, operation, record)?;
-            return Ok(SaveOutcome::IdentityRequired { context });
-        };
-
-        let destination = owned_document_path(&request.destination_path, operation, &context)?;
-        let source = request
-            .source_path
-            .as_deref()
-            .map(|path| owned_document_path(path, operation, &context))
-            .transpose()?;
-        if matches!(intent, ContextIntent::Create)
-            && let Some(existing) =
-                document_path_for_id(&context.worktree, &context.item_id, operation)?
-            && existing != destination
-        {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::OccupiedItemPath,
-                "the requested document ID already exists at a different path",
-            ));
-        }
-        validate_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
-        if let Some(source) = &source {
-            validate_safe_owned_parent(&context.worktree, source, operation, &context.root)?;
-        }
-        let document = match (intent, source.as_deref()) {
-            (ContextIntent::Create, Some(_)) => {
-                return Err(authoring_error(
-                    operation,
-                    &context.root,
-                    RepositoryErrorKind::InvalidPath,
-                    "new documents cannot have a source path",
-                ));
-            }
-            (ContextIntent::Create, None) => canonical::Document {
-                id: context.item_id.clone(),
-                title: request.draft.title,
-                body: request.draft.body,
-                unknown: serde_yaml::Mapping::new(),
-            },
-            (ContextIntent::Edit, None) => {
+        let result = (|| {
+            let intent = request.target.intent;
+            let context = match self.prepare_context_unlocked(
+                AuthoringTarget {
+                    root: request.target.root,
+                    kind: request.target.kind,
+                    item_id: request.target.item_id,
+                    intent: request.target.intent,
+                    operation_id: request.target.operation_id,
+                },
+                Some(record),
+            )? {
+                ContextProvisionOutcome::Created(context)
+                | ContextProvisionOutcome::Reused(context) => context,
+            };
+            if !matches!(context.kind, AuthoringKind::Document) {
                 return Err(authoring_error(
                     operation,
                     &context.root,
                     RepositoryErrorKind::MissingAuthoringTarget,
-                    "editing a document requires its source path",
+                    "document saves require a document target",
                 ));
             }
-            (ContextIntent::Edit, Some(source)) => {
-                let existing_path =
-                    if source_exists(&context.worktree, source, operation, &context.root)? {
-                        source
-                    } else {
-                        &destination
-                    };
-                let canonical::CanonicalItem::Document(mut document) =
-                    read_owned_item(&context.worktree, existing_path, operation, &context.root)?
-                else {
+            let repository = Repository::open(&context.worktree).map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let config = repository.config().map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let effective_config = effective_config.unwrap_or(&config);
+            let Some(identity) =
+                resolve_identity(&config, effective_config, &context.worktree, operation)?
+            else {
+                return Ok(SaveOutcome::IdentityRequired { context });
+            };
+
+            let destination = owned_document_path(&request.destination_path, operation, &context)?;
+            let source = request
+                .source_path
+                .as_deref()
+                .map(|path| owned_document_path(path, operation, &context))
+                .transpose()?;
+            if matches!(intent, ContextIntent::Create)
+                && let Some(existing) =
+                    document_path_for_id(&context.worktree, &context.item_id, operation)?
+                && existing != destination
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::OccupiedItemPath,
+                    "the requested document ID already exists at a different path",
+                ));
+            }
+            validate_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
+            if let Some(source) = &source {
+                validate_safe_owned_parent(&context.worktree, source, operation, &context.root)?;
+                if let Some(expected) = request.expected_source.as_ref() {
+                    ensure_expected_owned_observation(
+                        &context.worktree,
+                        source,
+                        expected,
+                        operation,
+                        &context,
+                    )?;
+                }
+            }
+            ensure_expected_owned_observation(
+                &context.worktree,
+                &destination,
+                &request.expected_destination,
+                operation,
+                &context,
+            )?;
+            let document = match (intent, source.as_deref()) {
+                (ContextIntent::Create, Some(_)) => {
                     return Err(authoring_error(
                         operation,
                         &context.root,
-                        RepositoryErrorKind::MissingAuthoringTarget,
-                        "the source path is not a canonical document",
-                    ));
-                };
-                if document.id != context.item_id {
-                    return Err(authoring_error(
-                        operation,
-                        &context.root,
-                        RepositoryErrorKind::MissingAuthoringTarget,
-                        "the source document ID does not match the selected target",
+                        RepositoryErrorKind::InvalidPath,
+                        "new documents cannot have a source path",
                     ));
                 }
-                document.title = request.draft.title;
-                document.body = request.draft.body;
-                document
-            }
-        };
-        let serialized = canonical::serialize_item(&canonical::CanonicalItem::Document(document))
+                (ContextIntent::Create, None) => canonical::Document {
+                    id: context.item_id.clone(),
+                    title: request.draft.title,
+                    body: request.draft.body,
+                    unknown: serde_yaml::Mapping::new(),
+                },
+                (ContextIntent::Edit, None) => {
+                    return Err(authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::MissingAuthoringTarget,
+                        "editing a document requires its source path",
+                    ));
+                }
+                (ContextIntent::Edit, Some(source)) => {
+                    let existing_path =
+                        if source_exists(&context.worktree, source, operation, &context.root)? {
+                            source
+                        } else {
+                            &destination
+                        };
+                    let canonical::CanonicalItem::Document(mut document) = read_owned_item(
+                        &context.worktree,
+                        existing_path,
+                        operation,
+                        &context.root,
+                    )?
+                    else {
+                        return Err(authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::MissingAuthoringTarget,
+                            "the source path is not a canonical document",
+                        ));
+                    };
+                    if document.id != context.item_id {
+                        return Err(authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::MissingAuthoringTarget,
+                            "the source document ID does not match the selected target",
+                        ));
+                    }
+                    document.title = request.draft.title;
+                    document.body = request.draft.body;
+                    document
+                }
+            };
+            let serialized = canonical::serialize_item(&canonical::CanonicalItem::Document(
+                document,
+            ))
             .map_err(|problem| {
-            authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::InvalidPath,
-                problem.message,
-            )
-        })?;
-        let canonical::CanonicalItem::Document(destination_document) =
-            canonical::parse_item(&destination, &serialized).map_err(|problem| {
                 authoring_error(
                     operation,
                     &context.root,
                     RepositoryErrorKind::InvalidPath,
                     problem.message,
                 )
-            })?
-        else {
-            unreachable!("serialized document parses as a document")
-        };
-        if destination_document.id != context.item_id {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::InvalidPath,
-                "destination document ID does not match the selected target",
-            ));
-        }
-
-        let moving = source.as_ref().is_some_and(|source| source != &destination);
-        let destination_exists =
-            owned_file_exists(&context.worktree, &destination, operation, &context.root)?;
-        if destination_exists && source.as_deref() != Some(destination.as_path()) {
-            let existing =
-                read_owned_item(&context.worktree, &destination, operation, &context.root)?;
-            if existing != canonical::CanonicalItem::Document(destination_document.clone()) {
+            })?;
+            let canonical::CanonicalItem::Document(destination_document) =
+                canonical::parse_item(&destination, &serialized).map_err(|problem| {
+                    authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::InvalidPath,
+                        problem.message,
+                    )
+                })?
+            else {
+                unreachable!("serialized document parses as a document")
+            };
+            if destination_document.id != context.item_id {
                 return Err(authoring_error(
                     operation,
                     &context.root,
-                    RepositoryErrorKind::OccupiedItemPath,
-                    "the destination path is occupied by different content",
+                    RepositoryErrorKind::InvalidPath,
+                    "destination document ID does not match the selected target",
                 ));
             }
-        }
-        let source_present = source
-            .as_ref()
-            .map(|source| source_exists(&context.worktree, source, operation, &context.root))
-            .transpose()?
-            .unwrap_or(false);
-        if moving && !source_present && !destination_exists {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "neither move path contains the selected document",
-            ));
-        }
-        if let Some(source) = &source
-            && let Some(expected) = request.expected_source.as_ref()
-        {
-            ensure_expected_owned_observation(
-                &context.worktree,
-                source,
-                expected,
-                operation,
-                &context.root,
-            )?;
-        }
-        let will_write_destination =
-            !destination_exists || source.as_deref() == Some(destination.as_path());
-        if will_write_destination
-            && (matches!(intent, ContextIntent::Create)
-                || matches!(
-                    request.expected_destination,
-                    ExpectedPathObservation::Blake3(_)
-                ))
-        {
-            ensure_expected_owned_observation(
-                &context.worktree,
-                &destination,
-                &request.expected_destination,
-                operation,
-                &context.root,
-            )?;
-        }
-        let source_in_head = if moving && !source_present {
-            validate_head_document_source(
-                &repository,
-                source.as_ref().expect("move has a source"),
-                &context,
-                operation,
-            )?
-        } else {
-            false
-        };
-        if will_write_destination {
-            ensure_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
-            self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
-            write_owned_document(
-                &context.worktree,
-                &destination,
-                serialized.as_bytes(),
-                operation,
-                &context.root,
-            )?;
-        }
-        if moving {
-            let source = source.as_ref().expect("move has a source");
-            if source_present {
-                self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
-                remove_owned_file(&context.worktree, source, operation, &context.root)?;
+
+            let moving = source.as_ref().is_some_and(|source| source != &destination);
+            let destination_exists =
+                owned_file_exists(&context.worktree, &destination, operation, &context.root)?;
+            if destination_exists && source.as_deref() != Some(destination.as_path()) {
+                let existing =
+                    read_owned_item(&context.worktree, &destination, operation, &context.root)?;
+                if existing != canonical::CanonicalItem::Document(destination_document.clone()) {
+                    return Err(authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::OccupiedItemPath,
+                        "the destination path is occupied by different content",
+                    ));
+                }
             }
-        }
-        let checkpoint = self.checkpoint_owned_paths(
-            &repository,
-            &context,
-            &identity,
-            CheckpointSpec {
-                operation: RepositoryOperation::SaveDocument,
-                subject: &format!("Checkpoint document {}", context.item_id),
-                added_paths: &[destination.as_path()],
-                removed_source: (source_present || source_in_head)
-                    .then(|| source.as_deref().expect("move has a source")),
-            },
-        )?;
-        self.complete_lifecycle(&context.root, operation, record)?;
-        Ok(SaveOutcome::Saved {
-            context,
-            checkpoint,
-        })
+            let source_present = source
+                .as_ref()
+                .map(|source| source_exists(&context.worktree, source, operation, &context.root))
+                .transpose()?
+                .unwrap_or(false);
+            if moving && !source_present && !destination_exists {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "neither move path contains the selected document",
+                ));
+            }
+            let will_write_destination =
+                !destination_exists || source.as_deref() == Some(destination.as_path());
+            let source_in_head = if moving && !source_present {
+                validate_head_document_source(
+                    &repository,
+                    source.as_ref().expect("move has a source"),
+                    &context,
+                    operation,
+                )?
+            } else {
+                false
+            };
+            if will_write_destination {
+                ensure_safe_owned_parent(
+                    &context.worktree,
+                    &destination,
+                    operation,
+                    &context.root,
+                )?;
+                self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
+                write_owned_document(
+                    &context.worktree,
+                    &destination,
+                    serialized.as_bytes(),
+                    operation,
+                    &context.root,
+                )?;
+            }
+            if moving {
+                let source = source.as_ref().expect("move has a source");
+                if source_present {
+                    self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
+                    remove_owned_file(&context.worktree, source, operation, &context.root)?;
+                }
+            }
+            let checkpoint = self.checkpoint_owned_paths(
+                &repository,
+                &context,
+                &identity,
+                CheckpointSpec {
+                    operation: RepositoryOperation::SaveDocument,
+                    subject: &format!("Checkpoint document {}", context.item_id),
+                    added_paths: &[destination.as_path()],
+                    removed_source: (source_present || source_in_head)
+                        .then(|| source.as_deref().expect("move has a source")),
+                },
+            )?;
+            Ok(SaveOutcome::Saved {
+                context,
+                checkpoint,
+            })
+        })();
+        self.finish_authoring_lifecycle(&root, operation, record, result)
     }
 
     pub fn save_ticket(&self, request: SaveTicketRequest) -> Result<SaveOutcome, RepositoryError> {
@@ -1561,184 +1598,180 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
         )?;
-        let intent = request.target.intent;
-        let context = match self.prepare_context_unlocked(
-            AuthoringTarget {
-                root: request.target.root,
-                kind: request.target.kind,
-                item_id: request.target.item_id,
-                intent,
-                operation_id: request.target.operation_id,
-            },
-            Some(record),
-        )? {
-            ContextProvisionOutcome::Created(context)
-            | ContextProvisionOutcome::Reused(context) => context,
-        };
-        if !matches!(context.kind, AuthoringKind::Ticket) {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "ticket saves require a ticket target",
-            ));
-        }
-        let repository = Repository::open(&context.worktree)
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let config = repository
-            .config()
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let effective_config = effective_config.unwrap_or(&config);
-        let Some(identity) =
-            resolve_identity(&config, effective_config, &context.worktree, operation)?
-        else {
-            self.complete_lifecycle(&context.root, operation, record)?;
-            return Ok(SaveOutcome::IdentityRequired { context });
-        };
-        let path = PathBuf::from(format!(".manyhands/tickets/{}/ticket.md", context.item_id));
-        validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-        if ticket_id_exists_at_a_different_path(
-            &context.worktree,
-            &context.item_id,
-            &path,
-            operation,
-            &context.root,
-        )? {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::OccupiedItemPath,
-                "the ticket ID already exists at a different ticket path",
-            ));
-        }
-        let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
-        let ticket = match intent {
-            ContextIntent::Create => canonical::Ticket {
-                id: context.item_id.clone(),
-                title: request.draft.title,
-                ticket_type: request.draft.ticket_type,
-                status: request.draft.status,
-                project: request.draft.project,
-                team: request.draft.team,
-                closed_at: None,
-                closed_by: None,
-                body: request.draft.body,
-                unknown: serde_yaml::Mapping::new(),
-            },
-            ContextIntent::Edit => {
-                let canonical::CanonicalItem::Ticket(mut ticket) =
-                    read_owned_item(&context.worktree, &path, operation, &context.root)?
-                else {
-                    return Err(authoring_error(
-                        operation,
-                        &context.root,
-                        RepositoryErrorKind::MissingAuthoringTarget,
-                        "the ticket path does not contain a canonical ticket",
-                    ));
-                };
-                if ticket.id != context.item_id {
-                    return Err(authoring_error(
-                        operation,
-                        &context.root,
-                        RepositoryErrorKind::MissingAuthoringTarget,
-                        "the ticket ID does not match the selected target",
-                    ));
-                }
-                ticket.title = request.draft.title;
-                ticket.ticket_type = request.draft.ticket_type;
-                ticket.status = request.draft.status;
-                ticket.project = request.draft.project;
-                ticket.team = request.draft.team;
-                ticket.body = request.draft.body;
-                ticket
-            }
-        };
-        let serialized = canonical::serialize_item(&canonical::CanonicalItem::Ticket(
-            ticket.clone(),
-        ))
-        .map_err(|problem| {
-            authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::InvalidPath,
-                problem.message,
-            )
-        })?;
-        let canonical::CanonicalItem::Ticket(parsed) = canonical::parse_item(&path, &serialized)
-            .map_err(|problem| {
-                authoring_error(
-                    operation,
-                    &context.root,
-                    RepositoryErrorKind::InvalidPath,
-                    problem.message,
-                )
-            })?
-        else {
-            unreachable!("serialized ticket parses as a ticket")
-        };
-        if parsed.id != context.item_id {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::InvalidPath,
-                "ticket ID does not match the selected target",
-            ));
-        }
-        let write = if exists {
-            let existing = read_owned_item(&context.worktree, &path, operation, &context.root)?;
-            if matches!(intent, ContextIntent::Create)
-                && existing != canonical::CanonicalItem::Ticket(ticket.clone())
-            {
+        let result = (|| {
+            let intent = request.target.intent;
+            let context = match self.prepare_context_unlocked(
+                AuthoringTarget {
+                    root: request.target.root,
+                    kind: request.target.kind,
+                    item_id: request.target.item_id,
+                    intent,
+                    operation_id: request.target.operation_id,
+                },
+                Some(record),
+            )? {
+                ContextProvisionOutcome::Created(context)
+                | ContextProvisionOutcome::Reused(context) => context,
+            };
+            if !matches!(context.kind, AuthoringKind::Ticket) {
                 return Err(authoring_error(
                     operation,
                     &context.root,
-                    RepositoryErrorKind::OccupiedItemPath,
-                    "the ticket path is occupied by different content",
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "ticket saves require a ticket target",
                 ));
             }
-            existing != canonical::CanonicalItem::Ticket(ticket)
-        } else {
-            true
-        };
-        if write
-            && (matches!(intent, ContextIntent::Create)
-                || matches!(request.expected_path, ExpectedPathObservation::Blake3(_)))
-        {
+            let repository = Repository::open(&context.worktree).map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let config = repository.config().map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let effective_config = effective_config.unwrap_or(&config);
+            let Some(identity) =
+                resolve_identity(&config, effective_config, &context.worktree, operation)?
+            else {
+                return Ok(SaveOutcome::IdentityRequired { context });
+            };
+            let path = PathBuf::from(format!(".manyhands/tickets/{}/ticket.md", context.item_id));
+            validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
             ensure_expected_owned_observation(
                 &context.worktree,
                 &path,
                 &request.expected_path,
                 operation,
-                &context.root,
+                &context,
             )?;
-        }
-        if write {
-            ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-            self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
-            write_owned_document(
+            if ticket_id_exists_at_a_different_path(
                 &context.worktree,
+                &context.item_id,
                 &path,
-                serialized.as_bytes(),
                 operation,
                 &context.root,
+            )? {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::OccupiedItemPath,
+                    "the ticket ID already exists at a different ticket path",
+                ));
+            }
+            let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
+            let ticket = match intent {
+                ContextIntent::Create => canonical::Ticket {
+                    id: context.item_id.clone(),
+                    title: request.draft.title,
+                    ticket_type: request.draft.ticket_type,
+                    status: request.draft.status,
+                    project: request.draft.project,
+                    team: request.draft.team,
+                    closed_at: None,
+                    closed_by: None,
+                    body: request.draft.body,
+                    unknown: serde_yaml::Mapping::new(),
+                },
+                ContextIntent::Edit => {
+                    let canonical::CanonicalItem::Ticket(mut ticket) =
+                        read_owned_item(&context.worktree, &path, operation, &context.root)?
+                    else {
+                        return Err(authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::MissingAuthoringTarget,
+                            "the ticket path does not contain a canonical ticket",
+                        ));
+                    };
+                    if ticket.id != context.item_id {
+                        return Err(authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::MissingAuthoringTarget,
+                            "the ticket ID does not match the selected target",
+                        ));
+                    }
+                    ticket.title = request.draft.title;
+                    ticket.ticket_type = request.draft.ticket_type;
+                    ticket.status = request.draft.status;
+                    ticket.project = request.draft.project;
+                    ticket.team = request.draft.team;
+                    ticket.body = request.draft.body;
+                    ticket
+                }
+            };
+            let serialized =
+                canonical::serialize_item(&canonical::CanonicalItem::Ticket(ticket.clone()))
+                    .map_err(|problem| {
+                        authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::InvalidPath,
+                            problem.message,
+                        )
+                    })?;
+            let canonical::CanonicalItem::Ticket(parsed) =
+                canonical::parse_item(&path, &serialized).map_err(|problem| {
+                    authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::InvalidPath,
+                        problem.message,
+                    )
+                })?
+            else {
+                unreachable!("serialized ticket parses as a ticket")
+            };
+            if parsed.id != context.item_id {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::InvalidPath,
+                    "ticket ID does not match the selected target",
+                ));
+            }
+            let write = if exists {
+                let existing = read_owned_item(&context.worktree, &path, operation, &context.root)?;
+                if matches!(intent, ContextIntent::Create)
+                    && existing != canonical::CanonicalItem::Ticket(ticket.clone())
+                {
+                    return Err(authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::OccupiedItemPath,
+                        "the ticket path is occupied by different content",
+                    ));
+                }
+                existing != canonical::CanonicalItem::Ticket(ticket)
+            } else {
+                true
+            };
+            if write {
+                ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
+                self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
+                write_owned_document(
+                    &context.worktree,
+                    &path,
+                    serialized.as_bytes(),
+                    operation,
+                    &context.root,
+                )?;
+            }
+            let checkpoint = self.checkpoint_owned_paths(
+                &repository,
+                &context,
+                &identity,
+                CheckpointSpec {
+                    operation: RepositoryOperation::SaveTicket,
+                    subject: &format!("Checkpoint ticket {}", context.item_id),
+                    added_paths: &[path.as_path()],
+                    removed_source: None,
+                },
             )?;
-        }
-        let checkpoint = self.checkpoint_owned_paths(
-            &repository,
-            &context,
-            &identity,
-            CheckpointSpec {
-                operation: RepositoryOperation::SaveTicket,
-                subject: &format!("Checkpoint ticket {}", context.item_id),
-                added_paths: &[path.as_path()],
-                removed_source: None,
-            },
-        )?;
-        self.complete_lifecycle(&context.root, operation, record)?;
-        Ok(SaveOutcome::Saved {
-            context,
-            checkpoint,
-        })
+            Ok(SaveOutcome::Saved {
+                context,
+                checkpoint,
+            })
+        })();
+        self.finish_authoring_lifecycle(&root, operation, record, result)
     }
 
     pub fn submit_comment(
@@ -1783,197 +1816,199 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
-        if !matches!(request.target.intent, ContextIntent::Edit) {
-            return Err(authoring_error(
-                operation,
-                &request.target.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "comment submission requires an edit target",
-            ));
-        }
-        let context = match self.prepare_context_unlocked(
-            AuthoringTarget {
-                root: request.target.root,
-                kind: request.target.kind,
-                item_id: request.target.item_id,
-                intent: ContextIntent::Edit,
-                operation_id: request.target.operation_id,
-            },
-            Some(record),
-        )? {
-            ContextProvisionOutcome::Created(context)
-            | ContextProvisionOutcome::Reused(context) => context,
-        };
-        let publication = comment_publication_state(
-            read_configuration_for(&context.root, operation)?,
-            operation,
-            &context.root,
-        )?;
-        let context_content = canonical_context_at(&context.worktree, operation)?;
-        if !context_content
-            .items
-            .iter()
-            .any(|item| authoring_item_matches(item, &context))
-        {
-            return Err(authoring_error(
+        let result = (|| {
+            if !matches!(request.target.intent, ContextIntent::Edit) {
+                return Err(authoring_error(
+                    operation,
+                    &request.target.root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "comment submission requires an edit target",
+                ));
+            }
+            let context = match self.prepare_context_unlocked(
+                AuthoringTarget {
+                    root: request.target.root,
+                    kind: request.target.kind,
+                    item_id: request.target.item_id,
+                    intent: ContextIntent::Edit,
+                    operation_id: request.target.operation_id,
+                },
+                Some(record),
+            )? {
+                ContextProvisionOutcome::Created(context)
+                | ContextProvisionOutcome::Reused(context) => context,
+            };
+            let publication = comment_publication_state(
+                read_configuration_for(&context.root, operation)?,
                 operation,
                 &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "the selected context does not contain the requested canonical item",
-            ));
-        }
-        if let Some(parent_id) = &request.parent_id
-            && !context_content.items.iter().any(|item| {
-                matches!(item, canonical::CanonicalItem::Comment(comment)
-                    if &comment.id == parent_id && comment.item_id == context.item_id)
-            })
-        {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "the requested parent is not a conforming comment for the selected item",
-            ));
-        }
-        let path = PathBuf::from(format!(
-            ".manyhands/comments/{}/{}.md",
-            context.item_id, request.comment_id
-        ));
-        let existing_comment_paths =
-            canonical_comment_paths_for_id(&context.worktree, &request.comment_id, operation)?;
-        if canonical_context_has_item_id(&context_content, &request.comment_id)
-            && (existing_comment_paths.len() != 1 || existing_comment_paths[0] != path)
-        {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::OccupiedItemPath,
-                "the comment ID already exists at a different path",
-            ));
-        }
-
-        validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-        let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
-        let comment = if exists {
-            let canonical::CanonicalItem::Comment(comment) =
-                read_owned_item(&context.worktree, &path, operation, &context.root)?
-            else {
+            )?;
+            let context_content = canonical_context_at(&context.worktree, operation)?;
+            if !context_content
+                .items
+                .iter()
+                .any(|item| authoring_item_matches(item, &context))
+            {
                 return Err(authoring_error(
                     operation,
                     &context.root,
-                    RepositoryErrorKind::OccupiedItemPath,
-                    "the comment path is occupied by a different canonical item",
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "the selected context does not contain the requested canonical item",
                 ));
-            };
-            if comment.id != request.comment_id
-                || comment.item_id != context.item_id
-                || comment.parent_id != request.parent_id
-                || comment.body != request.body
-                || !comment.unknown.is_empty()
+            }
+            if let Some(parent_id) = &request.parent_id
+                && !context_content.items.iter().any(|item| {
+                    matches!(item, canonical::CanonicalItem::Comment(comment)
+                    if &comment.id == parent_id && comment.item_id == context.item_id)
+                })
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "the requested parent is not a conforming comment for the selected item",
+                ));
+            }
+            let path = PathBuf::from(format!(
+                ".manyhands/comments/{}/{}.md",
+                context.item_id, request.comment_id
+            ));
+            let existing_comment_paths =
+                canonical_comment_paths_for_id(&context.worktree, &request.comment_id, operation)?;
+            if canonical_context_has_item_id(&context_content, &request.comment_id)
+                && (existing_comment_paths.len() != 1 || existing_comment_paths[0] != path)
             {
                 return Err(authoring_error(
                     operation,
                     &context.root,
                     RepositoryErrorKind::OccupiedItemPath,
-                    "the comment path is occupied by different content",
+                    "the comment ID already exists at a different path",
                 ));
             }
-            comment
-        } else {
-            canonical::Comment {
-                id: request.comment_id.clone(),
-                item_id: context.item_id.clone(),
-                parent_id: request.parent_id.clone(),
-                created_at: OffsetDateTime::now_utc(),
-                body: request.body.clone(),
-                unknown: serde_yaml::Mapping::new(),
-            }
-        };
-        let serialized = canonical::serialize_item(&canonical::CanonicalItem::Comment(comment))
-            .map_err(|problem| {
-                authoring_error(
-                    operation,
-                    &context.root,
-                    RepositoryErrorKind::InvalidPath,
-                    problem.message,
-                )
-            })?;
-        let mut context_sources = Vec::new();
-        collect_canonical_sources(&context.worktree, &mut context_sources, operation)?;
-        if !exists {
+
+            validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
             ensure_expected_owned_observation(
                 &context.worktree,
                 &path,
                 &request.expected_destination,
                 operation,
-                &context.root,
+                &context,
             )?;
-            context_sources.push((path.clone(), serialized.clone()));
-        }
-        let validated = canonical::validate_context(context_sources);
-        if !validated.problems.is_empty() {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "the selected context contains nonconforming canonical content",
-            ));
-        }
-        if !validated.items.iter().any(|item| {
-            matches!(item, canonical::CanonicalItem::Comment(comment)
+            let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
+            let comment = if exists {
+                let canonical::CanonicalItem::Comment(comment) =
+                    read_owned_item(&context.worktree, &path, operation, &context.root)?
+                else {
+                    return Err(authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::OccupiedItemPath,
+                        "the comment path is occupied by a different canonical item",
+                    ));
+                };
+                if comment.id != request.comment_id
+                    || comment.item_id != context.item_id
+                    || comment.parent_id != request.parent_id
+                    || comment.body != request.body
+                    || !comment.unknown.is_empty()
+                {
+                    return Err(authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::OccupiedItemPath,
+                        "the comment path is occupied by different content",
+                    ));
+                }
+                comment
+            } else {
+                canonical::Comment {
+                    id: request.comment_id.clone(),
+                    item_id: context.item_id.clone(),
+                    parent_id: request.parent_id.clone(),
+                    created_at: OffsetDateTime::now_utc(),
+                    body: request.body.clone(),
+                    unknown: serde_yaml::Mapping::new(),
+                }
+            };
+            let serialized = canonical::serialize_item(&canonical::CanonicalItem::Comment(comment))
+                .map_err(|problem| {
+                    authoring_error(
+                        operation,
+                        &context.root,
+                        RepositoryErrorKind::InvalidPath,
+                        problem.message,
+                    )
+                })?;
+            let mut context_sources = Vec::new();
+            collect_canonical_sources(&context.worktree, &mut context_sources, operation)?;
+            if !exists {
+                context_sources.push((path.clone(), serialized.clone()));
+            }
+            let validated = canonical::validate_context(context_sources);
+            if !validated.problems.is_empty() {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "the selected context contains nonconforming canonical content",
+                ));
+            }
+            if !validated.items.iter().any(|item| {
+                matches!(item, canonical::CanonicalItem::Comment(comment)
                 if comment.id == request.comment_id
                     && comment.item_id == context.item_id
                     && comment.parent_id == request.parent_id
                     && comment.body == request.body)
-        }) {
-            return Err(authoring_error(
-                operation,
-                &context.root,
-                RepositoryErrorKind::MissingAuthoringTarget,
-                "the submitted comment is not conforming in the selected context",
-            ));
-        }
+            }) {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "the submitted comment is not conforming in the selected context",
+                ));
+            }
 
-        let repository = Repository::open(&context.worktree)
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let config = repository
-            .config()
-            .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
-        let effective_config = effective_config.unwrap_or(&config);
-        let Some(identity) =
-            resolve_identity(&config, effective_config, &context.worktree, operation)?
-        else {
-            self.complete_lifecycle(&context.root, operation, record)?;
-            return Ok(CommentSubmissionOutcome::IdentityRequired { context });
-        };
-        if !exists {
-            self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
-            ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-            write_owned_document(
-                &context.worktree,
-                &path,
-                serialized.as_bytes(),
-                operation,
-                &context.root,
+            let repository = Repository::open(&context.worktree).map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let config = repository.config().map_err(|error| {
+                RepositoryError::git(operation, Some(context.root.clone()), error)
+            })?;
+            let effective_config = effective_config.unwrap_or(&config);
+            let Some(identity) =
+                resolve_identity(&config, effective_config, &context.worktree, operation)?
+            else {
+                return Ok(CommentSubmissionOutcome::IdentityRequired { context });
+            };
+            if !exists {
+                self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
+                ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
+                write_owned_document(
+                    &context.worktree,
+                    &path,
+                    serialized.as_bytes(),
+                    operation,
+                    &context.root,
+                )?;
+            }
+            let checkpoint = self.checkpoint_owned_paths(
+                &repository,
+                &context,
+                &identity,
+                CheckpointSpec {
+                    operation,
+                    subject: &format!("Checkpoint comment {}", request.comment_id),
+                    added_paths: &[path.as_path()],
+                    removed_source: None,
+                },
             )?;
-        }
-        let checkpoint = self.checkpoint_owned_paths(
-            &repository,
-            &context,
-            &identity,
-            CheckpointSpec {
-                operation,
-                subject: &format!("Checkpoint comment {}", request.comment_id),
-                added_paths: &[path.as_path()],
-                removed_source: None,
-            },
-        )?;
-        self.complete_lifecycle(&context.root, operation, record)?;
-        Ok(CommentSubmissionOutcome::Saved {
-            context,
-            checkpoint,
-            publication,
-        })
+            Ok(CommentSubmissionOutcome::Saved {
+                context,
+                checkpoint,
+                publication,
+            })
+        })();
+        self.finish_authoring_lifecycle(&root, operation, record, result)
     }
 
     fn check_failure(
@@ -2089,6 +2124,26 @@ impl RepositoryService {
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         advance_after_observation(&connection, record.id, "completed", None, None)
             .map_err(|error| error.for_operation(operation, root))
+    }
+
+    fn finish_authoring_lifecycle<T>(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+        result: Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
+        match result {
+            Ok(value) => {
+                self.complete_lifecycle(root, operation, record)?;
+                Ok(value)
+            }
+            Err(error) if error.kind != RepositoryErrorKind::InjectedFailure => {
+                self.complete_lifecycle(root, operation, record)?;
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn advance_lifecycle(
@@ -4932,14 +4987,21 @@ fn ensure_expected_owned_observation(
     relative: &Path,
     expected: &ExpectedPathObservation,
     operation: RepositoryOperation,
-    repository_root: &Path,
+    context: &ItemContext,
 ) -> Result<(), RepositoryError> {
-    if observe_owned_regular_file(root, relative, operation, repository_root)? != *expected {
-        return Err(authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::ExternalChange,
-            "an owned path changed after it was observed",
+    if observe_owned_regular_file(root, relative, operation, &context.root)? != *expected {
+        return Err(RepositoryError::external_change_error(
+            ExternalChangeDiagnostic {
+                root: context.root.clone(),
+                operation,
+                item_id: context.item_id.clone(),
+                context: context.worktree.clone(),
+                path: relative.to_owned(),
+                expectation: match expected {
+                    ExpectedPathObservation::Missing => ExternalChangeExpectation::Missing,
+                    ExpectedPathObservation::Blake3(_) => ExternalChangeExpectation::Changed,
+                },
+            },
         ));
     }
     Ok(())
@@ -6980,6 +7042,7 @@ fn registry_refresh_pending(
         message: "Git remote configuration is authoritative; local registry refresh is pending"
             .to_owned(),
         source: Some(Box::new(error)),
+        external_change: None,
     }
 }
 

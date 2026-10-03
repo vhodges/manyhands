@@ -2082,7 +2082,9 @@ fn document_completed_move_retry_is_a_noop_without_its_old_source() {
 
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
     assert!(!context.worktree.join("docs/source.md").exists());
-    let outcome = enabled.service.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = enabled.service.save_document(retry).unwrap();
 
     assert!(matches!(
         outcome,
@@ -2127,7 +2129,9 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
 
-    let outcome = failing.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = failing.save_document(retry).unwrap();
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
@@ -2141,7 +2145,9 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
         Some(commit_oid)
     );
 
-    let outcome = enabled.service.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = enabled.service.save_document(retry).unwrap();
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
@@ -4858,8 +4864,13 @@ fn document_request_with_operation_id(
             title: title.to_owned(),
             body: body.to_owned(),
         },
-        expected_source: None,
-        expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
+        expected_source: source_path
+            .map(|path| expected_context_observation(root, &support::document_id(), path)),
+        expected_destination: expected_context_observation(
+            root,
+            &support::document_id(),
+            destination_path,
+        ),
     }
 }
 
@@ -4906,7 +4917,11 @@ fn ticket_request_with_operation_id(
             team: Some("core".to_owned()),
             body: body.to_owned(),
         },
-        expected_path: manyhands::repository::ExpectedPathObservation::Missing,
+        expected_path: expected_context_observation(
+            root,
+            &support::ticket_id(),
+            ticket_relative_path(),
+        ),
     }
 }
 
@@ -4936,11 +4951,34 @@ fn comment_request(
     body: &str,
 ) -> SubmitCommentRequest {
     SubmitCommentRequest {
-        target: target(root, kind, item_id, intent),
-        comment_id,
+        target: target(root, kind, item_id.clone(), intent),
+        comment_id: comment_id.clone(),
         parent_id,
         body: body.to_owned(),
-        expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
+        expected_destination: expected_context_observation(
+            root,
+            &item_id,
+            comment_relative_path(&item_id, &comment_id),
+        ),
+    }
+}
+
+fn expected_context_observation(
+    root: &std::path::Path,
+    item_id: &manyhands::canonical::ItemId,
+    relative: impl AsRef<std::path::Path>,
+) -> manyhands::repository::ExpectedPathObservation {
+    let context_root = root.join(".manyhands/worktrees").join(item_id.to_string());
+    let path = if context_root.exists() {
+        context_root.join(relative.as_ref())
+    } else {
+        root.join(relative)
+    };
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            manyhands::repository::ExpectedPathObservation::from_bytes(&fs::read(path).unwrap())
+        }
+        _ => manyhands::repository::ExpectedPathObservation::Missing,
     }
 }
 
@@ -5638,4 +5676,85 @@ fn document_same_id_different_move_source_is_an_operation_mismatch() {
     let _ = enabled.service.save_document(request("docs/one.md"));
     let error = document_error(enabled.service.save_document(request("docs/two.md")));
     assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
+
+#[test]
+fn externally_populated_missing_document_destination_is_redacted_external_change() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let item_id = support::document_id();
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                item_id.clone(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let destination = context.worktree.join("docs/new.md");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::write(
+        &destination,
+        canonical_document("External", "secret external body\n"),
+    )
+    .unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        "docs/new.md",
+        "Requested",
+        "secret draft body\n",
+    );
+    request.expected_destination = manyhands::repository::ExpectedPathObservation::Missing;
+    let error = document_error(enabled.service.save_document(request));
+
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().expect("external-change diagnostic");
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.item_id, item_id);
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(diagnostic.path, std::path::PathBuf::from("docs/new.md"));
+    assert_eq!(
+        diagnostic.expectation,
+        manyhands::repository::ExternalChangeExpectation::Missing
+    );
+    assert!(!format!("{error:?}").contains("secret"));
+    assert!(!format!("{error}").contains("secret"));
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+#[test]
+fn rejected_authoring_request_does_not_strand_a_pending_lifecycle_record() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+
+    let rejected = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/missing.md"),
+        "docs/new.md",
+        "Rejected",
+        "Body\n",
+    )));
+    assert_eq!(rejected.kind, RepositoryErrorKind::MissingAuthoringTarget);
+
+    assert!(matches!(
+        enabled.service.save_document(document_request(
+            &fixture.root,
+            ContextIntent::Create,
+            None,
+            "docs/new.md",
+            "Accepted",
+            "Body\n",
+        )),
+        Ok(SaveOutcome::Saved { .. })
+    ));
 }
