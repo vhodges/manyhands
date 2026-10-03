@@ -2098,14 +2098,16 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Moved body\n",
+            operation_id,
         )
     };
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
@@ -2216,14 +2218,16 @@ fn recovery_document_before_item_write_preserves_absent_destination_for_retry() 
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2281,14 +2285,16 @@ fn recovery_document_before_item_write_preserves_existing_owned_bytes_for_retry(
     );
     let path = context.worktree.join("docs/edit.md");
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/edit.md"),
             "docs/edit.md",
             "Changed",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2361,14 +2367,16 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
     );
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2451,14 +2459,16 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
@@ -2502,14 +2512,16 @@ fn document_missing_registration_reports_refresh_pending_without_duplicate_commi
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
@@ -3095,12 +3107,14 @@ fn ticket_exact_create_retry_checkpoints_pending_work_then_noops() {
     let path = ticket_path(&context);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, canonical_ticket("Retry", "Retry body\n")).unwrap();
+    let operation_id = support::new_operation_id();
     let request = || {
-        ticket_request(
+        ticket_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             "Retry",
             "Retry body\n",
+            operation_id,
         )
     };
 
@@ -3124,7 +3138,16 @@ fn ticket_missing_registration_is_refresh_pending_without_another_commit() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
-    let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+    let operation_id = support::new_operation_id();
+    let request = || {
+        ticket_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Create,
+            "Title",
+            "Body\n",
+            operation_id,
+        )
+    };
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_ticket(request()).unwrap());
     enabled
         .service
@@ -3152,7 +3175,16 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
-    let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+    let operation_id = support::new_operation_id();
+    let request = || {
+        ticket_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Create,
+            "Title",
+            "Body\n",
+            operation_id,
+        )
+    };
     enabled
         .service
         .with_registry_connection_for_testing(|connection| {
@@ -3302,7 +3334,16 @@ fn recovery_ticket_write_and_checkpoint_failures_preserve_retryable_state() {
             &[ticket_relative_path().to_str().unwrap()],
         );
         let failing = support::FailOnce::at(point).open_service(enabled.data_directory.path());
-        let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+        let operation_id = support::new_operation_id();
+        let request = || {
+            ticket_request_with_operation_id(
+                &fixture.root,
+                ContextIntent::Create,
+                "Title",
+                "Body\n",
+                operation_id,
+            )
+        };
 
         assert_eq!(
             ticket_error(failing.save_ticket(request())).kind,
@@ -3705,8 +3746,9 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
+        comment_request_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
@@ -3714,6 +3756,7 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
             support::root_comment_id(),
             None,
             "Retry\n",
+            operation_id,
         )
     };
     let (context, commit_oid, _) =
@@ -3945,8 +3988,9 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
+        comment_request_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
@@ -3954,6 +3998,7 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
             support::root_comment_id(),
             None,
             "Body\n",
+            operation_id,
         )
     };
 
@@ -4039,8 +4084,9 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     config.remove("user.email").unwrap();
     drop(config);
     let effective = Config::new().unwrap();
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
+        comment_request_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
@@ -4048,6 +4094,7 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
             support::root_comment_id(),
             None,
             "Body\n",
+            operation_id,
         )
     };
     let outcome = enabled
@@ -4209,8 +4256,9 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
+        comment_request_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
@@ -4218,6 +4266,7 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
             support::root_comment_id(),
             None,
             "Body\n",
+            operation_id,
         )
     };
     enabled
@@ -4286,8 +4335,9 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
+        comment_request_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
@@ -4295,6 +4345,7 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
             support::root_comment_id(),
             None,
             "Body\n",
+            operation_id,
         )
     };
 
@@ -4814,8 +4865,24 @@ fn ticket_request(
     title: &str,
     body: &str,
 ) -> SaveTicketRequest {
+    ticket_request_with_operation_id(root, intent, title, body, support::new_operation_id())
+}
+
+fn ticket_request_with_operation_id(
+    root: &std::path::Path,
+    intent: ContextIntent,
+    title: &str,
+    body: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> SaveTicketRequest {
     SaveTicketRequest {
-        target: target(root, AuthoringKind::Ticket, support::ticket_id(), intent),
+        target: target_with_operation_id(
+            root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            intent,
+            operation_id,
+        ),
         draft: TicketDraft {
             title: title.to_owned(),
             ticket_type: "feature".to_owned(),
@@ -4853,8 +4920,30 @@ fn comment_request(
     parent_id: Option<manyhands::canonical::ItemId>,
     body: &str,
 ) -> SubmitCommentRequest {
+    comment_request_with_operation_id(
+        root,
+        kind,
+        item_id,
+        intent,
+        comment_id,
+        parent_id,
+        body,
+        support::new_operation_id(),
+    )
+}
+
+fn comment_request_with_operation_id(
+    root: &std::path::Path,
+    kind: AuthoringKind,
+    item_id: manyhands::canonical::ItemId,
+    intent: ContextIntent,
+    comment_id: manyhands::canonical::ItemId,
+    parent_id: Option<manyhands::canonical::ItemId>,
+    body: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> SubmitCommentRequest {
     SubmitCommentRequest {
-        target: target(root, kind, item_id, intent),
+        target: target_with_operation_id(root, kind, item_id, intent, operation_id),
         comment_id,
         parent_id,
         body: body.to_owned(),

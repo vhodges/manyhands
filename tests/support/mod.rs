@@ -400,6 +400,10 @@ pub fn operation_id() -> OperationId {
     OperationId::new()
 }
 
+pub fn new_operation_id() -> OperationId {
+    operation_id()
+}
+
 pub fn enable_request(root: &Path) -> EnableRepositoryRequest {
     enable_request_with_operation_id(root, operation_id())
 }

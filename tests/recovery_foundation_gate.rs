@@ -38,3 +38,14 @@ fn default_fixture_ids_are_unique_and_retry_ids_are_explicitly_shared() {
     assert_ne!(first_default.operation_id, second_default.operation_id);
     assert_eq!(initial.operation_id, retry.operation_id);
 }
+
+#[test]
+fn reconstructed_enable_retry_requires_a_shared_operation_id() {
+    let root = std::path::Path::new("/repository");
+    let operation_id = support::new_operation_id();
+
+    assert_eq!(
+        support::enable_request_with_operation_id(root, operation_id).operation_id,
+        support::enable_request_with_operation_id(root, operation_id).operation_id
+    );
+}
