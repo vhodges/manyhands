@@ -14,9 +14,9 @@ use manyhands::repository::{
     ContextIntent, CreateRepositoryRequest, DocumentDraft, EnableRepositoryOutcome,
     ExpectedPathObservation, FailurePoint, IndexPending, LeaseKind, LifecycleLeasePhase,
     OperationId, PublicationRemoteOutcome, RebuildRepositoryRequest, RecoveryInspection,
-    RefreshRepositoryRequest, RemoveRegistrationOutcome, RemoveRegistrationRequest,
-    RemoveRemoteRequest, RepositoryErrorKind, RepositoryService, SaveDocumentRequest, SaveOutcome,
-    SetPublicationRemoteRequest,
+    RefreshRepositoryRequest, RemoteChange, RemoteOutcome, RemoveRegistrationOutcome,
+    RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
+    SaveDocumentRequest, SaveOutcome, SetPublicationRemoteRequest,
 };
 use rusqlite::{Connection, params};
 
@@ -1374,6 +1374,102 @@ fn index_pending_enable_replays_only_discovery_after_initialization_commit() {
         EnableRepositoryOutcome::AlreadyEnabled
     );
     assert_eq!(commit_count(&fixture.repository), 2);
+    assert!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .repository_snapshot(&fixture.root)
+            .is_ok()
+    );
+}
+
+#[test]
+fn remote_index_pending_replay_preserves_the_authoritative_change() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    RepositoryService::open_at(data.path())
+        .unwrap()
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let request = AddRemoteRequest {
+        root: fixture.root.clone(),
+        name: "origin".to_owned(),
+        url: "git@example.invalid:project.git".to_owned(),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+
+    assert!(matches!(
+        failing.add_remote(request.clone()).unwrap(),
+        RemoteOutcome::IndexPending {
+            authoritative: RemoteChange::Changed
+        }
+    ));
+    assert_eq!(fixture.repository.remotes().unwrap().len(), 1);
+    drop(failing);
+
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .add_remote(request)
+            .unwrap(),
+        RemoteOutcome::Changed
+    );
+    assert_eq!(fixture.repository.remotes().unwrap().len(), 1);
+    assert!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .repository_snapshot(&fixture.root)
+            .is_ok()
+    );
+}
+
+#[test]
+fn publication_index_pending_replay_preserves_the_authoritative_commit() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    setup
+        .add_remote(AddRemoteRequest {
+            root: fixture.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:project.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index
+        .add_path(std::path::Path::new(".manyhands/config.toml"))
+        .unwrap();
+    index.write().unwrap();
+    let request = SetPublicationRemoteRequest {
+        root: fixture.root.clone(),
+        name: Some("origin".to_owned()),
+        operation_id: OperationId::new(),
+    };
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+
+    let PublicationRemoteOutcome::IndexPending {
+        commit_oid: Some(commit_oid),
+    } = failing.set_publication_remote(request.clone()).unwrap()
+    else {
+        panic!("expected discovery to remain pending");
+    };
+    assert_eq!(commit_count(&fixture.repository), 3);
+    drop(failing);
+
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .set_publication_remote(request)
+            .unwrap(),
+        PublicationRemoteOutcome::Changed { commit_oid }
+    );
+    assert_eq!(commit_count(&fixture.repository), 3);
     assert!(
         RepositoryService::open_at(data.path())
             .unwrap()

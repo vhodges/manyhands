@@ -38,7 +38,8 @@ use discovery::{
 };
 use recovery::{
     RecoveryRecord, advance_after_observation, begin_or_reconcile_operation, claim_indexing,
-    pending_for_root, record_persisted_context as record_recovery_context,
+    pending_for_root, record_persisted_context as record_recovery_context, touch_indexing,
+    transition_indexing,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -183,6 +184,7 @@ pub struct RepositoryService {
     failure_point: Mutex<Option<FailurePoint>>,
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -548,6 +550,9 @@ pub struct DiscoveryProblem {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RefreshOutcome {
+    IndexPending {
+        root: PathBuf,
+    },
     Refreshed {
         snapshot: RepositorySnapshot,
     },
@@ -875,17 +880,32 @@ impl RepositoryService {
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        // Only establish durable recovery state while holding the common Git lease.
-        // Filesystem and Git observation intentionally happens after this scope.
         let (repository_id, record) = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
-            (
-                registered_repository_id(&self.registry_path, &root, operation)?,
-                begin_operation(&self.registry_path, &root, operation, request.operation_id)?,
-            )
+            let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
+            let Some(record) = self.claim_refresh_indexing(&root, request.operation_id)? else {
+                return Ok(RefreshOutcome::IndexPending { root });
+            };
+            (repository_id, record)
         };
-        let operation_id = record.id;
-        let before = observe_root(&repository, &root);
+        self.run_refresh_claim_hook();
+        let result =
+            self.refresh_repository_claimed(&repository, root.clone(), repository_id, record.id);
+        if result.is_err() {
+            let _ = set_refresh_operation(&self.registry_path, record.id, "failed", None, &root);
+        }
+        result
+    }
+
+    fn refresh_repository_claimed(
+        &self,
+        repository: &Repository,
+        root: PathBuf,
+        repository_id: i64,
+        operation_id: i64,
+    ) -> Result<RefreshOutcome, RepositoryError> {
+        let operation = RepositoryOperation::RefreshRepository;
+        let before = observe_root(repository, &root);
         if let Err(error) =
             self.check_failure(FailurePoint::AfterContextObservation, operation, &root)
         {
@@ -907,10 +927,8 @@ impl RepositoryService {
         {
             hook();
         }
-        // Reacquire only to close the observation window and publish its stable result.
-        let _repository_lease = repository_lease(&repository, &root, operation)?;
-        let after = observe_root(&repository, &root);
-        set_refresh_operation(&self.registry_path, operation_id, "observed", None, &root)?;
+        let after = observe_root(repository, &root);
+        touch_refresh_index_owner(&self.registry_path, operation_id, &root)?;
         if let Err(error) =
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)
         {
@@ -2562,7 +2580,7 @@ impl RepositoryService {
         root: &Path,
         operation: RepositoryOperation,
         record: RecoveryRecord,
-        operation_id: OperationId,
+        _operation_id: OperationId,
         lease: RepositoryLease,
     ) -> Result<bool, RepositoryError> {
         self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
@@ -2570,15 +2588,22 @@ impl RepositoryService {
             return Ok(false);
         }
         drop(lease);
-        match self.refresh_repository(RefreshRepositoryRequest {
-            root: root.to_owned(),
-            operation_id,
-        }) {
-            Ok(RefreshOutcome::Refreshed { .. }) => {
-                self.complete_lifecycle(root, operation, record)?;
-                Ok(true)
+        let refresh = (|| {
+            let repository_id = registered_repository_id(&self.registry_path, root, operation)?;
+            let (repository, root) = canonical_repository_root(root, operation)?;
+            self.refresh_repository_claimed(&repository, root, repository_id, record.id)
+        })();
+        if refresh
+            .as_ref()
+            .is_err_and(|error| error.kind != RepositoryErrorKind::RepositoryNotRegistered)
+        {
+            let _ = set_refresh_operation(&self.registry_path, record.id, "failed", None, root);
+        }
+        match refresh {
+            Ok(RefreshOutcome::Refreshed { .. }) => Ok(true),
+            Ok(RefreshOutcome::RetryRequired { .. } | RefreshOutcome::IndexPending { .. }) => {
+                Ok(false)
             }
-            Ok(RefreshOutcome::RetryRequired { .. }) => Ok(false),
             Err(error)
                 if matches!(
                     error.kind,
@@ -2590,7 +2615,7 @@ impl RepositoryService {
                 Ok(false)
             }
             Err(error) if error.kind == RepositoryErrorKind::RepositoryNotRegistered => {
-                self.complete_lifecycle(root, operation, record)?;
+                set_refresh_operation(&self.registry_path, record.id, "completed", None, root)?;
                 Ok(true)
             }
             Err(error) => Err(error),
@@ -2611,6 +2636,28 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         claim_indexing(&connection, record.id).map_err(|error| error.for_operation(operation, root))
+    }
+
+    fn claim_refresh_indexing(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+    ) -> Result<Option<RecoveryRecord>, RepositoryError> {
+        let operation = RepositoryOperation::RefreshRepository;
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        let record =
+            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, "")
+                .map_err(|error| error.for_operation(operation, root))?;
+        if claim_indexing(&connection, record.id)
+            .map_err(|error| error.for_operation(operation, root))?
+        {
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
     }
 
     fn require_index_available(
@@ -2756,6 +2803,7 @@ impl RepositoryService {
             failure_point: Mutex::new(None),
             lifecycle_lease_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
+            refresh_claim_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
             corrupt_cache_decision_hook: Mutex::new(None),
             corrupt_cache_critical_hook: Mutex::new(None),
@@ -3042,6 +3090,18 @@ impl RepositoryService {
         if config.publication_remote == request.name {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
+            if !record.is_pending
+                && (record.completed_step == Some("publication_committed")
+                    || request.name.is_some())
+            {
+                let commit_oid = repository
+                    .head()
+                    .and_then(|head| head.peel_to_commit())
+                    .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?
+                    .id();
+                self.complete_lifecycle(&root, operation, record)?;
+                return Ok(PublicationRemoteOutcome::Changed { commit_oid });
+            }
             if record.is_pending {
                 let changed = record.completed_step == Some("publication_committed");
                 let commit_oid = repository
@@ -3824,6 +3884,25 @@ impl RepositoryService {
     }
 
     #[doc(hidden)]
+    pub fn set_refresh_claim_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .refresh_claim_hook
+            .lock()
+            .expect("test refresh-claim hook lock") = Some(Box::new(hook));
+    }
+
+    fn run_refresh_claim_hook(&self) {
+        if let Some(hook) = self
+            .refresh_claim_hook
+            .lock()
+            .expect("test refresh-claim hook lock")
+            .take()
+        {
+            hook();
+        }
+    }
+
+    #[doc(hidden)]
     pub fn set_lifecycle_lease_hook_for_testing(
         &self,
         phase: LifecycleLeasePhase,
@@ -4246,8 +4325,38 @@ fn set_refresh_operation(
         cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    advance_after_observation(&connection, operation_id, state, context, None)
+    if !transition_indexing(&connection, operation_id, state, context)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        return Err(RepositoryError::new(
+            RepositoryOperation::RefreshRepository,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RecoveryRequired,
+            "the repository refresh no longer owns indexing",
+        ));
+    }
+    Ok(())
+}
+
+fn touch_refresh_index_owner(
+    registry_path: &Path,
+    operation_id: i64,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let _cache_guard =
+        cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
+    let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
+    if !touch_indexing(&connection, operation_id)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        return Err(RepositoryError::new(
+            RepositoryOperation::RefreshRepository,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RecoveryRequired,
+            "the repository refresh no longer owns indexing",
+        ));
+    }
     Ok(())
 }
 

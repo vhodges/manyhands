@@ -361,6 +361,7 @@ pub(super) fn advance_after_observation(
                completed_step = CASE
                     WHEN ?2 = 'completed' THEN COALESCE(completed_step, 'completed')
                     WHEN ?2 IN ('indexing', 'observed', 'failed', 'persisted') THEN completed_step
+                    WHEN ?2 = 'authoritative_observed' THEN COALESCE(completed_step, ?2)
                     ELSE ?2
                END,
                context_path = ?3,
@@ -385,11 +386,40 @@ pub(super) fn claim_indexing(
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = 'indexing', observed_at = ?2
-             WHERE id = ?1 AND state IN (
-                'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
-                'publication_committed', 'initialization_committed', 'authoritative_observed',
-                'failed', 'observed', 'persisted'
+              WHERE id = ?1 AND state IN (
+                 'created', 'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
+                 'publication_committed', 'initialization_committed', 'authoritative_observed',
+                 'failed', 'observed', 'persisted', 'retry'
              )",
+            params![record_id, now()],
+        )
+        .map_err(RepositoryError::sqlite)?
+        == 1)
+}
+
+pub(super) fn transition_indexing(
+    connection: &Connection,
+    record_id: i64,
+    state: &str,
+    context: Option<&Path>,
+) -> Result<bool, RepositoryError> {
+    Ok(connection
+        .execute(
+            "UPDATE operation_records SET state = ?2, context_path = ?3, observed_at = ?4
+             WHERE id = ?1 AND state = 'indexing'",
+            params![record_id, state, context.and_then(Path::to_str), now()],
+        )
+        .map_err(RepositoryError::sqlite)?
+        == 1)
+}
+
+pub(super) fn touch_indexing(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<bool, RepositoryError> {
+    Ok(connection
+        .execute(
+            "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing'",
             params![record_id, now()],
         )
         .map_err(RepositoryError::sqlite)?
@@ -404,9 +434,8 @@ pub(super) fn record_persisted_context(
     connection
         .execute(
             "UPDATE operation_records
-         SET state = 'persisted', completed_step = 'persisted', context_path = ?2,
-             persisted_context_count = persisted_context_count + 1, observed_at = ?3
-         WHERE id = ?1",
+         SET context_path = ?2, persisted_context_count = persisted_context_count + 1, observed_at = ?3
+          WHERE id = ?1 AND state = 'indexing'",
             params![record_id, context.to_str(), now()],
         )
         .map_err(RepositoryError::sqlite)?;

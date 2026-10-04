@@ -81,6 +81,53 @@ fn retry_requests_retain_the_same_operation_id() {
     assert_eq!(initial.operation_id, retry.operation_id);
 }
 
+#[test]
+fn concurrent_refreshes_with_the_same_operation_id_have_one_index_owner() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    second_service.set_observation_hook_for_testing(|| panic!("non-owner must not scan"));
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    enabled.service.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    let outcomes = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        claimed_receive.recv().unwrap();
+        let second = scope.spawn(|| {
+            second_service.refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        release_send.send(()).unwrap();
+        [
+            first.join().unwrap().unwrap(),
+            second.join().unwrap().unwrap(),
+        ]
+    });
+
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RefreshOutcome::Refreshed { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RefreshOutcome::IndexPending { .. }))
+            .count(),
+        1
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct AvailableState {
     head: Option<git2::Oid>,
