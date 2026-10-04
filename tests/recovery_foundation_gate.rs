@@ -1341,6 +1341,40 @@ fn enable_replay_after_initialization_commit_retains_commit_and_registers_once()
 }
 
 #[test]
+fn index_pending_enable_replays_only_discovery_after_initialization_commit() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let request = support::enable_request_with_operation_id(&fixture.root, OperationId::new());
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+
+    let EnableRepositoryOutcome::IndexPending(IndexPending {
+        authoritative: commit_oid,
+    }) = failing.enable(request.clone()).unwrap()
+    else {
+        panic!("expected discovery to remain pending");
+    };
+    assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
+    assert_eq!(commit_count(&fixture.repository), 2);
+    drop(failing);
+
+    assert_eq!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .enable(request)
+            .unwrap(),
+        EnableRepositoryOutcome::AlreadyEnabled
+    );
+    assert_eq!(commit_count(&fixture.repository), 2);
+    assert!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .repository_snapshot(&fixture.root)
+            .is_ok()
+    );
+}
+
+#[test]
 fn publication_remote_replay_after_configuration_commit_retains_selection_and_registers_once() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();

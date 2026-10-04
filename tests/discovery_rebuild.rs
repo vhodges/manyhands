@@ -606,7 +606,7 @@ fn refresh_sqlite_context_write_failure_preserves_git_and_recovers() {
     assert_eq!(fixture.repository.head().unwrap().target(), head);
     assert_eq!(support::index_bytes(&fixture.repository).unwrap(), index);
     assert!(
-        enabled
+        !enabled
             .service
             .repository_snapshot(&fixture.root)
             .unwrap()
@@ -657,7 +657,7 @@ fn refresh_after_observation_failure_preserves_prior_rows_for_retry() {
         RepositoryErrorKind::InjectedFailure
     );
     assert!(
-        initial
+        !initial
             .repository_snapshot(&fixture.root)
             .unwrap()
             .refresh_required

@@ -314,6 +314,7 @@ pub struct ItemContext {
 pub enum ContextProvisionOutcome {
     Created(ItemContext),
     Reused(ItemContext),
+    IndexPending { context: ItemContext },
 }
 
 #[derive(Clone)]
@@ -372,6 +373,10 @@ pub enum SaveOutcome {
         context: ItemContext,
         checkpoint: LocalCheckpoint,
     },
+    IndexPending {
+        context: ItemContext,
+        checkpoint: LocalCheckpoint,
+    },
 }
 
 pub enum CommentPublicationState {
@@ -384,6 +389,11 @@ pub enum CommentSubmissionOutcome {
         context: ItemContext,
     },
     Saved {
+        context: ItemContext,
+        checkpoint: LocalCheckpoint,
+        publication: CommentPublicationState,
+    },
+    IndexPending {
         context: ItemContext,
         checkpoint: LocalCheckpoint,
         publication: CommentPublicationState,
@@ -426,11 +436,19 @@ pub enum EnableRepositoryOutcome {
     Enabled { commit_oid: git2::Oid },
     AlreadyEnabled,
     IdentityRequired,
+    IndexPending(IndexPending<git2::Oid>),
     RegistrationPending { commit_oid: git2::Oid },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RemoteOutcome {
+    Changed,
+    NoChange,
+    IndexPending { authoritative: RemoteChange },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RemoteChange {
     Changed,
     NoChange,
 }
@@ -440,6 +458,7 @@ pub enum PublicationRemoteOutcome {
     Changed { commit_oid: git2::Oid },
     NoChange,
     RegistrationPending { commit_oid: git2::Oid },
+    IndexPending { commit_oid: Option<git2::Oid> },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1070,6 +1089,7 @@ impl RepositoryService {
         target: AuthoringTarget,
     ) -> Result<ContextProvisionOutcome, RepositoryError> {
         let operation = RepositoryOperation::PrepareContext;
+        let operation_id = target.operation_id;
         self.require_index_available(operation, Some(&target.root))?;
         let (repository, root) = canonical_repository_root(&target.root, operation)?;
         match read_configuration_for(&root, operation)? {
@@ -1091,7 +1111,7 @@ impl RepositoryService {
                 ));
             }
         }
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             operation,
@@ -1107,6 +1127,27 @@ impl RepositoryService {
                 return Err(error);
             }
         };
+        let authoritative =
+            matches!(outcome, ContextProvisionOutcome::Created(_)) || record.is_pending;
+        if authoritative {
+            let context = match outcome {
+                ContextProvisionOutcome::Created(context)
+                | ContextProvisionOutcome::Reused(context) => context,
+                ContextProvisionOutcome::IndexPending { context } => context,
+            };
+            return if self.handoff_post_authoritative(
+                &root,
+                operation,
+                record,
+                operation_id,
+                lease,
+            )? {
+                Ok(ContextProvisionOutcome::Created(context))
+            } else {
+                Ok(ContextProvisionOutcome::IndexPending { context })
+            };
+        }
+        drop(lease);
         self.complete_lifecycle(&root, operation, record)?;
         Ok(outcome)
     }
@@ -1314,7 +1355,7 @@ impl RepositoryService {
             source_target_path.as_path(),
             request.destination_path.as_path(),
         ];
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,
@@ -1334,7 +1375,8 @@ impl RepositoryService {
                 Some(record),
             )? {
                 ContextProvisionOutcome::Created(context)
-                | ContextProvisionOutcome::Reused(context) => context,
+                | ContextProvisionOutcome::Reused(context)
+                | ContextProvisionOutcome::IndexPending { context } => context,
             };
             if !matches!(context.kind, AuthoringKind::Document) {
                 return Err(authoring_error(
@@ -1617,7 +1659,36 @@ impl RepositoryService {
                 checkpoint,
             })
         })();
-        self.finish_authoring_lifecycle(&root, operation, record, result)
+        match result {
+            Ok(SaveOutcome::Saved {
+                context,
+                checkpoint,
+            }) if !matches!(checkpoint, LocalCheckpoint::NoChange) || record.is_pending => {
+                if self.handoff_post_authoritative(
+                    &root,
+                    operation,
+                    record,
+                    request.target.operation_id,
+                    lease,
+                )? {
+                    Ok(SaveOutcome::Saved {
+                        context,
+                        checkpoint,
+                    })
+                } else {
+                    Ok(SaveOutcome::IndexPending {
+                        context,
+                        checkpoint,
+                    })
+                }
+            }
+            Ok(value) => {
+                drop(lease);
+                self.complete_lifecycle(&root, operation, record)?;
+                Ok(value)
+            }
+            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+        }
     }
 
     pub fn save_ticket(&self, request: SaveTicketRequest) -> Result<SaveOutcome, RepositoryError> {
@@ -1641,7 +1712,7 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveTicket;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,
@@ -1661,7 +1732,8 @@ impl RepositoryService {
                 Some(record),
             )? {
                 ContextProvisionOutcome::Created(context)
-                | ContextProvisionOutcome::Reused(context) => context,
+                | ContextProvisionOutcome::Reused(context)
+                | ContextProvisionOutcome::IndexPending { context } => context,
             };
             if !matches!(context.kind, AuthoringKind::Ticket) {
                 return Err(authoring_error(
@@ -1856,7 +1928,36 @@ impl RepositoryService {
                 checkpoint,
             })
         })();
-        self.finish_authoring_lifecycle(&root, operation, record, result)
+        match result {
+            Ok(SaveOutcome::Saved {
+                context,
+                checkpoint,
+            }) if !matches!(checkpoint, LocalCheckpoint::NoChange) || record.is_pending => {
+                if self.handoff_post_authoritative(
+                    &root,
+                    operation,
+                    record,
+                    request.target.operation_id,
+                    lease,
+                )? {
+                    Ok(SaveOutcome::Saved {
+                        context,
+                        checkpoint,
+                    })
+                } else {
+                    Ok(SaveOutcome::IndexPending {
+                        context,
+                        checkpoint,
+                    })
+                }
+            }
+            Ok(value) => {
+                drop(lease);
+                self.complete_lifecycle(&root, operation, record)?;
+                Ok(value)
+            }
+            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+        }
     }
 
     pub fn submit_comment(
@@ -1885,7 +1986,7 @@ impl RepositoryService {
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
             operation,
@@ -1912,7 +2013,8 @@ impl RepositoryService {
                 Some(record),
             )? {
                 ContextProvisionOutcome::Created(context)
-                | ContextProvisionOutcome::Reused(context) => context,
+                | ContextProvisionOutcome::Reused(context)
+                | ContextProvisionOutcome::IndexPending { context } => context,
             };
             let publication = comment_publication_state(
                 read_configuration_for(&context.root, operation)?,
@@ -2116,7 +2218,39 @@ impl RepositoryService {
                 publication,
             })
         })();
-        self.finish_authoring_lifecycle(&root, operation, record, result)
+        match result {
+            Ok(CommentSubmissionOutcome::Saved {
+                context,
+                checkpoint,
+                publication,
+            }) if !matches!(checkpoint, LocalCheckpoint::NoChange) || record.is_pending => {
+                if self.handoff_post_authoritative(
+                    &root,
+                    operation,
+                    record,
+                    request.target.operation_id,
+                    lease,
+                )? {
+                    Ok(CommentSubmissionOutcome::Saved {
+                        context,
+                        checkpoint,
+                        publication,
+                    })
+                } else {
+                    Ok(CommentSubmissionOutcome::IndexPending {
+                        context,
+                        checkpoint,
+                        publication,
+                    })
+                }
+            }
+            Ok(value) => {
+                drop(lease);
+                self.complete_lifecycle(&root, operation, record)?;
+                Ok(value)
+            }
+            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+        }
     }
 
     fn check_failure(
@@ -2208,6 +2342,7 @@ impl RepositoryService {
             return Ok(RecoveryRecord {
                 id: 0,
                 is_new: true,
+                is_pending: false,
                 completed_step: None,
             });
         }
@@ -2422,6 +2557,43 @@ impl RepositoryService {
             .map_err(|_| ())
     }
 
+    fn handoff_post_authoritative(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+        operation_id: OperationId,
+        lease: RepositoryLease,
+    ) -> Result<bool, RepositoryError> {
+        self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
+        drop(lease);
+        match self.refresh_repository(RefreshRepositoryRequest {
+            root: root.to_owned(),
+            operation_id,
+        }) {
+            Ok(RefreshOutcome::Refreshed { .. }) => {
+                self.complete_lifecycle(root, operation, record)?;
+                Ok(true)
+            }
+            Ok(RefreshOutcome::RetryRequired { .. }) => Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind,
+                    RepositoryErrorKind::InjectedFailure
+                        | RepositoryErrorKind::Sqlite
+                        | RepositoryErrorKind::IndexUnavailable
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) if error.kind == RepositoryErrorKind::RepositoryNotRegistered => {
+                self.complete_lifecycle(root, operation, record)?;
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn require_index_available(
         &self,
         operation: RepositoryOperation,
@@ -2609,11 +2781,21 @@ impl RepositoryService {
         )?;
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
-                mark_registered_refresh_required(
-                    &self.registry_path,
-                    &root,
-                    RepositoryOperation::AddRemote,
-                )?;
+                if record.is_pending {
+                    return if self.handoff_post_authoritative(
+                        &root,
+                        RepositoryOperation::AddRemote,
+                        record,
+                        request.operation_id,
+                        _lease,
+                    )? {
+                        Ok(RemoteOutcome::NoChange)
+                    } else {
+                        Ok(RemoteOutcome::IndexPending {
+                            authoritative: RemoteChange::NoChange,
+                        })
+                    };
+                }
                 self.complete_lifecycle(&root, RepositoryOperation::AddRemote, record)?;
                 return Ok(RemoteOutcome::NoChange);
             }
@@ -2651,13 +2833,19 @@ impl RepositoryService {
             RepositoryOperation::AddRemote,
             &root,
         )?;
-        mark_registered_refresh_required(
-            &self.registry_path,
+        if self.handoff_post_authoritative(
             &root,
             RepositoryOperation::AddRemote,
-        )?;
-        self.complete_lifecycle(&root, RepositoryOperation::AddRemote, record)?;
-        Ok(RemoteOutcome::Changed)
+            record,
+            request.operation_id,
+            _lease,
+        )? {
+            Ok(RemoteOutcome::Changed)
+        } else {
+            Ok(RemoteOutcome::IndexPending {
+                authoritative: RemoteChange::Changed,
+            })
+        }
     }
 
     pub fn remove_remote(
@@ -2692,11 +2880,21 @@ impl RepositoryService {
         match repository.find_remote(name) {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
-                mark_registered_refresh_required(
-                    &self.registry_path,
-                    &root,
-                    RepositoryOperation::RemoveRemote,
-                )?;
+                if record.is_pending {
+                    return if self.handoff_post_authoritative(
+                        &root,
+                        RepositoryOperation::RemoveRemote,
+                        record,
+                        request.operation_id,
+                        _lease,
+                    )? {
+                        Ok(RemoteOutcome::NoChange)
+                    } else {
+                        Ok(RemoteOutcome::IndexPending {
+                            authoritative: RemoteChange::NoChange,
+                        })
+                    };
+                }
                 self.complete_lifecycle(&root, RepositoryOperation::RemoveRemote, record)?;
                 return Ok(RemoteOutcome::NoChange);
             }
@@ -2722,13 +2920,19 @@ impl RepositoryService {
             RepositoryOperation::RemoveRemote,
             &root,
         )?;
-        mark_registered_refresh_required(
-            &self.registry_path,
+        if self.handoff_post_authoritative(
             &root,
             RepositoryOperation::RemoveRemote,
-        )?;
-        self.complete_lifecycle(&root, RepositoryOperation::RemoveRemote, record)?;
-        Ok(RemoteOutcome::Changed)
+            record,
+            request.operation_id,
+            _lease,
+        )? {
+            Ok(RemoteOutcome::Changed)
+        } else {
+            Ok(RemoteOutcome::IndexPending {
+                authoritative: RemoteChange::Changed,
+            })
+        }
     }
 
     pub fn set_publication_remote(
@@ -2801,6 +3005,19 @@ impl RepositoryService {
         if config.publication_remote == request.name {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
+            if record.is_pending {
+                return if self.handoff_post_authoritative(
+                    &root,
+                    operation,
+                    record,
+                    request.operation_id,
+                    _lease,
+                )? {
+                    Ok(PublicationRemoteOutcome::NoChange)
+                } else {
+                    Ok(PublicationRemoteOutcome::IndexPending { commit_oid: None })
+                };
+            }
             self.complete_lifecycle(&root, operation, record)?;
             return Ok(PublicationRemoteOutcome::NoChange);
         }
@@ -2890,8 +3107,19 @@ impl RepositoryService {
         self.advance_lifecycle(&root, operation, record, "publication_committed")?;
         match self.reconcile_registration(&repository, &root, operation) {
             Ok(()) => {
-                self.complete_lifecycle(&root, operation, record)?;
-                Ok(PublicationRemoteOutcome::Changed { commit_oid })
+                if self.handoff_post_authoritative(
+                    &root,
+                    operation,
+                    record,
+                    request.operation_id,
+                    _lease,
+                )? {
+                    Ok(PublicationRemoteOutcome::Changed { commit_oid })
+                } else {
+                    Ok(PublicationRemoteOutcome::IndexPending {
+                        commit_oid: Some(commit_oid),
+                    })
+                }
             }
             Err(_) => Ok(PublicationRemoteOutcome::RegistrationPending { commit_oid }),
         }
@@ -3184,7 +3412,7 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::Enable)?;
         registry_root_key(&root, RepositoryOperation::Enable)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             RepositoryOperation::Enable,
@@ -3257,6 +3485,32 @@ impl RepositoryService {
                     ));
                 }
                 ensure_worktree_exclusion(&repository, &root)?;
+                if record.completed_step == Some("authoritative_observed") {
+                    let commit_oid = repository
+                        .head()
+                        .and_then(|head| head.peel_to_commit())
+                        .map_err(|error| {
+                            RepositoryError::git(
+                                RepositoryOperation::Enable,
+                                Some(root.clone()),
+                                error,
+                            )
+                        })?
+                        .id();
+                    return if self.handoff_post_authoritative(
+                        &root,
+                        RepositoryOperation::Enable,
+                        record,
+                        request.operation_id,
+                        lease,
+                    )? {
+                        Ok(EnableRepositoryOutcome::AlreadyEnabled)
+                    } else {
+                        Ok(EnableRepositoryOutcome::IndexPending(IndexPending::new(
+                            commit_oid,
+                        )))
+                    };
+                }
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
                 self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                 return Ok(EnableRepositoryOutcome::AlreadyEnabled);
@@ -3403,8 +3657,19 @@ impl RepositoryService {
         )?;
         match self.reconcile_registration(&repository, &root, RepositoryOperation::Enable) {
             Ok(()) => {
-                self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
-                Ok(EnableRepositoryOutcome::Enabled { commit_oid })
+                if self.handoff_post_authoritative(
+                    &root,
+                    RepositoryOperation::Enable,
+                    record,
+                    request.operation_id,
+                    lease,
+                )? {
+                    Ok(EnableRepositoryOutcome::Enabled { commit_oid })
+                } else {
+                    Ok(EnableRepositoryOutcome::IndexPending(IndexPending::new(
+                        commit_oid,
+                    )))
+                }
             }
             Err(_) => Ok(EnableRepositoryOutcome::RegistrationPending { commit_oid }),
         }
@@ -7649,24 +7914,6 @@ fn configuration_tree(
     index
         .write_tree_to(repository)
         .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))
-}
-
-fn mark_registered_refresh_required(
-    registry_path: &Path,
-    root: &Path,
-    operation: RepositoryOperation,
-) -> Result<(), RepositoryError> {
-    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
-    let root_path = registry_root_key(root, operation)?;
-    let connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| registry_refresh_pending(operation, root, error))?;
-    connection
-        .execute(
-            "UPDATE repositories SET refresh_required = 1 WHERE root_path = ?1",
-            [root_path],
-        )
-        .map_err(|error| registry_refresh_pending(operation, root, error))?;
-    Ok(())
 }
 
 fn mark_document_refresh_required(

@@ -960,7 +960,7 @@ fn enable_born_main_writes_canonical_config_exclusion_and_single_file_commit() {
     assert_eq!(row.0, "accessible");
     assert!(!row.1.is_empty());
     assert_eq!(row.1, entry.id().to_string());
-    assert_eq!(row.2, 1);
+    assert_eq!(row.2, 0);
     assert!(row.3 > 0);
 }
 
@@ -1089,7 +1089,7 @@ fn remote_mutations_refresh_registered_rows_and_preserve_authoritative_git_on_re
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    assert_eq!(registry_row(data.path(), &root).unwrap().2, 1);
+    assert_eq!(registry_row(data.path(), &root).unwrap().2, 0);
     Connection::open(&registry)
         .unwrap()
         .execute(
@@ -1100,27 +1100,24 @@ fn remote_mutations_refresh_registered_rows_and_preserve_authoritative_git_on_re
     service
         .remove_remote(remove_remote_request(&fixture.root, "origin"))
         .unwrap();
-    assert_eq!(registry_row(data.path(), &root).unwrap().2, 1);
+    assert_eq!(registry_row(data.path(), &root).unwrap().2, 0);
 
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
-    let add_error = service
+    let add_pending = service
         .add_remote(add_remote_request(
             &fixture.root,
             "origin",
             "git@example.invalid:project.git",
         ))
-        .unwrap_err();
-    assert_eq!(add_error.kind, RepositoryErrorKind::RegistryRefreshPending);
+        .unwrap();
+    assert!(matches!(add_pending, RemoteOutcome::IndexPending { .. }));
     assert!(fixture.repository.find_remote("origin").is_ok());
 
-    let remove_error = service
+    let remove_pending = service
         .remove_remote(remove_remote_request(&fixture.root, "origin"))
-        .unwrap_err();
-    assert_eq!(
-        remove_error.kind,
-        RepositoryErrorKind::RegistryRefreshPending
-    );
+        .unwrap();
+    assert!(matches!(remove_pending, RemoteOutcome::IndexPending { .. }));
     assert!(fixture.repository.find_remote("origin").is_err());
 }
 
@@ -2791,7 +2788,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
         }
         let registry = registry_row(data.path(), root).unwrap();
         assert_eq!(registry.0, "accessible");
-        assert_eq!(registry.2, 1);
+        assert_eq!(registry.2, 0);
         assert!(!registry.1.is_empty());
         assert_eq!(registry.1, head_configuration_oid(&repository).to_string());
         assert_eq!(registry_row_count(data.path()), registrations_before + 1);
@@ -2889,7 +2886,7 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
         registry.1,
         head_configuration_oid(&fixture.repository).to_string()
     );
-    assert_eq!(registry.2, 1);
+    assert_eq!(registry.2, 0);
 }
 
 #[test]

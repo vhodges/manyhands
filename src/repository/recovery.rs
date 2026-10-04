@@ -11,6 +11,7 @@ use super::{
 pub(super) struct RecoveryRecord {
     pub(super) id: i64,
     pub(super) is_new: bool,
+    pub(super) is_pending: bool,
     #[allow(dead_code)]
     pub(super) completed_step: Option<&'static str>,
 }
@@ -234,8 +235,9 @@ pub(super) fn begin_or_reconcile_operation(
         if existing_root != root_path {
             return Err(mismatch(operation, root));
         }
-        if !same_lifecycle_action(existing_action, action)
-            || existing_target.as_deref() != Some(target)
+        if !(same_lifecycle_action(existing_action, action)
+            || action == "refresh" && existing_action != "refresh")
+            || action != "refresh" && existing_target.as_deref() != Some(target)
         {
             return Err(mismatch(operation, root));
         }
@@ -263,8 +265,9 @@ pub(super) fn begin_or_reconcile_operation(
         let mut matching = None;
         for (id, existing_id, existing_action, existing_target) in pending {
             if existing_id.as_deref() == Some(&requested)
-                && same_lifecycle_action(&existing_action, action)
-                && existing_target.as_deref() == Some(target)
+                && (same_lifecycle_action(&existing_action, action)
+                    || action == "refresh" && existing_action != "refresh")
+                && (action == "refresh" || existing_target.as_deref() == Some(target))
                 || existing_id.is_none()
                     && matches!(
                         (existing_action.as_str(), action),
@@ -281,6 +284,7 @@ pub(super) fn begin_or_reconcile_operation(
             return Ok(RecoveryRecord {
                 id,
                 is_new: false,
+                is_pending: true,
                 completed_step: existing
                     .as_ref()
                     .and_then(|(_, _, _, _, _, completed_step)| completed_step.as_deref())
@@ -294,6 +298,7 @@ pub(super) fn begin_or_reconcile_operation(
         return Ok(RecoveryRecord {
             id,
             is_new: false,
+            is_pending: false,
             completed_step: completed_step
                 .as_deref()
                 .and_then(authoring_observation_step),
@@ -319,6 +324,7 @@ pub(super) fn begin_or_reconcile_operation(
     Ok(RecoveryRecord {
         id,
         is_new: true,
+        is_pending: false,
         completed_step: None,
     })
 }
@@ -329,6 +335,7 @@ fn authoring_observation_step(step: &str) -> Option<&'static str> {
         "document_destination_observed" => Some("document_destination_observed"),
         "document_move_observed" => Some("document_move_observed"),
         "authoring_checkpoint_observed" => Some("authoring_checkpoint_observed"),
+        "authoritative_observed" => Some("authoritative_observed"),
         _ => None,
     }
 }

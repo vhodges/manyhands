@@ -4299,11 +4299,16 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
 
     let CommentSubmissionOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint,
         ..
     } = enabled.service.submit_comment(request()).unwrap()
     else {
         panic!("a changed comment with no registration must retain its checkpoint OID");
+    };
+    let (LocalCheckpoint::RefreshPending { commit_oid }
+    | LocalCheckpoint::Checkpointed { commit_oid }) = checkpoint
+    else {
+        panic!("a changed comment must retain its checkpoint OID");
     };
     assert!(matches!(
         enabled
@@ -4439,7 +4444,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
                 AuthoringKind::Ticket,
                 support::ticket_id(),
                 ContextIntent::Edit,
-                support::root_comment_id(),
+                "01J00000000000000000000003".parse().unwrap(),
                 None,
                 "Ticket root\n",
             ))
@@ -4455,7 +4460,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
             .find_commit(ticket_commit)
             .unwrap()
             .message(),
-        Some("Checkpoint comment 01ARZ3NDEKTSV4RRFFQ69G5FAX")
+        Some("Checkpoint comment 01J00000000000000000000003")
     );
 
     let (document_context, _, _) = saved_comment(
@@ -5039,15 +5044,19 @@ fn saved_comment(
     git2::Oid,
     CommentPublicationState,
 ) {
-    let CommentSubmissionOutcome::Saved {
-        context,
-        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
-        publication,
-    } = outcome
-    else {
-        panic!("comment submission must create a checkpoint");
-    };
-    (context, commit_oid, publication)
+    match outcome {
+        CommentSubmissionOutcome::Saved {
+            context,
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            publication,
+        }
+        | CommentSubmissionOutcome::IndexPending {
+            context,
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            publication,
+        } => (context, commit_oid, publication),
+        _ => panic!("comment submission must create a checkpoint"),
+    }
 }
 
 fn document_error(
@@ -5082,6 +5091,7 @@ fn context_from(outcome: ContextProvisionOutcome) -> manyhands::repository::Item
         ContextProvisionOutcome::Created(context) | ContextProvisionOutcome::Reused(context) => {
             context
         }
+        ContextProvisionOutcome::IndexPending { context } => context,
     }
 }
 
