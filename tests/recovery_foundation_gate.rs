@@ -2008,11 +2008,34 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                 let first = support::FailOnce::at(point).open_service(data.path());
                 assert!(first.enable(request.clone()).is_ok(), "{name}");
                 let retained = support::repository_and_worktree_snapshot(&fixture);
+                let pending_snapshot = first.repository_snapshot(&fixture.root).unwrap();
+                let pending_cache = support::registry_cache_state(data.path());
+                assert_eq!(pending_cache.repositories, 1, "{name}");
+                assert_eq!(pending_cache.contexts, 0, "{name}");
+                assert_eq!(pending_cache.items, 0, "{name}");
+                assert_eq!(pending_cache.comments, 0, "{name}");
+                assert_eq!(pending_cache.problems, 0, "{name}");
+                assert_eq!(pending_cache.operations.len(), 1, "{name}");
+                assert_eq!(pending_cache.operations[0].0, "enable", "{name}");
+                assert_ne!(pending_cache.operations[0].1, "completed", "{name}");
+                assert!(pending_snapshot.refresh_required, "{name}");
                 drop(first);
-                RepositoryService::open_at(data.path())
-                    .unwrap()
-                    .enable(request)
-                    .unwrap();
+                let retry = RepositoryService::open_at(data.path()).unwrap();
+                retry.enable(request).unwrap();
+                let converged_snapshot = retry.repository_snapshot(&fixture.root).unwrap();
+                let converged_cache = support::registry_cache_state(data.path());
+                assert_eq!(converged_snapshot.items, pending_snapshot.items, "{name}");
+                assert!(!converged_snapshot.refresh_required, "{name}");
+                assert_eq!(converged_cache.repositories, 1, "{name}");
+                assert_eq!(converged_cache.contexts, 1, "{name}");
+                assert_eq!(converged_cache.items, 0, "{name}");
+                assert_eq!(converged_cache.comments, 0, "{name}");
+                assert_eq!(converged_cache.problems, 0, "{name}");
+                assert_eq!(
+                    converged_cache.operations,
+                    vec![("enable".to_owned(), "completed".to_owned())],
+                    "{name}"
+                );
                 assert_eq!(
                     support::repository_and_worktree_snapshot(&fixture),
                     retained,
@@ -2033,10 +2056,22 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
     setup
         .enable(support::enable_request(&fixture.root))
         .unwrap();
+    const MARKDOWN_SENTINEL: &str = "SENTINEL-MARKDOWN-BODY-01ARZ3NDEKTSV4RRFFQ69G5FAZ";
+    const BLAKE3_SENTINEL: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const CREDENTIAL_SENTINEL: &str =
+        "https://diagnostic-user:diagnostic-password@example.invalid/repository.git";
+    const PRIVATE_KEY_SENTINEL: &str = "-----BEGIN PRIVATE KEY-----";
+    let sentinels = [
+        MARKDOWN_SENTINEL,
+        BLAKE3_SENTINEL,
+        CREDENTIAL_SENTINEL,
+        PRIVATE_KEY_SENTINEL,
+    ];
     fs::remove_file(data.path().join(manyhands::repository::REGISTRY_FILE)).unwrap();
     fs::write(
         data.path().join(manyhands::repository::REGISTRY_FILE),
-        b"not sqlite",
+        b"corrupt registry diagnostic",
     )
     .unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
@@ -2046,16 +2081,57 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
     };
     let first = support::FailOnce::at(FailurePoint::BeforeCorruptCacheReplacement)
         .open_service(data.path());
-    assert!(first.rebuild_repository(request.clone()).is_err());
+    let failure = first.rebuild_repository(request.clone()).unwrap_err();
+    let failure_output = format!("{failure:?}");
     drop(first);
-    RepositoryService::open_at(data.path())
-        .unwrap()
-        .rebuild_repository(request)
-        .unwrap();
+    let retry = RepositoryService::open_at(data.path()).unwrap();
+    retry.set_corrupt_cache_critical_hook_for_testing({
+        let data_directory = data.path().to_owned();
+        move || {
+            fs::write(
+                data_directory.join(format!("{}-wal", manyhands::repository::REGISTRY_FILE)),
+                b"corrupt wal diagnostic",
+            )
+            .unwrap();
+            fs::write(
+                data_directory.join(format!("{}-shm", manyhands::repository::REGISTRY_FILE)),
+                b"corrupt shm diagnostic",
+            )
+            .unwrap();
+        }
+    });
+    retry.rebuild_repository(request).unwrap();
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    support::assert_corrupt_diagnostics(
+        data.path(),
+        &[
+            ("", b"corrupt registry diagnostic".as_slice()),
+            ("-wal", b"corrupt wal diagnostic".as_slice()),
+            ("-shm", b"corrupt shm diagnostic".as_slice()),
+        ],
+        &sentinels,
+    );
+    support::assert_diagnostic_output_excludes(
+        &[
+            failure_output,
+            format!(
+                "{:?}",
+                RepositoryService::open_at(data.path())
+                    .unwrap()
+                    .recovery_inspection(&fixture.root)
+                    .unwrap()
+            ),
+        ],
+        &sentinels,
+    );
     support::assert_operation_records_exclude(
         data.path(),
-        &["not sqlite", "PRIVATE KEY", "password", "credential"],
+        &[
+            MARKDOWN_SENTINEL,
+            BLAKE3_SENTINEL,
+            CREDENTIAL_SENTINEL,
+            PRIVATE_KEY_SENTINEL,
+        ],
     );
 }
 

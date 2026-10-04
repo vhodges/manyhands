@@ -769,6 +769,92 @@ pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct RegistryCacheState {
+    pub repositories: i64,
+    pub contexts: i64,
+    pub items: i64,
+    pub comments: i64,
+    pub problems: i64,
+    pub operations: Vec<(String, String)>,
+}
+
+pub fn registry_cache_state(data_directory: &Path) -> RegistryCacheState {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let count = |table: &str| {
+        connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    let operations = connection
+        .prepare("SELECT action, state FROM operation_records ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    RegistryCacheState {
+        repositories: count("repositories"),
+        contexts: count("contexts"),
+        items: count("discovered_items"),
+        comments: count("discovered_comments"),
+        problems: count("problems"),
+        operations,
+    }
+}
+
+pub fn assert_corrupt_diagnostics(
+    data_directory: &Path,
+    expected: &[(&str, &[u8])],
+    forbidden: &[&str],
+) {
+    let prefix = format!("{}.corrupt-", manyhands::repository::REGISTRY_FILE);
+    let diagnostics = fs::read_dir(data_directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), expected.len());
+    for (suffix, bytes) in expected {
+        let artifact = diagnostics.iter().find(|(name, _)| {
+            if suffix.is_empty() {
+                name.starts_with(&prefix) && !name.ends_with("-wal") && !name.ends_with("-shm")
+            } else {
+                name.ends_with(suffix)
+            }
+        });
+        assert_eq!(artifact.map(|(_, bytes)| bytes.as_slice()), Some(*bytes));
+    }
+    for (_, bytes) in diagnostics {
+        assert_diagnostic_bytes_exclude(&bytes, forbidden);
+    }
+}
+
+pub fn assert_diagnostic_output_excludes(values: &[String], forbidden: &[&str]) {
+    for value in values {
+        assert_diagnostic_bytes_exclude(value.as_bytes(), forbidden);
+    }
+}
+
+fn assert_diagnostic_bytes_exclude(bytes: &[u8], forbidden: &[&str]) {
+    let value = String::from_utf8_lossy(bytes);
+    for forbidden in forbidden {
+        assert!(
+            !value.contains(forbidden),
+            "diagnostic retained forbidden value {forbidden:?}"
+        );
+    }
+}
+
 pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &Path) {
     let connection =
         Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
