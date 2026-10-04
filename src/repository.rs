@@ -2565,6 +2565,7 @@ impl RepositoryService {
         operation_id: OperationId,
         lease: RepositoryLease,
     ) -> Result<bool, RepositoryError> {
+        self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
         if !self.claim_lifecycle_indexing(root, operation, record)? {
             return Ok(false);
         }
