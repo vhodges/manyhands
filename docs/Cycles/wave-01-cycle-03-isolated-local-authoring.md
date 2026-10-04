@@ -103,7 +103,7 @@ operation records, or offer multiple local editing contexts for one item.
 | `tests/local_authoring.rs` | Add focused real-repository integration coverage for authoring, checkpointing, and recovery. |
 | `docs/Waves/wave-01-foundations.md` | Correct Cycle 03 and Cycle 04 scope to the approved one-local-context boundary. |
 | `docs/RFC/git-workflow-and-conflict-recovery.md` | Define the two-path staging boundary for a document move. |
-| `docs/RFC/repository-index-persistence-and-refresh.md` | Limit Wave 1 indexing to one deterministic local context per item and defer multiple-context choice state to Wave 2. |
+| `docs/RFC/repository-index-persistence-and-refresh.md` | Limit Wave 1 indexing to one deterministic local context per item and defer remote shared-context materialization to Wave 2. |
 
 No new runtime dependency is required. The public API MUST remain synchronous,
 headless shared domain logic. Git handles and temporary indexes MUST be opened
@@ -287,5 +287,5 @@ operation records without changing canonical Markdown or Git state.
 
 Cycle 05 adds the repository-scoped cross-process lease and proves restart and
 failure reconciliation across the completed Wave 1 lifecycle. Wave 2 owns
-remote context materialization and the user choice required when collaboration
-introduces multiple editable contexts.
+remote shared-context materialization and collaboration merge recovery; it does
+not introduce a multiple-editable-context choice result.

@@ -68,7 +68,7 @@ wording; this Cycle does not silently supersede either source.
 
 | Source | Required amendment | Reason |
 | --- | --- | --- |
-| `docs/RFC/git-workflow-and-conflict-recovery.md` | Replace the Wave 1 acceptance requirement that multiple contexts require selection with a recoverable duplicate or mismatched-context outcome. State that caller choice remains a Wave 2 remote-context protocol. | The Wave and Cycles 03/04 explicitly defer multiple-context choice to Wave 2. |
+| `docs/RFC/git-workflow-and-conflict-recovery.md` | Replace the Wave 1 acceptance requirement that multiple contexts require selection with a recoverable duplicate or mismatched-context outcome. State that Wave 2 retains one shared context branch rather than adding context choice. | The Wave and Cycles 03/04 explicitly defer remote materialization, not a second context identity. |
 | `docs/RFC/test-and-compatibility-strategy.md` | Replace the Wave 1 exit-gate requirement to expose a multiple-context choice state with evidence that duplicate or mismatched local contexts remain visible, preserved, and non-editable without a choice result. | The required test evidence must match the approved Wave 1 scope. |
 | `docs/RFC/repository-index-persistence-and-refresh.md` | Replace SQLite-only coordination with a repository-common-Git-directory advisory lease for repository actions, plus a narrow application-data cache-recovery guard for SQLite transactions and database replacement. | A corrupt or replaced SQLite database cannot safely host the only coordination lease. |
 | `docs/RFC/repository-index-persistence-and-refresh.md` | State that Cycle 05 extends Cycle 04's refresh/rebuild records to all Wave 1 lifecycle actions, while Git and canonical Markdown remain authoritative. | The Wave requires cross-lifecycle retry evidence, not just index recovery. |
@@ -132,8 +132,8 @@ wording; this Cycle does not silently supersede either source.
   lifecycle, filesystem watching, automatic retry scheduling, or cancellation
   UX. Future front ends and a daemon consume the typed domain outcomes.
 - A multiple-context choice result. Duplicate or mismatched deterministic
-  local contexts remain visible recovery problems until Wave 2 defines the
-  remote-context selection protocol.
+  local contexts remain visible recovery problems; Wave 2 retains the one
+  shared-context rule while adding remote materialization and merge recovery.
 - Automatic merge, last-writer-wins behavior, or automatic overwrite of
   externally edited Markdown. Direct filesystem authors do not acquire a
   Manyhands lease and remain external concurrent editors.

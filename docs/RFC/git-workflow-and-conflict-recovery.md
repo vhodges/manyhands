@@ -34,8 +34,11 @@ The desktop and CLI RFCs own interaction details, not lifecycle semantics.
 
 ## Git Backend
 
-All Git operations MUST use the Rust `git2` crate backed by libgit2. Manyhands
-MUST open a repository inside the background operation that uses it; repository
+All Manyhands product Git operations MUST use the Rust `git2` crate backed by
+libgit2. The test-only SSH Git server defined by the test strategy RFC may run
+Git protocol helpers for disposable fixture repositories; it is not a product
+runtime dependency. Manyhands MUST open a repository inside the background
+operation that uses it; repository
 handles and other libgit2 objects MUST NOT be retained in desktop model state or
 passed between threads.
 
@@ -104,10 +107,13 @@ When a user creates an item or starts editing an item:
 - With no local editable context, create the deterministic branch from the
   configured primary branch and add the deterministic worktree.
 - With exactly one local editable context, reuse it.
-- In Wave 1, a mismatched or duplicate expected local context is a recoverable
-  condition; no context choice is returned.
-- Wave 2 extends the protocol for multiple remote-materialized editable
-  contexts, returning each branch and worktree label for caller selection.
+- A mismatched, duplicate, malformed, renamed, or otherwise exceptional local
+  or remote context is a visible recovery condition; no context choice is
+  returned.
+- Wave 2 retains exactly one shared recognized context branch per item in a
+  local clone. Collaborators synchronize that branch and recover divergent work
+  through the merge protocol below; Wave 2 does not introduce a second context
+  identity or a caller context-selection result.
 
 Context creation MUST leave other worktrees, branches, and canonical item paths
 unchanged. In Cycle 03, a partially created deterministic branch or worktree is
@@ -156,19 +162,97 @@ Synchronization is deliberate except for the constrained polling behavior in
 the umbrella RFC. Wave 2 authentication supplies the configured shared SSH key
 and remote callbacks; this RFC defines the Git behavior after authentication.
 
-For item-context synchronization, Manyhands fetches the configured primary ref
-and matching `manyhands/<kind>/<id>` ref. It merges relevant fetched context and
-primary changes into the selected context when required, then publishes the
-current context when safe. It MUST NOT automatically rebase published commits.
+### Remote Refs
 
-For deliberate primary synchronization, Manyhands requires a clean primary
-worktree, fetches the configured primary ref, safely integrates it into local
-primary, and publishes the result. A dirty or conflicted primary worktree blocks
-the operation without staging, stashing, committing, discarding, or overwriting
-its changes.
+For a configured publication remote `R`, configured primary branch `P`, and
+shared item branch `C`, the authoritative remote refs are:
 
-Background polling may fetch and fast-forward only under the PRD conditions. It
-MUST NOT create checkpoints, merge, rebase, push, or clean up state.
+```text
+P = refs/heads/<primary-branch>
+C = refs/heads/manyhands/<kind>/<ULID>
+T(P) = refs/remotes/<R>/<primary-branch>
+T(C) = refs/remotes/<R>/manyhands/<kind>/<ULID>
+```
+
+The remote-tracking namespace is local metadata, never canonical content. A
+deliberate item synchronization fetches only `P` and its exact `C`; primary
+synchronization fetches only `P`; a poll fetches `P` and these two context
+families:
+
+```text
++refs/heads/<primary-branch>:refs/remotes/<R>/<primary-branch>
++refs/heads/manyhands/document/*:refs/remotes/<R>/manyhands/document/*
++refs/heads/manyhands/ticket/*:refs/remotes/<R>/manyhands/ticket/*
+```
+
+The leading `+` permits a remote-tracking ref to reflect a remote rewind; it
+does not permit a local branch or remote branch to be force-pushed. Before a
+poll prunes stale tracking refs, it records the advertised remote ref set and
+compares it with the preceding observation so a deleted remote context is
+visible rather than indistinguishable from a failed fetch.
+
+An absent `P` is a recoverable publication-remote problem and changes no local
+branch. An absent `C` for a context that has never been published permits first
+publication. An absent `C` that was previously observed as published is a
+remote-branch-deleted recovery state. It preserves the local context and
+requires explicit caller confirmation before republishing; neither polling nor
+an ordinary synchronization recreates it automatically.
+
+### Deliberate Item Synchronization
+
+Item synchronization requires a configured publication remote, selected and
+usable shared key, approved host trust, a recognized local context, and a clean,
+non-conflicted context worktree. After fetching, it re-observes `C`, `T(C)`, and
+`T(P)` before every local mutation:
+
+1. If `T(C)` exists, integrate it into `C`: fast-forward when local `C` is an
+   ancestor, make no change when `T(C)` is an ancestor, or create a non-rebase
+   merge when they diverge.
+2. If `T(P)` is not an ancestor of the resulting `C`, integrate it into `C`:
+   fast-forward when `C` is an ancestor or create a non-rebase merge otherwise.
+3. If `T(C)` was absent and `C` has never been published, use the result of step
+   2 as the first publication state. If it was previously published, return the
+   remote-branch-deleted outcome unless the caller supplied explicit republish
+   confirmation.
+4. Push `C:C` with an ordinary, non-force refspec. A server rejection or a
+   changed remote advertisement is recovery-required; the operation fetches and
+   reconciles before a later retry rather than overwriting remote work.
+5. Refresh discovery after the push is observed. A refresh failure returns index
+   pending and never repeats an observed push or merge.
+
+Merge commits use deterministic subjects that do not include user-authored
+titles:
+
+```text
+Merge remote context <ULID>
+Merge primary into <kind> <ULID>
+Resolve synchronization <kind> <ULID>
+```
+
+### Deliberate Primary Synchronization
+
+Primary synchronization requires a clean, non-conflicted primary worktree. It
+fetches `P`, then fast-forwards local `P` when it is an ancestor of `T(P)`, makes
+no local integration change when `T(P)` is an ancestor, or creates a non-rebase
+merge when they diverge. It pushes `P:P` with an ordinary non-force refspec and
+refreshes discovery after the push is observed. A dirty or conflicted primary
+worktree blocks the operation without staging, stashing, committing,
+discarding, or overwriting its changes.
+
+### Polling
+
+A poll is a remote lifecycle action, not an index-only refresh. It fetches the
+poll ref set, records remote observations, and then may fast-forward a local
+primary or existing context only when its worktree is clean, non-conflicted, and
+its local branch is strictly behind its matching tracking ref. It validates a
+new remote `C` from its fetched tree before creating exactly one local tracking
+branch and deterministic worktree for that context. It then invokes the
+non-mutating index refresh.
+
+Polling MUST NOT push, checkpoint, merge, rebase, force-update, stash,
+overwrite, discard, or clean up state. A dirty, divergent, conflicted,
+malformed, inaccessible, renamed, unrecognized, unmaterialized, or remotely
+deleted context remains locally preserved and visible with recovery guidance.
 
 ## Promotion, Closure, and Cleanup
 
@@ -183,9 +267,42 @@ Document promotion does not close the document. If no publication remote exists,
 the local merge and cleanup complete and the primary result is marked publish
 pending for later deliberate primary synchronization.
 
-A publication success followed by branch-deletion failure is a partial success.
-The operation record MUST permit a retry that performs cleanup only. No retry
-may duplicate a merge, checkpoint, or canonical content.
+A successful primary publication followed by remote context-branch deletion
+failure is a partial success. The local worktree and local context branch remain
+until the remote deletion succeeds, preventing a later poll from rematerializing
+a still-published context. The operation record MUST permit a retry that
+performs remote deletion followed by local cleanup only. Once remote deletion is
+observed, cleanup removes the local worktree before deleting the local context
+branch. No retry may duplicate a checkpoint, merge, primary publication, or
+canonical content.
+
+Remote branch deletion uses the observed remote context OID as its precondition.
+If the remote branch changed or deletion acknowledgement is ambiguous, cleanup
+stops and records recovery-required; it never deletes local context state based
+only on a stale record.
+
+## Remote Coordination And Cancellation
+
+The Wave 01 repository-common-Git-directory advisory lease remains limited to
+short local Git, filesystem, and SQLite transitions. Network transport, caller
+interaction, and full index scans MUST NOT hold it. Wave 02 adds a durable,
+repository-scoped remote-operation reservation with operation identity, action,
+manual-or-poll priority, phase, yield request, and cancellation state. The
+repository/index RFC owns its physical representation.
+
+A manual lifecycle request encountering an active poll records a yield request
+and returns a typed retryable `poll yielding` outcome. The poll checks for that
+request before transport, in transport progress callbacks, after fetch, between
+context observations, and before each local mutation. It aborts only at those
+safe points, releases its reservation, and records an interrupted poll state;
+it never abandons an in-progress short atomic transition. The retried manual
+operation takes a normal manual reservation and re-observes Git state.
+
+Cancellation follows the same safe-point rule. A cancelled operation reports
+whether it stopped before a durable transition or completed the current atomic
+step into a recoverable state. Every operation reacquires the short repository
+lease and re-observes refs, worktrees, and canonical paths after each network
+step and before changing local state.
 
 ## Conflict and Interruption Recovery
 
@@ -196,9 +313,21 @@ will define the interaction that edits a resolution and creates its recovery
 checkpoint before retrying the pending operation.
 
 The operation record has enough state to identify the repository, item when
-applicable, branch, worktree, action, completed steps, and last error. On the
-next use, reconciliation compares that record with actual Git refs, worktrees,
-and commits. Git state wins over a stale record.
+applicable, branch, worktree, action, publication remote, affected local and
+tracking refs, observed local and remote object IDs, completed steps,
+reservation/cancellation state, and redacted error category. It contains no
+credentials, passphrases, private-key data, remote response body, or Markdown
+draft. On the next use, reconciliation compares that record with actual Git
+refs, worktrees, commits, and canonical Markdown. Git state wins over a stale
+record.
+
+Conflict resolution requires a caller-supplied resolution and expected
+observations for every conflicted canonical path. After acquiring the short
+lease, Manyhands verifies those observations, validates the resolution, writes
+only the conflicted owned paths, creates the deterministic resolution checkpoint,
+and resumes only the recorded incomplete synchronization step. A changed
+observation returns external-change or recovery-required without overwriting
+the worktree.
 
 ## Wave 1 Acceptance
 
@@ -210,8 +339,8 @@ Wave 1 Git work is complete when real temporary repositories demonstrate:
   configuration before a commit.
 - Context creation uses the exact branch and worktree conventions and reuses
   one context. A mismatched or duplicate expected local context is visible and
-  recoverable without returning a choice result; Wave 2 owns caller selection
-  among multiple remote-materialized contexts.
+  recoverable without returning a choice result; Wave 2 retains that
+  one-shared-context rule for remote-materialized state.
 - Document, ticket, and comment checkpoints stage only their permitted paths,
   preserve unrelated changes, and never create empty commits.
 - Write, commit, index, and partial-context failures retain recoverable state

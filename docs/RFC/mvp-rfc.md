@@ -1,6 +1,6 @@
 ---
 title: "MVP/Dogfooding Architecture RFC"
-date: 2026-09-29
+date: 2026-10-04
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && OpenCode"
 manyhands_managed: true
@@ -13,7 +13,7 @@ manyhands_managed: true
 This RFC defines the architectural direction, consent boundaries, and delivery
 governance for the Manyhands collaboration-complete dogfooding release. It is
 the umbrella RFC for the approved product requirements in
-[`docs/PRD/mvp.md`](../PRD/mvp.md), version 0.3.
+[`docs/PRD/mvp.md`](../PRD/mvp.md), version 0.4.
 
 It resolves cross-cutting decisions that must be consistent across content,
 Git, credentials, indexing, desktop, and CLI work. It does not prescribe the
@@ -21,7 +21,7 @@ exact Markdown schema, file layout, database schema, command grammar, or UI
 components. Focused RFCs own those decisions within the constraints here.
 
 This RFC is `approved` and is an implementation authority. The PRD amendments
-recorded here are adopted in PRD version 0.3.
+recorded here are adopted in their stated approved PRD versions.
 
 ## Motivation
 
@@ -75,6 +75,7 @@ when product behavior changes, the PRD.
 | Publication remote | The optional, explicitly configured SSH remote to which Manyhands publishes collaboration work. |
 | Editing context | An item-specific Git branch and worktree used for an item's isolated edits. |
 | Checkpoint | An inspectable local Git commit containing a valid changed item or comment event. |
+| Index-only refresh | A read-only canonical scan and SQLite replacement. It does not perform a remote poll's authorized Git mutations. |
 | Synchronization | A deliberate operation that fetches relevant remote changes, safely integrates them into an editing context when possible, and publishes current work. |
 | Remote polling | An automatic, configured operation that fetches a publication remote, fast-forwards only clean local state, discovers recognized item contexts, and refreshes discovery. |
 | Primary synchronization | A deliberate repository-level operation that safely integrates and publishes the configured primary branch. |
@@ -185,7 +186,7 @@ deleted, renamed, malformed, or unrecognized remote context MUST remain
 unmodified locally and be surfaced with an actionable status. Remote deletion
 or invalidation MUST NOT remove an existing local worktree.
 
-PRD version 0.3 updates `MH-INDEX-002` so a configured polling refresh includes this remote
+PRD version 0.3 updates `MH-INDEX-002` so configured polling behavior includes this remote
 discovery and safe local update behavior rather than only an application-local
 index refresh.
 
@@ -207,6 +208,19 @@ pause and report an Unlock or Sync recovery action without mutating local work.
 
 The selected shared key remains subject to the existing generation, import,
 session-only passphrase retention, removal, and redaction requirements.
+
+### Shared Context And Index-Only Refresh
+
+PRD version 0.4 replaces multiple editable-context selection with one shared,
+deterministic `manyhands/<kind>/<ULID>` branch per item in each local clone.
+Collaborators synchronize that branch. Duplicate, mismatched, malformed, or
+otherwise exceptional context resources remain visible recovery state and never
+produce a context-choice result.
+
+PRD version 0.4 distinguishes a remote poll from an index-only refresh. A poll
+may perform only the Git mutations expressly authorized by the polling contract,
+then invokes an index-only refresh or rebuild that remains non-mutating with
+respect to canonical Markdown and Git state.
 
 ## MVP Operating Model
 
@@ -246,13 +260,17 @@ to select or configure an SSH remote.
 
 Markdown content, repository configuration defined by the canonical-schema
 RFC, and Git history are canonical. The application-local repository registry,
-SQLite index, key registration metadata, passphrases, UI state, and operation
-progress records are not canonical item content.
+SQLite index, key registration metadata, session-only passphrases, UI state, and
+operation progress records are not canonical item content. Session passphrases
+are never persisted.
 
-The SQLite index MUST remain rebuildable from accessible canonical state. It
-MUST NOT rewrite Markdown, commits, branches, worktrees, remotes, or Git
-configuration while refreshing or rebuilding. A lost or corrupt index cannot
-invalidate a checkpoint, promotion, closure, or locally recoverable draft.
+The SQLite index MUST remain rebuildable from accessible canonical state. An
+index-only refresh or rebuild MUST NOT rewrite Markdown, commits, branches,
+worktrees, remotes, or Git configuration. A remote poll is a distinct lifecycle
+operation: it may perform only the explicitly authorized fetch, clean
+fast-forward, and recognized-context materialization steps before invoking an
+index-only refresh. A lost or corrupt index cannot invalidate a checkpoint,
+promotion, closure, or locally recoverable draft.
 
 The repository/index RFC MUST define how interrupted lifecycle operations are
 reconciled without treating an index record as proof that a Git operation
@@ -262,13 +280,14 @@ repository disagree.
 ### Editing Contexts and Checkpoints
 
 Creating an item or editing an item that has no editable context MUST provision
-an item-specific branch and worktree. If exactly one local editable context
-exists, Manyhands MUST reuse it. If more than one exists, the user MUST choose
-one before editing continues. Every context displayed in a list or item view
-MUST be distinguishable by branch and worktree label.
+the one shared item-specific branch and worktree. A local clone reuses its one
+recognized shared context when it exists. Duplicate, mismatched, malformed, or
+otherwise exceptional local or remote context resources remain visible recovery
+states and never produce a context-choice result. Every displayed context and
+recovery state MUST identify its branch and worktree when available.
 
-The exact item identity, branch naming, worktree location, and detection of
-active contexts are delegated to the canonical-schema and Git-workflow RFCs.
+The exact item identity, branch naming, worktree location, and detection of the
+shared context are delegated to the canonical-schema and Git-workflow RFCs.
 Those RFCs MUST ensure that provisioning one context cannot silently mutate
 another item's content, metadata, or context.
 
@@ -504,7 +523,7 @@ remaining decision as a blocker rather than silently relying on an assumption.
 | Git workflow and conflict/recovery | Context naming and provisioning, remote-ref protocol, branch recognition, fast-forward preconditions, merge order, checkpoint messages, operation serialization, retry, interruption reconciliation, cleanup. | Wave 1 lifecycle work |
 | Repository/index persistence and refresh | Local registry, SQLite schema, scan/rebuild/refresh behavior, external changes, polling schedule/backoff, idempotent worktree materialization, scale limits. | Wave 1 discovery work |
 | Authentication and credential handling | Git identity prompt, shared-key generation/import/storage/removal, session passphrases, startup polling unlock, SSH-only transport, redaction. | Wave 2 remote work |
-| Desktop information architecture and editor | Navigation, open-item/context selection, accessible controls, polling status/pause/recovery, Markdown editing and conflict resolution. | Wave 3 desktop gate |
+| Desktop information architecture and editor | Navigation, open-item and context recovery presentation, accessible controls, polling status/pause/recovery, Markdown editing and conflict resolution. | Wave 3 desktop gate |
 | CLI contract | Command taxonomy, safe input/output boundaries, polling configuration/status and daemon mode, JSON schema, recovery states, exit statuses, conflict interaction. | Wave 3 CLI gate |
 | Test and compatibility strategy | Fixture repositories, polling and lifecycle fault injection, real remote journeys, cross-platform and Git matrix, performance limits. | Each Wave gate |
 
@@ -656,4 +675,6 @@ revision rather than accepted as an implementation limitation.
 | One shared SSH key is used for all MVP Git-over-SSH operations. | Adopted in PRD 0.3 | Supports startup unlock and safe unattended polling without per-remote key prompts. |
 | Generated-key removal unregisters by default. | Accepted | Avoids accidental private-key deletion. |
 | SSH publication remotes poll by default and fast-forward only clean local state. | Adopted in PRD 0.3 | Keeps discovered managed work current without background merge, publication, or cleanup. |
+| One shared deterministic context branch exists per item in each local clone. | Adopted in PRD 0.4 | Collaborators synchronize the same branch and recover conflicts rather than choosing among incompatible parallel contexts. |
+| Index-only refresh is distinct from a remote poll. | Adopted in PRD 0.4 | Preserves the canonical cache boundary while permitting the narrow remote updates the PRD authorizes before indexing. |
 | The CLI provides polling through a documented daemon mode. | Adopted in PRD 0.3 | Gives headless environments the same configured remote-update behavior without surprising one-shot invocations. |

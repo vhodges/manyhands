@@ -130,8 +130,8 @@ contacts a remote, or turns an invalid context into an editable one.
   item writing, checkpointing, synchronization, promotion, closure, or cleanup.
   Cycle 03 retains immediate Git-state retry behavior; Cycle 05 owns broader
   lifecycle reconciliation evidence and the cross-process repository lease.
-- Multiple editable-context choice, remote context discovery, and context
-  materialization. Wave 2 owns that protocol.
+- Remote context discovery and shared-context materialization. Wave 2 owns that
+  protocol; it does not introduce a multiple-editable-context choice result.
 - Automatic global restoration of all prior registrations after complete SQLite
   loss. A caller must provide each known root to explicit-root rebuild.
 
@@ -355,6 +355,6 @@ lease and prove recovery across the Wave 1 lifecycle. It MUST continue to treat
 Git and canonical Markdown as authoritative over SQLite.
 
 Wave 2 extends this model with remote polling, recognized remote-context
-materialization, and multiple-context choice. It MUST not reinterpret an
+materialization, and shared-branch merge recovery. It MUST not reinterpret an
 unverified or malformed local candidate as an editable context without an
 approved protocol amendment.

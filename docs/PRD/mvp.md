@@ -1,6 +1,6 @@
 ---
 title: "MVP/Dogfood PRD"
-date: 2026-09-29
+date: 2026-10-04
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
@@ -10,11 +10,19 @@ manyhands_managed: true
 
 **Status:** Approved MVP/Dogfooding release
 
-**Version:** 0.3
+**Version:** 0.4
 
 **Owner:** The product owner maintains this document. Requirement IDs are stable once published; changes to intent or acceptance criteria require an updated version and changelog entry.
 
 ## Changelog
+
+### 0.4 - 2026-10-04
+
+- Replaced multiple editable-context selection with one shared deterministic
+  context branch per item. Concurrent collaborators synchronize and recover
+  conflicts on that shared branch.
+- Distinguished non-mutating index refresh and rebuild from a remote poll's
+  explicitly authorized fetch, fast-forward, and worktree materialization.
 
 ### 0.3 - 2026-09-29
 
@@ -228,7 +236,10 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - Each displayed item shows its title, type and status when relevant, and the timestamp of its most recent content or metadata change.
 - When an item has an active editing context, that context is labeled with its branch and worktree clearly enough to distinguish it from the primary copy.
 - When exactly one active worktree contains an editable copy of the same item as a primary-branch copy, the list and item view display that active edit instead of the primary-branch copy.
-- When multiple active worktrees contain editable copies of the same item, the list displays each editable context distinctly with its branch or worktree label, and the user must choose a context before opening the item or continuing an edit.
+- Each local clone recognizes at most one editable shared context branch for an
+  item. Duplicate, mismatched, malformed, or otherwise exceptional local or
+  remote context resources remain visible with recovery guidance and do not
+  become a user context-selection result.
 - Nonconforming discovered content remains visible in lists with its nonconforming state and recovery guidance.
 - Primary-branch suggestion and same-item identification remain RFC-owned; primary-branch selection occurs during repository enablement.
 
@@ -270,7 +281,10 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 - When creating an item or starting an edit with no existing editable context, Manyhands automatically creates an isolated editing context comprising an item-specific Git branch and worktree, without asking the user to execute Git commands.
 - When exactly one editable context exists for an item, Manyhands automatically reuses it without asking the user to execute Git commands.
-- When multiple editable contexts exist for an item, Manyhands presents the required context choice and automatically reuses the user-selected context without asking the user to execute Git commands.
+- Each local clone reuses the one recognized shared context for an item. A
+  duplicate, mismatched, malformed, or otherwise exceptional context remains a
+  visible recovery state; Manyhands does not create a second context or ask the
+  user to choose one.
 - Exact context naming and provisioning mechanics remain RFC-owned.
 - Manyhands reports the context setup progress and its completed or failed outcome to the user.
 - Context setup for an item does not silently mutate another item's content, metadata, or editing context.
@@ -297,7 +311,10 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- Creating a comment or reply invokes the applicable item-context provisioning, reuse, or selection lifecycle defined by MH-COLLAB-001 before Manyhands writes its Markdown representation and automatically creates an inspectable Git commit for that comment event, without requiring the user to create a Git commit.
+- Creating a comment or reply invokes the applicable item-context provisioning
+  or reuse lifecycle defined by MH-COLLAB-001 before Manyhands writes its
+  Markdown representation and automatically creates an inspectable Git commit
+  for that comment event, without requiring the user to create a Git commit.
 - After successfully checkpointing a newly created comment or reply, Manyhands immediately synchronizes the comment's editing context as part of the same deliberate submit action under MH-COLLAB-004 when a publication remote is configured. Without a publication remote, Manyhands reports the comment or reply as saved locally with publication pending.
 - Exact comment storage layout and checkpoint commit mechanics remain RFC-owned.
 - Manyhands reports the checkpoint outcome and makes the comment or reply available when the item is reopened.
@@ -393,7 +410,10 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - The index updates after managed-document, ticket, and comment changes that affect discovery metadata or editing context.
 - A user can manually request a refresh and the resulting discovery data reflects the currently accessible canonical content.
 - For a repository with an SSH publication remote, background polling is enabled by default at desktop application launch and CLI daemon startup; a user can pause polling or configure its interval for that repository.
-- A configured polling refresh fetches remote state, updates discovery data, fast-forwards only clean primary and item contexts, and materializes a newly discovered recognized item context as a worktree before indexing its managed item folder and comments.
+- A configured poll fetches remote state, updates permitted local Git state,
+  fast-forwards only clean primary and item contexts, and materializes a newly
+  discovered recognized item context as a worktree before it invokes an
+  index-only refresh of the managed item folder and comments.
 - Polling leaves dirty, divergent, conflicted, deleted, renamed, malformed, inaccessible, or unrecognized contexts unchanged locally and surfaces them with recovery guidance.
 
 ### MH-INDEX-003: Surface External and Malformed Changes
@@ -516,7 +536,11 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 
 **Acceptance Criteria:**
 
-- Rebuilding or refreshing the index does not modify canonical Markdown content, Git commits, branches, worktrees, remotes, or repository configuration.
+- An index-only refresh or rebuild does not modify canonical Markdown content,
+  Git commits, branches, worktrees, remotes, or repository configuration.
+- A remote poll is distinct from an index-only refresh. It may perform only the
+  fetch, clean fast-forward, and recognized-context materialization explicitly
+  permitted by `MH-COLLAB-004` before it invokes the non-mutating index refresh.
 - The behavior remains consistent with `MH-INDEX-001` and `MH-INDEX-003` when canonical content is malformed or inaccessible.
 
 ### MH-NFR-008: Prevent Silent Data Loss

@@ -25,7 +25,8 @@ workflows, or the full CLI contract are implemented.
 ## Authority and Traceability
 
 This Wave implements the local foundation described by the approved
-[MVP architecture RFC](../RFC/mvp-rfc.md) and PRD version 0.3. Its governing
+[MVP architecture RFC](../RFC/mvp-rfc.md) and the foundation requirements
+approved in PRD version 0.3 and retained by version 0.4. Its governing
 technical RFCs are:
 
 - [Canonical content and comment schema](../RFC/canonical-content-and-comment-schema.md)
@@ -47,7 +48,7 @@ Primary PRD traceability:
 
 Wave implementation may begin only when all conditions hold:
 
-- PRD version 0.3 remains approved.
+- The PRD's version 0.3 foundation requirements remain approved by version 0.4.
 - The four governing Wave 1 RFCs remain approved and mutually consistent.
 - The implementation starts from a clean `main` branch with the existing
   Devenv/Cargo and CI baseline available.
@@ -197,7 +198,8 @@ worktree state that already exists; retry performs only the incomplete step.
 **Exit evidence:** Real-repository tests prove deterministic context paths,
 single-context reuse, scoped commits, no-op saves, and preservation of
 unrelated changes. A mismatched or duplicate expected context is visible as a
-recoverable condition; multiple-context choice is deferred to Wave 2.
+recoverable condition; remote shared-context materialization is deferred to
+Wave 2 without introducing context choice.
 
 ### Cycle 04: Discovery and Rebuild
 
@@ -303,7 +305,7 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 ## Deferred Work
 
 Wave 2 owns authentication, SSH transport, remote synchronization, polling,
-remote context materialization, multi-context choice, merge recovery,
+remote shared-context materialization, merge recovery,
 managed-document promotion, and ticket closure. Wave 3 owns the desktop
 information architecture, editor behavior, full CLI contract, keyboard
 journeys, and dogfooding acceptance on supported platforms.

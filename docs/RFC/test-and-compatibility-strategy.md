@@ -100,6 +100,13 @@ file, commit OID, branch, worktree, index-pending operation, or visible problem.
 They MUST also assert that retry performs only unfinished work and creates no
 duplicate commits, branches, worktrees, items, or comments.
 
+Wave 2 extends named failure injection to fetch, remote-ref observation and
+pruning, host approval, key unlock, fast-forward, merge conflict, push
+rejection, ambiguous post-push transport failure, remote-context deletion,
+context materialization, poll yield/cancellation, and local or remote cleanup.
+Each case asserts the observed refs, local worktree, remote state, recovery
+record, and index state before proving that retry performs only incomplete work.
+
 ## Wave 1 Entry Gate
 
 Before Wave 1 implementation begins, the following RFCs MUST be approved:
@@ -149,12 +156,47 @@ Wave 1 verifies domain behavior on the local development platform and preserves
 the existing Linux, macOS, and Windows CI build matrix. The test strategy grows
 without weakening prior evidence:
 
-- Wave 2 adds local bare remotes or equivalent real remote fixtures, SSH
-  callback failures, polling serialization, merge conflicts, promotion, and
-  ticket closure recovery.
+- Wave 2 adds an authenticated SSH Git fixture, selected-key and host-trust
+  evidence, polling serialization, merge conflicts, promotion, and ticket
+  closure recovery. The fixture generates ephemeral host and client keys, uses
+  isolated home, SSH, Git configuration, and application-data paths, and serves
+  disposable bare repositories. It MAY use a test-only local SSH server that
+  invokes `git-upload-pack` and `git-receive-pack`; production code remains
+  `git2`/libgit2-only and never invokes a system Git executable.
 - Wave 3 adds desktop keyboard journeys, CLI JSON and daemon behavior, native
   platform journey runs, and trusted-collaborator dogfooding evidence.
 
 Platform-specific deviations in filesystem case behavior, path normalization,
 Git installations, locking, or credential facilities MUST become documented
 compatibility cases rather than implicit assumptions.
+
+## Wave 2 Evidence Gate
+
+Wave 2 completes only with automated real-remote evidence for all of the
+following, in addition to retaining the Wave 1 gate:
+
+- Generated and imported selected-key behavior, first-session unlock,
+  cancellation, unavailable or unsupported keys, imported-key non-deletion, and
+  generated-key protection/deletion recovery.
+- Successful authenticated fetch and push with the selected key; rejection of a
+  wrong, absent, default, or SSH-agent key; first-contact host approval; changed
+  host replacement; and redaction of all credential and remote response data.
+- Two disposable clones synchronizing one shared context branch, including
+  already-current, fast-forward, clean merge, conflict, explicit resolution,
+  retry, and no automatic rebase or force push.
+- A new item context's first publication, a remotely deleted previously
+  published context requiring explicit republish confirmation, and no automatic
+  local worktree deletion after remote deletion.
+- Primary synchronization, clean-only one-shot polling updates, remote context
+  materialization exactly once, poll/manual yield behavior, and preservation of
+  dirty, divergent, conflicted, malformed, inaccessible, renamed, unrecognized,
+  unmaterialized, and remotely deleted state.
+- Comment checkpoint followed by immediate publication attempt, with later
+  publication retry and no duplicate comment or checkpoint.
+- Confirmed document promotion and ticket closure, including local-only
+  publication pending, dirty-primary blocking, primary-publication success
+  followed by remote cleanup failure, and cleanup-only replay without duplicate
+  merge, push, branch deletion, or worktree removal.
+- Remote operation interruption or cancellation at every named boundary,
+  reconciliation from actual refs and canonical Markdown, and no secret data in
+  SQLite, diagnostics, logs, or assertion output.

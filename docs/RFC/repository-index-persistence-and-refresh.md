@@ -34,8 +34,10 @@ MUST enable foreign-key enforcement, use WAL journal mode, and set a bounded
 busy timeout so desktop, CLI, and a CLI daemon can coordinate safely.
 
 The database contains application-local state only. It MUST NOT store private
-key data, passphrases, managed Markdown bodies, or an authoritative copy of
-canonical repository configuration.
+key data, passphrases, credentials, credential callback values, unredacted
+remote/server response text, managed Markdown bodies, or an authoritative copy
+of canonical repository configuration. Failure records store only stable
+recovery codes, redacted categories, and non-secret target identifiers.
 
 ## Required Logical Tables
 
@@ -45,10 +47,13 @@ registration only; Cycle 04 adds the remaining logical records:
 | Record | Required information |
 | --- | --- |
 | Repository registration | Stable local ID, canonicalized root path, enabled time, accessibility state, and last observed config identity. |
-| Context | Repository ID, primary or item context kind, branch, worktree path, item ULID when applicable, active state, and observed Git HEAD. |
+| SSH key registration | Local key ID, label, generated/imported ownership, non-secret source paths, optional public fingerprint, selected state, and observed accessibility. |
+| Host trust | Normalized SSH host and effective port, host-key algorithm, non-secret fingerprint, and approval/replacement state. |
+| Context | Repository ID, primary, local item, or remote item context kind; branch; local worktree path when materialized; item ULID when applicable; local and remote observation state; and observed local/remote OIDs. |
 | Item discovery | Context ID, item ULID, kind, canonical path, title, ticket type/status when applicable, closure state, project/team when present, and observed modification time. |
 | Problem | Repository/context/path, stable problem code, human-readable recovery guidance, and observation time. |
-| Operation recovery | Repository, operation ID, item/context when applicable, lifecycle action, completed steps, relevant commit OIDs, failure detail, and recovery state. |
+| Polling policy and status | Repository, enabled/paused state, configured interval, bounded backoff, latest result, and next eligible automatic poll time. |
+| Operation recovery | Repository, operation ID, item/context when applicable, lifecycle action, manual-or-poll priority, reservation/cancellation state, publication remote and refs, completed steps, relevant local/remote OIDs, redacted failure category, and recovery state. |
 
 The canonicalized root path is unique among enabled registrations. Removing a
 repository from Manyhands removes only its local registration, contexts, item
@@ -69,7 +74,7 @@ problem record with recovery guidance.
 
 ## Context Discovery
 
-Each refresh discovers:
+Each index-only refresh discovers:
 
 - The configured primary worktree at the repository root.
 - Active repo-local worktrees whose branch matches
@@ -82,10 +87,18 @@ branch outside the context convention is not an active Manyhands item context.
 The Git RFC owns creation and recovery of worktrees; this RFC records what Git
 and the filesystem actually expose.
 
-## Full Refresh Algorithm
+Remote observation records are distinct from local contexts. After a successful
+poll, the index records recognized remote context branches whether or not they
+have a local worktree. A conforming unmaterialized branch is visible as pending
+materialization; malformed, inaccessible, renamed, unrecognized, divergent, or
+remotely deleted branches are visible as recovery problems. Only a recognized
+conforming shared branch may be materialized once. Remote observation does not
+create a second editable context or a context-choice result.
+
+## Index-Only Refresh Algorithm
 
 Wave 1 uses a full per-context scan rather than Git-diff incremental indexing.
-For each accessible primary or active context, a refresh MUST:
+For each accessible primary or active context, an index-only refresh MUST:
 
 1. Enumerate canonical paths defined by the schema RFC.
 2. Parse and validate eligible Markdown without rewriting it.
@@ -94,10 +107,10 @@ For each accessible primary or active context, a refresh MUST:
 5. Replace only that context's item and problem rows in one SQLite transaction.
 
 The primary context and item contexts remain separate rows even when they
-contain the same item ULID. Wave 1 records at most one deterministic local item
-context for an item, which replaces the primary presentation when active. Wave
-2 extends this model for remote materialization and multiple active contexts,
-where consumers require an explicit choice.
+contain the same item ULID. A local clone records at most one deterministic
+shared local item context for an item, which replaces the primary presentation
+when active. Remote observations add presentation and recovery metadata; they
+never create multiple editable contexts or require a consumer choice.
 
 For committed files, observed activity uses the latest Git commit that touches
 the item Markdown or a managed comment for that item. For uncommitted local
@@ -132,7 +145,7 @@ index refresh is retried as indexing only and never creates a duplicate commit.
 
 Cycle 05 makes cross-process repository coordination mandatory across desktop,
 CLI, and future daemon processes. Each repository-mutating or
-repository-refreshing Wave 1 action MUST acquire a repository-scoped exclusive
+index-only-refreshing Wave 1 action MUST acquire a repository-scoped exclusive
 advisory lease at the resolved common Git directory. The lease has a fixed
 bounded wait and recoverable busy outcome. Draft preparation and full read-only
 scans remain outside the lease; actions re-observe state while holding it before
@@ -146,17 +159,40 @@ preserving and replacing the database, then releases it before an explicit-root
 rebuild acquires its repository lease and scans canonical state. This prevents
 database replacement races without globally serializing Git work or scans.
 
-## Polling Extension
+## Remote Polling And Reservation
 
-Wave 1 does not implement remote fetch scheduling. Its schema and locking model
-reserve the same repository lease for a future poll. The Wave 2 extension will
-record poll status, backoff, and remote observation without changing this RFC's
-canonical/cache boundary.
+Wave 2 adds repository-scoped remote-operation reservations for polling, item
+synchronization, primary synchronization, promotion, and closure. A reservation
+is durable recovery state, not a lock: it identifies the operation, priority,
+phase, yield request, cancellation state, remote/ref targets, and observed
+object IDs. The common-Git-directory advisory lease remains the sole short
+cross-process lock for local atomic transitions.
 
-When implemented, a poll will use the Git RFC's recognized context branches,
-fast-forward only clean contexts, and materialize a new conforming context once.
-Remote-deleted, divergent, malformed, or inaccessible contexts remain locally
-preserved and are recorded as recovery problems.
+Network transport, caller interaction, and full scans MUST NOT hold the
+repository lease. A remote action records its reservation, performs network
+work outside that lease, then reacquires the lease and re-observes refs,
+worktrees, and canonical paths before each local mutation or cache replacement.
+A manual action that finds a poll reservation requests yield and returns a
+retryable `poll yielding` result. The poll acknowledges at a Git transport or
+per-context safe point, records its interrupted state, and releases the
+reservation before the retried manual action begins.
+
+Each repository with an SSH publication remote stores polling enabled state,
+pause state, configured interval, backoff, latest result, and next eligible
+automatic poll time. Polling is enabled by default, uses a five-minute interval,
+accepts an interval from one to sixty minutes, and backs off failed automatic
+polls from one minute exponentially to a fifteen-minute maximum. Manual
+one-shot polls are never delayed by automatic backoff. Wave 2 persists and
+executes one-shot poll behavior; Wave 3 owns launch and daemon scheduling.
+
+A poll first fetches and records the Git RFC's remote ref set. It may then
+fast-forward only clean, non-conflicted local primary or shared-context branches
+that are strictly behind their matching tracking ref. It validates and
+materializes each new recognized conforming shared context exactly once, then
+invokes the index-only refresh. Remote-deleted, divergent, malformed,
+inaccessible, renamed, unrecognized, and unmaterialized contexts remain locally
+preserved and appear as recovery problems. A poll never pushes, checkpoints,
+merges, rebases, stashes, overwrites, discards, or cleans up state.
 
 ## Wave 1 Acceptance
 
@@ -166,9 +202,9 @@ Wave 1 persistence work is complete when real temporary repositories show that:
   removed without repository mutation.
 - Full refresh indexes valid primary and active-context items, comments, and
   problems while preserving distinct context rows.
-- A single deterministic local active context receives discovery precedence.
-  Multiple-context choice state is deferred to the Wave 2 remote-context
-  extension.
+- A single deterministic shared local active context receives discovery
+  precedence. Remote observations and exceptional context resources remain
+  visible recovery state without creating a multiple-context choice result.
 - Marker-only, malformed, duplicate-ID, and inaccessible content stays visible
   as a problem rather than disappearing or being rewritten.
 - Deleting or corrupting the SQLite database followed by rebuild produces the
