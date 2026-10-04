@@ -6179,7 +6179,7 @@ fn read_owned_item(
     } else {
         std::fs::read(root.join(relative)).map_err(|error| {
             RepositoryError::io(operation, Some(repository_root.to_owned()), error)
-        })?;
+        })?
     };
     let source = String::from_utf8(source).map_err(|_| {
         authoring_error(
@@ -7405,6 +7405,7 @@ struct OwnedTarget {
 impl OwnedTarget {
     fn new(root: &Path) -> Result<Self, RepositoryError> {
         validate_creation_target(root)?;
+        #[cfg(unix)]
         let metadata = std::fs::symlink_metadata(root).map_err(|error| {
             RepositoryError::io(
                 RepositoryOperation::CreateAndEnable,
