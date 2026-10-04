@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+export LC_ALL=C
+
+script_path=${BASH_SOURCE[0]}
+case $script_path in
+    */*) script_directory=${script_path%/*} ;;
+    *) script_directory=. ;;
+esac
+source "$script_directory/ticket-front-matter"
+
+malformed_ticket() {
+    printf 'list-tickets: malformed ticket file %s: %s\n' "$1" "$2" >&2
+}
+
+list_ticket() {
+    local ticket_file=$1
+    local ticket_directory displayed_id displayed_status displayed_type displayed_title
+
+    if ! read_managed_front_matter "$ticket_file" ticket; then
+        if ! malformed_ticket "$ticket_file" "$front_matter_error"; then
+            return 2
+        fi
+        return 1
+    fi
+    ticket_directory=${ticket_file%/ticket.md}
+    ticket_directory=${ticket_directory##*/}
+    if ! is_canonical_ulid "$ticket_directory"; then
+        if ! malformed_ticket "$ticket_file" 'ticket directory name is not a canonical ULID'; then
+            return 2
+        fi
+        return 1
+    fi
+    if ! is_canonical_ulid "$front_matter_id"; then
+        if ! malformed_ticket "$ticket_file" 'ticket ID is not a canonical ULID'; then
+            return 2
+        fi
+        return 1
+    fi
+    if [[ $front_matter_id != "$ticket_directory" ]]; then
+        if ! malformed_ticket "$ticket_file" 'ticket ID does not match its directory'; then
+            return 2
+        fi
+        return 1
+    fi
+
+    listed_ticket_id=$front_matter_id
+    render_display_value "$front_matter_id"
+    displayed_id=$display_value
+    render_display_value "$front_matter_status"
+    displayed_status=$display_value
+    render_display_value "$front_matter_type"
+    displayed_type=$display_value
+    render_display_value "$front_matter_title"
+    displayed_title=$display_value
+    printf -v listed_ticket_record '%s\t%s\t%s\t%s' \
+        "$displayed_id" "$displayed_status" "$displayed_type" "$displayed_title"
+}
+
+if ! discover_ticket_contexts; then
+    printf 'list-tickets: %s\n' "$context_discovery_error" >&2
+    exit 1
+fi
+
+listed_ticket_ids=()
+listed_ticket_records=()
+listed_ticket_files=()
+for context in "${ticket_contexts[@]}"; do
+    tickets_directory=$context/.manyhands/tickets
+    [[ -d $tickets_directory ]] || continue
+
+    for ticket_file in "$tickets_directory"/*/ticket.md; do
+        [[ -f $ticket_file ]] || continue
+        if list_ticket "$ticket_file"; then
+            duplicate_ticket=false
+            for (( index = 0; index < ${#listed_ticket_ids[@]}; index += 1 )); do
+                if [[ ${listed_ticket_ids[$index]} == "$listed_ticket_id" ]]; then
+                    if ! malformed_ticket "$ticket_file" \
+                        "duplicate canonical ticket ID $listed_ticket_id also found in ${listed_ticket_files[$index]}"; then
+                        exit 2
+                    fi
+                    duplicate_ticket=true
+                    break
+                fi
+            done
+            if [[ $duplicate_ticket != true ]]; then
+                listed_ticket_ids+=("$listed_ticket_id")
+                listed_ticket_records+=("$listed_ticket_record")
+                listed_ticket_files+=("$ticket_file")
+            fi
+        else
+            list_ticket_status=$?
+            if (( list_ticket_status != 1 )); then
+                exit "$list_ticket_status"
+            fi
+        fi
+    done
+done
+
+listed_ticket_printed=()
+for (( printed_count = 0; printed_count < ${#listed_ticket_ids[@]}; printed_count += 1 )); do
+    selected_index=
+    for (( index = 0; index < ${#listed_ticket_ids[@]}; index += 1 )); do
+        [[ ${listed_ticket_printed[$index]:-false} == true ]] && continue
+        if [[ -z $selected_index \
+            || ${listed_ticket_ids[$index]} < ${listed_ticket_ids[$selected_index]} \
+            || ( ${listed_ticket_ids[$index]} == ${listed_ticket_ids[$selected_index]} \
+                && ${listed_ticket_records[$index]} < ${listed_ticket_records[$selected_index]} ) ]]; then
+            selected_index=$index
+        fi
+    done
+    listed_ticket_printed[$selected_index]=true
+    if ! printf '%s\n' "${listed_ticket_records[$selected_index]}"; then
+        exit 2
+    fi
+done

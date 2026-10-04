@@ -1,0 +1,439 @@
+trim_value() {
+    local value=$1
+
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    printf '%s' "$value"
+}
+
+append_utf8_byte() {
+    local byte=$1 escaped_byte decoded_byte
+
+    printf -v escaped_byte '\\%03o' "$byte"
+    printf -v decoded_byte '%b' "$escaped_byte"
+    parsed_scalar=$parsed_scalar$decoded_byte
+}
+
+append_codepoint() {
+    local codepoint=$1
+
+    if (( codepoint == 0 || codepoint > 0x10ffff \
+        || (codepoint >= 0xd800 && codepoint <= 0xdfff) )); then
+        return 1
+    elif (( codepoint <= 0x7f )); then
+        append_utf8_byte "$codepoint"
+    elif (( codepoint <= 0x7ff )); then
+        append_utf8_byte "$((0xc0 | (codepoint >> 6)))"
+        append_utf8_byte "$((0x80 | (codepoint & 0x3f)))"
+    elif (( codepoint <= 0xffff )); then
+        append_utf8_byte "$((0xe0 | (codepoint >> 12)))"
+        append_utf8_byte "$((0x80 | ((codepoint >> 6) & 0x3f)))"
+        append_utf8_byte "$((0x80 | (codepoint & 0x3f)))"
+    else
+        append_utf8_byte "$((0xf0 | (codepoint >> 18)))"
+        append_utf8_byte "$((0x80 | ((codepoint >> 12) & 0x3f)))"
+        append_utf8_byte "$((0x80 | ((codepoint >> 6) & 0x3f)))"
+        append_utf8_byte "$((0x80 | (codepoint & 0x3f)))"
+    fi
+}
+
+parse_double_quoted_scalar() {
+    local value=$1 character escape trailing hex codepoint
+    local index=1 next_index length=${#value}
+
+    parsed_scalar=
+    while (( index < length )); do
+        character=${value:$index:1}
+        if [[ $character == '"' ]]; then
+            trailing=${value:$((index + 1))}
+            if [[ -n $trailing \
+                && ! $trailing =~ ^[[:space:]]+(\#.*)?$ ]]; then
+                return 1
+            fi
+            return 0
+        elif [[ $character != \\ ]]; then
+            parsed_scalar=$parsed_scalar$character
+            ((index += 1))
+            continue
+        fi
+
+        next_index=$((index + 1))
+        (( next_index < length )) || return 1
+        escape=${value:$next_index:1}
+        case $escape in
+            0) return 1 ;; # Bash variables cannot represent a YAML NUL escape.
+            a) append_codepoint 7 ;;
+            b) append_codepoint 8 ;;
+            t) append_codepoint 9 ;;
+            n) append_codepoint 10 ;;
+            v) append_codepoint 11 ;;
+            f) append_codepoint 12 ;;
+            r) append_codepoint 13 ;;
+            e) append_codepoint 27 ;;
+            ' ') append_codepoint 32 ;;
+            '"') append_codepoint 34 ;;
+            /) append_codepoint 47 ;;
+            \\) append_codepoint 92 ;;
+            N) append_codepoint 0x85 ;;
+            _) append_codepoint 0xa0 ;;
+            L) append_codepoint 0x2028 ;;
+            P) append_codepoint 0x2029 ;;
+            x)
+                hex=${value:$((index + 2)):2}
+                [[ $hex =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
+                codepoint=$((16#$hex))
+                append_codepoint "$codepoint" || return 1
+                ((index += 4))
+                continue
+                ;;
+            u)
+                hex=${value:$((index + 2)):4}
+                [[ $hex =~ ^[0-9A-Fa-f]{4}$ ]] || return 1
+                codepoint=$((16#$hex))
+                append_codepoint "$codepoint" || return 1
+                ((index += 6))
+                continue
+                ;;
+            U)
+                hex=${value:$((index + 2)):8}
+                [[ $hex =~ ^[0-9A-Fa-f]{8}$ ]] || return 1
+                codepoint=$((16#$hex))
+                append_codepoint "$codepoint" || return 1
+                ((index += 10))
+                continue
+                ;;
+            *) return 1 ;;
+        esac
+        ((index += 2))
+    done
+    return 1
+}
+
+parse_single_quoted_scalar() {
+    local value=$1 character trailing
+    local index=1 next_index length=${#value}
+
+    parsed_scalar=
+    while (( index < length )); do
+        character=${value:$index:1}
+        if [[ $character != "'" ]]; then
+            parsed_scalar=$parsed_scalar$character
+            ((index += 1))
+            continue
+        fi
+
+        next_index=$((index + 1))
+        if (( next_index < length )) && [[ ${value:$next_index:1} == "'" ]]; then
+            parsed_scalar=$parsed_scalar"'"
+            ((index += 2))
+            continue
+        fi
+
+        trailing=${value:$next_index}
+        if [[ -n $trailing && ! $trailing =~ ^[[:space:]]+(\#.*)?$ ]]; then
+            return 1
+        fi
+        return 0
+    done
+    return 1
+}
+
+parse_scalar() {
+    local value=$1 first_character
+
+    parsed_scalar=
+    value=$(trim_value "$value")
+    [[ -n $value ]] || return 0
+
+    first_character=${value:0:1}
+    case $first_character in
+        '#') return 0 ;;
+        '"') parse_double_quoted_scalar "$value" ;;
+        "'") parse_single_quoted_scalar "$value" ;;
+        '['|'{'|\||'>') return 1 ;;
+        *)
+            if [[ $value == *[[:space:]]\#* ]]; then
+                value=${value%%[[:space:]]\#*}
+                value=$(trim_value "$value")
+            fi
+            [[ $value != *:[[:space:]]* ]] || return 1
+            parsed_scalar=$value
+            ;;
+    esac
+}
+
+is_canonical_ulid() {
+    [[ $1 =~ ^[0-7][0-9A-HJKMNP-TV-Z]{25}$ ]]
+}
+
+render_display_value() {
+    local value=$1 character character_code escaped_control c1_byte c1_code
+    local index length=${#value}
+
+    display_value=
+    for (( index = 0; index < length; index += 1 )); do
+        if [[ ${value:$index:1} == $'\302' ]]; then
+            c1_byte=${value:$((index + 1)):1}
+            if [[ -n $c1_byte ]]; then
+                printf -v c1_code '%d' "'$c1_byte"
+                if (( c1_code >= 128 && c1_code <= 159 )); then
+                    printf -v escaped_control '\\u00%02X' "$c1_code"
+                    display_value=$display_value$escaped_control
+                    ((index += 1))
+                    continue
+                fi
+            fi
+        fi
+        if [[ ${value:$index:3} == $'\342\200\250' ]]; then
+            display_value=$display_value$'\\u2028'
+            ((index += 2))
+            continue
+        elif [[ ${value:$index:3} == $'\342\200\251' ]]; then
+            display_value=$display_value$'\\u2029'
+            ((index += 2))
+            continue
+        fi
+        character=${value:$index:1}
+        case $character in
+            \\) display_value=$display_value$'\\\\' ;;
+            $'\n') display_value=$display_value$'\\n' ;;
+            $'\t') display_value=$display_value$'\\t' ;;
+            $'\r') display_value=$display_value$'\\r' ;;
+            $'\a') display_value=$display_value$'\\a' ;;
+            $'\b') display_value=$display_value$'\\b' ;;
+            $'\v') display_value=$display_value$'\\v' ;;
+            $'\f') display_value=$display_value$'\\f' ;;
+            $'\e') display_value=$display_value$'\\e' ;;
+            *)
+                printf -v character_code '%d' "'$character"
+                if (( character_code < 32 || character_code == 127 )); then
+                    printf -v escaped_control '\\x%02X' "$character_code"
+                    display_value=$display_value$escaped_control
+                else
+                    display_value=$display_value$character
+                fi
+                ;;
+        esac
+    done
+}
+
+discover_ticket_contexts() {
+    local git_common_dir worktree_list worktree_line primary_root caller_root
+    local primary_common_dir worktrees_directory worktree
+
+    context_discovery_error=
+    ticket_contexts=()
+    if ! git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        context_discovery_error='must be run inside a Git worktree'
+        return 1
+    fi
+    if ! worktree_list=$(git worktree list --porcelain 2>/dev/null); then
+        context_discovery_error='could not list Git worktrees'
+        return 1
+    fi
+
+    primary_root=
+    while IFS= read -r worktree_line; do
+        case $worktree_line in
+            worktree\ *)
+                primary_root=${worktree_line#worktree }
+                break
+                ;;
+        esac
+    done <<<"$worktree_list"
+    if [[ -z $primary_root ]]; then
+        context_discovery_error='could not identify the primary Git worktree'
+        return 1
+    fi
+    # Separate Git directories are reported as the primary worktree path.
+    if [[ $primary_root == "$git_common_dir" ]]; then
+        if ! caller_root=$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null); then
+            context_discovery_error='could not identify the caller Git worktree'
+            return 1
+        fi
+        case $caller_root in
+            */.manyhands/worktrees/*) primary_root=${caller_root%%/.manyhands/worktrees/*} ;;
+            *) primary_root=$caller_root ;;
+        esac
+    fi
+    if ! primary_common_dir=$(git -C "$primary_root" rev-parse \
+        --path-format=absolute --git-common-dir 2>/dev/null); then
+        context_discovery_error='could not inspect the primary Git worktree'
+        return 1
+    fi
+    if [[ $primary_common_dir != "$git_common_dir" ]]; then
+        context_discovery_error='primary Git worktree does not share the caller Git directory'
+        return 1
+    fi
+    if [[ ! -f $primary_root/.manyhands/config.toml ]]; then
+        context_discovery_error=".manyhands/config.toml not found at primary repository root $primary_root"
+        return 1
+    fi
+
+    ticket_contexts=("$primary_root")
+    worktrees_directory=$primary_root/.manyhands/worktrees
+    if [[ -d $worktrees_directory ]]; then
+        for worktree in "$worktrees_directory"/*; do
+            [[ -d $worktree ]] || continue
+            ticket_contexts+=("$worktree")
+        done
+    fi
+}
+
+read_managed_front_matter() {
+    local front_matter_file=$1 entity=$2
+    local line key raw_value value line_number=0
+    local closed_front_matter=false
+
+    front_matter_error=
+    front_matter_managed= front_matter_kind= front_matter_id=
+    front_matter_title= front_matter_type= front_matter_status=
+    front_matter_item_id= front_matter_created_at= front_matter_body_line=
+    front_matter_seen_managed=false front_matter_seen_kind=false front_matter_seen_id=false
+    front_matter_seen_title=false front_matter_seen_type=false front_matter_seen_status=false
+    front_matter_seen_item_id=false front_matter_seen_created_at=false
+
+    while IFS= read -r line || [[ -n $line ]]; do
+        ((line_number += 1))
+        line=${line%$'\r'}
+        if (( line_number == 1 )); then
+            if [[ $line != '---' ]]; then
+                front_matter_error='missing YAML front matter opening delimiter'
+                return 1
+            fi
+            continue
+        fi
+
+        if [[ $line == '---' ]]; then
+            closed_front_matter=true
+            front_matter_body_line=$((line_number + 1))
+            break
+        fi
+
+        # YAML metadata is a root mapping; nested mappings cannot supply it.
+        if [[ ! $line =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:(.*)$ ]]; then
+            continue
+        fi
+        key=${BASH_REMATCH[1]}
+        raw_value=${BASH_REMATCH[2]}
+        case $key in
+            manyhands_managed|manyhands_kind|id) ;;
+            title|type|status)
+                [[ $entity == ticket ]] || continue
+                ;;
+            item_id|created_at)
+                [[ $entity == comment ]] || continue
+                ;;
+            *) continue ;;
+        esac
+
+        case $key in
+            manyhands_managed)
+                [[ $front_matter_seen_managed == false ]] || {
+                    front_matter_error='duplicate field manyhands_managed'
+                    return 1
+                }
+                front_matter_seen_managed=true
+                ;;
+            manyhands_kind)
+                [[ $front_matter_seen_kind == false ]] || {
+                    front_matter_error='duplicate field manyhands_kind'
+                    return 1
+                }
+                front_matter_seen_kind=true
+                ;;
+            id)
+                [[ $front_matter_seen_id == false ]] || {
+                    front_matter_error='duplicate field id'
+                    return 1
+                }
+                front_matter_seen_id=true
+                ;;
+            title)
+                [[ $front_matter_seen_title == false ]] || {
+                    front_matter_error='duplicate field title'
+                    return 1
+                }
+                front_matter_seen_title=true
+                ;;
+            type)
+                [[ $front_matter_seen_type == false ]] || {
+                    front_matter_error='duplicate field type'
+                    return 1
+                }
+                front_matter_seen_type=true
+                ;;
+            status)
+                [[ $front_matter_seen_status == false ]] || {
+                    front_matter_error='duplicate field status'
+                    return 1
+                }
+                front_matter_seen_status=true
+                ;;
+            item_id)
+                [[ $front_matter_seen_item_id == false ]] || {
+                    front_matter_error='duplicate field item_id'
+                    return 1
+                }
+                front_matter_seen_item_id=true
+                ;;
+            created_at)
+                [[ $front_matter_seen_created_at == false ]] || {
+                    front_matter_error='duplicate field created_at'
+                    return 1
+                }
+                front_matter_seen_created_at=true
+                ;;
+        esac
+
+        if ! parse_scalar "$raw_value"; then
+            case $key in
+                manyhands_managed|manyhands_kind)
+                    front_matter_error="field $key is not a scalar"
+                    ;;
+                *) front_matter_error="required field $key is not a scalar" ;;
+            esac
+            return 1
+        fi
+        value=$parsed_scalar
+        case $key in
+            manyhands_managed) front_matter_managed=$value ;;
+            manyhands_kind) front_matter_kind=$value ;;
+            id) front_matter_id=$value ;;
+            title) front_matter_title=$value ;;
+            type) front_matter_type=$value ;;
+            status) front_matter_status=$value ;;
+            item_id) front_matter_item_id=$value ;;
+            created_at) front_matter_created_at=$value ;;
+        esac
+    done <"$front_matter_file"
+
+    if (( line_number == 0 )); then
+        front_matter_error='missing YAML front matter'
+        return 1
+    fi
+    if [[ $closed_front_matter != true ]]; then
+        front_matter_error='missing YAML front matter closing delimiter'
+        return 1
+    fi
+    if [[ $front_matter_managed != true || $front_matter_kind != "$entity" ]]; then
+        front_matter_error="not a managed $entity"
+        return 1
+    fi
+    case $entity in
+        ticket)
+            if [[ -z $front_matter_id || -z $front_matter_title \
+                || -z $front_matter_type || -z $front_matter_status ]]; then
+                front_matter_error='missing a required nonempty scalar field'
+                return 1
+            fi
+            ;;
+        comment)
+            if [[ -z $front_matter_id || -z $front_matter_item_id \
+                || -z $front_matter_created_at ]]; then
+                front_matter_error='missing a required nonempty scalar field'
+                return 1
+            fi
+            ;;
+    esac
+}
