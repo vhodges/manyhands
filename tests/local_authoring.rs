@@ -2143,7 +2143,7 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
-            checkpoint: LocalCheckpoint::RefreshPending { commit_oid: pending },
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid: pending },
             ..
         } if pending == commit_oid
     ));
@@ -2504,7 +2504,7 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
 
     let outcome = failing.save_document(request()).unwrap();
     assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid } , .. } if commit_oid == oid)
+        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::Checkpointed { commit_oid } , .. } if commit_oid == oid)
     );
     assert_eq!(registry_refresh_required(&enabled.service), 0);
     assert_eq!(
@@ -2689,7 +2689,7 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
 
     let SaveOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
     } = failing.save_document(request()).unwrap()
     else {
         panic!("checkpoint must be pending only after its commit");
@@ -3223,7 +3223,7 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
 
     let SaveOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
     } = failing.save_ticket(request()).unwrap()
     else {
         panic!("ticket checkpoint must be pending only after its commit");
@@ -4019,7 +4019,7 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     };
 
     let CommentSubmissionOutcome::Saved {
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
         ..
     } = failing.submit_comment(request()).unwrap()
     else {

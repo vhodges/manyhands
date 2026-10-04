@@ -451,7 +451,7 @@ fn refresh_keeps_primary_and_active_contexts_with_active_item_precedence() {
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
-            checkpoint: LocalCheckpoint::RefreshPending { .. },
+            checkpoint: LocalCheckpoint::Checkpointed { .. },
             ..
         }
     ));

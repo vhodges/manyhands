@@ -374,6 +374,20 @@ pub(super) fn advance_after_observation(
     Ok(())
 }
 
+pub(super) fn claim_indexing(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<bool, RepositoryError> {
+    Ok(connection
+        .execute(
+            "UPDATE operation_records SET state = 'indexing', observed_at = ?2
+             WHERE id = ?1 AND state != 'completed' AND state != 'indexing'",
+            params![record_id, now()],
+        )
+        .map_err(RepositoryError::sqlite)?
+        == 1)
+}
+
 pub(super) fn record_persisted_context(
     connection: &Connection,
     record_id: i64,

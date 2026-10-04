@@ -37,8 +37,8 @@ use discovery::{
     RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
 };
 use recovery::{
-    RecoveryRecord, advance_after_observation, begin_or_reconcile_operation, pending_for_root,
-    record_persisted_context as record_recovery_context,
+    RecoveryRecord, advance_after_observation, begin_or_reconcile_operation, claim_indexing,
+    pending_for_root, record_persisted_context as record_recovery_context,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -1673,7 +1673,7 @@ impl RepositoryService {
                 )? {
                     Ok(SaveOutcome::Saved {
                         context,
-                        checkpoint,
+                        checkpoint: checkpoint_after_refresh(checkpoint),
                     })
                 } else {
                     Ok(SaveOutcome::IndexPending {
@@ -1942,7 +1942,7 @@ impl RepositoryService {
                 )? {
                     Ok(SaveOutcome::Saved {
                         context,
-                        checkpoint,
+                        checkpoint: checkpoint_after_refresh(checkpoint),
                     })
                 } else {
                     Ok(SaveOutcome::IndexPending {
@@ -2233,7 +2233,7 @@ impl RepositoryService {
                 )? {
                     Ok(CommentSubmissionOutcome::Saved {
                         context,
-                        checkpoint,
+                        checkpoint: checkpoint_after_refresh(checkpoint),
                         publication,
                     })
                 } else {
@@ -2566,6 +2566,9 @@ impl RepositoryService {
         lease: RepositoryLease,
     ) -> Result<bool, RepositoryError> {
         self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
+        if !self.claim_lifecycle_indexing(root, operation, record)? {
+            return Ok(false);
+        }
         drop(lease);
         match self.refresh_repository(RefreshRepositoryRequest {
             root: root.to_owned(),
@@ -2592,6 +2595,22 @@ impl RepositoryService {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn claim_lifecycle_indexing(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+    ) -> Result<bool, RepositoryError> {
+        if record.id == 0 {
+            return Ok(true);
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        claim_indexing(&connection, record.id).map_err(|error| error.for_operation(operation, root))
     }
 
     fn require_index_available(
@@ -3940,6 +3959,15 @@ impl RepositoryService {
         } else {
             RemoveRegistrationOutcome::Removed
         })
+    }
+}
+
+fn checkpoint_after_refresh(checkpoint: LocalCheckpoint) -> LocalCheckpoint {
+    match checkpoint {
+        LocalCheckpoint::RefreshPending { commit_oid } => {
+            LocalCheckpoint::Checkpointed { commit_oid }
+        }
+        checkpoint => checkpoint,
     }
 }
 
