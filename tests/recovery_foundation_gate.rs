@@ -16,7 +16,8 @@ use manyhands::repository::{
     OperationId, PublicationRemoteOutcome, RebuildRepositoryRequest, RecoveryInspection,
     RefreshRepositoryRequest, RemoteChange, RemoteOutcome, RemoveRegistrationOutcome,
     RemoveRegistrationRequest, RemoveRemoteRequest, RepositoryErrorKind, RepositoryService,
-    SaveDocumentRequest, SaveOutcome, SetPublicationRemoteRequest,
+    SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SetPublicationRemoteRequest,
+    SubmitCommentRequest, TicketDraft,
 };
 use rusqlite::{Connection, params};
 
@@ -1763,4 +1764,382 @@ fn pending_remote_removal_blocks_a_different_lifecycle_request_until_replayed() 
     assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
     fresh.remove_remote(remove).unwrap();
+}
+
+#[test]
+fn wave_one_real_repository_journey_covers_the_recovery_gate() {
+    let born = support::born_repository();
+    let unborn_parent = tempfile::tempdir().unwrap();
+    let unborn_root = unborn_parent.path().join("unborn");
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    assert!(matches!(
+        service.enable(support::enable_request(&born.root)).unwrap(),
+        EnableRepositoryOutcome::Enabled { .. }
+    ));
+    assert!(matches!(
+        service
+            .create_and_enable(CreateRepositoryRequest {
+                root: unborn_root.clone(),
+                primary_branch: "main".to_owned(),
+                identity: Some(CommitIdentity {
+                    name: "Unborn Author".to_owned(),
+                    email: "unborn@example.invalid".to_owned(),
+                }),
+                operation_id: OperationId::new(),
+            })
+            .unwrap(),
+        EnableRepositoryOutcome::Enabled { .. }
+    ));
+    service
+        .add_remote(AddRemoteRequest {
+            root: born.root.clone(),
+            name: "origin".to_owned(),
+            url: "git@example.invalid:wave-one.git".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    stage_configuration(&born);
+    assert!(matches!(
+        service
+            .set_publication_remote(SetPublicationRemoteRequest {
+                root: born.root.clone(),
+                name: Some("origin".to_owned()),
+                operation_id: OperationId::new(),
+            })
+            .unwrap(),
+        PublicationRemoteOutcome::Changed { .. }
+    ));
+
+    let document_context = context_from(service.prepare_context(authoring_target(
+        &born.root,
+        AuthoringKind::Document,
+        support::document_id(),
+        OperationId::new(),
+    )));
+    let reused_document_context = context_from(service.prepare_context(authoring_target(
+        &born.root,
+        AuthoringKind::Document,
+        support::document_id(),
+        OperationId::new(),
+    )));
+    assert_eq!(document_context.worktree, reused_document_context.worktree);
+    assert!(matches!(
+        service
+            .save_document(document_request(&born.root, OperationId::new()))
+            .unwrap(),
+        SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
+    ));
+    assert!(
+        service
+            .save_ticket(ticket_request(&born.root, OperationId::new()))
+            .is_ok()
+    );
+    assert!(
+        service
+            .submit_comment(comment_request(&born.root, OperationId::new()))
+            .is_ok()
+    );
+
+    let snapshot = service.repository_snapshot(&born.root).unwrap();
+    assert_eq!(
+        snapshot.configuration,
+        manyhands::repository::SnapshotConfiguration::Valid {
+            primary_branch: "main".to_owned(),
+            publication_remote: Some("origin".to_owned()),
+        }
+    );
+    assert_eq!(snapshot.items.len(), 2);
+    assert_eq!(
+        snapshot
+            .items
+            .iter()
+            .find(|item| item.id == support::document_id())
+            .unwrap()
+            .comments
+            .len(),
+        1
+    );
+    assert!(!snapshot.refresh_required);
+    support::assert_operation_records_exclude(
+        data.path(),
+        &[
+            "acceptance body",
+            "ticket body",
+            "comment body",
+            "BLAKE3",
+            "PRIVATE KEY",
+            "password",
+            "credential",
+        ],
+    );
+    let before_rebuild = support::repository_and_worktree_snapshot(&born);
+    service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: born.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&born),
+        before_rebuild
+    );
+    assert_eq!(
+        service.repository_snapshot(&born.root).unwrap().items.len(),
+        2
+    );
+
+    service
+        .remove_registration(RemoveRegistrationRequest {
+            root: born.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert_eq!(registered_rows(data.path(), &born.root), 0);
+    assert_eq!(operation_rows(data.path(), &born.root), 0);
+}
+
+#[test]
+fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
+    for (name, point) in [
+        (
+            "configuration write",
+            FailurePoint::BeforeConfigurationWrite,
+        ),
+        (
+            "initialization commit",
+            FailurePoint::BeforeInitializationCommit,
+        ),
+        ("context branch", FailurePoint::BeforeContextBranchCreation),
+        ("context worktree", FailurePoint::BeforeWorktreeCreation),
+        ("item write", FailurePoint::BeforeItemWrite),
+        ("checkpoint", FailurePoint::BeforeCheckpointCommit),
+        ("sqlite refresh", FailurePoint::BeforeIndexTransactionCommit),
+    ] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        let operation_id = OperationId::new();
+
+        match point {
+            FailurePoint::BeforeConfigurationWrite | FailurePoint::BeforeInitializationCommit => {
+                let request =
+                    support::enable_request_with_operation_id(&fixture.root, operation_id);
+                let before = support::repository_and_worktree_snapshot(&fixture);
+                let first = support::FailOnce::at(point).open_service(data.path());
+                assert!(first.enable(request.clone()).is_err(), "{name}");
+                drop(first);
+                let retained = support::repository_and_worktree_snapshot(&fixture);
+                assert_eq!(retained, before, "{name}");
+                RepositoryService::open_at(data.path())
+                    .unwrap()
+                    .enable(request)
+                    .unwrap();
+                assert_eq!(commit_count(&fixture.repository), 2, "{name}");
+            }
+            FailurePoint::BeforeContextBranchCreation | FailurePoint::BeforeWorktreeCreation => {
+                RepositoryService::open_at(data.path())
+                    .unwrap()
+                    .enable(support::enable_request(&fixture.root))
+                    .unwrap();
+                stage_configuration(&fixture);
+                let request = authoring_target(
+                    &fixture.root,
+                    AuthoringKind::Document,
+                    support::document_id(),
+                    operation_id,
+                );
+                let first = support::FailOnce::at(point).open_service(data.path());
+                assert!(first.prepare_context(request.clone()).is_err(), "{name}");
+                drop(first);
+                let context = context_from(
+                    RepositoryService::open_at(data.path())
+                        .unwrap()
+                        .prepare_context(request),
+                );
+                assert_eq!(
+                    support::repository_and_worktree_snapshot(&fixture)
+                        .worktrees
+                        .len(),
+                    1
+                );
+                assert_eq!(
+                    context.worktree,
+                    fixture
+                        .root
+                        .join(".manyhands/worktrees")
+                        .join(support::document_id().to_string())
+                );
+            }
+            FailurePoint::BeforeItemWrite | FailurePoint::BeforeCheckpointCommit => {
+                let setup = RepositoryService::open_at(data.path()).unwrap();
+                setup
+                    .enable(support::enable_request(&fixture.root))
+                    .unwrap();
+                stage_configuration(&fixture);
+                let request = document_request(&fixture.root, operation_id);
+                let first = support::FailOnce::at(point).open_service(data.path());
+                assert!(first.save_document(request.clone()).is_err(), "{name}");
+                let retained = support::repository_and_worktree_snapshot(&fixture);
+                drop(first);
+                RepositoryService::open_at(data.path())
+                    .unwrap()
+                    .save_document(request)
+                    .unwrap();
+                let after = support::repository_and_worktree_snapshot(&fixture);
+                assert_eq!(after.references.len(), retained.references.len(), "{name}");
+                assert_eq!(
+                    commit_count(
+                        &git2::Repository::open(
+                            fixture
+                                .root
+                                .join(".manyhands/worktrees")
+                                .join(support::document_id().to_string())
+                        )
+                        .unwrap()
+                    ),
+                    3,
+                    "{name}"
+                );
+            }
+            FailurePoint::BeforeIndexTransactionCommit => {
+                let request =
+                    support::enable_request_with_operation_id(&fixture.root, operation_id);
+                let first = support::FailOnce::at(point).open_service(data.path());
+                assert!(first.enable(request.clone()).is_ok(), "{name}");
+                let retained = support::repository_and_worktree_snapshot(&fixture);
+                drop(first);
+                RepositoryService::open_at(data.path())
+                    .unwrap()
+                    .enable(request)
+                    .unwrap();
+                assert_eq!(
+                    support::repository_and_worktree_snapshot(&fixture),
+                    retained,
+                    "{name}"
+                );
+            }
+            _ => unreachable!(),
+        }
+        support::assert_operation_records_exclude(
+            data.path(),
+            &["acceptance body", "PRIVATE KEY", "password", "credential"],
+        );
+    }
+
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let setup = RepositoryService::open_at(data.path()).unwrap();
+    setup
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    fs::remove_file(data.path().join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    fs::write(
+        data.path().join(manyhands::repository::REGISTRY_FILE),
+        b"not sqlite",
+    )
+    .unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let request = RebuildRepositoryRequest {
+        root: fixture.root.clone(),
+        operation_id: OperationId::new(),
+    };
+    let first = support::FailOnce::at(FailurePoint::BeforeCorruptCacheReplacement)
+        .open_service(data.path());
+    assert!(first.rebuild_repository(request.clone()).is_err());
+    drop(first);
+    RepositoryService::open_at(data.path())
+        .unwrap()
+        .rebuild_repository(request)
+        .unwrap();
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    support::assert_operation_records_exclude(
+        data.path(),
+        &["not sqlite", "PRIVATE KEY", "password", "credential"],
+    );
+}
+
+fn authoring_target(
+    root: &std::path::Path,
+    kind: AuthoringKind,
+    item_id: manyhands::canonical::ItemId,
+    operation_id: OperationId,
+) -> AuthoringTarget {
+    AuthoringTarget {
+        root: root.to_owned(),
+        kind,
+        item_id,
+        intent: ContextIntent::Create,
+        operation_id,
+    }
+}
+
+fn context_from(
+    outcome: Result<
+        manyhands::repository::ContextProvisionOutcome,
+        manyhands::repository::RepositoryError,
+    >,
+) -> manyhands::repository::ItemContext {
+    match outcome.unwrap() {
+        manyhands::repository::ContextProvisionOutcome::Created(context)
+        | manyhands::repository::ContextProvisionOutcome::Reused(context)
+        | manyhands::repository::ContextProvisionOutcome::IndexPending { context } => context,
+    }
+}
+
+fn document_request(root: &std::path::Path, operation_id: OperationId) -> SaveDocumentRequest {
+    SaveDocumentRequest {
+        target: authoring_target(
+            root,
+            AuthoringKind::Document,
+            support::document_id(),
+            operation_id,
+        ),
+        source_path: None,
+        destination_path: PathBuf::from("docs/acceptance.md"),
+        draft: DocumentDraft {
+            title: "Acceptance document".to_owned(),
+            body: "acceptance body\n".to_owned(),
+        },
+        expected_source: None,
+        expected_destination: ExpectedPathObservation::Missing,
+    }
+}
+
+fn ticket_request(root: &std::path::Path, operation_id: OperationId) -> SaveTicketRequest {
+    SaveTicketRequest {
+        target: authoring_target(
+            root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            operation_id,
+        ),
+        draft: TicketDraft {
+            title: "Acceptance ticket".to_owned(),
+            ticket_type: "feature".to_owned(),
+            status: "open".to_owned(),
+            project: None,
+            team: None,
+            body: "ticket body\n".to_owned(),
+        },
+        expected_path: ExpectedPathObservation::Missing,
+    }
+}
+
+fn comment_request(root: &std::path::Path, operation_id: OperationId) -> SubmitCommentRequest {
+    SubmitCommentRequest {
+        target: AuthoringTarget {
+            intent: ContextIntent::Edit,
+            ..authoring_target(
+                root,
+                AuthoringKind::Document,
+                support::document_id(),
+                operation_id,
+            )
+        },
+        comment_id: support::root_comment_id(),
+        parent_id: None,
+        body: "comment body\n".to_owned(),
+        expected_destination: ExpectedPathObservation::Missing,
+    }
 }
