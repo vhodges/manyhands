@@ -1,8 +1,8 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -39,23 +39,7 @@ const MAX_DOCUMENT_DIRECTORY_ENTRIES: usize = 1024;
 const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 
-type RepositoryOperationLock = Arc<Mutex<()>>;
-type RepositoryOperationLockMap = HashMap<(PathBuf, PathBuf), Weak<Mutex<()>>>;
 type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
-
-fn process_repository_operation_lock(registry_path: &Path, root: &Path) -> RepositoryOperationLock {
-    static OPERATION_LOCKS: OnceLock<Mutex<RepositoryOperationLockMap>> = OnceLock::new();
-    let locks = OPERATION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks.lock().unwrap_or_else(|error| error.into_inner());
-    locks.retain(|_, lock| lock.strong_count() != 0);
-    let key = (registry_path.to_owned(), root.to_owned());
-    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-        return lock;
-    }
-    let lock = Arc::new(Mutex::new(()));
-    locks.insert(key, Arc::downgrade(&lock));
-    lock
-}
 
 fn remote_target_matcher(action: RepositoryOperation, name: &str, url: Option<&str>) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -86,6 +70,34 @@ fn authoring_write_target(target: &AuthoringTarget, paths: &[&Path]) -> String {
         .collect::<Vec<_>>()
         .join("\0");
     format!("{}\0{}", authoring_context_target(target), paths)
+}
+
+fn creation_destination_is_safe(
+    record: RecoveryRecord,
+    expected: &ExpectedPathObservation,
+) -> bool {
+    matches!(expected, ExpectedPathObservation::Missing) || replay_owns_destination(record)
+}
+
+fn replay_owns_destination(record: RecoveryRecord) -> bool {
+    !record.is_new
+        && matches!(
+            record.completed_step,
+            Some(
+                "authoring_destination_observed"
+                    | "document_destination_observed"
+                    | "document_move_observed"
+                    | "authoring_checkpoint_observed"
+            )
+        )
+}
+
+fn replay_owns_document_source(record: RecoveryRecord) -> bool {
+    !record.is_new
+        && matches!(
+            record.completed_step,
+            Some("document_move_observed" | "authoring_checkpoint_observed")
+        )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1058,16 +1070,6 @@ impl RepositoryService {
     ) -> Result<ContextProvisionOutcome, RepositoryError> {
         let operation = RepositoryOperation::PrepareContext;
         self.require_index_available(operation, Some(&target.root))?;
-        let (_, root) = canonical_repository_root(&target.root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
         let (repository, root) = canonical_repository_root(&target.root, operation)?;
         match read_configuration_for(&root, operation)? {
             ConfigurationInspection::Valid(_) => {}
@@ -1294,15 +1296,6 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveDocument;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
         let source_target_path = request.source_path.clone().unwrap_or_default();
         let paths = [
             source_target_path.as_path(),
@@ -1370,9 +1363,22 @@ impl RepositoryService {
                 ));
             }
             validate_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
+            if matches!(intent, ContextIntent::Create)
+                && (!request.source_path.is_none()
+                    || !creation_destination_is_safe(record, &request.expected_destination))
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::OperationMismatch,
+                    "document creation requires no source and a missing destination observation",
+                ));
+            }
             if let Some(source) = &source {
                 validate_safe_owned_parent(&context.worktree, source, operation, &context.root)?;
-                if let Some(expected) = request.expected_source.as_ref() {
+                if let Some(expected) = request.expected_source.as_ref()
+                    && !replay_owns_document_source(record)
+                {
                     ensure_expected_owned_observation(
                         &context.worktree,
                         source,
@@ -1382,13 +1388,15 @@ impl RepositoryService {
                     )?;
                 }
             }
-            ensure_expected_owned_observation(
-                &context.worktree,
-                &destination,
-                &request.expected_destination,
-                operation,
-                &context,
-            )?;
+            if !replay_owns_destination(record) {
+                ensure_expected_owned_observation(
+                    &context.worktree,
+                    &destination,
+                    &request.expected_destination,
+                    operation,
+                    &context,
+                )?;
+            }
             let document = match (intent, source.as_deref()) {
                 (ContextIntent::Create, Some(_)) => {
                     return Err(authoring_error(
@@ -1533,12 +1541,24 @@ impl RepositoryService {
                     operation,
                     &context.root,
                 )?;
+                self.advance_lifecycle(
+                    &context.root,
+                    operation,
+                    record,
+                    "document_destination_observed",
+                )?;
             }
             if moving {
                 let source = source.as_ref().expect("move has a source");
                 if source_present {
                     self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                     remove_owned_file(&context.worktree, source, operation, &context.root)?;
+                    self.advance_lifecycle(
+                        &context.root,
+                        operation,
+                        record,
+                        "document_move_observed",
+                    )?;
                 }
             }
             let checkpoint = self.checkpoint_owned_paths(
@@ -1552,6 +1572,12 @@ impl RepositoryService {
                     removed_source: (source_present || source_in_head)
                         .then(|| source.as_deref().expect("move has a source")),
                 },
+            )?;
+            self.advance_lifecycle(
+                &context.root,
+                operation,
+                record,
+                "authoring_checkpoint_observed",
             )?;
             Ok(SaveOutcome::Saved {
                 context,
@@ -1582,15 +1608,6 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveTicket;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
         let (_lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
@@ -1635,13 +1652,25 @@ impl RepositoryService {
             };
             let path = PathBuf::from(format!(".manyhands/tickets/{}/ticket.md", context.item_id));
             validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-            ensure_expected_owned_observation(
-                &context.worktree,
-                &path,
-                &request.expected_path,
-                operation,
-                &context,
-            )?;
+            if matches!(intent, ContextIntent::Create)
+                && !creation_destination_is_safe(record, &request.expected_path)
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::OperationMismatch,
+                    "ticket creation requires a missing destination observation",
+                ));
+            }
+            if !replay_owns_destination(record) {
+                ensure_expected_owned_observation(
+                    &context.worktree,
+                    &path,
+                    &request.expected_path,
+                    operation,
+                    &context,
+                )?;
+            }
             if ticket_id_exists_at_a_different_path(
                 &context.worktree,
                 &context.item_id,
@@ -1754,6 +1783,12 @@ impl RepositoryService {
                     operation,
                     &context.root,
                 )?;
+                self.advance_lifecycle(
+                    &context.root,
+                    operation,
+                    record,
+                    "authoring_destination_observed",
+                )?;
             }
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
@@ -1765,6 +1800,12 @@ impl RepositoryService {
                     added_paths: &[path.as_path()],
                     removed_source: None,
                 },
+            )?;
+            self.advance_lifecycle(
+                &context.root,
+                operation,
+                record,
+                "authoring_checkpoint_observed",
             )?;
             Ok(SaveOutcome::Saved {
                 context,
@@ -1798,15 +1839,6 @@ impl RepositoryService {
         let operation = RepositoryOperation::SubmitComment;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
-        let operation_lock = process_repository_operation_lock(&self.registry_path, &root);
-        let _operation_lock = operation_lock.lock().map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.clone()),
-                RepositoryErrorKind::InjectedFailure,
-                "the repository operation synchronization state is unavailable",
-            )
-        })?;
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
         let (_lease, record) = self.begin_lifecycle(
@@ -1887,13 +1919,23 @@ impl RepositoryService {
             }
 
             validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-            ensure_expected_owned_observation(
-                &context.worktree,
-                &path,
-                &request.expected_destination,
-                operation,
-                &context,
-            )?;
+            if !creation_destination_is_safe(record, &request.expected_destination) {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::OperationMismatch,
+                    "comment creation requires a missing destination observation",
+                ));
+            }
+            if !replay_owns_destination(record) {
+                ensure_expected_owned_observation(
+                    &context.worktree,
+                    &path,
+                    &request.expected_destination,
+                    operation,
+                    &context,
+                )?;
+            }
             let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
             let comment = if exists {
                 let canonical::CanonicalItem::Comment(comment) =
@@ -1990,6 +2032,12 @@ impl RepositoryService {
                     operation,
                     &context.root,
                 )?;
+                self.advance_lifecycle(
+                    &context.root,
+                    operation,
+                    record,
+                    "authoring_destination_observed",
+                )?;
             }
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
@@ -2001,6 +2049,12 @@ impl RepositoryService {
                     added_paths: &[path.as_path()],
                     removed_source: None,
                 },
+            )?;
+            self.advance_lifecycle(
+                &context.root,
+                operation,
+                record,
+                "authoring_checkpoint_observed",
             )?;
             Ok(CommentSubmissionOutcome::Saved {
                 context,
@@ -2097,7 +2151,11 @@ impl RepositoryService {
     ) -> Result<RecoveryRecord, RepositoryError> {
         // Preserve authoritative local-Git behavior when the optional cache is unavailable.
         if self.registry_path.is_dir() {
-            return Ok(RecoveryRecord { id: 0 });
+            return Ok(RecoveryRecord {
+                id: 0,
+                is_new: true,
+                completed_step: None,
+            });
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
@@ -7152,7 +7210,7 @@ mod tests {
         let operation_id = OperationId::new();
         let _barrier = recovery::pause_before_begin_for_testing(
             operation_id,
-            Arc::new(std::sync::Barrier::new(2)),
+            std::sync::Arc::new(std::sync::Barrier::new(2)),
         );
 
         let results = std::thread::scope(|scope| {

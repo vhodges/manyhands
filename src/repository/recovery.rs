@@ -10,6 +10,8 @@ use super::{
 #[derive(Clone, Copy)]
 pub(super) struct RecoveryRecord {
     pub(super) id: i64,
+    pub(super) is_new: bool,
+    pub(super) completed_step: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -212,7 +214,7 @@ pub(super) fn begin_or_reconcile_operation(
         .map_err(RepositoryError::sqlite)?;
     let existing = transaction
         .query_row(
-            "SELECT id, root_path, action, target, state FROM operation_records WHERE operation_ulid = ?1",
+            "SELECT id, root_path, action, target, state, completed_step FROM operation_records WHERE operation_ulid = ?1",
             [&requested],
             |row| {
                 Ok((
@@ -221,12 +223,13 @@ pub(super) fn begin_or_reconcile_operation(
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(RepositoryError::sqlite)?;
-    if let Some((_, existing_root, existing_action, existing_target, _)) = &existing {
+    if let Some((_, existing_root, existing_action, existing_target, _, _)) = &existing {
         if existing_root != root_path {
             return Err(mismatch(operation, root));
         }
@@ -274,13 +277,26 @@ pub(super) fn begin_or_reconcile_operation(
         }
         if let Some(id) = matching {
             transaction.commit().map_err(RepositoryError::sqlite)?;
-            return Ok(RecoveryRecord { id });
+            return Ok(RecoveryRecord {
+                id,
+                is_new: false,
+                completed_step: existing
+                    .as_ref()
+                    .and_then(|(_, _, _, _, _, completed_step)| completed_step.as_deref())
+                    .and_then(authoring_observation_step),
+            });
         }
         return Err(recovery_required(operation, root));
     }
-    if let Some((id, ..)) = existing {
+    if let Some((id, _, _, _, _, completed_step)) = existing {
         transaction.commit().map_err(RepositoryError::sqlite)?;
-        return Ok(RecoveryRecord { id });
+        return Ok(RecoveryRecord {
+            id,
+            is_new: false,
+            completed_step: completed_step
+                .as_deref()
+                .and_then(authoring_observation_step),
+        });
     }
     let repository_id: Option<i64> = transaction
         .query_row(
@@ -299,7 +315,21 @@ pub(super) fn begin_or_reconcile_operation(
         .map_err(RepositoryError::sqlite)?;
     let id = transaction.last_insert_rowid();
     transaction.commit().map_err(RepositoryError::sqlite)?;
-    Ok(RecoveryRecord { id })
+    Ok(RecoveryRecord {
+        id,
+        is_new: true,
+        completed_step: None,
+    })
+}
+
+fn authoring_observation_step(step: &str) -> Option<&'static str> {
+    match step {
+        "authoring_destination_observed" => Some("authoring_destination_observed"),
+        "document_destination_observed" => Some("document_destination_observed"),
+        "document_move_observed" => Some("document_move_observed"),
+        "authoring_checkpoint_observed" => Some("authoring_checkpoint_observed"),
+        _ => None,
+    }
 }
 
 fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
@@ -316,7 +346,12 @@ pub(super) fn advance_after_observation(
     connection
         .execute(
             "UPDATE operation_records
-         SET state = ?2, completed_step = ?2, context_path = ?3,
+         SET state = ?2,
+               completed_step = CASE
+                   WHEN ?2 = 'completed' THEN COALESCE(completed_step, 'completed')
+                   ELSE ?2
+               END,
+               context_path = ?3,
               persisted_context_count = COALESCE(?4, persisted_context_count), observed_at = ?5
           WHERE id = ?1 AND NOT (state = 'completed' AND ?2 = 'error')",
             params![

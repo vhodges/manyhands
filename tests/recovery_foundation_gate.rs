@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use fs4::fs_std::FileExt;
 use manyhands::repository::{
     AddRemoteRequest, AuthoringKind, AuthoringTarget, CommitIdentity, ConfigurationInspection,
     ContextIntent, CreateRepositoryRequest, DocumentDraft, EnableRepositoryOutcome,
@@ -209,6 +210,62 @@ fn authoring_context_and_save_wait_for_common_git_lease_then_replay_after_releas
         service.save_document(save_request()).unwrap(),
         SaveOutcome::Saved { .. }
     ));
+}
+
+#[test]
+fn authoring_save_respects_an_in_process_repository_lease() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    stage_configuration(&fixture);
+    let repository = git2::Repository::open(&fixture.root).unwrap();
+    let lock_path = repository.commondir().join("manyhands-operation.lock");
+    let (acquired_sender, acquired) = mpsc::channel();
+    let (release, release_receiver) = mpsc::channel();
+    let holder = thread::spawn(move || {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .unwrap();
+        file.lock_exclusive().unwrap();
+        acquired_sender.send(()).unwrap();
+        release_receiver.recv().unwrap();
+        file.unlock().unwrap();
+    });
+    acquired.recv().unwrap();
+
+    let start = Instant::now();
+    let error = match service.save_document(SaveDocumentRequest {
+        target: AuthoringTarget {
+            root: fixture.root.clone(),
+            kind: AuthoringKind::Document,
+            item_id: support::document_id(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        },
+        source_path: None,
+        destination_path: PathBuf::from("docs/in-process-lease.md"),
+        draft: DocumentDraft {
+            title: "Lease holder".to_owned(),
+            body: "must not block indefinitely\n".to_owned(),
+        },
+        expected_source: None,
+        expected_destination: ExpectedPathObservation::Missing,
+    }) {
+        Ok(_) => panic!("lease-held document save unexpectedly succeeded"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+    assert!(start.elapsed() < Duration::from_secs(1));
+
+    release.send(()).unwrap();
+    holder.join().unwrap();
 }
 
 #[test]

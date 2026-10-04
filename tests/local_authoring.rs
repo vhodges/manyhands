@@ -1684,13 +1684,6 @@ fn document_exact_create_retry_checkpoints_once_then_is_a_no_op() {
             ))
             .unwrap(),
     );
-    fs::create_dir_all(context.worktree.join("docs")).unwrap();
-    fs::write(
-        context.worktree.join("docs/new.md"),
-        canonical_document("Retry", "Retry body\n"),
-    )
-    .unwrap();
-
     let operation_id = support::operation_id();
     let (_, first) = saved_checkpoint(
         enabled
@@ -2520,7 +2513,7 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
 }
 
 #[test]
-fn document_missing_registration_reports_refresh_pending_without_duplicate_commit() {
+fn document_missing_registration_rejects_a_new_blake3_creation_claim() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -2545,10 +2538,8 @@ fn document_missing_registration_reports_refresh_pending_without_duplicate_commi
         })
         .unwrap();
 
-    let outcome = enabled.service.save_document(request()).unwrap();
-    assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid }, .. } if commit_oid == oid)
-    );
+    let error = document_error(enabled.service.save_document(request()));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
     assert_eq!(
         support::head_commit(&Repository::open(context.worktree).unwrap()),
         Some(oid)
@@ -3116,9 +3107,6 @@ fn ticket_exact_create_retry_checkpoints_pending_work_then_noops() {
             ))
             .unwrap(),
     );
-    let path = ticket_path(&context);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, canonical_ticket("Retry", "Retry body\n")).unwrap();
     let operation_id = support::new_operation_id();
     let request = || {
         ticket_request_with_operation_id(
@@ -3146,7 +3134,7 @@ fn ticket_exact_create_retry_checkpoints_pending_work_then_noops() {
 }
 
 #[test]
-fn ticket_missing_registration_is_refresh_pending_without_another_commit() {
+fn ticket_missing_registration_rejects_a_new_blake3_creation_claim() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -3169,10 +3157,8 @@ fn ticket_missing_registration_is_refresh_pending_without_another_commit() {
         })
         .unwrap();
 
-    let outcome = enabled.service.save_ticket(request()).unwrap();
-    assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid: pending }, .. } if pending == commit_oid)
-    );
+    let error = document_error(enabled.service.save_ticket(request()));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)
