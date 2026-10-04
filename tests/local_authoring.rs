@@ -6187,3 +6187,42 @@ fn recovery_document_write_transition_persistence_failure_blocks_other_ids_until
     assert_ne!(checkpoint, git2::Oid::zero());
     assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
 }
+
+#[test]
+fn context_git_failure_after_branch_creation_stays_pending_until_exact_retry() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let request = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::AfterContextBranchBeforeWorktreeGitFailure)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(request())).kind,
+        RepositoryErrorKind::Git
+    );
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    assert_eq!(
+        context_error(fresh.prepare_context(target(
+            &fixture.root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            ContextIntent::Create,
+        )))
+        .kind,
+        RepositoryErrorKind::RecoveryRequired,
+    );
+    assert!(matches!(
+        fresh.prepare_context(request()),
+        Ok(ContextProvisionOutcome::Created(_))
+    ));
+}

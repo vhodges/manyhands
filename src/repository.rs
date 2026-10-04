@@ -49,6 +49,11 @@ const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 
 type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
+#[cfg(unix)]
+type OwnedPathHook = (PathBuf, Box<dyn FnOnce() + Send>);
+#[cfg(unix)]
+static OWNED_PATH_HOOK: std::sync::OnceLock<Mutex<Option<OwnedPathHook>>> =
+    std::sync::OnceLock::new();
 
 fn remote_target_matcher(action: RepositoryOperation, name: &str, url: Option<&str>) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -540,6 +545,7 @@ pub enum FailurePoint {
     BeforeInitializationCommit,
     BeforePublicationConfigurationCommit,
     BeforeContextBranchCreation,
+    AfterContextBranchBeforeWorktreeGitFailure,
     BeforeWorktreeCreation,
     BeforeItemWrite,
     AfterOwnedWriteBeforeLifecyclePersistence,
@@ -1086,7 +1092,7 @@ impl RepositoryService {
         let outcome = match self.prepare_context_unlocked(target, Some(record)) {
             Ok(outcome) => outcome,
             Err(error) => {
-                if error.kind != RepositoryErrorKind::InjectedFailure {
+                if self.is_definite_authoring_rejection(record, operation, &root, &error)? {
                     self.complete_lifecycle(&root, operation, record)?;
                 }
                 return Err(error);
@@ -1248,6 +1254,18 @@ impl RepositoryService {
         };
         let mut options = WorktreeAddOptions::new();
         options.reference(Some(&reference));
+        if self.should_inject(
+            FailurePoint::AfterContextBranchBeforeWorktreeGitFailure,
+            operation,
+            &root,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::Git,
+                "the context worktree creation returned a Git error after branch creation",
+            ));
+        }
         self.check_failure(FailurePoint::BeforeWorktreeCreation, operation, &root)?;
         repository
             .worktree(&item_id, &worktree, Some(&options))
@@ -3517,6 +3535,19 @@ impl RepositoryService {
             .expect("test rebuild error hook lock") = Some(Box::new(hook));
     }
 
+    #[cfg(unix)]
+    #[doc(hidden)]
+    pub fn set_owned_path_hook_for_testing(
+        &self,
+        relative: PathBuf,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *OWNED_PATH_HOOK
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("test owned-path hook lock") = Some((relative, Box::new(hook)));
+    }
+
     pub fn remove_registration(
         &self,
         request: RemoveRegistrationRequest,
@@ -5061,6 +5092,21 @@ fn canonical_document_probe(item_id: &canonical::ItemId) -> String {
 }
 
 #[cfg(unix)]
+fn run_owned_path_hook(relative: &Path) {
+    let hook = OWNED_PATH_HOOK.get().and_then(|installed| {
+        let mut installed = installed.lock().expect("test owned-path hook lock");
+        if installed.as_ref().is_some_and(|(path, _)| path == relative) {
+            installed.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, hook)) = hook {
+        hook();
+    }
+}
+
+#[cfg(unix)]
 fn owned_leaf(
     relative: &Path,
     operation: RepositoryOperation,
@@ -5187,6 +5233,7 @@ fn owned_file_bytes(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<Option<Vec<u8>>, RepositoryError> {
+    run_owned_path_hook(relative);
     let parent_path = relative.parent().ok_or_else(|| {
         authoring_error(
             operation,
@@ -5244,6 +5291,7 @@ fn replace_owned_bytes(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
+    run_owned_path_hook(relative);
     let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
     let leaf = owned_leaf(relative, operation, repository_root)?;
     let temp = CString::new(format!(".manyhands-write-{}", std::process::id()))
@@ -5689,6 +5737,7 @@ fn remove_owned_file(
 ) -> Result<(), RepositoryError> {
     #[cfg(unix)]
     {
+        run_owned_path_hook(relative);
         let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
         let leaf = owned_leaf(relative, operation, repository_root)?;
         let result =
