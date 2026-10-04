@@ -2474,6 +2474,64 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
 }
 
 #[test]
+fn fresh_service_replay_of_interrupted_move_preserves_an_externally_changed_source() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/source.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join("docs/source.md");
+    let destination = context.worktree.join("docs/destination.md");
+    let source_expected = ExpectedPathObservation::from_bytes(&fs::read(&source).unwrap());
+    let operation_id = support::new_operation_id();
+    let request = || {
+        let mut request = document_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Edit,
+            Some("docs/source.md"),
+            "docs/destination.md",
+            "Moved",
+            "Body\n",
+            operation_id,
+        );
+        request.expected_source = Some(source_expected.clone());
+        request.expected_destination = ExpectedPathObservation::Missing;
+        request
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        document_error(failing.save_document(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let external = canonical_document("External source", "External body\n");
+    fs::write(&source, &external).unwrap();
+    let before_replay = support::repository_and_worktree_snapshot(&fixture);
+
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let error = document_error(fresh.save_document(request()));
+
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert_eq!(fs::read_to_string(source).unwrap(), external);
+    assert!(!destination.exists());
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        before_replay
+    );
+}
+
+#[test]
 fn document_noop_registry_failure_returns_pending_then_invalidates_without_commit() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);

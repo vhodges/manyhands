@@ -1509,17 +1509,6 @@ impl RepositoryService {
             }
             if let Some(source) = &source {
                 validate_safe_owned_parent(&context.worktree, source, operation, &context.root)?;
-                if let Some(expected) = request.expected_source.as_ref()
-                    && record.is_new
-                {
-                    ensure_expected_owned_observation(
-                        &context.worktree,
-                        source,
-                        expected,
-                        operation,
-                        &context,
-                    )?;
-                }
             }
             if record.is_new {
                 ensure_expected_owned_observation(
@@ -1554,6 +1543,21 @@ impl RepositoryService {
                     ));
                 }
                 (ContextIntent::Edit, Some(source)) => {
+                    let expected_source = if record.completed_step == Some("document_move_observed")
+                    {
+                        Some(ExpectedPathObservation::Missing)
+                    } else {
+                        request.expected_source.clone()
+                    };
+                    if let Some(expected_source) = &expected_source {
+                        ensure_expected_owned_observation(
+                            &context.worktree,
+                            source,
+                            expected_source,
+                            operation,
+                            &context,
+                        )?;
+                    }
                     let existing_path =
                         if source_exists(&context.worktree, source, operation, &context.root)? {
                             source
@@ -1703,6 +1707,21 @@ impl RepositoryService {
             if moving {
                 let source = source.as_ref().expect("move has a source");
                 if source_present {
+                    let expected_source = if record.completed_step == Some("document_move_observed")
+                    {
+                        Some(ExpectedPathObservation::Missing)
+                    } else {
+                        request.expected_source.clone()
+                    };
+                    if let Some(expected_source) = &expected_source {
+                        ensure_expected_owned_observation(
+                            &context.worktree,
+                            source,
+                            expected_source,
+                            operation,
+                            &context,
+                        )?;
+                    }
                     self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                     remove_owned_file(&context.worktree, source, operation, &context.root)?;
                     self.advance_lifecycle(
