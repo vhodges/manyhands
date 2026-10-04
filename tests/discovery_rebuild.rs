@@ -218,6 +218,61 @@ fn active_paused_scan_heartbeats_without_being_stolen() {
     });
 }
 
+#[test]
+fn reclaimed_owner_cannot_overwrite_newer_discovery_rows() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let document = support::write_document_source(&fixture.root, "docs/fixture.md");
+    let first = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let second = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let operation_id = support::operation_id();
+    let (observed_send, observed_receive) = mpsc::sync_channel(0);
+    let (resume_send, resume_receive) = mpsc::sync_channel(0);
+    let (heartbeat_send, heartbeat_receive) = mpsc::sync_channel(0);
+    let (heartbeat_resume_send, heartbeat_resume_receive) = mpsc::sync_channel(0);
+    first.set_observation_hook_for_testing(move || {
+        observed_send.send(()).unwrap();
+        resume_receive.recv().unwrap();
+    });
+    first.set_index_owner_heartbeat_hook_for_testing(move || {
+        heartbeat_send.send(()).unwrap();
+        heartbeat_resume_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let stale =
+            scope.spawn(|| first.refresh_repository(refresh_request!(&fixture.root, operation_id)));
+        observed_receive.recv().unwrap();
+        heartbeat_receive.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        fs::write(
+            &document,
+            support::document_source().replace("Fixture document", "Second owner"),
+        )
+        .unwrap();
+        assert!(matches!(
+            second
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+        heartbeat_resume_send.send(()).unwrap();
+        resume_send.send(()).unwrap();
+        assert!(matches!(
+            stale.join().unwrap().unwrap(),
+            RefreshOutcome::IndexPending { .. }
+        ));
+    });
+
+    let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
+    assert!(
+        snapshot
+            .items
+            .iter()
+            .any(|item| item.title == "Second owner")
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct AvailableState {
     head: Option<git2::Oid>,

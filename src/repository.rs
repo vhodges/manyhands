@@ -39,8 +39,8 @@ use discovery::{
 };
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
-    claim_indexing, pending_for_root, record_persisted_context as record_recovery_context,
-    touch_indexing, transition_indexing,
+    claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
+    record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -188,6 +188,7 @@ pub struct RepositoryService {
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    index_owner_heartbeat_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -200,9 +201,17 @@ struct IndexOwnerHeartbeat {
 }
 
 impl IndexOwnerHeartbeat {
-    fn start(registry_path: PathBuf, owner: IndexOwner, root: PathBuf) -> Self {
+    fn start(
+        registry_path: PathBuf,
+        owner: IndexOwner,
+        root: PathBuf,
+        heartbeat_hook: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Self {
         let (stop, stopped) = mpsc::channel();
         let worker = thread::spawn(move || {
+            if let Some(hook) = heartbeat_hook {
+                hook();
+            }
             loop {
                 match stopped.recv_timeout(INDEX_OWNER_HEARTBEAT_INTERVAL) {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -929,7 +938,12 @@ impl RepositoryService {
             };
             (repository_id, owner)
         };
-        let heartbeat = IndexOwnerHeartbeat::start(self.registry_path.clone(), owner, root.clone());
+        let heartbeat = IndexOwnerHeartbeat::start(
+            self.registry_path.clone(),
+            owner,
+            root.clone(),
+            self.take_index_owner_heartbeat_hook(),
+        );
         if self.should_inject(FailurePoint::AfterIndexClaim, operation, &root)? {
             return Err(RepositoryError::new(
                 operation,
@@ -942,6 +956,12 @@ impl RepositoryService {
         let result =
             self.refresh_repository_claimed(&repository, root.clone(), repository_id, owner);
         drop(heartbeat);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind == RepositoryErrorKind::RecoveryRequired)
+        {
+            return Ok(RefreshOutcome::IndexPending { root });
+        }
         if result.is_err() {
             let _ = set_refresh_operation(&self.registry_path, owner, "failed", None, &root);
         }
@@ -996,7 +1016,7 @@ impl RepositoryService {
             persist_context_refresh(
                 &self.registry_path,
                 repository_id,
-                owner.record_id,
+                owner,
                 &before,
                 &before.context,
                 &before.head,
@@ -1012,7 +1032,7 @@ impl RepositoryService {
                 persist_context_refresh(
                     &self.registry_path,
                     repository_id,
-                    owner.record_id,
+                    owner,
                     &before,
                     &active.context,
                     &active.head,
@@ -2629,8 +2649,12 @@ impl RepositoryService {
         let Some(owner) = self.claim_lifecycle_indexing(root, operation, record)? else {
             return Ok(false);
         };
-        let heartbeat =
-            IndexOwnerHeartbeat::start(self.registry_path.clone(), owner, root.to_owned());
+        let heartbeat = IndexOwnerHeartbeat::start(
+            self.registry_path.clone(),
+            owner,
+            root.to_owned(),
+            self.take_index_owner_heartbeat_hook(),
+        );
         drop(lease);
         let refresh = (|| {
             let repository_id = registered_repository_id(&self.registry_path, root, operation)?;
@@ -2851,6 +2875,7 @@ impl RepositoryService {
             lifecycle_lease_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
             refresh_claim_hook: Mutex::new(None),
+            index_owner_heartbeat_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
             corrupt_cache_decision_hook: Mutex::new(None),
             corrupt_cache_critical_hook: Mutex::new(None),
@@ -3938,6 +3963,21 @@ impl RepositoryService {
             .expect("test refresh-claim hook lock") = Some(Box::new(hook));
     }
 
+    #[doc(hidden)]
+    pub fn set_index_owner_heartbeat_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .index_owner_heartbeat_hook
+            .lock()
+            .expect("test index-owner heartbeat hook lock") = Some(Box::new(hook));
+    }
+
+    fn take_index_owner_heartbeat_hook(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        self.index_owner_heartbeat_hook
+            .lock()
+            .expect("test index-owner heartbeat hook lock")
+            .take()
+    }
+
     fn run_refresh_claim_hook(&self) {
         if let Some(hook) = self
             .refresh_claim_hook
@@ -4483,7 +4523,7 @@ fn changed_contexts(
 fn persist_context_refresh(
     registry_path: &Path,
     repository_id: i64,
-    operation_id: i64,
+    owner: IndexOwner,
     root_observation: &RootObservation,
     context: &discovery::RootContextObservation,
     head: &discovery::RootHeadObservation,
@@ -4497,9 +4537,13 @@ fn persist_context_refresh(
         cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    let transaction = connection.transaction().map_err(|error| {
-        RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| {
+            RepositoryError::sqlite(error)
+                .for_operation(RepositoryOperation::RefreshRepository, root)
+        })?;
+    require_index_owner(&transaction, owner, root)?;
     transaction
         .execute(
             "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
@@ -4565,8 +4609,12 @@ fn persist_context_refresh(
     })?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    record_recovery_context(&connection, operation_id, &context.worktree)
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))
+    if !record_owned_persisted_context(&connection, owner, &context.worktree)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        return Err(nonowner_error(root));
+    }
+    Ok(())
 }
 
 fn persist_retry_problem(
@@ -4578,9 +4626,16 @@ fn persist_retry_problem(
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
         cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
-    let connection = open_registry(registry_path, &mut |_| {})
+    let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    let context_id: Option<i64> = connection
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| {
+            RepositoryError::sqlite(error)
+                .for_operation(RepositoryOperation::RefreshRepository, root)
+        })?;
+    require_index_owner(&transaction, owner, root)?;
+    let context_id: Option<i64> = transaction
         .query_row(
             "SELECT id FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
             params![repository_id, context.to_str()],
@@ -4591,7 +4646,7 @@ fn persist_retry_problem(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    connection
+    transaction
         .execute(
             "UPDATE repositories SET refresh_required = 1 WHERE id = ?1",
             [repository_id],
@@ -4600,8 +4655,15 @@ fn persist_retry_problem(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    connection.execute("INSERT INTO problems (repository_id, context_id, code, guidance, observed_at) VALUES (?1, ?2, 'retry-required', 'the context changed while it was being observed; refresh again', ?3)", params![repository_id, context_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    set_refresh_operation(registry_path, owner, "retry", Some(context), root)
+    transaction.execute("INSERT INTO problems (repository_id, context_id, code, guidance, observed_at) VALUES (?1, ?2, 'retry-required', 'the context changed while it was being observed; refresh again', ?3)", params![repository_id, context_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    if !transition_indexing(&transaction, owner, "retry", Some(context))
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        return Err(nonowner_error(root));
+    }
+    transaction.commit().map_err(|error| {
+        RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
+    })
 }
 
 fn reconcile_disappeared_contexts(
@@ -4615,9 +4677,13 @@ fn reconcile_disappeared_contexts(
         cache_read_guard(registry_path, root, RepositoryOperation::RefreshRepository)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    let transaction = connection.transaction().map_err(|error| {
-        RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| {
+            RepositoryError::sqlite(error)
+                .for_operation(RepositoryOperation::RefreshRepository, root)
+        })?;
+    require_index_owner(&transaction, owner, root)?;
     let paths = std::iter::once(observation.context.worktree.clone())
         .chain(
             observation
@@ -4661,10 +4727,37 @@ fn reconcile_disappeared_contexts(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1", [repository_id]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    if !transition_indexing(&transaction, owner, "completed", None)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        return Err(nonowner_error(root));
+    }
     transaction.commit().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
-    })?;
-    set_refresh_operation(registry_path, owner, "completed", None, root)
+    })
+}
+
+fn require_index_owner(
+    connection: &rusqlite::Connection,
+    owner: IndexOwner,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    if owns_indexing(connection, owner)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    {
+        Ok(())
+    } else {
+        Err(nonowner_error(root))
+    }
+}
+
+fn nonowner_error(root: &Path) -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::RefreshRepository,
+        Some(root.to_owned()),
+        RepositoryErrorKind::RecoveryRequired,
+        "the repository refresh no longer owns indexing",
+    )
 }
 
 #[allow(dead_code)]

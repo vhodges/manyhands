@@ -456,6 +456,19 @@ pub(super) fn touch_indexing(
         == 1)
 }
 
+pub(super) fn owns_indexing(
+    connection: &Connection,
+    owner: IndexOwner,
+) -> Result<bool, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM operation_records WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?2)",
+            params![owner.record_id, owner.epoch],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)
+}
+
 pub(super) fn record_persisted_context(
     connection: &Connection,
     record_id: i64,
@@ -470,6 +483,22 @@ pub(super) fn record_persisted_context(
         )
         .map_err(RepositoryError::sqlite)?;
     Ok(())
+}
+
+pub(super) fn record_owned_persisted_context(
+    connection: &Connection,
+    owner: IndexOwner,
+    context: &Path,
+) -> Result<bool, RepositoryError> {
+    Ok(connection
+        .execute(
+            "UPDATE operation_records
+         SET context_path = ?2, persisted_context_count = persisted_context_count + 1, observed_at = ?3
+          WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?4",
+            params![owner.record_id, context.to_str(), now(), owner.epoch],
+        )
+        .map_err(RepositoryError::sqlite)?
+        == 1)
 }
 
 pub(super) fn pending_for_root(
