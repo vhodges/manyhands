@@ -41,6 +41,10 @@
 - Close the ticket only after the associated change receives code-review or PR
   approval, normally in the final push before merge.
 
+## Working on a ticket
+
+Since each the branch and worktree will be pre-existing from some branch point in the last, before starting, rebase main onto the ticket branch before starting any work, planning or implementation.
+
 ## Linux Toolchain
 
 - Keep `devenv.nix`'s GPUI runtime library list and `env.LD_LIBRARY_PATH` in sync. GPUI dynamically loads Wayland; removing the loader path causes `NoWaylandLib` at startup even when the Nix packages are installed.
