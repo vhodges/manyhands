@@ -50,10 +50,19 @@ const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 
 type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
 #[cfg(unix)]
-type OwnedPathHook = (PathBuf, Box<dyn FnOnce() + Send>);
+type OwnedPathHook = (PathBuf, OwnedPathBoundary, Box<dyn FnOnce() + Send>);
 #[cfg(unix)]
 static OWNED_PATH_HOOK: std::sync::OnceLock<Mutex<Option<OwnedPathHook>>> =
     std::sync::OnceLock::new();
+
+#[cfg(unix)]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnedPathBoundary {
+    Read,
+    Replace,
+    Remove,
+}
 
 fn remote_target_matcher(action: RepositoryOperation, name: &str, url: Option<&str>) -> String {
     let mut hasher = blake3::Hasher::new();
@@ -1522,6 +1531,14 @@ impl RepositoryService {
                 .map(|source| source_exists(&context.worktree, source, operation, &context.root))
                 .transpose()?
                 .unwrap_or(false);
+            if moving && source_present {
+                ensure_owned_file_removable(
+                    &context.worktree,
+                    source.as_ref().expect("move has a source"),
+                    operation,
+                    &context.root,
+                )?;
+            }
             if moving && !source_present && !destination_exists {
                 return Err(authoring_error(
                     operation,
@@ -3540,12 +3557,13 @@ impl RepositoryService {
     pub fn set_owned_path_hook_for_testing(
         &self,
         relative: PathBuf,
+        boundary: OwnedPathBoundary,
         hook: impl FnOnce() + Send + 'static,
     ) {
         *OWNED_PATH_HOOK
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .expect("test owned-path hook lock") = Some((relative, Box::new(hook)));
+            .expect("test owned-path hook lock") = Some((relative, boundary, Box::new(hook)));
     }
 
     pub fn remove_registration(
@@ -5092,16 +5110,22 @@ fn canonical_document_probe(item_id: &canonical::ItemId) -> String {
 }
 
 #[cfg(unix)]
-fn run_owned_path_hook(relative: &Path) {
+fn run_owned_path_hook(relative: &Path, boundary: OwnedPathBoundary) {
     let hook = OWNED_PATH_HOOK.get().and_then(|installed| {
         let mut installed = installed.lock().expect("test owned-path hook lock");
-        if installed.as_ref().is_some_and(|(path, _)| path == relative) {
+        if installed
+            .as_ref()
+            .is_some_and(|(path, installed_boundary, _)| {
+                path == relative && *installed_boundary == boundary
+            })
+        {
             installed.take()
         } else {
             None
         }
     });
-    if let Some((_, hook)) = hook {
+    // Remove the hook before calling it so a panic cannot leak it into another test.
+    if let Some((_, _, hook)) = hook {
         hook();
     }
 }
@@ -5233,7 +5257,7 @@ fn owned_file_bytes(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<Option<Vec<u8>>, RepositoryError> {
-    run_owned_path_hook(relative);
+    run_owned_path_hook(relative, OwnedPathBoundary::Read);
     let parent_path = relative.parent().ok_or_else(|| {
         authoring_error(
             operation,
@@ -5291,7 +5315,7 @@ fn replace_owned_bytes(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    run_owned_path_hook(relative);
+    run_owned_path_hook(relative, OwnedPathBoundary::Replace);
     let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
     let leaf = owned_leaf(relative, operation, repository_root)?;
     let temp = CString::new(format!(".manyhands-write-{}", std::process::id()))
@@ -5476,6 +5500,42 @@ fn source_exists(
     repository_root: &Path,
 ) -> Result<bool, RepositoryError> {
     owned_file_exists(root, relative, operation, repository_root)
+}
+
+#[allow(clippy::needless_return)]
+fn ensure_owned_file_removable(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    #[cfg(unix)]
+    {
+        run_owned_path_hook(relative, OwnedPathBoundary::Remove);
+        return owned_file_bytes(root, relative, operation, repository_root)?.map_or_else(
+            || {
+                Err(authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::MissingAuthoringTarget,
+                    "the owned file is missing",
+                ))
+            },
+            |_| Ok(()),
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        if !owned_file_exists(root, relative, operation, repository_root)? {
+            return Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::MissingAuthoringTarget,
+                "the owned file is missing",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn read_owned_item(
@@ -5737,7 +5797,6 @@ fn remove_owned_file(
 ) -> Result<(), RepositoryError> {
     #[cfg(unix)]
     {
-        run_owned_path_hook(relative);
         let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
         let leaf = owned_leaf(relative, operation, repository_root)?;
         let result =

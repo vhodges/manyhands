@@ -1,6 +1,8 @@
 use std::fs;
 
 use git2::{Config, Repository, Signature, Time, WorktreeAddOptions};
+#[cfg(unix)]
+use manyhands::repository::OwnedPathBoundary;
 use manyhands::repository::{
     AuthoringKind, AuthoringTarget, CommentPublicationState, CommentSubmissionOutcome,
     ContextIntent, ContextProvisionOutcome, DocumentDraft, EnableRepositoryOutcome,
@@ -10,6 +12,18 @@ use manyhands::repository::{
 };
 
 mod support;
+
+#[cfg(unix)]
+static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(unix)]
+fn owned_path_hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    OWNED_PATH_HOOK_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("owned-path hook test lock")
+}
 
 #[test]
 fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
@@ -6038,6 +6052,190 @@ fn stale_owned_symlink_is_rejected_without_following_or_writing_outside_reposito
         "outside must remain unchanged\n"
     );
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_leaf_swap_at_read_boundary_rejects_document_update_without_staging_outside_bytes() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let relative = std::path::PathBuf::from("docs/nofollow-read.md");
+    commit_source(
+        &fixture,
+        relative.to_str().unwrap(),
+        &support::document_source(),
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join(&relative);
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.md");
+    let outside_bytes = b"outside bytes must not be staged\n";
+    fs::write(&outside_file, outside_bytes).unwrap();
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+    let hook_outside_file = outside_file.clone();
+
+    enabled.service.set_owned_path_hook_for_testing(
+        relative.clone(),
+        OwnedPathBoundary::Read,
+        move || {
+            fs::remove_file(&source).unwrap();
+            symlink(&hook_outside_file, &source).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some(relative.to_str().unwrap()),
+        relative.to_str().unwrap(),
+        "Updated",
+        "updated body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!format!("{error:?}").contains("outside bytes"));
+    assert_eq!(fs::read(&outside_file).unwrap(), outside_bytes);
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_parent_swap_at_replace_boundary_rejects_document_create_without_writing_outside() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let relative = std::path::PathBuf::from("docs/nofollow-parent/new.md");
+    let parent = context.worktree.join(relative.parent().unwrap());
+    fs::create_dir_all(&parent).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("new.md");
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+
+    enabled.service.set_owned_path_hook_for_testing(
+        relative.clone(),
+        OwnedPathBoundary::Replace,
+        move || {
+            fs::remove_dir(&parent).unwrap();
+            symlink(outside.path(), &parent).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        relative.to_str().unwrap(),
+        "Created",
+        "created body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!outside_file.exists());
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_source_swap_at_remove_boundary_rejects_document_move_without_destination_or_commit() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let source_relative = std::path::PathBuf::from("docs/nofollow-source.md");
+    let destination_relative = std::path::PathBuf::from("docs/nofollow-destination.md");
+    commit_source(
+        &fixture,
+        source_relative.to_str().unwrap(),
+        &support::document_source(),
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join(&source_relative);
+    let destination = context.worktree.join(&destination_relative);
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.md");
+    let outside_bytes = b"outside source must not be removed or read\n";
+    fs::write(&outside_file, outside_bytes).unwrap();
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+    let hook_outside_file = outside_file.clone();
+
+    enabled.service.set_owned_path_hook_for_testing(
+        source_relative.clone(),
+        OwnedPathBoundary::Remove,
+        move || {
+            fs::remove_file(&source).unwrap();
+            symlink(&hook_outside_file, &source).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some(source_relative.to_str().unwrap()),
+        destination_relative.to_str().unwrap(),
+        "Moved",
+        "moved body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!format!("{error:?}").contains("outside source"));
+    assert_eq!(fs::read(&outside_file).unwrap(), outside_bytes);
+    assert!(!destination.exists());
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
     assert_eq!(operation_record_rows(&enabled.service), records_before);
 }
 
