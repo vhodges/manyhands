@@ -3006,6 +3006,11 @@ impl RepositoryService {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if record.is_pending {
+                let commit_oid = repository
+                    .head()
+                    .and_then(|head| head.peel_to_commit())
+                    .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?
+                    .id();
                 return if self.handoff_post_authoritative(
                     &root,
                     operation,
@@ -3015,7 +3020,9 @@ impl RepositoryService {
                 )? {
                     Ok(PublicationRemoteOutcome::NoChange)
                 } else {
-                    Ok(PublicationRemoteOutcome::IndexPending { commit_oid: None })
+                    Ok(PublicationRemoteOutcome::IndexPending {
+                        commit_oid: Some(commit_oid),
+                    })
                 };
             }
             self.complete_lifecycle(&root, operation, record)?;
@@ -3512,6 +3519,32 @@ impl RepositoryService {
                     };
                 }
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
+                if record.is_pending {
+                    let commit_oid = repository
+                        .head()
+                        .and_then(|head| head.peel_to_commit())
+                        .map_err(|error| {
+                            RepositoryError::git(
+                                RepositoryOperation::Enable,
+                                Some(root.clone()),
+                                error,
+                            )
+                        })?
+                        .id();
+                    return if self.handoff_post_authoritative(
+                        &root,
+                        RepositoryOperation::Enable,
+                        record,
+                        request.operation_id,
+                        lease,
+                    )? {
+                        Ok(EnableRepositoryOutcome::AlreadyEnabled)
+                    } else {
+                        Ok(EnableRepositoryOutcome::IndexPending(IndexPending::new(
+                            commit_oid,
+                        )))
+                    };
+                }
                 self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                 return Ok(EnableRepositoryOutcome::AlreadyEnabled);
             }

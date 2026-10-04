@@ -1277,6 +1277,7 @@ fn create_replay_after_registration_failure_resumes_the_create_action() {
         EnableRepositoryOutcome::AlreadyEnabled
     );
     assert_eq!(support::head_commit(&repository), Some(commit_oid));
+    assert!(!replay.repository_snapshot(&root).unwrap().refresh_required);
 }
 
 #[test]
@@ -1338,6 +1339,13 @@ fn enable_replay_after_initialization_commit_retains_commit_and_registers_once()
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(commit_count(&fixture.repository), 2);
     assert_eq!(registered_rows(data.path(), &fixture.root), 1);
+    assert!(
+        !RepositoryService::open_at(data.path())
+            .unwrap()
+            .repository_snapshot(&fixture.root)
+            .unwrap()
+            .refresh_required
+    );
 }
 
 #[test]
@@ -1435,6 +1443,13 @@ fn publication_remote_replay_after_configuration_commit_retains_selection_and_re
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(commit_count(&fixture.repository), 3);
     assert_eq!(registered_rows(data.path(), &fixture.root), 1);
+    assert!(
+        !RepositoryService::open_at(data.path())
+            .unwrap()
+            .repository_snapshot(&fixture.root)
+            .unwrap()
+            .refresh_required
+    );
 }
 
 #[test]
