@@ -16,6 +16,12 @@ pub(super) struct RecoveryRecord {
     pub(super) completed_step: Option<&'static str>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct IndexOwner {
+    pub(super) record_id: i64,
+    pub(super) epoch: i64,
+}
+
 #[cfg(test)]
 static BEGIN_OPERATION_BARRIER: std::sync::OnceLock<std::sync::Mutex<Option<BeginOperationPause>>> =
     std::sync::OnceLock::new();
@@ -107,6 +113,13 @@ pub(super) fn migrate_operation_records(
          CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);
         ",
     ).map_err(RepositoryError::sqlite)?;
+    let has_owner_epoch = transaction
+        .prepare("SELECT name FROM pragma_table_info('operation_records') WHERE name = 'index_owner_epoch'")
+        .and_then(|mut statement| statement.exists([]))
+        .map_err(RepositoryError::sqlite)?;
+    if !has_owner_epoch {
+        transaction.execute("ALTER TABLE operation_records ADD COLUMN index_owner_epoch INTEGER NOT NULL DEFAULT 0", []).map_err(RepositoryError::sqlite)?;
+    }
     let has_legacy_operations: bool = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operations')",
@@ -382,32 +395,49 @@ pub(super) fn advance_after_observation(
 pub(super) fn claim_indexing(
     connection: &Connection,
     record_id: i64,
-) -> Result<bool, RepositoryError> {
-    Ok(connection
+    stale_before: i64,
+) -> Result<Option<IndexOwner>, RepositoryError> {
+    let claimed = connection
         .execute(
-            "UPDATE operation_records SET state = 'indexing', observed_at = ?2
+            "UPDATE operation_records SET state = 'indexing', index_owner_epoch = index_owner_epoch + 1, observed_at = ?2
               WHERE id = ?1 AND state IN (
                  'created', 'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
                  'publication_committed', 'initialization_committed', 'authoritative_observed',
                  'failed', 'observed', 'persisted', 'retry'
-             )",
-            params![record_id, now()],
+             ) OR (id = ?1 AND state = 'indexing' AND observed_at < ?3)",
+            params![record_id, now(), stale_before],
         )
-        .map_err(RepositoryError::sqlite)?
-        == 1)
+        .map_err(RepositoryError::sqlite)?;
+    if claimed != 1 {
+        return Ok(None);
+    }
+    let epoch = connection
+        .query_row(
+            "SELECT index_owner_epoch FROM operation_records WHERE id = ?1",
+            [record_id],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(Some(IndexOwner { record_id, epoch }))
 }
 
 pub(super) fn transition_indexing(
     connection: &Connection,
-    record_id: i64,
+    owner: IndexOwner,
     state: &str,
     context: Option<&Path>,
 ) -> Result<bool, RepositoryError> {
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = ?2, context_path = ?3, observed_at = ?4
-             WHERE id = ?1 AND state = 'indexing'",
-            params![record_id, state, context.and_then(Path::to_str), now()],
+             WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?5",
+            params![
+                owner.record_id,
+                state,
+                context.and_then(Path::to_str),
+                now(),
+                owner.epoch
+            ],
         )
         .map_err(RepositoryError::sqlite)?
         == 1)
@@ -415,12 +445,12 @@ pub(super) fn transition_indexing(
 
 pub(super) fn touch_indexing(
     connection: &Connection,
-    record_id: i64,
+    owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
     Ok(connection
         .execute(
-            "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing'",
-            params![record_id, now()],
+            "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?3",
+            params![owner.record_id, now(), owner.epoch],
         )
         .map_err(RepositoryError::sqlite)?
         == 1)

@@ -128,6 +128,30 @@ fn concurrent_refreshes_with_the_same_operation_id_have_one_index_owner() {
     );
 }
 
+#[test]
+fn refresh_reclaims_an_interrupted_index_owner_on_exact_replay() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let operation_id = support::operation_id();
+    let interrupted = support::FailOnce::at(FailurePoint::AfterIndexClaim)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        interrupted
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    assert!(matches!(
+        RepositoryService::open_at(enabled.data_directory.path())
+            .unwrap()
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct AvailableState {
     head: Option<git2::Oid>,
