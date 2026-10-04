@@ -5,8 +5,8 @@ use manyhands::{
         AddRemoteRequest, CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
         EnableRepositoryOutcome, EnableRepositoryRequest, FailurePoint, IdentityInspection,
         PublicationRemoteOutcome, REGISTRY_FILE, RegistryConnectionPhase, RemoteOutcome,
-        RemoveRegistrationOutcome, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-        SetPublicationRemoteRequest,
+        RemoveRegistrationOutcome, RemoveRegistrationRequest, RemoveRemoteRequest,
+        RepositoryErrorKind, RepositoryOperation, RepositoryService, SetPublicationRemoteRequest,
     },
 };
 use rusqlite::Connection;
@@ -91,14 +91,31 @@ fn registry_row(
 }
 
 fn enable_request(root: &std::path::Path, primary_branch: &str) -> EnableRepositoryRequest {
+    enable_request_with_operation_id(root, primary_branch, support::operation_id())
+}
+
+fn enable_request_with_operation_id(
+    root: &std::path::Path,
+    primary_branch: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> EnableRepositoryRequest {
     EnableRepositoryRequest {
         root: root.to_owned(),
         primary_branch: primary_branch.to_owned(),
         identity: None,
+        operation_id,
     }
 }
 
 fn create_request(root: &std::path::Path, primary_branch: &str) -> CreateRepositoryRequest {
+    create_request_with_operation_id(root, primary_branch, support::operation_id())
+}
+
+fn create_request_with_operation_id(
+    root: &std::path::Path,
+    primary_branch: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> CreateRepositoryRequest {
     CreateRepositoryRequest {
         root: root.to_owned(),
         primary_branch: primary_branch.to_owned(),
@@ -106,6 +123,7 @@ fn create_request(root: &std::path::Path, primary_branch: &str) -> CreateReposit
             name: "Created Author".to_owned(),
             email: "created@example.invalid".to_owned(),
         }),
+        operation_id,
     }
 }
 
@@ -114,13 +132,45 @@ fn add_remote_request(root: &std::path::Path, name: &str, url: &str) -> AddRemot
         root: root.to_owned(),
         name: name.to_owned(),
         url: url.to_owned(),
+        operation_id: support::operation_id(),
     }
 }
 
 fn publication_request(root: &std::path::Path, name: Option<&str>) -> SetPublicationRemoteRequest {
+    publication_request_with_operation_id(root, name, support::operation_id())
+}
+
+fn publication_request_with_operation_id(
+    root: &std::path::Path,
+    name: Option<&str>,
+    operation_id: manyhands::repository::OperationId,
+) -> SetPublicationRemoteRequest {
     SetPublicationRemoteRequest {
         root: root.to_owned(),
         name: name.map(str::to_owned),
+        operation_id,
+    }
+}
+
+fn remove_remote_request(root: &std::path::Path, name: &str) -> RemoveRemoteRequest {
+    RemoveRemoteRequest {
+        root: root.to_owned(),
+        name: name.to_owned(),
+        operation_id: support::operation_id(),
+    }
+}
+
+fn remove_registration_request(root: &std::path::Path) -> RemoveRegistrationRequest {
+    remove_registration_request_with_operation_id(root, support::operation_id())
+}
+
+fn remove_registration_request_with_operation_id(
+    root: &std::path::Path,
+    operation_id: manyhands::repository::OperationId,
+) -> RemoveRegistrationRequest {
+    RemoveRegistrationRequest {
+        root: root.to_owned(),
+        operation_id,
     }
 }
 
@@ -280,6 +330,7 @@ fn create_rejects_invalid_requests_without_creating_a_repository_or_target() {
             root: identity_required_target.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -428,9 +479,10 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "contexts",
             "discovered_comments",
             "discovered_items",
-            "index_operation_contexts",
-            "index_operations",
+            "operation_record_contexts",
+            "operation_records",
             "problems",
+            "registry_migrations",
             "repositories",
         ]
     );
@@ -908,7 +960,7 @@ fn enable_born_main_writes_canonical_config_exclusion_and_single_file_commit() {
     assert_eq!(row.0, "accessible");
     assert!(!row.1.is_empty());
     assert_eq!(row.1, entry.id().to_string());
-    assert_eq!(row.2, 1);
+    assert_eq!(row.2, 0);
     assert!(row.3 > 0);
 }
 
@@ -918,17 +970,18 @@ fn registration_retries_existing_configuration_without_another_commit_or_row() {
     let service = RepositoryService::open_at(data.path()).unwrap();
     let fixture = support::born_repository();
 
-    let first = service
-        .enable(enable_request(&fixture.root, "main"))
-        .unwrap();
+    let operation_id = support::new_operation_id();
+    let first_request = enable_request_with_operation_id(&fixture.root, "main", operation_id);
+    let retry_request =
+        enable_request_with_operation_id(&fixture.root.join("."), "main", operation_id);
+    assert_eq!(first_request.operation_id, retry_request.operation_id);
+    let first = service.enable(first_request).unwrap();
     let EnableRepositoryOutcome::Enabled { commit_oid } = first else {
         panic!("expected an initialization commit");
     };
     let canonical_root = std::fs::canonicalize(&fixture.root).unwrap();
 
-    let second = service
-        .enable(enable_request(&fixture.root.join("."), "main"))
-        .unwrap();
+    let second = service.enable(retry_request).unwrap();
 
     assert_eq!(second, EnableRepositoryOutcome::AlreadyEnabled);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
@@ -998,11 +1051,15 @@ fn remote_listing_addition_and_removal_use_only_local_configuration() {
         .unwrap_err();
     assert_eq!(conflict.kind, RepositoryErrorKind::RemoteNameConflict);
     assert_eq!(
-        service.remove_remote(&fixture.root, "origin").unwrap(),
+        service
+            .remove_remote(remove_remote_request(&fixture.root, "origin"))
+            .unwrap(),
         RemoteOutcome::Changed
     );
     assert_eq!(
-        service.remove_remote(&fixture.root, "origin").unwrap(),
+        service
+            .remove_remote(remove_remote_request(&fixture.root, "origin"))
+            .unwrap(),
         RemoteOutcome::NoChange
     );
 }
@@ -1032,7 +1089,7 @@ fn remote_mutations_refresh_registered_rows_and_preserve_authoritative_git_on_re
             "git@example.invalid:project.git",
         ))
         .unwrap();
-    assert_eq!(registry_row(data.path(), &root).unwrap().2, 1);
+    assert_eq!(registry_row(data.path(), &root).unwrap().2, 0);
     Connection::open(&registry)
         .unwrap()
         .execute(
@@ -1040,26 +1097,27 @@ fn remote_mutations_refresh_registered_rows_and_preserve_authoritative_git_on_re
             [root.to_str().unwrap()],
         )
         .unwrap();
-    service.remove_remote(&fixture.root, "origin").unwrap();
-    assert_eq!(registry_row(data.path(), &root).unwrap().2, 1);
+    service
+        .remove_remote(remove_remote_request(&fixture.root, "origin"))
+        .unwrap();
+    assert_eq!(registry_row(data.path(), &root).unwrap().2, 0);
 
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
-    let add_error = service
+    let add_pending = service
         .add_remote(add_remote_request(
             &fixture.root,
             "origin",
             "git@example.invalid:project.git",
         ))
-        .unwrap_err();
-    assert_eq!(add_error.kind, RepositoryErrorKind::RegistryRefreshPending);
+        .unwrap();
+    assert!(matches!(add_pending, RemoteOutcome::IndexPending { .. }));
     assert!(fixture.repository.find_remote("origin").is_ok());
 
-    let remove_error = service.remove_remote(&fixture.root, "origin").unwrap_err();
-    assert_eq!(
-        remove_error.kind,
-        RepositoryErrorKind::RegistryRefreshPending
-    );
+    let remove_pending = service
+        .remove_remote(remove_remote_request(&fixture.root, "origin"))
+        .unwrap();
+    assert!(matches!(remove_pending, RemoteOutcome::IndexPending { .. }));
     assert!(fixture.repository.find_remote("origin").is_err());
 }
 
@@ -1206,7 +1264,7 @@ fn publication_selection_commits_only_canonical_configuration_changes() {
         service
             .set_publication_remote(publication_request(&fixture.root, Some("origin")))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert!(matches!(
         service.set_publication_remote(publication_request(&fixture.root, None)),
@@ -1416,9 +1474,14 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
     let registry = data.path().join(REGISTRY_FILE);
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
+    let operation_id = support::operation_id();
 
     let PublicationRemoteOutcome::RegistrationPending { commit_oid } = service
-        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .set_publication_remote(publication_request_with_operation_id(
+            &fixture.root,
+            Some("origin"),
+            operation_id,
+        ))
         .unwrap()
     else {
         panic!("expected pending registration");
@@ -1440,9 +1503,13 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
     let retry_service = RepositoryService::open_at(data.path()).unwrap();
     assert_eq!(
         retry_service
-            .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+            .set_publication_remote(publication_request_with_operation_id(
+                &fixture.root,
+                Some("origin"),
+                operation_id,
+            ))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     let root = std::fs::canonicalize(&fixture.root).unwrap();
@@ -1489,7 +1556,9 @@ fn publication_selection_blocks_selected_removal_and_dirty_configuration_path() 
         .set_publication_remote(publication_request(&fixture.root, Some("origin")))
         .unwrap();
 
-    let removal = service.remove_remote(&fixture.root, "origin").unwrap_err();
+    let removal = service
+        .remove_remote(remove_remote_request(&fixture.root, "origin"))
+        .unwrap_err();
     assert_eq!(removal.kind, RepositoryErrorKind::SelectedRemoteRemoval);
     let mut dirty_source =
         String::from_utf8(support::tracked_configuration(&fixture.root).unwrap()).unwrap();
@@ -1804,6 +1873,7 @@ fn registration_rejects_a_non_utf8_canonical_root_before_enablement_mutation() {
                 name: "Rejected Author".to_owned(),
                 email: "rejected@example.invalid".to_owned(),
             }),
+            operation_id: support::operation_id(),
         })
         .unwrap_err();
 
@@ -1822,9 +1892,14 @@ fn registration_failure_after_commit_is_pending_and_a_retry_registers_without_co
     let registry = data.path().join(REGISTRY_FILE);
     std::fs::remove_file(&registry).unwrap();
     std::fs::create_dir(&registry).unwrap();
+    let operation_id = support::operation_id();
 
     let first = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap();
     let EnableRepositoryOutcome::RegistrationPending { commit_oid } = first else {
         panic!("expected the committed initialization to remain pending registration");
@@ -1832,14 +1907,22 @@ fn registration_failure_after_commit_is_pending_and_a_retry_registers_without_co
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
 
     let error = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap_err();
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
 
     std::fs::remove_dir(&registry).unwrap();
     let retry = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap();
 
     assert_eq!(retry, EnableRepositoryOutcome::AlreadyEnabled);
@@ -1856,11 +1939,20 @@ fn remove_registration_only_deletes_its_canonical_registry_row() {
         .enable(enable_request(&fixture.root, "main"))
         .unwrap();
     let before = repository_snapshot(&fixture.repository, &fixture.root);
+    let operation_id = support::operation_id();
 
     let removed = service
-        .remove_registration(&fixture.root.join("."))
+        .remove_registration(remove_registration_request_with_operation_id(
+            &fixture.root.join("."),
+            operation_id,
+        ))
         .unwrap();
-    let retried = service.remove_registration(&fixture.root).unwrap();
+    let retried = service
+        .remove_registration(remove_registration_request_with_operation_id(
+            &fixture.root,
+            operation_id,
+        ))
+        .unwrap();
 
     assert_eq!(removed, RemoveRegistrationOutcome::Removed);
     assert_eq!(retried, RemoveRegistrationOutcome::NotRegistered);
@@ -1884,7 +1976,9 @@ fn remove_registration_rejects_missing_and_file_roots_without_deleting_existing_
     std::fs::write(&file, "file\n").unwrap();
 
     for root in [&missing, &file] {
-        let error = service.remove_registration(root).unwrap_err();
+        let error = service
+            .remove_registration(remove_registration_request(root))
+            .unwrap_err();
         assert_eq!(error.operation, RepositoryOperation::RemoveRegistration);
         assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
         assert_eq!(registry_row_count(data.path()), 1);
@@ -1905,6 +1999,7 @@ fn enable_unborn_trunk_creates_its_first_commit_without_master() {
                 name: "Trunk Author".to_owned(),
                 email: "trunk@example.invalid".to_owned(),
             }),
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -1955,6 +2050,7 @@ fn enable_unborn_untracked_worktree_rejects_without_mutation() {
                 name: "Untracked Author".to_owned(),
                 email: "untracked@example.invalid".to_owned(),
             }),
+            operation_id: support::operation_id(),
         })
         .unwrap_err();
 
@@ -2046,6 +2142,7 @@ fn enable_unborn_obstacle_restores_supplied_local_identity() {
                 name: "Temporary Author".to_owned(),
                 email: "temporary@example.invalid".to_owned(),
             }),
+            operation_id: support::operation_id(),
         })
         .unwrap_err();
 
@@ -2292,6 +2389,7 @@ fn enable_caller_identity_is_local_and_authors_initialization_commit() {
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: Some(identity),
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -2433,6 +2531,7 @@ fn enable_invalid_configuration_with_supplied_identity_preserves_all_state() {
                 name: "Must Not Persist".to_owned(),
                 email: "must-not-persist@example.invalid".to_owned(),
             }),
+            operation_id: support::operation_id(),
         })
         .unwrap_err();
 
@@ -2502,9 +2601,14 @@ fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
     let remotes_before = remote_names(&fixture.repository);
     let exclude_before = support::exclude_bytes(&fixture.repository);
     let service = failing_service(data.path(), FailurePoint::BeforeConfigurationWrite);
+    let operation_id = support::operation_id();
 
     let error = service
-        .enable(enable_request(&fixture.root, "trunk"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "trunk",
+            operation_id,
+        ))
         .unwrap_err();
 
     assert_eq!(error.operation, RepositoryOperation::Enable);
@@ -2528,7 +2632,11 @@ fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
 
     assert!(matches!(
         service
-            .enable(enable_request(&fixture.root, "trunk"))
+            .enable(enable_request_with_operation_id(
+                &fixture.root,
+                "trunk",
+                operation_id
+            ))
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. }
     ));
@@ -2561,9 +2669,14 @@ fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
     let remotes_before = remote_names(&fixture.repository);
     let exclude_before = support::exclude_bytes(&fixture.repository);
     let service = failing_service(data.path(), FailurePoint::BeforeInitializationCommit);
+    let operation_id = support::operation_id();
 
     let error = service
-        .enable(enable_request(&fixture.root, "trunk"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "trunk",
+            operation_id,
+        ))
         .unwrap_err();
 
     assert_eq!(error.operation, RepositoryOperation::Enable);
@@ -2587,7 +2700,11 @@ fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
 
     assert!(matches!(
         service
-            .enable(enable_request(&fixture.root, "trunk"))
+            .enable(enable_request_with_operation_id(
+                &fixture.root,
+                "trunk",
+                operation_id
+            ))
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. }
     ));
@@ -2617,8 +2734,9 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
     for root in [&created, &existing] {
         let service = failing_service(data.path(), FailurePoint::BeforeRepositoryInitialization);
         let registrations_before = registry_row_count(data.path());
+        let operation_id = support::operation_id();
         let error = service
-            .create_and_enable(create_request(root, "main"))
+            .create_and_enable(create_request_with_operation_id(root, "main", operation_id))
             .unwrap_err();
 
         assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
@@ -2631,7 +2749,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
         }
         assert!(matches!(
             service
-                .create_and_enable(create_request(root, "main"))
+                .create_and_enable(create_request_with_operation_id(root, "main", operation_id))
                 .unwrap(),
             EnableRepositoryOutcome::Enabled { .. }
         ));
@@ -2670,7 +2788,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
         }
         let registry = registry_row(data.path(), root).unwrap();
         assert_eq!(registry.0, "accessible");
-        assert_eq!(registry.2, 1);
+        assert_eq!(registry.2, 0);
         assert!(!registry.1.is_empty());
         assert_eq!(registry.1, head_configuration_oid(&repository).to_string());
         assert_eq!(registry_row_count(data.path()), registrations_before + 1);
@@ -2705,9 +2823,14 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
         data.path(),
         FailurePoint::BeforePublicationConfigurationCommit,
     );
+    let operation_id = support::operation_id();
 
     let error = service
-        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .set_publication_remote(publication_request_with_operation_id(
+            &fixture.root,
+            Some("origin"),
+            operation_id,
+        ))
         .unwrap_err();
 
     assert_eq!(error.operation, RepositoryOperation::SetPublicationRemote);
@@ -2727,7 +2850,11 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
     );
 
     let PublicationRemoteOutcome::Changed { commit_oid } = service
-        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .set_publication_remote(publication_request_with_operation_id(
+            &fixture.root,
+            Some("origin"),
+            operation_id,
+        ))
         .unwrap()
     else {
         panic!("expected the unfinished publication commit");
@@ -2759,7 +2886,7 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
         registry.1,
         head_configuration_oid(&fixture.repository).to_string()
     );
-    assert_eq!(registry.2, 1);
+    assert_eq!(registry.2, 0);
 }
 
 #[test]
@@ -2767,9 +2894,14 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     let data = tempfile::tempdir().unwrap();
     let fixture = support::born_repository();
     let service = failing_service(data.path(), FailurePoint::BeforeRegistryWrite);
+    let operation_id = support::operation_id();
 
     let outcome = service
-        .enable(enable_request(&fixture.root, "main"))
+        .enable(enable_request_with_operation_id(
+            &fixture.root,
+            "main",
+            operation_id,
+        ))
         .unwrap();
 
     let EnableRepositoryOutcome::RegistrationPending { commit_oid } = outcome else {
@@ -2782,7 +2914,11 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
 
     assert_eq!(
         service
-            .enable(enable_request(&fixture.root, "main"))
+            .enable(enable_request_with_operation_id(
+                &fixture.root,
+                "main",
+                operation_id
+            ))
             .unwrap(),
         EnableRepositoryOutcome::AlreadyEnabled
     );
@@ -2806,11 +2942,13 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     stage_configuration(&publication_fixture);
     let publication_service =
         failing_service(publication_data.path(), FailurePoint::BeforeRegistryWrite);
+    let publication_operation_id = support::operation_id();
 
     let outcome = publication_service
-        .set_publication_remote(publication_request(
+        .set_publication_remote(publication_request_with_operation_id(
             &publication_fixture.root,
             Some("origin"),
+            publication_operation_id,
         ))
         .unwrap();
 
@@ -2840,12 +2978,13 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     );
     assert_eq!(
         publication_service
-            .set_publication_remote(publication_request(
+            .set_publication_remote(publication_request_with_operation_id(
                 &publication_fixture.root,
-                Some("origin")
+                Some("origin"),
+                publication_operation_id,
             ))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert_eq!(
         support::head_commit(&publication_fixture.repository),

@@ -3,15 +3,21 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     str::FromStr,
+    time::{Duration, Instant},
 };
 
 use git2::{Config, Repository, RepositoryInitOptions, Signature, StatusOptions, Time};
 use manyhands::{
     canonical::ItemId,
-    repository::{EnableRepositoryOutcome, EnableRepositoryRequest, RepositoryService},
+    repository::{
+        EnableRepositoryOutcome, EnableRepositoryRequest, OperationId, RepositoryService,
+    },
 };
+use rusqlite::{Connection, params};
 
 pub struct TestRepository {
     // Fields drop in declaration order, so the repository closes before TempDir removes it.
@@ -309,6 +315,7 @@ pub fn enabled_repository(fixture: &TestRepository) -> EnabledRepository {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -391,6 +398,124 @@ pub fn open_linked_worktree(path: &Path) -> LinkedWorktree {
 
 pub fn document_id() -> ItemId {
     ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap()
+}
+
+pub fn operation_id() -> OperationId {
+    OperationId::new()
+}
+
+pub fn new_operation_id() -> OperationId {
+    operation_id()
+}
+
+pub struct LeaseHolder {
+    child: Child,
+    release: PathBuf,
+    _synchronization: tempfile::TempDir,
+}
+
+impl LeaseHolder {
+    pub fn release(mut self) {
+        fs::write(&self.release, b"release").unwrap();
+        assert!(self.child.wait().unwrap().success());
+    }
+
+    pub fn terminate(mut self) {
+        self.child.kill().unwrap();
+        assert!(!self.child.wait().unwrap().success());
+    }
+}
+
+impl Drop for LeaseHolder {
+    fn drop(&mut self) {
+        if self.child.try_wait().unwrap().is_none() {
+            let _ = fs::write(&self.release, b"release");
+            let _ = self.child.wait();
+        }
+    }
+}
+
+pub fn hold_lease_in_child(
+    root: &Path,
+    data_directory: &Path,
+    kind: manyhands::repository::LeaseKind,
+) -> LeaseHolder {
+    hold_lease_in_child_for_test(root, data_directory, kind, "common_git_lease_child")
+}
+
+pub fn hold_lease_in_child_for_test(
+    root: &Path,
+    data_directory: &Path,
+    kind: manyhands::repository::LeaseKind,
+    child_test: &str,
+) -> LeaseHolder {
+    let synchronization = tempfile::tempdir().unwrap();
+    let ready = synchronization.path().join("ready");
+    let release = synchronization.path().join("release");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(child_test)
+        .arg("--nocapture")
+        .env("MANYHANDS_LEASE_ROOT", root)
+        .env("MANYHANDS_LEASE_DATA_DIRECTORY", data_directory)
+        .env("MANYHANDS_LEASE_KIND", kind.as_str())
+        .env("MANYHANDS_LEASE_READY", &ready)
+        .env("MANYHANDS_LEASE_RELEASE", &release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_path(&mut child, &ready);
+    LeaseHolder {
+        child,
+        release,
+        _synchronization: synchronization,
+    }
+}
+
+pub fn wait_for_path(child: &mut Child, path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            let stdout = child
+                .stdout
+                .take()
+                .map(read_child_output)
+                .unwrap_or_default();
+            let stderr = child
+                .stderr
+                .take()
+                .map(read_child_output)
+                .unwrap_or_default();
+            panic!(
+                "lease holder child exited before ready ({status}):\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {path:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn read_child_output(mut output: impl Read) -> String {
+    let mut bytes = Vec::new();
+    let _ = output.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+pub fn enable_request(root: &Path) -> EnableRepositoryRequest {
+    enable_request_with_operation_id(root, operation_id())
+}
+
+pub fn enable_request_with_operation_id(
+    root: &Path,
+    operation_id: OperationId,
+) -> EnableRepositoryRequest {
+    EnableRepositoryRequest {
+        root: root.to_owned(),
+        primary_branch: "main".to_owned(),
+        identity: None,
+        operation_id,
+    }
 }
 
 pub fn ticket_id() -> ItemId {
@@ -525,4 +650,280 @@ pub fn root_comment_source() -> String {
 pub fn reply_source() -> String {
     "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAY\nitem_id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\nparent_id: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ncreated_at: 2026-09-30T12:01:00Z\n---\n"
         .to_owned()
+}
+
+pub fn create_cycle_04_registry(data_directory: &Path, root: &Path, operation: &str, state: &str) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE repositories (
+            id INTEGER PRIMARY KEY,
+            root_path TEXT NOT NULL UNIQUE,
+            enabled_at INTEGER NOT NULL,
+            accessibility TEXT NOT NULL,
+            config_blob_oid TEXT,
+            refresh_required INTEGER NOT NULL
+        );
+        CREATE TABLE index_operations (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            operation TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'completed',
+            context_path TEXT,
+            persisted_context_count INTEGER NOT NULL DEFAULT 0,
+            observed_at INTEGER NOT NULL
+        );
+        CREATE TABLE index_operation_contexts (
+            operation_id INTEGER NOT NULL REFERENCES index_operations(id) ON DELETE CASCADE,
+            worktree_path TEXT NOT NULL,
+            observation_fingerprint TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (operation_id, worktree_path)
+        );",
+        )
+        .unwrap();
+    let root = root.canonicalize().unwrap();
+    connection.execute(
+        "INSERT INTO repositories (root_path, enabled_at, accessibility, config_blob_oid, refresh_required)
+         VALUES (?1, 1, 'accessible', NULL, 1)",
+        [root.to_str().unwrap()],
+    ).unwrap();
+    let repository_id = connection.last_insert_rowid();
+    connection.execute(
+        "INSERT INTO index_operations (repository_id, operation, state, context_path, persisted_context_count, observed_at)
+         VALUES (?1, ?2, ?3, ?4, 2, 1)",
+        params![repository_id, operation, state, root.to_str().unwrap()],
+    ).unwrap();
+    let operation_id = connection.last_insert_rowid();
+    connection.execute(
+        "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint)
+          VALUES (?1, ?2, 'legacy-fingerprint-BLAKE3-PRIVATE-MARKDOWN')",
+        params![operation_id, root.to_str().unwrap()],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO index_operation_contexts (operation_id, worktree_path, observation_fingerprint)
+          VALUES (?1, ?2, 'another-legacy-fingerprint-GIT-BLOB-OID')",
+        params![operation_id, root.join(".manyhands/worktrees/second").to_str().unwrap()],
+    ).unwrap();
+    connection
+        .execute(
+            "INSERT INTO index_operations (repository_id, operation, state, observed_at)
+         VALUES (?1, 'rebuild', 'completed', 2)",
+            [repository_id],
+        )
+        .unwrap();
+}
+
+pub fn assert_operation_records_hold_no_content(data_directory: &Path) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operation_records'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!schema.to_ascii_lowercase().contains("digest"));
+    assert!(!schema.to_ascii_lowercase().contains("fingerprint"));
+    assert!(!schema.to_ascii_lowercase().contains("blake3"));
+    assert!(!schema.to_ascii_lowercase().contains("oid"));
+    assert!(!schema.to_ascii_lowercase().contains("content"));
+    assert!(!schema.to_ascii_lowercase().contains("draft"));
+}
+
+pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str]) {
+    assert_operation_records_hold_no_content(data_directory);
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT COALESCE(operation_ulid, ''), action, target, state, completed_step, \
+                    COALESCE(item_id, ''), COALESCE(context_path, ''), \
+                    CAST(observed_at AS TEXT), CAST(persisted_context_count AS TEXT), \
+                    COALESCE(redacted_error, '') \
+             FROM operation_records",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| {
+            Ok((0..10)
+                .map(|column| row.get::<_, String>(column))
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n"))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for value in rows {
+        for forbidden in forbidden {
+            assert!(
+                !value.contains(forbidden),
+                "operation record retained forbidden value {forbidden:?}"
+            );
+        }
+        assert!(!value.to_ascii_lowercase().contains("blake3"));
+        assert!(!value.to_ascii_lowercase().contains("credential"));
+        assert!(!value.to_ascii_lowercase().contains("password"));
+        assert!(!value.to_ascii_lowercase().contains("private key"));
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RegistryCacheState {
+    pub repositories: i64,
+    pub contexts: i64,
+    pub items: i64,
+    pub comments: i64,
+    pub problems: i64,
+    pub operations: Vec<(String, String)>,
+}
+
+pub fn registry_cache_state(data_directory: &Path) -> RegistryCacheState {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let count = |table: &str| {
+        connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    let operations = connection
+        .prepare("SELECT action, state FROM operation_records ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    RegistryCacheState {
+        repositories: count("repositories"),
+        contexts: count("contexts"),
+        items: count("discovered_items"),
+        comments: count("discovered_comments"),
+        problems: count("problems"),
+        operations,
+    }
+}
+
+pub fn assert_corrupt_diagnostics(
+    data_directory: &Path,
+    expected: &[(&str, &[u8])],
+    forbidden: &[&str],
+) {
+    let prefix = format!("{}.corrupt-", manyhands::repository::REGISTRY_FILE);
+    let diagnostics = fs::read_dir(data_directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), expected.len());
+    for (suffix, bytes) in expected {
+        let artifact = diagnostics.iter().find(|(name, _)| {
+            if suffix.is_empty() {
+                name.starts_with(&prefix) && !name.ends_with("-wal") && !name.ends_with("-shm")
+            } else {
+                name.ends_with(suffix)
+            }
+        });
+        assert_eq!(artifact.map(|(_, bytes)| bytes.as_slice()), Some(*bytes));
+    }
+    for (_, bytes) in diagnostics {
+        assert_diagnostic_bytes_exclude(&bytes, forbidden);
+    }
+}
+
+pub fn assert_diagnostic_output_excludes(values: &[String], forbidden: &[&str]) {
+    for value in values {
+        assert_diagnostic_bytes_exclude(value.as_bytes(), forbidden);
+    }
+}
+
+fn assert_diagnostic_bytes_exclude(bytes: &[u8], forbidden: &[&str]) {
+    let value = String::from_utf8_lossy(bytes);
+    for forbidden in forbidden {
+        assert!(
+            !value.contains(forbidden),
+            "diagnostic retained forbidden value {forbidden:?}"
+        );
+    }
+}
+
+pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &Path) {
+    let connection =
+        Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    assert_operation_records_hold_no_content(data_directory);
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM operation_records", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state, context_path, persisted_context_count
+                 FROM operation_records WHERE state != 'completed'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?
+                )),
+            )
+            .unwrap(),
+        ("created".to_owned(), None, 0)
+    );
+    let root: String = connection
+        .query_row(
+            "SELECT root_path FROM operation_records WHERE state != 'completed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let contexts = connection
+        .prepare(
+            "SELECT operation_record_contexts.worktree_path
+             FROM operation_record_contexts
+             JOIN operation_records ON operation_records.id = operation_record_contexts.operation_record_id
+             WHERE operation_records.state != 'completed'
+             ORDER BY operation_record_contexts.worktree_path",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        contexts,
+        vec![root.clone(), format!("{root}/.manyhands/worktrees/second")]
+    );
+    let context_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'operation_record_contexts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!context_schema.to_ascii_lowercase().contains("fingerprint"));
+    assert!(!context_schema.to_ascii_lowercase().contains("digest"));
+    for table in ["index_operations", "index_operation_contexts"] {
+        assert!(
+            !connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap(),
+            "legacy table {table} remains after migration"
+        );
+    }
 }

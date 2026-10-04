@@ -1195,21 +1195,6 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
                 invalid_code TEXT,
                 guidance TEXT
              );
-             CREATE TABLE IF NOT EXISTS index_operations (
-                 id INTEGER PRIMARY KEY,
-                 repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-                 operation TEXT NOT NULL,
-                 state TEXT NOT NULL DEFAULT 'completed',
-                 context_path TEXT,
-                 persisted_context_count INTEGER NOT NULL DEFAULT 0,
-                 observed_at INTEGER NOT NULL
-              );
-             CREATE TABLE IF NOT EXISTS index_operation_contexts (
-                 operation_id INTEGER NOT NULL REFERENCES index_operations(id) ON DELETE CASCADE,
-                 worktree_path TEXT NOT NULL,
-                 observation_fingerprint TEXT NOT NULL DEFAULT '',
-                 PRIMARY KEY (operation_id, worktree_path)
-             );
             CREATE INDEX IF NOT EXISTS contexts_repository_id_idx
                 ON contexts(repository_id, worktree_path);
             CREATE INDEX IF NOT EXISTS discovered_items_context_id_idx
@@ -1218,19 +1203,26 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
                 ON discovered_comments(item_id, created_at, comment_id);
             CREATE INDEX IF NOT EXISTS problems_repository_id_idx
                 ON problems(repository_id, context_id, observed_at);
-             CREATE INDEX IF NOT EXISTS index_operations_repository_id_idx
-                 ON index_operations(repository_id, observed_at);",
+              ",
         )
         .map_err(RepositoryError::sqlite)?;
-    let has_state = transaction
+    let has_index_operations = transaction
         .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('index_operations') WHERE name = 'state'",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operations')",
             [],
-            |row| row.get::<_, i64>(0),
+            |row| row.get::<_, bool>(0),
         )
-        .map_err(RepositoryError::sqlite)?
-        != 0;
-    if !has_state {
+        .map_err(RepositoryError::sqlite)?;
+    let has_state = has_index_operations
+        && transaction
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('index_operations') WHERE name = 'state'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(RepositoryError::sqlite)?
+            != 0;
+    if has_index_operations && !has_state {
         transaction
             .execute_batch(
                 "ALTER TABLE index_operations ADD COLUMN state TEXT NOT NULL DEFAULT 'completed';
@@ -1238,15 +1230,16 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
             )
             .map_err(RepositoryError::sqlite)?;
     }
-    let has_persisted_context_count = transaction.query_row(
+    let has_persisted_context_count = has_index_operations && transaction.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('index_operations') WHERE name = 'persisted_context_count'",
         [], |row| row.get::<_, i64>(0),
     ).map_err(RepositoryError::sqlite)? != 0;
-    if !has_persisted_context_count {
+    if has_index_operations && !has_persisted_context_count {
         transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
             .map_err(RepositoryError::sqlite)?;
     }
-    transaction.commit().map_err(RepositoryError::sqlite)
+    transaction.commit().map_err(RepositoryError::sqlite)?;
+    super::recovery::migrate_operation_records(connection)
 }
 
 #[cfg(test)]

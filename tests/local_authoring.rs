@@ -1,14 +1,29 @@
 use std::fs;
 
 use git2::{Config, Repository, Signature, Time, WorktreeAddOptions};
+#[cfg(unix)]
+use manyhands::repository::OwnedPathBoundary;
 use manyhands::repository::{
     AuthoringKind, AuthoringTarget, CommentPublicationState, CommentSubmissionOutcome,
     ContextIntent, ContextProvisionOutcome, DocumentDraft, EnableRepositoryOutcome,
-    EnableRepositoryRequest, FailurePoint, LocalCheckpoint, RepositoryErrorKind, RepositoryService,
+    EnableRepositoryRequest, ExpectedPathObservation, ExternalChangeExpectation, FailurePoint,
+    LocalCheckpoint, RepositoryErrorKind, RepositoryOperation, RepositoryService,
     SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
 };
 
 mod support;
+
+#[cfg(unix)]
+static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(unix)]
+fn owned_path_hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    OWNED_PATH_HOOK_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("owned-path hook test lock")
+}
 
 #[test]
 fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
@@ -69,6 +84,7 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -82,6 +98,7 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
             kind: AuthoringKind::Document,
             item_id,
             intent: ContextIntent::Create,
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -288,6 +305,7 @@ fn context_rejects_an_authoring_branch_that_is_the_primary_branch_without_mutati
                 root: fixture.root.clone(),
                 primary_branch: branch.clone(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::Enabled { .. },
@@ -920,12 +938,14 @@ fn recovery_branch_creation_failure_leaves_no_context_and_retry_creates_one() {
     let before = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let failing = support::FailOnce::at(FailurePoint::BeforeContextBranchCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -974,12 +994,14 @@ fn recovery_worktree_creation_failure_retains_branch_and_retry_adds_one_worktree
     let pre_state = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             item_id.clone(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -1676,35 +1698,31 @@ fn document_exact_create_retry_checkpoints_once_then_is_a_no_op() {
             ))
             .unwrap(),
     );
-    fs::create_dir_all(context.worktree.join("docs")).unwrap();
-    fs::write(
-        context.worktree.join("docs/new.md"),
-        canonical_document("Retry", "Retry body\n"),
-    )
-    .unwrap();
-
+    let operation_id = support::operation_id();
     let (_, first) = saved_checkpoint(
         enabled
             .service
-            .save_document(document_request(
+            .save_document(document_request_with_operation_id(
                 &fixture.root,
                 ContextIntent::Create,
                 None,
                 "docs/new.md",
                 "Retry",
                 "Retry body\n",
+                operation_id,
             ))
             .unwrap(),
     );
     let outcome = enabled
         .service
-        .save_document(document_request(
+        .save_document(document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Retry",
             "Retry body\n",
+            operation_id,
         ))
         .unwrap();
     assert!(matches!(
@@ -1726,14 +1744,16 @@ fn document_create_retry_at_a_different_path_preserves_completed_context() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
     let request = |path| {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             path,
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, commit_oid) = saved_checkpoint(
@@ -1750,7 +1770,9 @@ fn document_create_retry_at_a_different_path_preserves_completed_context() {
 
     assert!(matches!(
         error.kind,
-        RepositoryErrorKind::OccupiedItemPath | RepositoryErrorKind::MismatchedAuthoringContext
+        RepositoryErrorKind::OperationMismatch
+            | RepositoryErrorKind::OccupiedItemPath
+            | RepositoryErrorKind::MismatchedAuthoringContext
     ));
     assert_eq!(
         rejection_state(&fixture, &enabled.service, &context, &[&first, &second]),
@@ -1802,6 +1824,7 @@ fn document_rejects_occupied_noncanonical_mismatched_and_missing_paths_without_w
             RepositoryErrorKind::InvalidPath
                 | RepositoryErrorKind::MissingAuthoringTarget
                 | RepositoryErrorKind::OccupiedItemPath
+                | RepositoryErrorKind::RecoveryRequired
         ));
     }
     assert_eq!(fs::read(occupied).unwrap(), before);
@@ -2052,20 +2075,24 @@ fn document_completed_move_retry_is_a_noop_without_its_old_source() {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Moved body\n",
+            operation_id,
         )
     };
 
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
     assert!(!context.worktree.join("docs/source.md").exists());
-    let outcome = enabled.service.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = enabled.service.save_document(retry).unwrap();
 
     assert!(matches!(
         outcome,
@@ -2086,14 +2113,16 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Moved body\n",
+            operation_id,
         )
     };
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
@@ -2108,11 +2137,13 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
 
-    let outcome = failing.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = failing.save_document(retry).unwrap();
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
-            checkpoint: LocalCheckpoint::RefreshPending { commit_oid: pending },
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid: pending },
             ..
         } if pending == commit_oid
     ));
@@ -2122,7 +2153,9 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
         Some(commit_oid)
     );
 
-    let outcome = enabled.service.save_document(request()).unwrap();
+    let mut retry = request();
+    retry.expected_source = Some(manyhands::repository::ExpectedPathObservation::Missing);
+    let outcome = enabled.service.save_document(retry).unwrap();
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
@@ -2204,14 +2237,16 @@ fn recovery_document_before_item_write_preserves_absent_destination_for_retry() 
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2269,14 +2304,16 @@ fn recovery_document_before_item_write_preserves_existing_owned_bytes_for_retry(
     );
     let path = context.worktree.join("docs/edit.md");
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/edit.md"),
             "docs/edit.md",
             "Changed",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2349,14 +2386,16 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
     );
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Edit,
             Some("docs/source.md"),
             "docs/destination.md",
             "Moved",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2435,18 +2474,78 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
 }
 
 #[test]
+fn fresh_service_replay_of_interrupted_move_preserves_an_externally_changed_source() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/source.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join("docs/source.md");
+    let destination = context.worktree.join("docs/destination.md");
+    let source_expected = ExpectedPathObservation::from_bytes(&fs::read(&source).unwrap());
+    let operation_id = support::new_operation_id();
+    let request = || {
+        let mut request = document_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Edit,
+            Some("docs/source.md"),
+            "docs/destination.md",
+            "Moved",
+            "Body\n",
+            operation_id,
+        );
+        request.expected_source = Some(source_expected.clone());
+        request.expected_destination = ExpectedPathObservation::Missing;
+        request
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        document_error(failing.save_document(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let external = canonical_document("External source", "External body\n");
+    fs::write(&source, &external).unwrap();
+    let before_replay = support::repository_and_worktree_snapshot(&fixture);
+
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let error = document_error(fresh.save_document(request()));
+
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert_eq!(fs::read_to_string(source).unwrap(), external);
+    assert!(!destination.exists());
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        before_replay
+    );
+}
+
+#[test]
 fn document_noop_registry_failure_returns_pending_then_invalidates_without_commit() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
@@ -2463,7 +2562,7 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
 
     let outcome = failing.save_document(request()).unwrap();
     assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid } , .. } if commit_oid == oid)
+        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::Checkpointed { commit_oid } , .. } if commit_oid == oid)
     );
     assert_eq!(registry_refresh_required(&enabled.service), 0);
     assert_eq!(
@@ -2486,27 +2585,33 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
 }
 
 #[test]
-fn document_missing_registration_reports_refresh_pending_without_duplicate_commit() {
+fn document_missing_registration_rejects_a_new_blake3_creation_claim() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     let (context, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
-    let outcome = enabled.service.save_document(request()).unwrap();
-    assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid }, .. } if commit_oid == oid)
-    );
+    let error = document_error(enabled.service.save_document(request()));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
     assert_eq!(
         support::head_commit(&Repository::open(context.worktree).unwrap()),
         Some(oid)
@@ -2534,14 +2639,16 @@ fn recovery_document_before_checkpoint_commit_preserves_written_file_for_exact_r
     let unrelated_before = unrelated_status_entries(&Repository::open(&context.worktree).unwrap());
     let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
 
@@ -2602,14 +2709,16 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        document_request(
+        document_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             None,
             "docs/new.md",
             "Title",
             "Body\n",
+            operation_id,
         )
     };
     enabled
@@ -2638,7 +2747,7 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
 
     let SaveOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
     } = failing.save_document(request()).unwrap()
     else {
         panic!("checkpoint must be pending only after its commit");
@@ -3070,15 +3179,14 @@ fn ticket_exact_create_retry_checkpoints_pending_work_then_noops() {
             ))
             .unwrap(),
     );
-    let path = ticket_path(&context);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, canonical_ticket("Retry", "Retry body\n")).unwrap();
+    let operation_id = support::new_operation_id();
     let request = || {
-        ticket_request(
+        ticket_request_with_operation_id(
             &fixture.root,
             ContextIntent::Create,
             "Retry",
             "Retry body\n",
+            operation_id,
         )
     };
 
@@ -3098,18 +3206,31 @@ fn ticket_exact_create_retry_checkpoints_pending_work_then_noops() {
 }
 
 #[test]
-fn ticket_missing_registration_is_refresh_pending_without_another_commit() {
+fn ticket_missing_registration_rejects_a_new_blake3_creation_claim() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
-    let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+    let operation_id = support::new_operation_id();
+    let request = || {
+        ticket_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Create,
+            "Title",
+            "Body\n",
+            operation_id,
+        )
+    };
     let (context, commit_oid) = saved_checkpoint(enabled.service.save_ticket(request()).unwrap());
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
-    let outcome = enabled.service.save_ticket(request()).unwrap();
-    assert!(
-        matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::RefreshPending { commit_oid: pending }, .. } if pending == commit_oid)
-    );
+    let error = document_error(enabled.service.save_ticket(request()));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)
@@ -3124,7 +3245,16 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
-    let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+    let operation_id = support::new_operation_id();
+    let request = || {
+        ticket_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Create,
+            "Title",
+            "Body\n",
+            operation_id,
+        )
+    };
     enabled
         .service
         .with_registry_connection_for_testing(|connection| {
@@ -3151,7 +3281,7 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
 
     let SaveOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
     } = failing.save_ticket(request()).unwrap()
     else {
         panic!("ticket checkpoint must be pending only after its commit");
@@ -3274,7 +3404,16 @@ fn recovery_ticket_write_and_checkpoint_failures_preserve_retryable_state() {
             &[ticket_relative_path().to_str().unwrap()],
         );
         let failing = support::FailOnce::at(point).open_service(enabled.data_directory.path());
-        let request = || ticket_request(&fixture.root, ContextIntent::Create, "Title", "Body\n");
+        let operation_id = support::new_operation_id();
+        let request = || {
+            ticket_request_with_operation_id(
+                &fixture.root,
+                ContextIntent::Create,
+                "Title",
+                "Body\n",
+                operation_id,
+            )
+        };
 
         assert_eq!(
             ticket_error(failing.save_ticket(request())).kind,
@@ -3634,6 +3773,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
             root: fixture.root.clone(),
             name: "origin".to_owned(),
             url: "ssh://example.invalid/manyhands".to_owned(),
+            operation_id: support::operation_id(),
         })
         .unwrap();
     enabled
@@ -3641,6 +3781,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
         .set_publication_remote(manyhands::repository::SetPublicationRemoteRequest {
             root: fixture.root.clone(),
             name: Some("origin".to_owned()),
+            operation_id: support::operation_id(),
         })
         .unwrap();
 
@@ -3675,15 +3816,19 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Retry\n",
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Retry\n",
+            ),
+            operation_id,
         )
     };
     let (context, commit_oid, _) =
@@ -3915,20 +4060,24 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeRegistryWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
         )
     };
 
     let CommentSubmissionOutcome::Saved {
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
         ..
     } = failing.submit_comment(request()).unwrap()
     else {
@@ -4009,15 +4158,19 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     config.remove("user.email").unwrap();
     drop(config);
     let effective = Config::new().unwrap();
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
         )
     };
     let outcome = enabled
@@ -4179,26 +4332,41 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
         )
     };
-    enabled.service.remove_registration(&fixture.root).unwrap();
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
 
     let CommentSubmissionOutcome::Saved {
         context,
-        checkpoint: LocalCheckpoint::RefreshPending { commit_oid },
+        checkpoint,
         ..
     } = enabled.service.submit_comment(request()).unwrap()
     else {
         panic!("a changed comment with no registration must retain its checkpoint OID");
+    };
+    let (LocalCheckpoint::RefreshPending { commit_oid }
+    | LocalCheckpoint::Checkpointed { commit_oid }) = checkpoint
+    else {
+        panic!("a changed comment must retain its checkpoint OID");
     };
     assert!(matches!(
         enabled
@@ -4207,6 +4375,7 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap(),
         EnableRepositoryOutcome::AlreadyEnabled
@@ -4249,15 +4418,19 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     let failing = support::FailOnce::at(FailurePoint::BeforeItemWrite)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::new_operation_id();
     let request = || {
-        comment_request(
-            &fixture.root,
-            AuthoringKind::Document,
-            support::document_id(),
-            ContextIntent::Edit,
-            support::root_comment_id(),
-            None,
-            "Body\n",
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
         )
     };
 
@@ -4329,7 +4502,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
                 AuthoringKind::Ticket,
                 support::ticket_id(),
                 ContextIntent::Edit,
-                support::root_comment_id(),
+                "01J00000000000000000000003".parse().unwrap(),
                 None,
                 "Ticket root\n",
             ))
@@ -4345,7 +4518,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
             .find_commit(ticket_commit)
             .unwrap()
             .message(),
-        Some("Checkpoint comment 01ARZ3NDEKTSV4RRFFQ69G5FAX")
+        Some("Checkpoint comment 01J00000000000000000000003")
     );
 
     let (document_context, _, _) = saved_comment(
@@ -4694,11 +4867,22 @@ fn target(
     item_id: manyhands::canonical::ItemId,
     intent: ContextIntent,
 ) -> AuthoringTarget {
+    target_with_operation_id(root, kind, item_id, intent, support::operation_id())
+}
+
+fn target_with_operation_id(
+    root: &std::path::Path,
+    kind: AuthoringKind,
+    item_id: manyhands::canonical::ItemId,
+    intent: ContextIntent,
+    operation_id: manyhands::repository::OperationId,
+) -> AuthoringTarget {
     AuthoringTarget {
         root: root.to_owned(),
         kind,
         item_id,
         intent,
+        operation_id,
     }
 }
 
@@ -4710,12 +4894,33 @@ fn document_request(
     title: &str,
     body: &str,
 ) -> SaveDocumentRequest {
+    document_request_with_operation_id(
+        root,
+        intent,
+        source_path,
+        destination_path,
+        title,
+        body,
+        support::operation_id(),
+    )
+}
+
+fn document_request_with_operation_id(
+    root: &std::path::Path,
+    intent: ContextIntent,
+    source_path: Option<&str>,
+    destination_path: &str,
+    title: &str,
+    body: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> SaveDocumentRequest {
     SaveDocumentRequest {
-        target: target(
+        target: target_with_operation_id(
             root,
             AuthoringKind::Document,
             support::document_id(),
             intent,
+            operation_id,
         ),
         source_path: source_path.map(std::path::PathBuf::from),
         destination_path: std::path::PathBuf::from(destination_path),
@@ -4723,6 +4928,13 @@ fn document_request(
             title: title.to_owned(),
             body: body.to_owned(),
         },
+        expected_source: source_path
+            .map(|path| expected_context_observation(root, &support::document_id(), path)),
+        expected_destination: expected_context_observation(
+            root,
+            &support::document_id(),
+            destination_path,
+        ),
     }
 }
 
@@ -4743,8 +4955,24 @@ fn ticket_request(
     title: &str,
     body: &str,
 ) -> SaveTicketRequest {
+    ticket_request_with_operation_id(root, intent, title, body, support::new_operation_id())
+}
+
+fn ticket_request_with_operation_id(
+    root: &std::path::Path,
+    intent: ContextIntent,
+    title: &str,
+    body: &str,
+    operation_id: manyhands::repository::OperationId,
+) -> SaveTicketRequest {
     SaveTicketRequest {
-        target: target(root, AuthoringKind::Ticket, support::ticket_id(), intent),
+        target: target_with_operation_id(
+            root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            intent,
+            operation_id,
+        ),
         draft: TicketDraft {
             title: title.to_owned(),
             ticket_type: "feature".to_owned(),
@@ -4753,6 +4981,11 @@ fn ticket_request(
             team: Some("core".to_owned()),
             body: body.to_owned(),
         },
+        expected_path: expected_context_observation(
+            root,
+            &support::ticket_id(),
+            ticket_relative_path(),
+        ),
     }
 }
 
@@ -4782,11 +5015,43 @@ fn comment_request(
     body: &str,
 ) -> SubmitCommentRequest {
     SubmitCommentRequest {
-        target: target(root, kind, item_id, intent),
-        comment_id,
+        target: target(root, kind, item_id.clone(), intent),
+        comment_id: comment_id.clone(),
         parent_id,
         body: body.to_owned(),
+        expected_destination: expected_context_observation(
+            root,
+            &item_id,
+            comment_relative_path(&item_id, &comment_id),
+        ),
     }
+}
+
+fn expected_context_observation(
+    root: &std::path::Path,
+    item_id: &manyhands::canonical::ItemId,
+    relative: impl AsRef<std::path::Path>,
+) -> manyhands::repository::ExpectedPathObservation {
+    let context_root = root.join(".manyhands/worktrees").join(item_id.to_string());
+    let path = if context_root.exists() {
+        context_root.join(relative.as_ref())
+    } else {
+        root.join(relative)
+    };
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            manyhands::repository::ExpectedPathObservation::from_bytes(&fs::read(path).unwrap())
+        }
+        _ => manyhands::repository::ExpectedPathObservation::Missing,
+    }
+}
+
+fn comment_request_with_operation_id(
+    mut request: SubmitCommentRequest,
+    operation_id: manyhands::repository::OperationId,
+) -> SubmitCommentRequest {
+    request.target.operation_id = operation_id;
+    request
 }
 
 fn canonical_ticket(title: &str, body: &str) -> String {
@@ -4837,15 +5102,19 @@ fn saved_comment(
     git2::Oid,
     CommentPublicationState,
 ) {
-    let CommentSubmissionOutcome::Saved {
-        context,
-        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
-        publication,
-    } = outcome
-    else {
-        panic!("comment submission must create a checkpoint");
-    };
-    (context, commit_oid, publication)
+    match outcome {
+        CommentSubmissionOutcome::Saved {
+            context,
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            publication,
+        }
+        | CommentSubmissionOutcome::IndexPending {
+            context,
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            publication,
+        } => (context, commit_oid, publication),
+        _ => panic!("comment submission must create a checkpoint"),
+    }
 }
 
 fn document_error(
@@ -4880,6 +5149,7 @@ fn context_from(outcome: ContextProvisionOutcome) -> manyhands::repository::Item
         ContextProvisionOutcome::Created(context) | ContextProvisionOutcome::Reused(context) => {
             context
         }
+        ContextProvisionOutcome::IndexPending { context } => context,
     }
 }
 
@@ -5186,6 +5456,47 @@ fn registry_refresh_required(service: &RepositoryService) -> i64 {
         .unwrap()
 }
 
+fn operation_record_rows(
+    service: &RepositoryService,
+) -> Vec<manyhands::repository::RecoveryInspection> {
+    let root = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row("SELECT root_path FROM repositories LIMIT 1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap()
+        })
+        .unwrap();
+    service
+        .recovery_inspection(std::path::Path::new(&root))
+        .unwrap()
+}
+
+fn assert_redacted_authoring_failure(
+    error: &manyhands::repository::RepositoryError,
+    service: &RepositoryService,
+    forbidden: &[&str],
+) {
+    let rendered = format!("{error:?}\n{error}");
+    for forbidden in forbidden {
+        assert!(!rendered.contains(forbidden));
+    }
+    let data_directory = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
+                .unwrap()
+        })
+        .unwrap();
+    support::assert_operation_records_exclude(
+        std::path::Path::new(&data_directory)
+            .parent()
+            .expect("registry has a parent directory"),
+        forbidden,
+    );
+}
+
 fn ticket_source_for(item_id: &manyhands::canonical::ItemId) -> String {
     support::ticket_source().replace(&support::ticket_id().to_string(), &item_id.to_string())
 }
@@ -5216,12 +5527,14 @@ fn recovery_ticket_branch_creation_failure_leaves_no_context_then_retries() {
     let branch = format!("manyhands/ticket/{}", support::ticket_id());
     let failing = support::FailOnce::at(FailurePoint::BeforeContextBranchCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Ticket,
             support::ticket_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -5266,12 +5579,14 @@ fn recovery_ticket_worktree_creation_failure_retains_branch_then_retries() {
     let branch = format!("manyhands/ticket/{}", support::ticket_id());
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Ticket,
             support::ticket_id(),
             ContextIntent::Create,
+            operation_id,
         )
     };
 
@@ -5327,12 +5642,14 @@ fn recovery_document_edit_worktree_creation_failure_retries_exact_primary_branch
     clean_configuration_index(&fixture);
     let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
         .open_service(enabled.data_directory.path());
+    let operation_id = support::operation_id();
     let request = || {
-        target(
+        target_with_operation_id(
             &fixture.root,
             AuthoringKind::Document,
             support::document_id(),
             ContextIntent::Edit,
+            operation_id,
         )
     };
 
@@ -5362,4 +5679,816 @@ fn recovery_document_edit_worktree_creation_failure_retries_exact_primary_branch
         worktree_paths(&fixture.repository),
         vec![std::fs::canonicalize(context.worktree).unwrap()]
     );
+}
+
+#[test]
+fn context_replay_worktree_interruption_uses_one_journaled_context() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let target = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(target())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let pending = enabled.service.recovery_inspection(&fixture.root).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(matches!(
+        pending.as_slice(),
+        [manyhands::repository::RecoveryInspection::Pending { operation_id: found, .. }]
+            if *found == operation_id
+    ));
+
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let context = context_from(fresh.prepare_context(target()).unwrap());
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![fs::canonicalize(&context.worktree).unwrap()]
+    );
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
+}
+
+#[test]
+fn fresh_service_replays_branch_only_interruption_with_one_deterministic_branch() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let request = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let branch = format!("manyhands/document/{}", support::document_id());
+    let target = fixture
+        .repository
+        .find_branch(&branch, git2::BranchType::Local)
+        .unwrap()
+        .get()
+        .target()
+        .unwrap();
+    assert!(worktree_paths(&fixture.repository).is_empty());
+
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let context = context_from(fresh.prepare_context(request()).unwrap());
+    assert_eq!(context.branch, branch);
+    assert_eq!(
+        fixture
+            .repository
+            .find_branch(&context.branch, git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .target(),
+        Some(target)
+    );
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![fs::canonicalize(context.worktree).unwrap()]
+    );
+}
+
+#[test]
+fn fresh_service_replays_worktree_only_interruption_with_one_deterministic_worktree() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let request = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeWorktreeCreation)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let first = context_from(fresh.prepare_context(request()).unwrap());
+    let replay = context_from(fresh.prepare_context(request()).unwrap());
+    assert_eq!(replay.branch, first.branch);
+    assert_eq!(replay.worktree, first.worktree);
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![fs::canonicalize(first.worktree).unwrap()]
+    );
+}
+
+#[test]
+fn stale_document_edit_preserves_external_replacement() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let path = context.worktree.join("docs/fixture.md");
+    let expected =
+        manyhands::repository::ExpectedPathObservation::from_bytes(&fs::read(&path).unwrap());
+    let external = canonical_document("External", "External body\n");
+    fs::write(&path, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/fixture.md"),
+        "docs/fixture.md",
+        "Replacement",
+        "Replacement body\n",
+    );
+    request.expected_source = Some(expected.clone());
+    request.expected_destination = expected;
+
+    let error = match enabled.service.save_document(request) {
+        Ok(_) => panic!("stale edit must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+#[test]
+fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/source.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join("docs/source.md");
+    let source_expected = ExpectedPathObservation::from_bytes(&fs::read(&source).unwrap());
+    let destination_expected = ExpectedPathObservation::Missing;
+    let external = canonical_document("External source", "external source body\n");
+    fs::write(&source, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/source.md"),
+        "docs/destination.md",
+        "Requested move",
+        "draft source body\n",
+    );
+    request.expected_source = Some(source_expected);
+    request.expected_destination = destination_expected;
+
+    let error = document_error(enabled.service.save_document(request));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().unwrap();
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
+    assert_eq!(diagnostic.item_id, support::document_id());
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(diagnostic.path, std::path::PathBuf::from("docs/source.md"));
+    assert_eq!(diagnostic.expectation, ExternalChangeExpectation::Changed);
+    assert_redacted_authoring_failure(
+        &error,
+        &enabled.service,
+        &["external source body", "draft source body"],
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), external);
+    assert!(!context.worktree.join("docs/destination.md").exists());
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[test]
+fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_state() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/source.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join("docs/source.md");
+    let source_expected = ExpectedPathObservation::from_bytes(&fs::read(&source).unwrap());
+    let destination = context.worktree.join("docs/destination.md");
+    let external = canonical_document("External destination", "external destination body\n");
+    fs::write(&destination, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/source.md"),
+        "docs/destination.md",
+        "Requested move",
+        "draft destination body\n",
+    );
+    request.expected_source = Some(source_expected);
+    request.expected_destination = ExpectedPathObservation::Missing;
+
+    let error = document_error(enabled.service.save_document(request));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().unwrap();
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
+    assert_eq!(diagnostic.item_id, support::document_id());
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(
+        diagnostic.path,
+        std::path::PathBuf::from("docs/destination.md")
+    );
+    assert_eq!(diagnostic.expectation, ExternalChangeExpectation::Missing);
+    assert_redacted_authoring_failure(
+        &error,
+        &enabled.service,
+        &["external destination body", "draft destination body"],
+    );
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        support::document_source()
+    );
+    assert_eq!(fs::read_to_string(&destination).unwrap(), external);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[test]
+fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
+    let fixture = support::born_repository();
+    commit_source(
+        &fixture,
+        &ticket_relative_path().display().to_string(),
+        &support::ticket_source(),
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Ticket,
+                support::ticket_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let path = ticket_path(&context);
+    let expected = ExpectedPathObservation::from_bytes(&fs::read(&path).unwrap());
+    let external = canonical_ticket("External ticket", "external ticket body\n");
+    fs::write(&path, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let mut request = ticket_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        "Requested ticket",
+        "draft ticket body\n",
+    );
+    request.expected_path = expected;
+
+    let error = document_error(enabled.service.save_ticket(request));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().unwrap();
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.operation, RepositoryOperation::SaveTicket);
+    assert_eq!(diagnostic.item_id, support::ticket_id());
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(diagnostic.path, ticket_relative_path());
+    assert_eq!(diagnostic.expectation, ExternalChangeExpectation::Changed);
+    assert_redacted_authoring_failure(
+        &error,
+        &enabled.service,
+        &["external ticket body", "draft ticket body"],
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[test]
+fn stale_comment_creation_preserves_pre_save_repository_and_worktree_state() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let path = comment_path(&context, &support::root_comment_id());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let external = comment_source_for(&support::root_comment_id(), &support::document_id())
+        + "external comment body\n";
+    fs::write(&path, &external).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let mut request = comment_request(
+        &fixture.root,
+        AuthoringKind::Document,
+        support::document_id(),
+        ContextIntent::Edit,
+        support::root_comment_id(),
+        None,
+        "draft comment body\n",
+    );
+    request.expected_destination = ExpectedPathObservation::Missing;
+
+    let error = comment_error(enabled.service.submit_comment(request));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().unwrap();
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.operation, RepositoryOperation::SubmitComment);
+    assert_eq!(diagnostic.item_id, support::document_id());
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(
+        diagnostic.path,
+        comment_relative_path(&support::document_id(), &support::root_comment_id())
+    );
+    assert_eq!(diagnostic.expectation, ExternalChangeExpectation::Missing);
+    assert_redacted_authoring_failure(
+        &error,
+        &enabled.service,
+        &["external comment body", "draft comment body"],
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_owned_symlink_is_rejected_without_following_or_writing_outside_repository() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join("docs/fixture.md");
+    let expected = ExpectedPathObservation::from_bytes(&fs::read(&source).unwrap());
+    let external = tempfile::tempdir().unwrap();
+    let outside = external.path().join("outside.md");
+    fs::write(&outside, "outside must remain unchanged\n").unwrap();
+    fs::remove_file(&source).unwrap();
+    symlink(&outside, &source).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/fixture.md"),
+        "docs/fixture.md",
+        "Requested",
+        "draft body\n",
+    );
+    request.expected_source = Some(expected.clone());
+    request.expected_destination = expected;
+
+    let error = document_error(enabled.service.save_document(request));
+    assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap(),
+        "outside must remain unchanged\n"
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_leaf_swap_at_read_boundary_rejects_document_update_without_staging_outside_bytes() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let relative = std::path::PathBuf::from("docs/nofollow-read.md");
+    commit_source(
+        &fixture,
+        relative.to_str().unwrap(),
+        &support::document_source(),
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join(&relative);
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.md");
+    let outside_bytes = b"outside bytes must not be staged\n";
+    fs::write(&outside_file, outside_bytes).unwrap();
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+    let hook_outside_file = outside_file.clone();
+
+    enabled.service.set_owned_path_hook_for_testing(
+        relative.clone(),
+        OwnedPathBoundary::Read,
+        move || {
+            fs::remove_file(&source).unwrap();
+            symlink(&hook_outside_file, &source).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some(relative.to_str().unwrap()),
+        relative.to_str().unwrap(),
+        "Updated",
+        "updated body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!format!("{error:?}").contains("outside bytes"));
+    assert_eq!(fs::read(&outside_file).unwrap(), outside_bytes);
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_parent_swap_at_replace_boundary_rejects_document_create_without_writing_outside() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let relative = std::path::PathBuf::from("docs/nofollow-parent/new.md");
+    let parent = context.worktree.join(relative.parent().unwrap());
+    fs::create_dir_all(&parent).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("new.md");
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+
+    enabled.service.set_owned_path_hook_for_testing(
+        relative.clone(),
+        OwnedPathBoundary::Replace,
+        move || {
+            fs::remove_dir(&parent).unwrap();
+            symlink(outside.path(), &parent).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        relative.to_str().unwrap(),
+        "Created",
+        "created body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!outside_file.exists());
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn owned_source_swap_at_remove_boundary_rejects_document_move_without_destination_or_commit() {
+    use std::os::unix::fs::symlink;
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let fixture = support::born_repository();
+    let source_relative = std::path::PathBuf::from("docs/nofollow-source.md");
+    let destination_relative = std::path::PathBuf::from("docs/nofollow-destination.md");
+    commit_source(
+        &fixture,
+        source_relative.to_str().unwrap(),
+        &support::document_source(),
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let source = context.worktree.join(&source_relative);
+    let destination = context.worktree.join(&destination_relative);
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.md");
+    let outside_bytes = b"outside source must not be removed or read\n";
+    fs::write(&outside_file, outside_bytes).unwrap();
+    let repository = Repository::open(&context.worktree).unwrap();
+    let head_before = support::head_commit(&repository);
+    let index_before = support::index_bytes(&repository);
+    let records_before = operation_record_rows(&enabled.service);
+    let hook_outside_file = outside_file.clone();
+
+    enabled.service.set_owned_path_hook_for_testing(
+        source_relative.clone(),
+        OwnedPathBoundary::Remove,
+        move || {
+            fs::remove_file(&source).unwrap();
+            symlink(&hook_outside_file, &source).unwrap();
+        },
+    );
+    let error = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some(source_relative.to_str().unwrap()),
+        destination_relative.to_str().unwrap(),
+        "Moved",
+        "moved body\n",
+    )));
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_ne!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!format!("{error:?}").contains("outside source"));
+    assert_eq!(fs::read(&outside_file).unwrap(), outside_bytes);
+    assert!(!destination.exists());
+    assert_eq!(support::head_commit(&repository), head_before);
+    assert_eq!(support::index_bytes(&repository), index_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+}
+
+#[test]
+fn document_same_id_different_move_source_is_an_operation_mismatch() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/one.md", &support::document_source());
+    commit_source(&fixture, "docs/two.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::operation_id();
+    let request = |source| {
+        document_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Edit,
+            Some(source),
+            "docs/destination.md",
+            "Moved",
+            "Body\n",
+            operation_id,
+        )
+    };
+
+    let _ = enabled.service.save_document(request("docs/one.md"));
+    let error = document_error(enabled.service.save_document(request("docs/two.md")));
+    assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch);
+}
+
+#[test]
+fn externally_populated_missing_document_destination_is_redacted_external_change() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let item_id = support::document_id();
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                item_id.clone(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let destination = context.worktree.join("docs/new.md");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::write(
+        &destination,
+        canonical_document("External", "secret external body\n"),
+    )
+    .unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    let mut request = document_request(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        "docs/new.md",
+        "Requested",
+        "secret draft body\n",
+    );
+    request.expected_destination = manyhands::repository::ExpectedPathObservation::Missing;
+    let error = document_error(enabled.service.save_document(request));
+
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    let diagnostic = error.external_change().expect("external-change diagnostic");
+    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.item_id, item_id);
+    assert_eq!(diagnostic.context, context.worktree);
+    assert_eq!(diagnostic.path, std::path::PathBuf::from("docs/new.md"));
+    assert_eq!(
+        diagnostic.expectation,
+        manyhands::repository::ExternalChangeExpectation::Missing
+    );
+    assert!(!format!("{error:?}").contains("secret"));
+    assert!(!format!("{error}").contains("secret"));
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+#[test]
+fn rejected_authoring_request_does_not_strand_a_pending_lifecycle_record() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+
+    let rejected = document_error(enabled.service.save_document(document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/missing.md"),
+        "docs/new.md",
+        "Rejected",
+        "Body\n",
+    )));
+    assert_eq!(rejected.kind, RepositoryErrorKind::MissingAuthoringTarget);
+
+    assert!(matches!(
+        enabled.service.save_document(document_request(
+            &fixture.root,
+            ContextIntent::Create,
+            None,
+            "docs/new.md",
+            "Accepted",
+            "Body\n",
+        )),
+        Ok(SaveOutcome::Saved { .. })
+    ));
+}
+
+#[test]
+fn recovery_document_write_transition_persistence_failure_blocks_other_ids_until_same_id_replays() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let request = document_request_with_operation_id(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        "docs/new.md",
+        "Title",
+        "Body\n",
+        operation_id,
+    );
+    let failing = support::FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        document_error(failing.save_document(request.clone())).kind,
+        RepositoryErrorKind::Sqlite
+    );
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    assert_eq!(
+        document_error(fresh.save_document(document_request(
+            &fixture.root,
+            ContextIntent::Create,
+            None,
+            "docs/other.md",
+            "Other",
+            "Body\n",
+        )))
+        .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+
+    let (_, checkpoint) = saved_checkpoint(fresh.save_document(request).unwrap());
+    assert_ne!(checkpoint, git2::Oid::zero());
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
+}
+
+#[test]
+fn context_git_failure_after_branch_creation_stays_pending_until_exact_retry() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let request = || {
+        target_with_operation_id(
+            &fixture.root,
+            AuthoringKind::Document,
+            support::document_id(),
+            ContextIntent::Create,
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::AfterContextBranchBeforeWorktreeGitFailure)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        context_error(failing.prepare_context(request())).kind,
+        RepositoryErrorKind::Git
+    );
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    assert_eq!(
+        context_error(fresh.prepare_context(target(
+            &fixture.root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            ContextIntent::Create,
+        )))
+        .kind,
+        RepositoryErrorKind::RecoveryRequired,
+    );
+    assert!(matches!(
+        fresh.prepare_context(request()),
+        Ok(ContextProvisionOutcome::Created(_))
+    ));
 }

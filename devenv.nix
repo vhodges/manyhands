@@ -30,6 +30,7 @@
     fontconfig
     glib
     gtk3
+    gh
   ];
 
   # https://devenv.sh/languages/

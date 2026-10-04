@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
 };
 
 use manyhands::{
@@ -11,15 +10,268 @@ use manyhands::{
     repository::{
         AuthoringKind, AuthoringTarget, ContextIntent, DiscoveredCommentThread, DiscoveredContext,
         DiscoveredItem, DiscoveryActivitySource, DiscoveryContextKind, DiscoveryProblem,
-        DocumentDraft, FailurePoint, LocalCheckpoint, RefreshOutcome, RepositoryErrorKind,
-        RepositoryOperation, RepositoryService, RepositorySnapshot, SaveDocumentRequest,
-        SaveOutcome, SnapshotConfiguration,
+        DocumentDraft, FailurePoint, LeaseKind, LocalCheckpoint, RefreshOutcome,
+        RepositoryErrorKind, RepositoryOperation, RepositoryService, RepositorySnapshot,
+        SaveDocumentRequest, SaveOutcome, SnapshotConfiguration,
     },
 };
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 
 mod support;
+
+#[test]
+fn cache_lease_child() {
+    let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
+        return;
+    };
+    let data_directory = PathBuf::from(std::env::var("MANYHANDS_LEASE_DATA_DIRECTORY").unwrap());
+    let kind = LeaseKind::parse(&std::env::var("MANYHANDS_LEASE_KIND").unwrap()).unwrap();
+    let ready = PathBuf::from(std::env::var("MANYHANDS_LEASE_READY").unwrap());
+    let release = PathBuf::from(std::env::var("MANYHANDS_LEASE_RELEASE").unwrap());
+    let _holder = RepositoryService::hold_lease_for_testing(
+        std::path::Path::new(&root),
+        &data_directory,
+        kind,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(ready)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !release.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+macro_rules! refresh_request {
+    ($root:expr, $operation_id:expr) => {
+        manyhands::repository::RefreshRepositoryRequest {
+            root: $root.to_owned(),
+            operation_id: $operation_id,
+        }
+    };
+    ($root:expr) => {
+        refresh_request!($root, support::operation_id())
+    };
+}
+
+macro_rules! rebuild_request {
+    ($root:expr, $operation_id:expr) => {
+        manyhands::repository::RebuildRepositoryRequest {
+            root: $root.to_owned(),
+            operation_id: $operation_id,
+        }
+    };
+    ($root:expr) => {
+        rebuild_request!($root, support::operation_id())
+    };
+}
+
+#[test]
+fn retry_requests_retain_the_same_operation_id() {
+    let root = PathBuf::from("/repository");
+    let operation_id = support::operation_id();
+    let initial = refresh_request!(&root, operation_id);
+    let retry = refresh_request!(&root, operation_id);
+
+    assert_eq!(initial.operation_id, retry.operation_id);
+}
+
+#[test]
+fn concurrent_refreshes_with_the_same_operation_id_have_one_index_owner() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    second_service.set_observation_hook_for_testing(|| panic!("non-owner must not scan"));
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    enabled.service.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    let outcomes = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        claimed_receive.recv().unwrap();
+        let second = scope.spawn(|| {
+            second_service.refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        release_send.send(()).unwrap();
+        [
+            first.join().unwrap().unwrap(),
+            second.join().unwrap().unwrap(),
+        ]
+    });
+
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RefreshOutcome::Refreshed { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RefreshOutcome::IndexPending { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn refresh_reclaims_an_interrupted_index_owner_on_exact_replay() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let operation_id = support::operation_id();
+    let interrupted = support::FailOnce::at(FailurePoint::AfterIndexClaim)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        interrupted
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(matches!(
+        RepositoryService::open_at(enabled.data_directory.path())
+            .unwrap()
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+}
+
+#[test]
+fn fresh_service_reclaims_owner_that_aborts_after_claim_without_timestamp_mutation() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let interrupted = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    interrupted.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        panic!("owner aborted after claiming indexing");
+    });
+    let root = fixture.root.clone();
+
+    let owner = std::thread::spawn(move || {
+        interrupted.refresh_repository(refresh_request!(&root, operation_id))
+    });
+    claimed_receive.recv().unwrap();
+    assert!(owner.join().is_err());
+
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(matches!(
+        RepositoryService::open_at(enabled.data_directory.path())
+            .unwrap()
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+}
+
+#[test]
+fn active_paused_scan_heartbeats_without_being_stolen() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    second_service.set_observation_hook_for_testing(|| panic!("live owner must not be stolen"));
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    enabled.service.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let owner = scope.spawn(|| {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        claimed_receive.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        assert!(matches!(
+            second_service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::IndexPending { .. }
+        ));
+        release_send.send(()).unwrap();
+        assert!(matches!(
+            owner.join().unwrap().unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+    });
+}
+
+#[test]
+fn reclaimed_owner_cannot_overwrite_newer_discovery_rows() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let document = support::write_document_source(&fixture.root, "docs/fixture.md");
+    let first = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let second = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let operation_id = support::operation_id();
+    let (observed_send, observed_receive) = mpsc::sync_channel(0);
+    let (resume_send, resume_receive) = mpsc::sync_channel(0);
+    let (heartbeat_send, heartbeat_receive) = mpsc::sync_channel(0);
+    let (heartbeat_resume_send, heartbeat_resume_receive) = mpsc::sync_channel(0);
+    first.set_observation_hook_for_testing(move || {
+        observed_send.send(()).unwrap();
+        resume_receive.recv().unwrap();
+    });
+    first.set_index_owner_heartbeat_hook_for_testing(move || {
+        heartbeat_send.send(()).unwrap();
+        heartbeat_resume_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let stale =
+            scope.spawn(|| first.refresh_repository(refresh_request!(&fixture.root, operation_id)));
+        observed_receive.recv().unwrap();
+        heartbeat_receive.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        fs::write(
+            &document,
+            support::document_source().replace("Fixture document", "Second owner"),
+        )
+        .unwrap();
+        assert!(matches!(
+            second
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+        heartbeat_resume_send.send(()).unwrap();
+        resume_send.send(()).unwrap();
+        assert!(matches!(
+            stale.join().unwrap().unwrap(),
+            RefreshOutcome::IndexPending { .. }
+        ));
+    });
+
+    let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
+    assert!(
+        snapshot
+            .items
+            .iter()
+            .any(|item| item.title == "Second owner")
+    );
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct AvailableState {
@@ -300,6 +552,7 @@ fn snapshot_reads_a_registered_cache_without_mutating_available_state() {
         .execute_batch("PRAGMA journal_mode=DELETE")
         .unwrap();
     drop(connection);
+    fs::File::create(data.path().join("manyhands.sqlite3.recovery.lock")).unwrap();
     let before = available_state(&fixture, data.path());
 
     let snapshot = service.repository_snapshot(&fixture.root).unwrap();
@@ -315,11 +568,17 @@ fn refresh_requires_registration_but_rebuild_registers_the_explicit_root() {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
 
-    let error = service.refresh_repository(&fixture.root).unwrap_err();
+    let error = service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::RepositoryNotRegistered);
     assert_eq!(error.operation, RepositoryOperation::RefreshRepository);
-    assert!(service.rebuild_repository(&fixture.root).is_ok());
+    assert!(
+        service
+            .rebuild_repository(rebuild_request!(&fixture.root))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -333,8 +592,10 @@ fn refresh_persists_primary_metadata_comments_and_activity() {
     fs::create_dir_all(comment.parent().unwrap()).unwrap();
     fs::write(comment, support::root_comment_source()).unwrap();
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
     else {
         panic!("expected stable refresh");
     };
@@ -367,6 +628,7 @@ fn refresh_keeps_primary_and_active_contexts_with_active_item_precedence() {
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -374,19 +636,23 @@ fn refresh_keeps_primary_and_active_contexts_with_active_item_precedence() {
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
     assert!(matches!(
         outcome,
         SaveOutcome::Saved {
-            checkpoint: LocalCheckpoint::RefreshPending { .. },
+            checkpoint: LocalCheckpoint::Checkpointed { .. },
             ..
         }
     ));
     support::write_document_source(&fixture.root, "docs/primary.md");
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
     else {
         panic!("expected stable refresh");
     };
@@ -413,6 +679,7 @@ fn refresh_after_pending_checkpoint_only_indexes_existing_git_state() {
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/pending.md"),
@@ -420,12 +687,16 @@ fn refresh_after_pending_checkpoint_only_indexes_existing_git_state() {
                 title: "Pending".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
     let before = commit_count(&fixture.repository);
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
     else {
         panic!("expected stable refresh");
     };
@@ -439,11 +710,16 @@ fn refresh_removes_disappeared_context_and_item_rows() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     support::write_document_source(&fixture.root, "docs/visible.md");
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     fs::remove_file(fixture.root.join("docs/visible.md")).unwrap();
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
     else {
         panic!("expected stable refresh");
     };
@@ -462,14 +738,19 @@ fn refresh_transaction_failure_retains_prior_rows_and_retries() {
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     support::write_document_source(&fixture.root, "docs/visible.md");
     let failing =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
 
     assert_eq!(
-        failing.refresh_repository(&fixture.root).unwrap_err().kind,
+        failing
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert!(
@@ -479,7 +760,9 @@ fn refresh_transaction_failure_retains_prior_rows_and_retries() {
             .items
             .is_empty()
     );
-    let RefreshOutcome::Refreshed { snapshot } = initial.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = initial
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected stable retry");
     };
@@ -504,17 +787,18 @@ fn refresh_sqlite_context_write_failure_preserves_git_and_recovers() {
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
     let error = enabled
         .service
-        .refresh_repository(&fixture.root)
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
         .unwrap_err();
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
     assert_eq!(error.operation, RepositoryOperation::RefreshRepository);
     assert_eq!(fixture.repository.head().unwrap().target(), head);
     assert_eq!(support::index_bytes(&fixture.repository).unwrap(), index);
     assert!(
-        enabled
+        !enabled
             .service
             .repository_snapshot(&fixture.root)
             .unwrap()
@@ -529,8 +813,10 @@ fn refresh_sqlite_context_write_failure_preserves_git_and_recovers() {
                 .unwrap();
         })
         .unwrap();
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected retry recovery")
     };
@@ -548,23 +834,30 @@ fn refresh_after_observation_failure_preserves_prior_rows_for_retry() {
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::AfterContextObservation).open_service(data.path());
+    let operation_id = support::operation_id();
 
     assert_eq!(
-        failing.refresh_repository(&fixture.root).unwrap_err().kind,
+        failing
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert!(
-        initial
+        !initial
             .repository_snapshot(&fixture.root)
             .unwrap()
             .refresh_required
     );
     assert!(matches!(
-        initial.refresh_repository(&fixture.root).unwrap(),
+        initial
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
         RefreshOutcome::Refreshed { .. }
     ));
 }
@@ -574,14 +867,21 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     let document = support::write_document_source(&fixture.root, "docs/visible.md");
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     enabled.service.set_observation_hook_for_testing({
         let document = document.clone();
         move || fs::write(document, "ordinary markdown\n").unwrap()
     });
+    let operation_id = support::operation_id();
 
     assert!(matches!(
-        enabled.service.refresh_repository(&fixture.root).unwrap(),
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
         RefreshOutcome::RetryRequired {
             context: Some(_),
             ..
@@ -591,8 +891,10 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
     assert_eq!(retained.items.len(), 1);
     assert!(retained.refresh_required);
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected stable retry");
     };
@@ -607,108 +909,6 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
 }
 
 #[test]
-fn refresh_and_authoring_are_serialized_across_service_instances() {
-    let fixture = support::born_repository();
-    let enabled = support::enabled_repository(&fixture);
-    let mut index = fixture.repository.index().unwrap();
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
-    index.write().unwrap();
-    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
-    let (observed_send, observed_receive) = mpsc::sync_channel(0);
-    let (release_send, release_receive) = mpsc::sync_channel(0);
-    let (saved_send, saved_receive) = mpsc::sync_channel(0);
-    enabled.service.set_observation_hook_for_testing(move || {
-        observed_send.send(()).unwrap();
-        release_receive.recv().unwrap();
-    });
-    let root = fixture.root.clone();
-
-    std::thread::scope(|scope| {
-        let refresh = scope.spawn(|| enabled.service.refresh_repository(&fixture.root));
-        observed_receive.recv().unwrap();
-        let save = scope.spawn(|| {
-            let outcome = second_service.save_document(SaveDocumentRequest {
-                target: AuthoringTarget {
-                    root,
-                    kind: AuthoringKind::Document,
-                    item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAZ".parse().unwrap(),
-                    intent: ContextIntent::Create,
-                },
-                source_path: None,
-                destination_path: PathBuf::from("docs/serialized.md"),
-                draft: DocumentDraft {
-                    title: "Serialized".to_owned(),
-                    body: String::new(),
-                },
-            });
-            saved_send.send(outcome.is_ok()).unwrap();
-        });
-        assert!(
-            saved_receive
-                .recv_timeout(Duration::from_millis(100))
-                .is_err()
-        );
-        release_send.send(()).unwrap();
-        refresh.join().unwrap().unwrap();
-        assert!(saved_receive.recv_timeout(Duration::from_secs(2)).unwrap());
-        save.join().unwrap();
-    });
-
-    assert!(
-        enabled
-            .service
-            .repository_snapshot(&fixture.root)
-            .unwrap()
-            .refresh_required
-    );
-}
-
-#[test]
-fn concurrent_refreshes_share_one_in_process_repository_lock() {
-    let fixture = support::born_repository();
-    let enabled = support::enabled_repository(&fixture);
-    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
-    let (observed_send, observed_receive) = mpsc::sync_channel(0);
-    let (release_send, release_receive) = mpsc::sync_channel(0);
-    let (completed_send, completed_receive) = mpsc::sync_channel(0);
-    enabled.service.set_observation_hook_for_testing(move || {
-        observed_send.send(()).unwrap();
-        release_receive.recv().unwrap();
-    });
-    let root = fixture.root.clone();
-
-    std::thread::scope(|scope| {
-        let first = scope.spawn(|| enabled.service.refresh_repository(&fixture.root));
-        observed_receive.recv().unwrap();
-        let second = scope.spawn(|| {
-            completed_send
-                .send(second_service.refresh_repository(&root))
-                .unwrap();
-        });
-        assert!(
-            completed_receive
-                .recv_timeout(Duration::from_millis(100))
-                .is_err()
-        );
-        release_send.send(()).unwrap();
-        first.join().unwrap().unwrap();
-        completed_receive
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap()
-            .unwrap();
-        second.join().unwrap();
-    });
-
-    assert!(
-        !enabled
-            .service
-            .repository_snapshot(&fixture.root)
-            .unwrap()
-            .refresh_required
-    );
-}
-
-#[test]
 fn refresh_does_not_mutate_git_or_canonical_content() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
@@ -716,7 +916,10 @@ fn refresh_does_not_mutate_git_or_canonical_content() {
     let before = available_state(&fixture, enabled.data_directory.path());
     let index = support::index_bytes(&fixture.repository).unwrap();
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(
         available_state(&fixture, enabled.data_directory.path()).head,
@@ -734,7 +937,10 @@ fn no_mutation_refresh_preserves_root_and_linked_worktree_state() {
     let (fixture, enabled) = repository_with_primary_and_context_content();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }
@@ -744,7 +950,10 @@ fn no_mutation_healthy_rebuild_preserves_root_and_linked_worktree_state() {
     let (fixture, enabled) = repository_with_primary_and_context_content();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
-    enabled.service.rebuild_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .rebuild_repository(rebuild_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }
@@ -758,7 +967,9 @@ fn no_mutation_corrupt_rebuild_preserves_root_and_linked_worktree_state() {
     let service = RepositoryService::open_at(data).unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
-    service.rebuild_repository(&fixture.root).unwrap();
+    service
+        .rebuild_repository(rebuild_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }
@@ -769,7 +980,10 @@ fn no_mutation_invalid_source_observation_preserves_root_and_linked_worktree_sta
     std::os::unix::fs::symlink("missing.md", fixture.root.join("docs/inaccessible.md")).unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
 }
@@ -793,7 +1007,7 @@ fn no_mutation_sqlite_persistence_failure_preserves_root_and_linked_worktree_sta
     assert_eq!(
         enabled
             .service
-            .refresh_repository(&fixture.root)
+            .refresh_repository(refresh_request!(&fixture.root))
             .unwrap_err()
             .kind,
         RepositoryErrorKind::Sqlite
@@ -817,7 +1031,10 @@ fn no_mutation_scan_race_retry_preserves_state_after_external_change() {
     });
 
     assert!(matches!(
-        enabled.service.refresh_repository(&fixture.root).unwrap(),
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root))
+            .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
 
@@ -903,6 +1120,7 @@ fn repository_with_primary_and_context_content()
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -910,6 +1128,8 @@ fn repository_with_primary_and_context_content()
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
     support::write_document_source(&fixture.root, "docs/primary.md");
@@ -924,7 +1144,7 @@ fn refresh_operation_states(service: &RepositoryService) -> Vec<(String, Option<
     service
         .with_registry_connection_for_testing(|connection| {
             connection
-                .prepare("SELECT state, context_path FROM index_operations WHERE operation = 'refresh' ORDER BY id")
+                .prepare("SELECT state, context_path FROM operation_records WHERE action = 'refresh' ORDER BY id")
                 .unwrap()
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .unwrap()
@@ -937,36 +1157,15 @@ fn refresh_operation_states(service: &RepositoryService) -> Vec<(String, Option<
 fn refresh_operation_progress(service: &RepositoryService) -> (String, i64) {
     service.with_registry_connection_for_testing(|connection| {
         connection.query_row(
-            "SELECT state, persisted_context_count FROM index_operations WHERE operation = 'refresh' ORDER BY id DESC LIMIT 1",
+            "SELECT state, persisted_context_count FROM operation_records WHERE action = 'refresh' ORDER BY id DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap()
     }).unwrap()
 }
 
-fn root_refresh_fingerprints(service: &RepositoryService, root: &Path) -> Vec<String> {
-    service
-        .with_registry_connection_for_testing(|connection| {
-            connection
-                .prepare(
-                    "SELECT index_operation_contexts.observation_fingerprint
-                     FROM index_operation_contexts
-                     JOIN index_operations ON index_operations.id = index_operation_contexts.operation_id
-                     WHERE index_operations.operation = 'refresh'
-                       AND index_operation_contexts.worktree_path = ?1
-                     ORDER BY index_operations.id ASC",
-                )
-                .unwrap()
-                .query_map([root.to_str().unwrap()], |row| row.get(0))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-        })
-        .unwrap()
-}
-
 #[test]
-fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
+fn refresh_does_not_persist_private_markdown_while_detecting_source_races() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     let private_body = "PRIVATE-MARKDOWN-BODY-01ARZ3NDEKTSV4RRFFQ69G5FAZ";
@@ -975,29 +1174,30 @@ fn refresh_fingerprints_digest_private_markdown_and_detect_source_races() {
     fs::create_dir_all(document.parent().unwrap()).unwrap();
     fs::write(&document, &source).unwrap();
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
-    let before = root_refresh_fingerprints(&enabled.service, &fixture.root);
-    assert_eq!(before.len(), 1);
-    assert!(!before[0].contains(private_body));
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
+    support::assert_operation_records_hold_no_content(enabled.data_directory.path());
 
     let changed_source = source.replace(private_body, "changed private Markdown body");
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, changed_source).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
-        enabled.service.refresh_repository(&fixture.root).unwrap(),
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
-    let after = root_refresh_fingerprints(&enabled.service, &fixture.root);
-    assert_eq!(after.len(), 2);
-    assert_ne!(before[0], after[1]);
-    assert!(
-        !after
-            .iter()
-            .any(|fingerprint| fingerprint.contains(private_body))
-    );
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap();
+    support::assert_operation_records_hold_no_content(enabled.data_directory.path());
 }
 
 #[test]
@@ -1015,6 +1215,7 @@ fn refresh_records_each_stable_context_persisted_before_completion() {
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -1022,10 +1223,15 @@ fn refresh_records_each_stable_context_persisted_before_completion() {
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
 
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
 
     assert_eq!(
         refresh_operation_progress(&enabled.service),
@@ -1048,6 +1254,7 @@ fn refresh_removes_rows_for_a_stably_disappeared_active_worktree() {
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -1055,13 +1262,18 @@ fn refresh_removes_rows_for_a_stably_disappeared_active_worktree() {
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
     support::write_ticket_source(
         &fixture.root,
         ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md",
     );
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     let active = fixture
         .root
         .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV");
@@ -1073,8 +1285,10 @@ fn refresh_removes_rows_for_a_stably_disappeared_active_worktree() {
         .prune(None)
         .unwrap();
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
     else {
         panic!("expected stable absence")
     };
@@ -1127,6 +1341,7 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -1134,6 +1349,8 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
     let ticket = fixture
@@ -1141,7 +1358,10 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
         .join(".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md");
     fs::create_dir_all(ticket.parent().unwrap()).unwrap();
     fs::write(&ticket, support::ticket_source()).unwrap();
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     fs::write(
         &ticket,
         support::ticket_source().replace("Fixture ticket", "Updated ticket"),
@@ -1156,11 +1376,15 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed_active).unwrap());
+    let operation_id = support::operation_id();
 
     let RefreshOutcome::RetryRequired {
         context: Some(context),
         ..
-    } = enabled.service.refresh_repository(&fixture.root).unwrap()
+    } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected active retry")
     };
@@ -1179,8 +1403,10 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
     );
     assert!(snapshot.items.iter().any(|item| item.title == "Active"));
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected stable retry")
     };
@@ -1213,6 +1439,7 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -1220,9 +1447,14 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     let active = fixture
         .root
         .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV/docs/active.md");
@@ -1232,8 +1464,12 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, active_changed).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
-        enabled.service.refresh_repository(&fixture.root).unwrap(),
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
     fs::write(
@@ -1242,8 +1478,10 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
     )
     .unwrap();
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected retry")
     };
@@ -1271,6 +1509,7 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
                 kind: AuthoringKind::Document,
                 item_id: support::document_id(),
                 intent: ContextIntent::Create,
+                operation_id: support::operation_id(),
             },
             source_path: None,
             destination_path: PathBuf::from("docs/active.md"),
@@ -1278,9 +1517,14 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
                 title: "Active".to_owned(),
                 body: String::new(),
             },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
         })
         .unwrap();
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     let active = fixture
         .root
         .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV/docs/active.md");
@@ -1290,14 +1534,20 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed).unwrap());
+    let operation_id = support::operation_id();
     assert!(matches!(
-        enabled.service.refresh_repository(&fixture.root).unwrap(),
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
         RefreshOutcome::RetryRequired { .. }
     ));
     fs::write(fixture.root.join(".manyhands/config.toml"), "not = [valid").unwrap();
 
-    let RefreshOutcome::Refreshed { snapshot } =
-        enabled.service.refresh_repository(&fixture.root).unwrap()
+    let RefreshOutcome::Refreshed { snapshot } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
     else {
         panic!("expected retry")
     };
@@ -1324,19 +1574,26 @@ fn refresh_lifecycle_failure_resumes_the_same_operation_to_completion() {
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::AfterContextObservation).open_service(data.path());
+    let operation_id = support::operation_id();
     assert_eq!(
-        failing.refresh_repository(&fixture.root).unwrap_err().kind,
+        failing
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert_eq!(
         refresh_operation_states(&service),
         vec![("failed".to_owned(), None)]
     );
-    service.refresh_repository(&fixture.root).unwrap();
+    service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap();
     assert_eq!(
         refresh_operation_states(&service),
         vec![("completed".to_owned(), None)]
@@ -1353,19 +1610,26 @@ fn refresh_lifecycle_marks_transaction_failure_then_resumes_without_duplicate_re
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     let failing =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
     assert_eq!(
-        failing.refresh_repository(&fixture.root).unwrap_err().kind,
+        failing
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap_err()
+            .kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert_eq!(
         refresh_operation_states(&service),
         vec![("failed".to_owned(), None)]
     );
-    service.refresh_repository(&fixture.root).unwrap();
+    service
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap();
     assert_eq!(
         refresh_operation_states(&service),
         vec![("completed".to_owned(), None)]
@@ -1376,7 +1640,10 @@ fn refresh_lifecycle_marks_transaction_failure_then_resumes_without_duplicate_re
 fn refresh_records_only_a_valid_configuration_committed_blob_oid() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     let expected = fixture
         .repository
         .head()
@@ -1399,7 +1666,10 @@ fn refresh_records_only_a_valid_configuration_committed_blob_oid() {
         })
         .unwrap();
     fs::remove_file(fixture.root.join(".manyhands/config.toml")).unwrap();
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     enabled
         .service
         .with_registry_connection_for_testing(|connection| {
@@ -1419,7 +1689,10 @@ fn refresh_records_only_a_valid_configuration_committed_blob_oid() {
         .unwrap();
     fs::create_dir_all(fixture.root.join(".manyhands")).unwrap();
     fs::write(fixture.root.join(".manyhands/config.toml"), "not = [valid").unwrap();
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     enabled
         .service
         .with_registry_connection_for_testing(|connection| {
@@ -1589,7 +1862,10 @@ fn snapshot_maps_invalid_configuration_observation() {
 fn snapshot_resolves_equivalent_and_symlinked_root_paths() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     let alias_parent = tempfile::tempdir().unwrap();
     let alias = alias_parent.path().join("repository-alias");
     std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
@@ -1608,7 +1884,10 @@ fn rebuild_keeps_prior_snapshot_stale_when_observation_changes() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
     let document = support::write_document_source(&fixture.root, "docs/visible.md");
-    enabled.service.refresh_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap();
     enabled.service.set_observation_hook_for_testing({
         let document = document.clone();
         move || {
@@ -1620,7 +1899,10 @@ fn rebuild_keeps_prior_snapshot_stale_when_observation_changes() {
         }
     });
 
-    let snapshot = enabled.service.rebuild_repository(&fixture.root).unwrap();
+    let snapshot = enabled
+        .service
+        .rebuild_repository(rebuild_request!(&fixture.root))
+        .unwrap();
 
     assert!(snapshot.refresh_required);
     assert_eq!(snapshot.items[0].title, "Fixture document");
@@ -1654,6 +1936,7 @@ fn rebuild_corrupt_cache_restores_only_the_explicit_root() {
             root: first.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     initial
@@ -1661,6 +1944,7 @@ fn rebuild_corrupt_cache_restores_only_the_explicit_root() {
             root: second.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     support::write_document_source(&first.root, "docs/visible.md");
@@ -1672,14 +1956,23 @@ fn rebuild_corrupt_cache_restores_only_the_explicit_root() {
     let service = RepositoryService::open_at(data.path()).unwrap();
     for error in [
         service.inspect(&first.root).unwrap_err(),
-        service.refresh_repository(&first.root).unwrap_err(),
+        service
+            .refresh_repository(refresh_request!(&first.root))
+            .unwrap_err(),
         service.repository_snapshot(&first.root).unwrap_err(),
-        service.remove_registration(&first.root).unwrap_err(),
+        service
+            .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+                root: first.root.clone(),
+                operation_id: support::operation_id(),
+            })
+            .unwrap_err(),
     ] {
         assert_eq!(error.kind, RepositoryErrorKind::IndexUnavailable);
     }
 
-    let snapshot = service.rebuild_repository(&first.root.join(".")).unwrap();
+    let snapshot = service
+        .rebuild_repository(rebuild_request!(&first.root.join(".")))
+        .unwrap();
 
     assert_eq!(snapshot.root, first.root.canonicalize().unwrap());
     assert_eq!(snapshot.items.len(), 1);
@@ -1709,16 +2002,23 @@ fn rebuild_healthy_cache_replaces_only_requested_root_derived_rows() {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap();
     }
     support::write_document_source(&first.root, "docs/first.md");
     support::write_document_source(&second.root, "docs/second.md");
-    service.refresh_repository(&first.root).unwrap();
-    service.refresh_repository(&second.root).unwrap();
+    service
+        .refresh_repository(refresh_request!(&first.root))
+        .unwrap();
+    service
+        .refresh_repository(refresh_request!(&second.root))
+        .unwrap();
     fs::remove_file(second.root.join("docs/second.md")).unwrap();
 
-    let snapshot = service.rebuild_repository(&first.root).unwrap();
+    let snapshot = service
+        .rebuild_repository(rebuild_request!(&first.root))
+        .unwrap();
 
     assert_eq!(snapshot.items.len(), 1);
     assert_eq!(
@@ -1739,8 +2039,11 @@ fn corrupt_rebuild_failure_preserves_diagnostics_for_retry() {
     fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
     let failing = support::FailOnce::at(FailurePoint::BeforeCorruptCacheReplacement)
         .open_service(data.path());
+    let operation_id = support::operation_id();
 
-    let error = failing.rebuild_repository(&fixture.root).unwrap_err();
+    let error = failing
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
     assert_eq!(error.operation, RepositoryOperation::RebuildRepository);
@@ -1754,7 +2057,9 @@ fn corrupt_rebuild_failure_preserves_diagnostics_for_retry() {
         RepositoryErrorKind::IndexUnavailable
     );
 
-    let snapshot = failing.rebuild_repository(&fixture.root).unwrap();
+    let snapshot = failing
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap();
     assert_eq!(snapshot.root, fixture.root.canonicalize().unwrap());
     assert!(corrupt_diagnostic_exists(data.path()));
 }
@@ -1764,8 +2069,8 @@ fn rebuild_operation_states(service: &RepositoryService) -> Vec<(String, i64)> {
         .with_registry_connection_for_testing(|connection| {
             connection
                 .prepare(
-                    "SELECT state, persisted_context_count FROM index_operations
-                     WHERE operation = 'rebuild' ORDER BY id",
+                    "SELECT state, persisted_context_count FROM operation_records
+                      WHERE action = 'rebuild' ORDER BY id",
                 )
                 .unwrap()
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -1780,8 +2085,8 @@ fn rebuild_operation_states_at(data: &Path) -> Vec<(String, i64)> {
     Connection::open(data.join("manyhands.sqlite3"))
         .unwrap()
         .prepare(
-            "SELECT state, persisted_context_count FROM index_operations
-             WHERE operation = 'rebuild' ORDER BY id",
+            "SELECT state, persisted_context_count FROM operation_records
+              WHERE action = 'rebuild' ORDER BY id",
         )
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -1800,6 +2105,7 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     service
@@ -1812,8 +2118,11 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
-    let error = service.rebuild_repository(&fixture.root).unwrap_err();
+    let error = service
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::Sqlite);
     assert_eq!(
@@ -1825,12 +2134,46 @@ fn rebuild_records_one_durable_operation_and_resumes_after_a_persistence_error()
         .execute_batch("DROP TRIGGER fail_rebuild_context_insert;")
         .unwrap();
 
-    service.rebuild_repository(&fixture.root).unwrap();
+    service
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap();
 
     assert_eq!(
         rebuild_operation_states(&service),
         vec![("completed".to_owned(), 1)]
     );
+}
+
+#[test]
+fn rebuild_error_does_not_overwrite_a_completed_same_id_retry() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let failing =
+        support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let retry = RepositoryService::open_at(data.path()).unwrap();
+    let operation_id = support::operation_id();
+    let (paused_send, paused_receive) = mpsc::sync_channel(0);
+    let (resume_send, resume_receive) = mpsc::sync_channel(0);
+    failing.set_rebuild_error_hook_for_testing(move || {
+        paused_send.send(()).unwrap();
+        resume_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let original = scope
+            .spawn(|| failing.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
+        paused_receive.recv().unwrap();
+        let retried = retry.rebuild_repository(rebuild_request!(&fixture.root, operation_id));
+        resume_send.send(()).unwrap();
+        let original = original.join().unwrap();
+        retried.unwrap();
+        assert_eq!(
+            original.unwrap_err().kind,
+            RepositoryErrorKind::InjectedFailure
+        );
+    });
+
+    assert!(retry.recovery_inspection(&fixture.root).unwrap().is_empty());
 }
 
 #[test]
@@ -1840,8 +2183,11 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
     let service =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data.path());
+    let operation_id = support::operation_id();
 
-    let error = service.rebuild_repository(&fixture.root).unwrap_err();
+    let error = service
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap_err();
 
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
     assert_eq!(
@@ -1851,10 +2197,12 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
     let diagnostics = corrupt_diagnostic_count(data.path());
     assert_eq!(
         service.repository_snapshot(&fixture.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
+        RepositoryErrorKind::RepositoryNotRegistered
     );
 
-    service.rebuild_repository(&fixture.root).unwrap();
+    service
+        .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        .unwrap();
 
     assert_eq!(corrupt_diagnostic_count(data.path()), diagnostics);
     assert_eq!(
@@ -1864,7 +2212,7 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
 }
 
 #[test]
-fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
+fn root_scoped_incomplete_rebuild_does_not_block_other_root_discovery() {
     let first = support::born_repository();
     let second = support::born_repository();
     let data = tempfile::tempdir().unwrap();
@@ -1875,6 +2223,7 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
                 root: fixture.root.clone(),
                 primary_branch: "main".to_owned(),
                 identity: None,
+                operation_id: support::operation_id(),
             })
             .unwrap();
     }
@@ -1890,9 +2239,13 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
                 .unwrap();
         })
         .unwrap();
+    let operation_id = support::operation_id();
 
     assert_eq!(
-        service.rebuild_repository(&first.root).unwrap_err().kind,
+        service
+            .rebuild_repository(rebuild_request!(&first.root, operation_id))
+            .unwrap_err()
+            .kind,
         RepositoryErrorKind::Sqlite
     );
     Connection::open(data.path().join("manyhands.sqlite3"))
@@ -1900,21 +2253,71 @@ fn rebuilding_another_root_does_not_make_an_incomplete_rebuild_available() {
         .execute_batch("DROP TRIGGER fail_first_rebuild;")
         .unwrap();
 
-    service.rebuild_repository(&second.root).unwrap();
-
-    assert_eq!(
-        service.inspect(&second.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
-    );
+    assert!(service.repository_snapshot(&second.root).is_ok());
+    assert!(matches!(
+        service
+            .refresh_repository(refresh_request!(&second.root))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
     let restarted = RepositoryService::open_at(data.path()).unwrap();
-    assert_eq!(
-        restarted.inspect(&second.root).unwrap_err().kind,
-        RepositoryErrorKind::IndexUnavailable
-    );
+    assert!(restarted.repository_snapshot(&second.root).is_ok());
 
-    restarted.rebuild_repository(&first.root).unwrap();
+    restarted
+        .rebuild_repository(rebuild_request!(&first.root, operation_id))
+        .unwrap();
 
     assert!(restarted.inspect(&second.root).is_ok());
+}
+
+#[test]
+fn refresh_scan_releases_repository_lease_before_observation() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let root = fixture.root.clone();
+    let data = enabled.data_directory.path().to_owned();
+    enabled.service.set_observation_hook_for_testing(move || {
+        support::hold_lease_in_child_for_test(
+            &root,
+            &data,
+            LeaseKind::Repository,
+            "cache_lease_child",
+        )
+        .release();
+    });
+
+    assert!(
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root))
+            .is_ok()
+    );
+}
+
+#[test]
+fn registration_git_reads_release_cache_guard_for_exclusive_replacement() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    enabled.service.set_registration_git_hook_for_testing({
+        let root = fixture.root.clone();
+        let data = enabled.data_directory.path().to_owned();
+        move || {
+            support::hold_lease_in_child_for_test(
+                &root,
+                &data,
+                LeaseKind::CacheWrite,
+                "cache_lease_child",
+            )
+            .release();
+        }
+    });
+
+    assert!(
+        enabled
+            .service
+            .enable(support::enable_request(&fixture.root))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -1927,6 +2330,7 @@ fn rebuild_clears_config_blob_oid_for_a_valid_uncommitted_config_edit() {
             root: fixture.root.clone(),
             primary_branch: "main".to_owned(),
             identity: None,
+            operation_id: support::operation_id(),
         })
         .unwrap();
     fs::write(
@@ -1935,7 +2339,9 @@ fn rebuild_clears_config_blob_oid_for_a_valid_uncommitted_config_edit() {
     )
     .unwrap();
 
-    let snapshot = service.rebuild_repository(&fixture.root).unwrap();
+    let snapshot = service
+        .rebuild_repository(rebuild_request!(&fixture.root))
+        .unwrap();
     let oid: Option<String> = service
         .with_registry_connection_for_testing(|connection| {
             connection
@@ -1965,11 +2371,14 @@ fn concurrent_corrupt_rebuilds_replace_the_cache_once() {
         observed_send.send(()).unwrap();
         release_receive.recv().unwrap();
     });
+    let operation_id = support::operation_id();
 
     std::thread::scope(|scope| {
-        let first = scope.spawn(|| service.rebuild_repository(&fixture.root));
+        let first = scope
+            .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         observed_receive.recv().unwrap();
-        let second = scope.spawn(|| service.rebuild_repository(&fixture.root));
+        let second = scope
+            .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         release_send.send(()).unwrap();
         first.join().unwrap().unwrap();
         second.join().unwrap().unwrap();
@@ -1992,11 +2401,16 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
         observed_send.send(()).unwrap();
         release_receive.recv().unwrap();
     });
+    let operation_id = support::operation_id();
 
     std::thread::scope(|scope| {
-        let first = scope.spawn(|| first_service.rebuild_repository(&fixture.root));
+        let first = scope.spawn(|| {
+            first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
         observed_receive.recv().unwrap();
-        let second = scope.spawn(|| second_service.rebuild_repository(&fixture.root));
+        let second = scope.spawn(|| {
+            second_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
         release_send.send(()).unwrap();
         first.join().unwrap().unwrap();
         second.join().unwrap().unwrap();
@@ -2005,6 +2419,89 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
     assert_eq!(corrupt_diagnostic_count(data.path()), 1);
     assert!(first_service.repository_snapshot(&fixture.root).is_ok());
     assert!(second_service.repository_snapshot(&fixture.root).is_ok());
+}
+
+#[test]
+fn corrupt_cache_replacement_rechecks_after_the_exclusive_guard() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
+    let first_service = RepositoryService::open_at(data.path()).unwrap();
+    let second_service = RepositoryService::open_at(data.path()).unwrap();
+    let decisions = Arc::new(std::sync::Barrier::new(2));
+    for service in [&first_service, &second_service] {
+        service.set_corrupt_cache_decision_hook_for_testing({
+            let decisions = Arc::clone(&decisions);
+            move || {
+                decisions.wait();
+            }
+        });
+    }
+    let (entered_send, entered_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    let entered = Arc::new(Mutex::new(false));
+    let release_receive = Arc::new(Mutex::new(release_receive));
+    for service in [&first_service, &second_service] {
+        service.set_corrupt_cache_critical_hook_for_testing({
+            let entered = Arc::clone(&entered);
+            let entered_send = entered_send.clone();
+            let release_receive = Arc::clone(&release_receive);
+            move || {
+                let mut entered = entered.lock().unwrap();
+                if !*entered {
+                    *entered = true;
+                    entered_send.send(()).unwrap();
+                    release_receive.lock().unwrap().recv().unwrap();
+                }
+            }
+        });
+    }
+    let operation_id = support::operation_id();
+
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
+        let second = scope.spawn(|| {
+            second_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+        });
+        entered_receive.recv().unwrap();
+        release_send.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+    });
+
+    assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    assert!(first_service.repository_snapshot(&fixture.root).is_ok());
+    assert!(second_service.repository_snapshot(&fixture.root).is_ok());
+}
+
+#[test]
+fn corrupt_rebuild_releases_cache_replacement_guard_before_observation() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let (observed_send, observed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    service.set_observation_hook_for_testing(move || {
+        observed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let rebuild = scope.spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root)));
+        observed_receive.recv().unwrap();
+        let reader = support::hold_lease_in_child_for_test(
+            &fixture.root,
+            data.path(),
+            LeaseKind::CacheRead,
+            "cache_lease_child",
+        );
+        reader.release();
+        release_send.send(()).unwrap();
+        rebuild.join().unwrap().unwrap();
+    });
 }
 
 #[test]
@@ -2019,6 +2516,7 @@ fn rebuild_persists_observed_configuration_blob_or_null_for_every_state() {
                     root: fixture.root.clone(),
                     primary_branch: "main".to_owned(),
                     identity: None,
+                    operation_id: support::operation_id(),
                 })
                 .unwrap();
             let expected = fixture
@@ -2045,7 +2543,9 @@ fn rebuild_persists_observed_configuration_blob_or_null_for_every_state() {
             }
             let service = RepositoryService::open_at(data.path()).unwrap();
 
-            let snapshot = service.rebuild_repository(&fixture.root).unwrap();
+            let snapshot = service
+                .rebuild_repository(rebuild_request!(&fixture.root))
+                .unwrap();
             let oid: Option<String> = service
                 .with_registry_connection_for_testing(|connection| {
                     connection
@@ -2147,7 +2647,7 @@ fn migration_retains_cycle_02_registration_and_adds_discovery_tables() {
                 "discovered_items",
                 "discovered_comments",
                 "problems",
-                "index_operations",
+                "operation_records",
                 "configuration_observations",
             ] {
                 assert!(table_exists(connection, table), "missing {table}");
@@ -2207,13 +2707,18 @@ fn remove_registration_cascades_only_its_derived_rows() {
                 connection.execute("INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, activity_at, activity_source) VALUES (?1, ?2, 'document', 'docs/item.md', 'Item', 1, 'git')", params![repository_id, format!("item-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO discovered_comments (item_id, comment_id, canonical_path, created_at) VALUES (?1, ?2, 'comments/item.md', 1)", params![repository_id, format!("comment-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO problems (repository_id, code, guidance, observed_at) VALUES (?1, 'problem', 'repair', 1)", [repository_id]).unwrap();
-                connection.execute("INSERT INTO index_operations (repository_id, operation, observed_at) VALUES (?1, 'refresh', 1)", [repository_id]).unwrap();
+                connection.execute("INSERT INTO operation_records (repository_id, root_path, action, state, observed_at) VALUES (?1, ?2, 'refresh', 'completed', 1)", params![repository_id, if repository_id == 1 { first.root.to_str().unwrap() } else { second.root.to_str().unwrap() }]).unwrap();
             }
         })
         .unwrap();
 
     assert_eq!(
-        service.remove_registration(&first.root).unwrap(),
+        service
+            .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+                root: first.root.clone(),
+                operation_id: support::operation_id(),
+            })
+            .unwrap(),
         manyhands::repository::RemoveRegistrationOutcome::Removed
     );
 
@@ -2224,7 +2729,7 @@ fn remove_registration_cascades_only_its_derived_rows() {
                 "discovered_items",
                 "discovered_comments",
                 "problems",
-                "index_operations",
+                "operation_records",
             ] {
                 let count: i64 = connection
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
