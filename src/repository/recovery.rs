@@ -11,6 +11,7 @@ use super::{
 pub(super) struct RecoveryRecord {
     pub(super) id: i64,
     pub(super) is_new: bool,
+    #[allow(dead_code)]
     pub(super) completed_step: Option<&'static str>,
 }
 

@@ -3967,6 +3967,7 @@ dependencies = [
  "fs4",
  "git2",
  "gpui-kit",
+ "libc",
  "rusqlite",
  "serde",
  "serde_yaml",

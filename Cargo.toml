@@ -16,6 +16,7 @@ directories = "5"
 fs4 = "0.13"
 git2 = "0.20"
 gpui-kit = { version = "0.6", optional = true }
+libc = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

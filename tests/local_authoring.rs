@@ -6146,3 +6146,44 @@ fn rejected_authoring_request_does_not_strand_a_pending_lifecycle_record() {
         Ok(SaveOutcome::Saved { .. })
     ));
 }
+
+#[test]
+fn recovery_document_write_transition_persistence_failure_blocks_other_ids_until_same_id_replays() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let request = document_request_with_operation_id(
+        &fixture.root,
+        ContextIntent::Create,
+        None,
+        "docs/new.md",
+        "Title",
+        "Body\n",
+        operation_id,
+    );
+    let failing = support::FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        document_error(failing.save_document(request.clone())).kind,
+        RepositoryErrorKind::Sqlite
+    );
+    let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    assert_eq!(
+        document_error(fresh.save_document(document_request(
+            &fixture.root,
+            ContextIntent::Create,
+            None,
+            "docs/other.md",
+            "Other",
+            "Body\n",
+        )))
+        .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+
+    let (_, checkpoint) = saved_checkpoint(fresh.save_document(request).unwrap());
+    assert_ne!(checkpoint, git2::Oid::zero());
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
+}

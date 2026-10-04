@@ -5,6 +5,15 @@ use std::{
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+#[cfg(unix)]
+use std::{
+    ffi::CString,
+    io::{Read, Write},
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::ffi::OsStrExt,
+    },
+};
 
 use git2::{
     BranchType, Config, ConfigLevel, Index, IndexEntry, Repository, RepositoryInitOptions,
@@ -72,32 +81,8 @@ fn authoring_write_target(target: &AuthoringTarget, paths: &[&Path]) -> String {
     format!("{}\0{}", authoring_context_target(target), paths)
 }
 
-fn creation_destination_is_safe(
-    record: RecoveryRecord,
-    expected: &ExpectedPathObservation,
-) -> bool {
-    matches!(expected, ExpectedPathObservation::Missing) || replay_owns_destination(record)
-}
-
-fn replay_owns_destination(record: RecoveryRecord) -> bool {
-    !record.is_new
-        && matches!(
-            record.completed_step,
-            Some(
-                "authoring_destination_observed"
-                    | "document_destination_observed"
-                    | "document_move_observed"
-                    | "authoring_checkpoint_observed"
-            )
-        )
-}
-
-fn replay_owns_document_source(record: RecoveryRecord) -> bool {
-    !record.is_new
-        && matches!(
-            record.completed_step,
-            Some("document_move_observed" | "authoring_checkpoint_observed")
-        )
+fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
+    matches!(expected, ExpectedPathObservation::Missing)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -557,6 +542,7 @@ pub enum FailurePoint {
     BeforeContextBranchCreation,
     BeforeWorktreeCreation,
     BeforeItemWrite,
+    AfterOwnedWriteBeforeLifecyclePersistence,
     BeforeCheckpointCommit,
     BeforeRegistryWrite,
     BeforeRegistrationRemovalTransaction,
@@ -1365,7 +1351,8 @@ impl RepositoryService {
             validate_safe_owned_parent(&context.worktree, &destination, operation, &context.root)?;
             if matches!(intent, ContextIntent::Create)
                 && (!request.source_path.is_none()
-                    || !creation_destination_is_safe(record, &request.expected_destination))
+                    || (record.is_new
+                        && !creation_destination_is_safe(&request.expected_destination)))
             {
                 return Err(authoring_error(
                     operation,
@@ -1377,7 +1364,7 @@ impl RepositoryService {
             if let Some(source) = &source {
                 validate_safe_owned_parent(&context.worktree, source, operation, &context.root)?;
                 if let Some(expected) = request.expected_source.as_ref()
-                    && !replay_owns_document_source(record)
+                    && record.is_new
                 {
                     ensure_expected_owned_observation(
                         &context.worktree,
@@ -1388,7 +1375,7 @@ impl RepositoryService {
                     )?;
                 }
             }
-            if !replay_owns_destination(record) {
+            if record.is_new {
                 ensure_expected_owned_observation(
                     &context.worktree,
                     &destination,
@@ -1484,6 +1471,17 @@ impl RepositoryService {
                     RepositoryErrorKind::InvalidPath,
                     "destination document ID does not match the selected target",
                 ));
+            }
+
+            if !record.is_new {
+                ensure_replayed_owned_destination(
+                    &context.worktree,
+                    &destination,
+                    serialized.as_bytes(),
+                    &request.expected_destination,
+                    operation,
+                    &context,
+                )?;
             }
 
             let moving = source.as_ref().is_some_and(|source| source != &destination);
@@ -1653,7 +1651,8 @@ impl RepositoryService {
             let path = PathBuf::from(format!(".manyhands/tickets/{}/ticket.md", context.item_id));
             validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
             if matches!(intent, ContextIntent::Create)
-                && !creation_destination_is_safe(record, &request.expected_path)
+                && record.is_new
+                && !creation_destination_is_safe(&request.expected_path)
             {
                 return Err(authoring_error(
                     operation,
@@ -1662,7 +1661,7 @@ impl RepositoryService {
                     "ticket creation requires a missing destination observation",
                 ));
             }
-            if !replay_owns_destination(record) {
+            if record.is_new {
                 ensure_expected_owned_observation(
                     &context.worktree,
                     &path,
@@ -1756,6 +1755,16 @@ impl RepositoryService {
                     RepositoryErrorKind::InvalidPath,
                     "ticket ID does not match the selected target",
                 ));
+            }
+            if !record.is_new {
+                ensure_replayed_owned_destination(
+                    &context.worktree,
+                    &path,
+                    serialized.as_bytes(),
+                    &request.expected_path,
+                    operation,
+                    &context,
+                )?;
             }
             let write = if exists {
                 let existing = read_owned_item(&context.worktree, &path, operation, &context.root)?;
@@ -1919,7 +1928,7 @@ impl RepositoryService {
             }
 
             validate_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
-            if !creation_destination_is_safe(record, &request.expected_destination) {
+            if record.is_new && !creation_destination_is_safe(&request.expected_destination) {
                 return Err(authoring_error(
                     operation,
                     &context.root,
@@ -1927,7 +1936,7 @@ impl RepositoryService {
                     "comment creation requires a missing destination observation",
                 ));
             }
-            if !replay_owns_destination(record) {
+            if record.is_new {
                 ensure_expected_owned_observation(
                     &context.worktree,
                     &path,
@@ -1981,6 +1990,16 @@ impl RepositoryService {
                         problem.message,
                     )
                 })?;
+            if !record.is_new {
+                ensure_replayed_owned_destination(
+                    &context.worktree,
+                    &path,
+                    serialized.as_bytes(),
+                    &request.expected_destination,
+                    operation,
+                    &context,
+                )?;
+            }
             let mut context_sources = Vec::new();
             collect_canonical_sources(&context.worktree, &mut context_sources, operation)?;
             if !exists {
@@ -2196,12 +2215,51 @@ impl RepositoryService {
                 self.complete_lifecycle(root, operation, record)?;
                 Ok(value)
             }
-            Err(error) if error.kind != RepositoryErrorKind::InjectedFailure => {
+            Err(error)
+                if self.is_definite_authoring_rejection(record, operation, root, &error)? =>
+            {
                 self.complete_lifecycle(root, operation, record)?;
                 Err(error)
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn is_definite_authoring_rejection(
+        &self,
+        record: RecoveryRecord,
+        operation: RepositoryOperation,
+        root: &Path,
+        error: &RepositoryError,
+    ) -> Result<bool, RepositoryError> {
+        if record.id == 0
+            || !matches!(
+                error.kind,
+                RepositoryErrorKind::InvalidPath
+                    | RepositoryErrorKind::OperationMismatch
+                    | RepositoryErrorKind::ExternalChange
+                    | RepositoryErrorKind::MissingAuthoringTarget
+                    | RepositoryErrorKind::OccupiedItemPath
+                    | RepositoryErrorKind::MismatchedAuthoringContext
+                    | RepositoryErrorKind::InvalidIdentity
+            )
+        {
+            return Ok(false);
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        let step: Option<Option<String>> = connection
+            .query_row(
+                "SELECT completed_step FROM operation_records WHERE id = ?1",
+                [record.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(RepositoryError::sqlite)
+            .map_err(|error| error.for_operation(operation, root))?;
+        Ok(matches!(step, Some(None)))
     }
 
     fn advance_lifecycle(
@@ -2213,6 +2271,24 @@ impl RepositoryService {
     ) -> Result<(), RepositoryError> {
         if record.id == 0 {
             return Ok(());
+        }
+        if matches!(
+            step,
+            "authoring_destination_observed"
+                | "document_destination_observed"
+                | "document_move_observed"
+                | "authoring_checkpoint_observed"
+        ) && self.should_inject(
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+            operation,
+            root,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::Sqlite,
+                "the authoring lifecycle transition could not be persisted",
+            ));
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
@@ -4984,12 +5060,249 @@ fn canonical_document_probe(item_id: &canonical::ItemId) -> String {
     .expect("fixed probe document is valid")
 }
 
+#[cfg(unix)]
+fn owned_leaf(
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<CString, RepositoryError> {
+    let leaf = relative.file_name().ok_or_else(|| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path needs a file name",
+        )
+    })?;
+    CString::new(leaf.as_bytes()).map_err(|_| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "owned paths cannot contain NUL",
+        )
+    })
+}
+
+#[cfg(unix)]
+fn owned_parent_directory(
+    root: &Path,
+    relative: &Path,
+    create: bool,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<std::fs::File, RepositoryError> {
+    let root_name = CString::new(root.as_os_str().as_bytes()).map_err(|_| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "root cannot contain NUL",
+        )
+    })?;
+    let root_fd = unsafe {
+        libc::open(
+            root_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        return Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    let parent = relative.parent().ok_or_else(|| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path needs a parent directory",
+        )
+    })?;
+    for component in parent.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths must be relative",
+            ));
+        };
+        let name = CString::new(component.as_bytes()).map_err(|_| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths cannot contain NUL",
+            )
+        })?;
+        let mut fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0
+            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+            && create
+        {
+            if unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o755) } < 0
+                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
+            {
+                return Err(RepositoryError::io(
+                    operation,
+                    Some(repository_root.to_owned()),
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+        }
+        if fd < 0 {
+            return Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "an owned parent must be a real directory",
+            ));
+        }
+        directory = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn owned_file_bytes(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    let parent_path = relative.parent().ok_or_else(|| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path needs a parent directory",
+        )
+    })?;
+    if !root.join(parent_path).exists() {
+        return Ok(None);
+    }
+    let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
+    let leaf = owned_leaf(relative, operation, repository_root)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+        return Ok(None);
+    }
+    if fd < 0 {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path must be a regular non-symlink file",
+        ));
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    if !metadata.is_file() {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path must be a regular non-symlink file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    Ok(Some(bytes))
+}
+
+#[cfg(unix)]
+fn replace_owned_bytes(
+    root: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
+    let leaf = owned_leaf(relative, operation, repository_root)?;
+    let temp = CString::new(format!(".manyhands-write-{}", std::process::id()))
+        .expect("fixed temporary name");
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            temp.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp.as_ptr(), 0) };
+        return Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            error,
+        ));
+    }
+    drop(file);
+    if unsafe {
+        libc::renameat(
+            parent.as_raw_fd(),
+            temp.as_ptr(),
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+        )
+    } < 0
+    {
+        let error = std::io::Error::last_os_error();
+        let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp.as_ptr(), 0) };
+        return Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            error,
+        ));
+    }
+    Ok(())
+}
+
 fn owned_file_exists(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<bool, RepositoryError> {
+    #[cfg(unix)]
+    return owned_file_bytes(root, relative, operation, repository_root)
+        .map(|bytes| bytes.is_some());
+    #[cfg(not(unix))]
     match std::fs::symlink_metadata(root.join(relative)) {
         Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
             Ok(true)
@@ -5015,28 +5328,39 @@ fn observe_owned_regular_file(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<ExpectedPathObservation, RepositoryError> {
-    let path = root.join(relative);
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
-            let bytes = std::fs::read(&path).map_err(|error| {
-                RepositoryError::io(operation, Some(repository_root.to_owned()), error)
-            })?;
-            Ok(ExpectedPathObservation::from_bytes(&bytes))
+    #[cfg(unix)]
+    return owned_file_bytes(root, relative, operation, repository_root).map(|bytes| {
+        bytes.map_or(ExpectedPathObservation::Missing, |bytes| {
+            ExpectedPathObservation::from_bytes(&bytes)
+        })
+    });
+    #[cfg(not(unix))]
+    {
+        let path = root.join(relative);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
+            {
+                let bytes = std::fs::read(&path).map_err(|error| {
+                    RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+                })?;
+                Ok(ExpectedPathObservation::from_bytes(&bytes))
+            }
+            Ok(_) => Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "an owned path must be a regular non-symlink file",
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(ExpectedPathObservation::Missing)
+            }
+            Err(error) => Err(RepositoryError::io(
+                operation,
+                Some(repository_root.to_owned()),
+                error,
+            )),
         }
-        Ok(_) => Err(authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::InvalidPath,
-            "an owned path must be a regular non-symlink file",
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(ExpectedPathObservation::Missing)
-        }
-        Err(error) => Err(RepositoryError::io(
-            operation,
-            Some(repository_root.to_owned()),
-            error,
-        )),
     }
 }
 
@@ -5065,6 +5389,38 @@ fn ensure_expected_owned_observation(
     Ok(())
 }
 
+fn ensure_replayed_owned_destination(
+    root: &Path,
+    relative: &Path,
+    intended: &[u8],
+    uncompleted_expectation: &ExpectedPathObservation,
+    operation: RepositoryOperation,
+    context: &ItemContext,
+) -> Result<(), RepositoryError> {
+    let observed = observe_owned_regular_file(root, relative, operation, &context.root)?;
+    match observed {
+        ExpectedPathObservation::Missing => ensure_expected_owned_observation(
+            root,
+            relative,
+            uncompleted_expectation,
+            operation,
+            context,
+        ),
+        _ if observed == ExpectedPathObservation::from_bytes(intended) => Ok(()),
+        _ if observed == *uncompleted_expectation => Ok(()),
+        _ => Err(RepositoryError::external_change_error(
+            ExternalChangeDiagnostic {
+                root: context.root.clone(),
+                operation,
+                item_id: context.item_id.clone(),
+                context: context.worktree.clone(),
+                path: relative.to_owned(),
+                expectation: ExternalChangeExpectation::Changed,
+            },
+        )),
+    }
+}
+
 fn source_exists(
     root: &Path,
     relative: &Path,
@@ -5080,16 +5436,37 @@ fn read_owned_item(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<canonical::CanonicalItem, RepositoryError> {
-    if !owned_file_exists(root, relative, operation, repository_root)? {
+    #[cfg(unix)]
+    let source =
+        owned_file_bytes(root, relative, operation, repository_root)?.ok_or_else(|| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::MissingAuthoringTarget,
+                "the owned file is missing",
+            )
+        })?;
+    #[cfg(not(unix))]
+    let source = if !owned_file_exists(root, relative, operation, repository_root)? {
         return Err(authoring_error(
             operation,
             repository_root,
             RepositoryErrorKind::MissingAuthoringTarget,
             "the owned file is missing",
         ));
-    }
-    let source = std::fs::read_to_string(root.join(relative))
-        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    } else {
+        std::fs::read(root.join(relative)).map_err(|error| {
+            RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+        })?;
+    };
+    let source = String::from_utf8(source).map_err(|_| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::MissingAuthoringTarget,
+            "the owned file is not canonical text",
+        )
+    })?;
     canonical::parse_item(relative, &source).map_err(|problem| {
         authoring_error(
             operation,
@@ -5107,93 +5484,146 @@ fn write_owned_document(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    ensure_safe_owned_parent(root, relative, operation, repository_root)?;
-    let path = root.join(relative);
-    let _ = owned_file_exists(root, relative, operation, repository_root)?;
-    replace_bytes_atomically(&path, bytes, repository_root)
-        .map_err(|error| error.for_operation(operation, repository_root))
+    #[cfg(unix)]
+    return replace_owned_bytes(root, relative, bytes, operation, repository_root);
+    #[cfg(not(unix))]
+    {
+        ensure_safe_owned_parent(root, relative, operation, repository_root)?;
+        let path = root.join(relative);
+        let _ = owned_file_exists(root, relative, operation, repository_root)?;
+        replace_bytes_atomically(&path, bytes, repository_root)
+            .map_err(|error| error.for_operation(operation, repository_root))
+    }
 }
 
+#[allow(clippy::needless_return)]
 fn ensure_safe_owned_parent(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    let parent = relative.parent().ok_or_else(|| {
-        authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::InvalidPath,
-            "an owned path needs a parent directory",
-        )
-    })?;
-    let mut current = root.to_owned();
-    for component in parent.components() {
-        let std::path::Component::Normal(component) = component else {
-            return Err(authoring_error(
+    #[cfg(unix)]
+    {
+        let _ = owned_parent_directory(root, relative, true, operation, repository_root)?;
+        return Ok(());
+    }
+    #[cfg(not(unix))]
+    {
+        let parent = relative.parent().ok_or_else(|| {
+            authoring_error(
                 operation,
                 repository_root,
                 RepositoryErrorKind::InvalidPath,
-                "owned paths must be relative",
-            ));
-        };
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
+                "an owned path needs a parent directory",
+            )
+        })?;
+        let mut current = root.to_owned();
+        for component in parent.components() {
+            let std::path::Component::Normal(component) = component else {
                 return Err(authoring_error(
                     operation,
                     repository_root,
                     RepositoryErrorKind::InvalidPath,
-                    "an owned parent must be a real directory",
+                    "owned paths must be relative",
                 ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current).map_err(|error| {
-                    RepositoryError::io(operation, Some(repository_root.to_owned()), error)
-                })?
-            }
-            Err(error) => {
-                return Err(RepositoryError::io(
-                    operation,
-                    Some(repository_root.to_owned()),
-                    error,
-                ));
+            };
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(authoring_error(
+                        operation,
+                        repository_root,
+                        RepositoryErrorKind::InvalidPath,
+                        "an owned parent must be a real directory",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&current).map_err(|error| {
+                        RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+                    })?
+                }
+                Err(error) => {
+                    return Err(RepositoryError::io(
+                        operation,
+                        Some(repository_root.to_owned()),
+                        error,
+                    ));
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
+#[allow(clippy::needless_return)]
 fn validate_safe_owned_parent(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    let parent = relative.parent().ok_or_else(|| {
-        authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::InvalidPath,
-            "an owned path needs a parent directory",
-        )
-    })?;
-    let mut current = root.to_owned();
-    for component in parent.components() {
-        let std::path::Component::Normal(component) = component else {
-            return Err(authoring_error(
+    #[cfg(unix)]
+    {
+        let root_name = CString::new(root.as_os_str().as_bytes()).map_err(|_| {
+            authoring_error(
                 operation,
                 repository_root,
                 RepositoryErrorKind::InvalidPath,
-                "owned paths must be relative",
-            ));
+                "root cannot contain NUL",
+            )
+        })?;
+        let root_fd = unsafe {
+            libc::open(
+                root_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
         };
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
+        if root_fd < 0 {
+            return Err(RepositoryError::io(
+                operation,
+                Some(repository_root.to_owned()),
+                std::io::Error::last_os_error(),
+            ));
+        }
+        let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+        let parent = relative.parent().ok_or_else(|| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "an owned path needs a parent directory",
+            )
+        })?;
+        for component in parent.components() {
+            let std::path::Component::Normal(component) = component else {
+                return Err(authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::InvalidPath,
+                    "owned paths must be relative",
+                ));
+            };
+            let name = CString::new(component.as_bytes()).map_err(|_| {
+                authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::InvalidPath,
+                    "owned paths cannot contain NUL",
+                )
+            })?;
+            let fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            if fd < 0 {
                 return Err(authoring_error(
                     operation,
                     repository_root,
@@ -5201,30 +5631,86 @@ fn validate_safe_owned_parent(
                     "an owned parent must be a real directory",
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(RepositoryError::io(
+            directory = unsafe { std::fs::File::from_raw_fd(fd) };
+        }
+        return Ok(());
+    }
+    #[cfg(not(unix))]
+    {
+        let parent = relative.parent().ok_or_else(|| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "an owned path needs a parent directory",
+            )
+        })?;
+        let mut current = root.to_owned();
+        for component in parent.components() {
+            let std::path::Component::Normal(component) = component else {
+                return Err(authoring_error(
                     operation,
-                    Some(repository_root.to_owned()),
-                    error,
+                    repository_root,
+                    RepositoryErrorKind::InvalidPath,
+                    "owned paths must be relative",
                 ));
+            };
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(authoring_error(
+                        operation,
+                        repository_root,
+                        RepositoryErrorKind::InvalidPath,
+                        "an owned parent must be a real directory",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(RepositoryError::io(
+                        operation,
+                        Some(repository_root.to_owned()),
+                        error,
+                    ));
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
+#[allow(clippy::needless_return)]
 fn remove_owned_file(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    if !owned_file_exists(root, relative, operation, repository_root)? {
-        return Ok(());
+    #[cfg(unix)]
+    {
+        let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
+        let leaf = owned_leaf(relative, operation, repository_root)?;
+        let result =
+            unsafe { libc::unlinkat(std::os::fd::AsRawFd::as_raw_fd(&parent), leaf.as_ptr(), 0) };
+        if result == 0 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(RepositoryError::io(
+            operation,
+            Some(repository_root.to_owned()),
+            std::io::Error::last_os_error(),
+        ));
     }
-    std::fs::remove_file(root.join(relative))
-        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))
+    #[cfg(not(unix))]
+    {
+        if !owned_file_exists(root, relative, operation, repository_root)? {
+            return Ok(());
+        }
+        std::fs::remove_file(root.join(relative)).map_err(|error| {
+            RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+        })
+    }
 }
 
 fn add_owned_blob(
@@ -5235,16 +5721,28 @@ fn add_owned_blob(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<(), RepositoryError> {
-    if !owned_file_exists(root, relative, operation, repository_root)? {
+    #[cfg(unix)]
+    let bytes = owned_file_bytes(root, relative, operation, repository_root)?.ok_or_else(|| {
+        authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::MissingAuthoringTarget,
+            "the checkpoint destination is missing",
+        )
+    })?;
+    #[cfg(not(unix))]
+    let bytes = if !owned_file_exists(root, relative, operation, repository_root)? {
         return Err(authoring_error(
             operation,
             repository_root,
             RepositoryErrorKind::MissingAuthoringTarget,
             "the checkpoint destination is missing",
         ));
-    }
-    let bytes = std::fs::read(root.join(relative))
-        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    } else {
+        std::fs::read(root.join(relative)).map_err(|error| {
+            RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+        })?
+    };
     let blob = repository.blob(&bytes).map_err(|error| {
         RepositoryError::git(operation, Some(repository_root.to_owned()), error)
     })?;
