@@ -143,6 +143,7 @@ fn refresh_reclaims_an_interrupted_index_owner_on_exact_replay() {
             .kind,
         RepositoryErrorKind::InjectedFailure
     );
+    std::thread::sleep(std::time::Duration::from_secs(4));
     assert!(matches!(
         RepositoryService::open_at(enabled.data_directory.path())
             .unwrap()
@@ -150,6 +151,71 @@ fn refresh_reclaims_an_interrupted_index_owner_on_exact_replay() {
             .unwrap(),
         RefreshOutcome::Refreshed { .. }
     ));
+}
+
+#[test]
+fn fresh_service_reclaims_owner_that_aborts_after_claim_without_timestamp_mutation() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let interrupted = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    interrupted.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        panic!("owner aborted after claiming indexing");
+    });
+    let root = fixture.root.clone();
+
+    let owner = std::thread::spawn(move || {
+        interrupted.refresh_repository(refresh_request!(&root, operation_id))
+    });
+    claimed_receive.recv().unwrap();
+    assert!(owner.join().is_err());
+
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(matches!(
+        RepositoryService::open_at(enabled.data_directory.path())
+            .unwrap()
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+}
+
+#[test]
+fn active_paused_scan_heartbeats_without_being_stolen() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let second_service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    second_service.set_observation_hook_for_testing(|| panic!("live owner must not be stolen"));
+    let operation_id = support::operation_id();
+    let (claimed_send, claimed_receive) = mpsc::sync_channel(0);
+    let (release_send, release_receive) = mpsc::sync_channel(0);
+    enabled.service.set_refresh_claim_hook_for_testing(move || {
+        claimed_send.send(()).unwrap();
+        release_receive.recv().unwrap();
+    });
+
+    std::thread::scope(|scope| {
+        let owner = scope.spawn(|| {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        });
+        claimed_receive.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        assert!(matches!(
+            second_service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::IndexPending { .. }
+        ));
+        release_send.send(()).unwrap();
+        assert!(matches!(
+            owner.join().unwrap().unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+    });
 }
 
 #[derive(Debug, PartialEq, Eq)]

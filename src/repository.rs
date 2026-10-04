@@ -2,7 +2,8 @@ use std::{
     collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, mpsc},
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[cfg(unix)]
@@ -43,7 +44,8 @@ use recovery::{
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
-const INDEX_OWNER_STALE_AFTER: i64 = 300;
+const INDEX_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+const INDEX_OWNER_STALE_AFTER: i64 = 3;
 const REGISTRY_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_DOCUMENT_DIRECTORY_DEPTH: usize = 16;
 const MAX_DOCUMENT_DIRECTORY_ENTRIES: usize = 1024;
@@ -190,6 +192,41 @@ pub struct RepositoryService {
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     rebuild_error_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+struct IndexOwnerHeartbeat {
+    stop: Option<mpsc::Sender<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl IndexOwnerHeartbeat {
+    fn start(registry_path: PathBuf, owner: IndexOwner, root: PathBuf) -> Self {
+        let (stop, stopped) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            loop {
+                match stopped.recv_timeout(INDEX_OWNER_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Heartbeats use their own brief cache guard so scans remain unguarded.
+                        let _ = touch_refresh_index_owner(&registry_path, owner, &root);
+                    }
+                }
+            }
+        });
+        Self {
+            stop: Some(stop),
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for IndexOwnerHeartbeat {
+    fn drop(&mut self) {
+        self.stop.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -892,8 +929,8 @@ impl RepositoryService {
             };
             (repository_id, owner)
         };
+        let heartbeat = IndexOwnerHeartbeat::start(self.registry_path.clone(), owner, root.clone());
         if self.should_inject(FailurePoint::AfterIndexClaim, operation, &root)? {
-            expire_index_owner(&self.registry_path, owner, &root)?;
             return Err(RepositoryError::new(
                 operation,
                 Some(root),
@@ -904,6 +941,7 @@ impl RepositoryService {
         self.run_refresh_claim_hook();
         let result =
             self.refresh_repository_claimed(&repository, root.clone(), repository_id, owner);
+        drop(heartbeat);
         if result.is_err() {
             let _ = set_refresh_operation(&self.registry_path, owner, "failed", None, &root);
         }
@@ -2591,12 +2629,15 @@ impl RepositoryService {
         let Some(owner) = self.claim_lifecycle_indexing(root, operation, record)? else {
             return Ok(false);
         };
+        let heartbeat =
+            IndexOwnerHeartbeat::start(self.registry_path.clone(), owner, root.to_owned());
         drop(lease);
         let refresh = (|| {
             let repository_id = registered_repository_id(&self.registry_path, root, operation)?;
             let (repository, root) = canonical_repository_root(root, operation)?;
             self.refresh_repository_claimed(&repository, root, repository_id, owner)
         })();
+        drop(heartbeat);
         if refresh
             .as_ref()
             .is_err_and(|error| error.kind != RepositoryErrorKind::RepositoryNotRegistered)
@@ -4363,20 +4404,6 @@ fn touch_refresh_index_owner(
             "the repository refresh no longer owns indexing",
         ));
     }
-    Ok(())
-}
-
-fn expire_index_owner(
-    registry_path: &Path,
-    owner: IndexOwner,
-    root: &Path,
-) -> Result<(), RepositoryError> {
-    let connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    connection.execute(
-        "UPDATE operation_records SET observed_at = 0 WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?2",
-        params![owner.record_id, owner.epoch],
-    ).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     Ok(())
 }
 
