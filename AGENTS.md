@@ -25,6 +25,22 @@
 - Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
 - Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 
+## Dogfooding Workflow
+
+- For every Cycle in a Wave, create one Manyhands ticket before creating its
+  implementation plan. The ticket is the record for the complete Cycle
+  lifecycle: planning, implementation, verification, review, and closure.
+- Until the CLI supports the required operation, create and update tickets and
+  comments directly in the canonical `.manyhands/` filesystem paths. Switch to
+  the Manyhands CLI as soon as it supports the operation.
+- Perform all implementation work for a Cycle in the ticket's worktree and on
+  its branch.
+- Add Manyhands comments to the ticket at implementation-plan checkpoints to
+  record progress, decisions, blockers, verification results, and review-ready
+  status.
+- Close the ticket only after the associated change receives code-review or PR
+  approval, normally in the final push before merge.
+
 ## Linux Toolchain
 
 - Keep `devenv.nix`'s GPUI runtime library list and `env.LD_LIBRARY_PATH` in sync. GPUI dynamically loads Wayland; removing the loader path causes `NoWaylandLib` at startup even when the Nix packages are installed.
