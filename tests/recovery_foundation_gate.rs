@@ -1437,7 +1437,7 @@ fn publication_remote_replay_after_configuration_commit_retains_selection_and_re
             .unwrap()
             .set_publication_remote(request)
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));

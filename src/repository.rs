@@ -2565,7 +2565,6 @@ impl RepositoryService {
         operation_id: OperationId,
         lease: RepositoryLease,
     ) -> Result<bool, RepositoryError> {
-        self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
         if !self.claim_lifecycle_indexing(root, operation, record)? {
             return Ok(false);
         }
@@ -2801,6 +2800,7 @@ impl RepositoryService {
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
                 if record.is_pending {
+                    let changed = record.completed_step == Some("remote_changed");
                     return if self.handoff_post_authoritative(
                         &root,
                         RepositoryOperation::AddRemote,
@@ -2808,10 +2808,18 @@ impl RepositoryService {
                         request.operation_id,
                         _lease,
                     )? {
-                        Ok(RemoteOutcome::NoChange)
+                        Ok(if changed {
+                            RemoteOutcome::Changed
+                        } else {
+                            RemoteOutcome::NoChange
+                        })
                     } else {
                         Ok(RemoteOutcome::IndexPending {
-                            authoritative: RemoteChange::NoChange,
+                            authoritative: if changed {
+                                RemoteChange::Changed
+                            } else {
+                                RemoteChange::NoChange
+                            },
                         })
                     };
                 }
@@ -2900,6 +2908,7 @@ impl RepositoryService {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
                 if record.is_pending {
+                    let changed = record.completed_step == Some("remote_changed");
                     return if self.handoff_post_authoritative(
                         &root,
                         RepositoryOperation::RemoveRemote,
@@ -2907,10 +2916,18 @@ impl RepositoryService {
                         request.operation_id,
                         _lease,
                     )? {
-                        Ok(RemoteOutcome::NoChange)
+                        Ok(if changed {
+                            RemoteOutcome::Changed
+                        } else {
+                            RemoteOutcome::NoChange
+                        })
                     } else {
                         Ok(RemoteOutcome::IndexPending {
-                            authoritative: RemoteChange::NoChange,
+                            authoritative: if changed {
+                                RemoteChange::Changed
+                            } else {
+                                RemoteChange::NoChange
+                            },
                         })
                     };
                 }
@@ -3025,6 +3042,7 @@ impl RepositoryService {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if record.is_pending {
+                let changed = record.completed_step == Some("publication_committed");
                 let commit_oid = repository
                     .head()
                     .and_then(|head| head.peel_to_commit())
@@ -3037,10 +3055,14 @@ impl RepositoryService {
                     request.operation_id,
                     _lease,
                 )? {
-                    Ok(PublicationRemoteOutcome::NoChange)
+                    Ok(if changed {
+                        PublicationRemoteOutcome::Changed { commit_oid }
+                    } else {
+                        PublicationRemoteOutcome::NoChange
+                    })
                 } else {
                     Ok(PublicationRemoteOutcome::IndexPending {
-                        commit_oid: Some(commit_oid),
+                        commit_oid: changed.then_some(commit_oid),
                     })
                 };
             }

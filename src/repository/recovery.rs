@@ -336,6 +336,9 @@ fn authoring_observation_step(step: &str) -> Option<&'static str> {
         "document_move_observed" => Some("document_move_observed"),
         "authoring_checkpoint_observed" => Some("authoring_checkpoint_observed"),
         "authoritative_observed" => Some("authoritative_observed"),
+        "remote_changed" => Some("remote_changed"),
+        "publication_committed" => Some("publication_committed"),
+        "initialization_committed" => Some("initialization_committed"),
         _ => None,
     }
 }
@@ -356,8 +359,9 @@ pub(super) fn advance_after_observation(
             "UPDATE operation_records
          SET state = ?2,
                completed_step = CASE
-                   WHEN ?2 = 'completed' THEN COALESCE(completed_step, 'completed')
-                   ELSE ?2
+                    WHEN ?2 = 'completed' THEN COALESCE(completed_step, 'completed')
+                    WHEN ?2 IN ('indexing', 'observed', 'failed', 'persisted') THEN completed_step
+                    ELSE ?2
                END,
                context_path = ?3,
               persisted_context_count = COALESCE(?4, persisted_context_count), observed_at = ?5
@@ -381,7 +385,11 @@ pub(super) fn claim_indexing(
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = 'indexing', observed_at = ?2
-             WHERE id = ?1 AND state != 'completed' AND state != 'indexing'",
+             WHERE id = ?1 AND state IN (
+                'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
+                'publication_committed', 'initialization_committed', 'authoritative_observed',
+                'failed', 'observed', 'persisted'
+             )",
             params![record_id, now()],
         )
         .map_err(RepositoryError::sqlite)?

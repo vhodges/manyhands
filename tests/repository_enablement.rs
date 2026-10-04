@@ -1264,7 +1264,7 @@ fn publication_selection_commits_only_canonical_configuration_changes() {
         service
             .set_publication_remote(publication_request(&fixture.root, Some("origin")))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert!(matches!(
         service.set_publication_remote(publication_request(&fixture.root, None)),
@@ -1509,7 +1509,7 @@ fn publication_pending_commit_retries_registration_without_another_commit() {
                 operation_id,
             ))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     let root = std::fs::canonicalize(&fixture.root).unwrap();
@@ -2984,7 +2984,7 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
                 publication_operation_id,
             ))
             .unwrap(),
-        PublicationRemoteOutcome::NoChange
+        PublicationRemoteOutcome::Changed { commit_oid }
     );
     assert_eq!(
         support::head_commit(&publication_fixture.repository),
