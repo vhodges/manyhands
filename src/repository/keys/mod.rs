@@ -279,12 +279,26 @@ pub struct KeyMaterialRecovery {
     pub recovery_action: RecoveryAction,
 }
 
+/// Protection values can own a secret and cannot be serialized.
+///
+/// ```compile_fail
+/// # use manyhands::repository::keys::KeyProtection;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<KeyProtection>();
+/// ```
 #[derive(Debug)]
 pub enum KeyProtection {
     Unencrypted,
     Passphrase(SecretPassphrase),
 }
 
+/// Generation requests can own protected credentials and cannot be serialized.
+///
+/// ```compile_fail
+/// # use manyhands::repository::keys::GenerateSharedKeyRequest;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<GenerateSharedKeyRequest>();
+/// ```
 #[derive(Debug)]
 pub struct GenerateSharedKeyRequest {
     pub operation_id: OperationId,

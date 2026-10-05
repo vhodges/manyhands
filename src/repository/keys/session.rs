@@ -10,6 +10,14 @@ use super::{
 };
 
 /// An owned passphrase whose application-controlled storage is erased on drop.
+///
+/// Secret passphrases cannot be serialized:
+///
+/// ```compile_fail
+/// # use manyhands::repository::keys::SecretPassphrase;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<SecretPassphrase>();
+/// ```
 pub struct SecretPassphrase {
     value: Zeroizing<String>,
     #[cfg(test)]
@@ -70,6 +78,14 @@ impl fmt::Display for InvalidPassphrase {
 impl std::error::Error for InvalidPassphrase {}
 
 /// Opaque, non-persisted metadata identifying an observed regular key source.
+///
+/// Source tokens cannot be serialized:
+///
+/// ```compile_fail
+/// # use manyhands::repository::keys::KeySourceToken;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<KeySourceToken>();
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeySourceToken {
     path: PathBuf,
@@ -104,6 +120,14 @@ impl fmt::Debug for KeySourceToken {
 }
 
 /// Non-secret context supplied to a credential provider for one unlock attempt.
+///
+/// Unlock requests contain a non-persisted source token and cannot be serialized:
+///
+/// ```compile_fail
+/// # use manyhands::repository::keys::UnlockRequest;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<UnlockRequest>();
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct UnlockRequest {
     pub key_id: SharedKeyId,
@@ -127,9 +151,9 @@ impl fmt::Debug for UnlockRequest {
 /// Credential responses deliberately do not implement serialization:
 ///
 /// ```compile_fail
-/// # use manyhands::repository::keys::{PassphraseResponse, SecretPassphrase};
-/// let response = PassphraseResponse::Supplied(SecretPassphrase::new("secret".into()).unwrap());
-/// let _ = serde_yaml::to_string(&response);
+/// # use manyhands::repository::keys::PassphraseResponse;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<PassphraseResponse>();
 /// ```
 pub enum PassphraseResponse {
     Supplied(SecretPassphrase),
@@ -198,12 +222,14 @@ struct CachedPassphrase {
 ///
 /// ```compile_fail
 /// # use manyhands::repository::keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest};
+/// # #[derive(serde::Serialize)]
 /// # struct Provider;
 /// # impl SessionCredentialProvider for Provider {
 /// #   fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse { PassphraseResponse::Cancelled }
 /// # }
-/// let session = SessionCredentials::new(Provider);
-/// let _ = serde_yaml::to_string(&session);
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<Provider>();
+/// assert_serialize::<SessionCredentials<Provider>>();
 /// ```
 pub struct SessionCredentials<P> {
     provider: P,
