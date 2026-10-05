@@ -5,6 +5,9 @@ use manyhands::repository::keys::{
 use manyhands::repository::{FailurePoint, OperationId, REGISTRY_FILE, RepositoryService};
 use std::fs;
 
+#[path = "key_material/privacy.rs"]
+mod privacy;
+
 fn request(id: OperationId, protection: KeyProtection) -> GenerateSharedKeyRequest {
     GenerateSharedKeyRequest {
         operation_id: id,

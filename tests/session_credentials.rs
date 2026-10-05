@@ -246,3 +246,79 @@ fn credential_formatting_is_redacted() {
         assert!(!formatted.contains(secret_text));
     }
 }
+
+#[test]
+fn credential_wrappers_have_exact_redacted_or_opaque_formatting() {
+    use manyhands::repository::{
+        OperationId,
+        keys::{GenerateSharedKeyRequest, KeyProtection},
+    };
+    let secret = format!("formatting-{}", OperationId::new());
+    let (_source, request) = observed_request("public label");
+    let (provider, _) = CountingProvider::new([supplied(&secret)]);
+    let mut session = SessionCredentials::new(provider);
+    let operation_id = OperationId::new();
+    let generation = GenerateSharedKeyRequest {
+        operation_id,
+        label: "public label".into(),
+        protection: KeyProtection::Passphrase(SecretPassphrase::new(secret.clone()).unwrap()),
+    };
+    for (actual, expected) in [
+        (
+            format!("{:?}", SecretPassphrase::new(secret.clone()).unwrap()),
+            "SecretPassphrase([REDACTED])".to_owned(),
+        ),
+        (
+            format!("{:?}", supplied(&secret)),
+            "Supplied([REDACTED])".to_owned(),
+        ),
+        (
+            format!("{:?}", PassphraseResponse::Cancelled),
+            "Cancelled".to_owned(),
+        ),
+        (
+            format!("{:?}", PassphraseResponse::Unavailable),
+            "Unavailable".to_owned(),
+        ),
+        (
+            format!("{:?}", request.source),
+            "KeySourceToken([OPAQUE])".to_owned(),
+        ),
+        (
+            format!("{request:?}"),
+            format!(
+                "UnlockRequest {{ key_id: {:?}, label: \"public label\", source: KeySourceToken([OPAQUE]) }}",
+                request.key_id
+            ),
+        ),
+        (
+            format!("{session:?}"),
+            "SessionCredentials { provider: \"[REDACTED]\", cached_passphrase: false }".to_owned(),
+        ),
+        (
+            format!("{:?}", generation.protection),
+            "Passphrase(SecretPassphrase([REDACTED]))".to_owned(),
+        ),
+        (
+            format!("{:?}", KeyProtection::Unencrypted),
+            "Unencrypted".to_owned(),
+        ),
+        (
+            format!("{generation:?}"),
+            format!(
+                "GenerateSharedKeyRequest {{ operation_id: {operation_id:?}, label: \"public label\", protection: Passphrase(SecretPassphrase([REDACTED])) }}"
+            ),
+        ),
+    ] {
+        assert!(
+            actual == expected,
+            "credential formatting must remain opaque/redacted"
+        );
+    }
+    assert!(session.with_passphrase(request, |_| Ok(())).is_ok());
+    assert!(
+        format!("{session:?}")
+            == "SessionCredentials { provider: \"[REDACTED]\", cached_passphrase: true }",
+        "cached credential formatting must remain redacted"
+    );
+}

@@ -380,6 +380,20 @@ every cryptographic dependency temporary. Review dependency allocation/error
 paths and document any limitation rather than claiming tests prove total
 process-memory erasure.
 
+The local review of locked `ssh-key` 0.6.7 found concrete limits: Ed25519
+private holders erase on drop, and decryption uses a `Zeroizing<Vec<u8>>`, but
+`PrivateKey::encrypt_with` encodes plaintext into an ordinary `Vec` before
+encryption. An encoding/encryption error can drop that allocation without
+erasure. `to_bytes` also wraps its allocation only after encoding succeeds;
+`to_openssh` wraps the successful PEM string, not every encoding temporary.
+Manyhands maps these errors to fixed kinds without formatting dependency
+errors and zeroizes its own seed, encoded private output, read buffers, and
+passphrase holders. This reduces exposure; it does not erase every dependency
+temporary, allocator copy, stack/register copy, OS swap page, or crash dump.
+The privacy tests establish storage/diagnostic exclusion, not total process
+memory erasure. Providers and validation callbacks remain trusted consumers
+of temporary passphrase borrows.
+
 | Risk / ambiguity | Decision or verification |
 | --- | --- |
 | Imported parser scope | User confirmed: readability/provider only; backend validation in Cycle 03. |

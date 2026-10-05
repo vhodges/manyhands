@@ -96,3 +96,42 @@ not confuse approval of this plan with approval of the finished code.
   real transport there before claiming compatibility.
 - Pause or cancel background polling when credentials are cancelled or their
   provider is unavailable; retries must be an explicit new attempt.
+
+### Local verification recorded 2026-10-05
+
+The ticket worktree passed `devenv shell -- cargo fmt`,
+`devenv shell -- cargo check --all-features --locked`,
+`devenv shell -- cargo fmt --check`,
+`devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`,
+and `devenv shell -- cargo test --all-features --locked`: 469 unit/integration
+and 9 compile-fail documentation tests passed, with zero failures or ignored
+tests. The CLI smoke command exited zero. The desktop smoke command ran on
+`DISPLAY=:1`, `WAYLAND_DISPLAY=wayland-1`; after Cargo reported execution,
+the app printed `Hello from Manyhands!` from its button callback and exited
+zero. This confirms an interactive window launched, beyond merely building.
+No smoke-test process remained. `git diff --check` also passed.
+
+The privacy regression runs in an isolated subprocess, captures stdout/stderr
+(including explicitly formatted API errors, guidance, Debug, and recovery
+results), and scans application-data paths recursively. It asserts that live
+WAL frames are scanned while a reader pins them, then scans nested DB/WAL
+backup snapshots and a populated rollback journal. Expected private fixtures
+stay in a separate temporary SSH home. Probes cover unique correct/incorrect
+passphrases, malformed sensitive input, whole private encodings, PEM body
+lines, and 16-byte private seed segments. Generation, wrong passphrase,
+cancellation, denied read, malformed input, registration failure, and
+interrupted deletion all execute. Temporary diagnostic and SQLite/WAL leak
+mutations each failed with fixed messages without exposing the secret; both
+mutations were removed. No application storage/diagnostic leak was found.
+
+This proves the tested persistence/diagnostic boundary, not erasure of all
+process memory. See the design's concrete `ssh-key` allocation/error-path
+limits. Imported-key backend validation, rejection-driven cache invalidation,
+real transport, and Windows `libssh2-sys` compatibility remain Cycle 03 work.
+
+The existing five-target native CI matrix now runs the approved headless
+library/credential command before artifact upload, preserving release builds
+and artifact checks. Linux ARM, both Windows targets, and macOS runtime
+results remain pending until those CI jobs run; workflow text and local Linux
+results do not satisfy their platform gate. Whole-branch code review and
+its approval remain separate from these local results; the ticket stays open.

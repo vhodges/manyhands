@@ -340,13 +340,13 @@ and unregistration methods; add `RepositoryErrorKind::SharedKeyMaterialPending`
 with fixed recovery guidance for these existing Result-returning APIs, never
 raw SQL text. Material APIs report Busy for the same condition.
 
-- [ ] Add `deletion_refuses_imported_selected_and_unproven_generated_rows`,
+- [x] Add `deletion_refuses_imported_selected_and_unproven_generated_rows`,
   `deletion_cancel_writes_nothing`, `deletion_removes_exact_owned_pair`,
   `deletion_rechecks_selection_after_review`, and
   `deletion_refuses_replaced_or_linked_target`. For caller-forged generated rows
   use both arbitrary paths and the expected-looking directory; both lack the
   creation evidence needed for deletion. Assert outside sentinels survive.
-- [ ] Add `deletion_retry_requires_fresh_confirmation` and
+- [x] Add `deletion_retry_requires_fresh_confirmation` and
   `deletion_retry_preserves_replacement_files`. Inject interruption after intent,
   after each unlink before/after recording the phase, and around final SQL commit.
   Reopen the service and assert it does not delete anything automatically;
@@ -355,17 +355,17 @@ raw SQL text. Material APIs report Busy for the same condition.
   `review: None` after restart, returns AlreadyDeleted without touching newly
   created entries. An incomplete operation with `review: None` returns
   ConfirmationRequired and does nothing.
-- [ ] Add `unregister_generated_retains_both_files` and ensure already-missing
+- [x] Add `unregister_generated_retains_both_files` and ensure already-missing
   entries are handled only against matching ownership evidence and fresh review.
   `deletion_operation_id_mismatch_changes_nothing` covers cross-key/action replay.
-- [ ] Run
+- [x] Run
   `devenv shell -- cargo test --locked --test key_material deletion`;
   expect missing behavior failures before implementation.
-- [ ] Implement handle validation, lock ordering, prepared record, private-first
+- [x] Implement handle validation, lock ordering, prepared record, private-first
   removal, progress recording, and final atomic row removal/completion. Preserve
   old advisory preflight behavior; never let its registration alone authorize
   removal. Keep errors and recovery rows free of source content.
-- [ ] Run deletion tests and `shared_key_registry`. Record checkpoint;
+- [x] Run deletion tests and `shared_key_registry`. Record checkpoint;
   suggested commit: `feat: confirm and recover generated key deletion`.
 
 ## Task 7: Prove Privacy And Platform Compatibility, Then Request Review

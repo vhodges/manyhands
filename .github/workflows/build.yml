@@ -82,6 +82,9 @@ jobs:
             throw "Missing release binaries: $($missing -join ', ')"
           }
 
+      - name: Test headless credential and platform contracts
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material
+
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
         with:
