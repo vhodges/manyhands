@@ -28,8 +28,8 @@ See the [Cycle](../Cycles/wave-02-cycle-03-authenticated-ssh-transport.md) and
 
 Review requested by the user on 2026-10-05 found substantive issues in the first
 draft. The user subsequently approved the complete scope, design, and plan on
-2026-10-05 and authorized subagent-driven implementation. The timeout mechanism
-is an implementation prerequisite to resolve before the driver task.
+2026-10-05 and authorized subagent-driven implementation. The timeout contract below is resolved by the subsequent user-approved backend
+limits and the startup/test-host mechanism; runtime proof remains required.
 The following behavioral decisions are approved:
 
 | ID | Decision | Approved behavior |
@@ -43,8 +43,9 @@ ambiguity. Q3 requires fresh approval after corrupt-database recovery, even
 when known_hosts matches. Its proposed durable mechanism is specified below.
 The user also accepted 10 seconds to connect and 30 seconds of stalled I/O on
 2026-10-05: allow a reasonable short backend delay without leaving the user
-waiting excessively. Initialization and backend phase coverage remain the
-engineering gate; the timeout values are no longer an open product decision.
+waiting excessively. The user subsequently accepted the documented backend limits: per-address TCP
+connection and per-blocking-call SSH budgets, including the DNS/control-call
+limitations. This refines the earlier shorthand of a resetting idle timeout.
 
 | Finding | Review disposition |
 | --- | --- |
@@ -52,20 +53,50 @@ engineering gate; the timeout values are no longer an open product decision.
 | Transfer calls can replace connect-time callbacks; a raw Remote closure bypasses policy. | Corrected below: scoped adapter owns every transfer's options and rejection checks. |
 | Pin survival was overstated for corrupt database replacement. | Normal rebuild versus corrupt database replacement distinguished; approved Q3 requires fresh trust using the proposed recovery marker below. |
 | `connect_auth` includes remote service/advertisement work, so its failure does not reliably prove a bad secret. | Cache only positively verified success; use conservative unknown-stage errors and no message-string inference. |
-| Network stalls were only bounded by a fixture watchdog. | Unresolved engineering gate: establish production timeout/cancellation scope and a safe initialization mechanism before approving the driver contract. |
+| Network stalls were only bounded by a fixture watchdog. | Resolved mechanism below: early bootstrap, custom-main test hosts, accepted per-call backend limits; native runtime evidence still required. |
 | Fixture portability was described as established before it was tested. | A target, not evidence; prove Windows OpenSSL, helper provisioning, and the chosen russh version early. |
 
-The locked backend starts with zero connect/I/O timeout settings; its exposed
-setters modify C globals and require initialization before threads. Do not set
-them per operation, race existing Git calls, or present a watchdog killing the
-test process as production cancellation. The fixture must characterize stalls
-before SSH handshake, during auth, and during advertisement/transfer. The accepted
-defaults are 10,000 ms to connect and 30,000 ms of stalled I/O, not a 30-second
-total transfer limit. A slow operation that continues making progress can run
-longer. Tests must cover both recovery from a shorter stall and timed failure
-after the threshold, allowing bounded scheduling tolerance. If a safe library/host initialization
-contract is needed, update this design and affected startup-file scope before
-implementation; never silently defer an indefinite hang to later polling work.
+### Startup And Accepted Backend Timeout Contract
+
+The user accepted the locked backend limits after source inspection showed
+that its timeout is per blocking SSH API call, not a resetting idle timer:
+10,000 ms for each TCP address connection attempt and 30,000 ms for each
+blocking SSH call. There is no total transfer deadline. Streaming transfers
+composed of progressing calls can exceed 30 seconds; a single slow control call
+can time out despite partial wire progress. DNS resolution is outside the TCP
+budget, multiple resolved addresses each receive a budget, and teardown calls
+can add additional budgets. Do not claim a strict end-to-end deadline, monotonic
+precision, immediate cancellation, or exact sliding-idle semantics.
+
+Add src/runtime.rs exported from src/lib.rs with an explicitly unsafe
+initialize_git_transport_before_threads() -> Result<(), TransportInitializationError>.
+Its safety contract requires invocation before any thread is spawned or
+concurrent/native Git activity begins; the host must not mutate the settings
+later. A OnceLock publishes an idempotent fixed result but does not make a late
+first invocation safe. Set both fixed globals once and use fixed non-secret
+errors. Both executable main functions call this before any application work,
+including gpui_kit::application(). This is startup wiring, not a UI/CLI feature.
+SSH operation entry points return RuntimeUninitialized before networking when
+bootstrap success is absent; existing local repository APIs remain unaffected.
+
+Use harness = false for tests/ssh_fixture.rs and tests/ssh_transport.rs so their
+real main can initialize before any test/fixture/watchdog thread. Normal libtest
+workers (even --test-threads=1 or exact-test child processes) cannot establish
+this pre-thread safety contract. The custom test host can compile the library
+source with #[path = "../src/lib.rs"] mod production; pub use production::*;
+so a cfg(test) pub(crate) dispatcher reaches private transport scenarios without
+adding production test APIs. A small dev-only runner may preserve case selection.
+Keep pure policy/unit tests on normal libtest without mutating global settings.
+Each isolated child enters the real custom main with home/config already set.
+
+Bootstrap tests read back the exact values before spawning anything. Real SSH
+cases cover a shorter recoverable stall, exceeded budgets at handshake/auth/
+advertisement/transfer phases, and a progressing multi-call transfer lasting
+more than 30 seconds. Separate operation-return timing from teardown timing;
+allow bounded scheduling/second-resolution tolerance. Generic SSH failures
+must not be labelled Timeout from message text; retain a redacted conservative
+transport category when the backend does not supply a reliable code. Watchdog
+expiry fails the test rather than proving the production timeout worked.
 
 Review evidence: locked libgit2 `remote.c` (`git_remote_create_anonymous`,
 `git_remote_create_with_opts`, `connect_or_reset_options`, `git_remote_upload`),
@@ -309,7 +340,7 @@ key ID, optional authority, and `SshTransportErrorKind`. Variants:
 `KeyRejected`, `UnlockCancelled`, `ProviderUnavailable`, `UnlockFailed`,
 `HostApprovalRequired { presented }`,
 `HostReplacementRequired { expected, presented }`, `HostTrustChanged`,
-`HostVerificationUnavailable`, `RegistryUnavailable`, `TransportUnavailable`,
+`HostVerificationUnavailable`, `RegistryUnavailable`, `RuntimeUninitialized`, `TransportUnavailable`,
 `RemoteUnavailable`, `PushRejected`, and `ProtocolFailure`.
 
 Use fixed guidance per variant, with exact identity fields only for trust
@@ -378,8 +409,9 @@ tests reuse this fixture without changing the production system-Git boundary.
   restricted in-process fixture; exact dependency compatibility is verified in
   the fixture task, not claimed by this plan.
 - Blocking backend calls do not promise immediate asynchronous cancellation.
-  Prompt cancellation is specified; production stall bounds remain the explicit
-  engineering gate above. Later lifecycle code owns reservation/yield semantics.
+  Prompt cancellation and documented per-call backend budgets are specified
+  above; DNS and teardown limitations remain. Later lifecycle code owns
+  reservation/yield semantics.
 - Rebase made the local ticket history diverge from its published planning
   branch. Publication requires history reconciliation; planning does not
   authorize a force push, merge, or cleanup.

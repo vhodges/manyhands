@@ -26,8 +26,9 @@ remote callbacks and prove authenticated transport against a real fixture.
 
 Implementation status: authorized and starting with subagent-driven development.
 The user approved scope, design, and plan on 2026-10-05, including Q1–Q3 and
-10,000/30,000 ms timeout defaults. Resolve safe timeout initialization and backend
-coverage before the connection-driver task. Track task/review state in the
+10,000/30,000 ms timeout defaults and the documented per-address/per-blocking-call
+backend limits. Implement the resolved pre-thread bootstrap and test-host design
+before the connection-driver task. Track task/review state in the
 plan-specific execution ledger and ticket comments; keep the ticket open.
 
 ## Entry Gate

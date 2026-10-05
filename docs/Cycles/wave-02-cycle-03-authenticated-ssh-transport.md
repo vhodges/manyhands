@@ -30,10 +30,11 @@ together. The user approved scope, design, and plan on 2026-10-05 and authorized
 implementation using subagent-driven development.
 The user approved all three review decisions on 2026-10-05: username in URL,
 one ambiguity-aware unlock prompt, and fresh host approval after database
-recovery even when known_hosts matches. The production timeout engineering gate
-remains an implementation prerequisite before the connection driver. The user accepted 10 seconds
-to connect and 30 seconds of stalled I/O; actively progressing transfers may
-run longer. Only initialization and backend coverage remain to settle.
+recovery even when known_hosts matches. The user also accepted the documented
+backend timeout limits: 10 seconds per TCP address connection attempt and
+30 seconds per blocking SSH call, with no total transfer deadline. The design
+specifies early initialization and custom test hosts; native evidence must
+prove the resulting behavior and preserve DNS/control-call/teardown caveats.
 
 ## Entry Evidence
 

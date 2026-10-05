@@ -30,19 +30,18 @@ Devenv locally and existing native GitHub Actions runners.
 and [Cycle](../Cycles/wave-02-cycle-03-authenticated-ssh-transport.md).
 
 **Status:** Approved by the user on 2026-10-05 for subagent-driven development.
-Resolve the timeout initialization/coverage prerequisite before Task 4; record
-engineering decisions and evidence in the execution ledger. Push/PR, merge,
+Implement the resolved timeout bootstrap in Task 2 and enforce it in Task 4;
+record engineering decisions and evidence in the execution ledger. Push/PR, merge,
 closure, and worktree cleanup remain separate authorization/lifecycle stages.
 
 ## Global Constraints
 
 - Preserve approved Q1–Q3: username in URL, one ambiguity-aware unlock prompt,
   and fresh approval after corrupt-database recovery even when known_hosts matches.
-- Resolve the production timeout initialization/ownership contract in the design
-  before executing Task 4. Fixture watchdogs do not establish production bounds.
-- Accepted timeout defaults: connect 10,000 ms; stalled I/O 30,000 ms. Preserve
-  actively progressing transfers beyond 30 seconds; do not impose a total
-  operation deadline using the idle timeout.
+- Initialize fixed backend settings before threads: 10,000 ms per TCP address
+  connect attempt and 30,000 ms per blocking SSH call; no total transfer deadline.
+  Document DNS/control-call/teardown limits accepted by the user. A fixture
+  watchdog never establishes production timeout behavior.
 
 - Work only in ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DB`'s existing branch/worktree.
 - Shared domain code belongs in the library and depends on no GPUI types.
@@ -84,7 +83,8 @@ closure, and worktree cleanup remain separate authorization/lifecycle stages.
 | `src/repository/discovery.rs` | Host-pin migration call (Task 3). |
 | `src/repository/transport/operation.rs` | Session/connection driver (Task 4). |
 | `src/repository/keys/session.rs` | Non-secret cache-presence query and typed unlock reason (Task 4). |
-| `tests/support/ssh_remote.rs` | Shared disposable SSH Git fixture (Task 2). |
+| `tests/support/ssh_remote.rs`, `tests/support/ssh_harness.rs` | Shared disposable SSH Git fixture and custom-main runner (Task 2). |
+| `src/runtime.rs`, `src/lib.rs`, `src/main.rs`, `src/bin/manyhands-cli.rs` | Safe pre-thread timeout bootstrap and startup wiring (Task 2). |
 | `tests/ssh_fixture.rs`, `tests/ssh_transport.rs` | Fixture and public-operation evidence (Tasks 2–5). |
 | `src/repository/transport/tests.rs` | Private-driver transfer tests using shared fixture (Tasks 3–5). |
 | `tests/ssh_transport/privacy.rs` | Isolated privacy subprocess (Task 5). |
@@ -137,7 +137,10 @@ Keep public service method implementation for Task 4.
 ## Task 2: Deliver A Restricted Portable SSH Git Fixture
 
 **Files:** create `tests/support/ssh_remote.rs`, `tests/ssh_fixture.rs`; modify
-Cargo.toml/Cargo.lock and CI helper provisioning as needed. Use a dedicated
+Cargo.toml/Cargo.lock, src/runtime.rs, src/lib.rs, both binary entry points,
+and tests/support/ssh_harness.rs. Configure harness=false for both SSH test
+executables; the Task 4 transport host is added when its cases exist.
+Update CI helper provisioning as needed. Use a dedicated
 support module import rather than adding server dependencies to every fixture.
 
 **Interfaces:** `SshRemoteFixture::start() -> Result<Self, FixtureError>` owns
@@ -152,6 +155,9 @@ environment set before any Git initialization and bounded process lifetime.
 - [ ] Add failing fixture tests for successful allowed-client authentication,
   wrong-key denial, command/path restrictions, EOF/exit forwarding, helper
   lookup with spaces, startup failure, and complete cleanup after failure.
+- [ ] Test and implement the design's unsafe pre-thread runtime initializer and
+  fixed errors; call it first in both binaries. Test exact settings read-back
+  in the custom-main host before any thread. Preserve GPUI Kit Root/init rules.
 - [ ] Resolve test-only russh/Tokio versions and pin the resulting lockfile;
   keep existing git2/libgit2/libssh2 versions. Add Windows-target libssh2-sys
   feature unification. Check native helper discovery via `git --exec-path`
@@ -172,8 +178,8 @@ environment set before any Git initialization and bounded process lifetime.
   matching backend message strings. Validate any timeout bootstrap in an isolated
   process before threads; do not mutate libgit2 global timeouts from test workers.
 - [ ] Verify the accepted 10,000/30,000 ms defaults, a shorter recoverable stall,
-  timeout after the applicable threshold with bounded scheduling tolerance, and
-  a progressing transfer lasting longer than 30 seconds. Clearly record phases
+  per-call timeout after the applicable threshold with bounded scheduling tolerance,
+  and a progressing multi-call transfer lasting longer than 30 seconds. Record phases
   the backend cannot bound; a test watchdog must not turn that gap into a pass.
 - [ ] Before depending on the fixture for all later tasks, obtain native evidence
   for helper invocation and encrypted Ed25519 on both Windows architectures when
@@ -231,7 +237,10 @@ transport/mod.rs, transport/tests.rs, keys/session.rs, tests/session_credentials
 
 **Interfaces:** implement `RepositoryService::verify_ssh_transport` and
 `with_authenticated_remote` with the scoped `AuthenticatedSshRemote` adapter
-specified in the design. The adapter owns fresh options/callbacks for every
+specified in the design. Require published runtime bootstrap success before
+networking (RuntimeUninitialized otherwise). Use a custom-main SSH transport test
+host as in Task 2; private scenarios use the design's test-only source inclusion.
+The adapter owns fresh options/callbacks for every
 transfer; it exposes no raw Remote. Add
 `SessionCredentials::has_cached_passphrase(&self, &UnlockRequest) -> bool`;
 it discloses only whether key/source match, never a secret. Use existing
