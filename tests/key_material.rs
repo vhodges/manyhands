@@ -688,9 +688,9 @@ fn generated_unlock_cancel_preserves_state() {
         f.service.list_shared_keys().unwrap(),
         vec![f.registration.clone()]
     );
-    assert_eq!(
-        fs::read(&f.registration.private_key_path).unwrap(),
-        original
+    assert!(
+        fs::read(&f.registration.private_key_path).unwrap() == original,
+        "unlock changed the private key file"
     );
     assert!(f.service.list_key_material_recovery().unwrap().is_empty());
 }
