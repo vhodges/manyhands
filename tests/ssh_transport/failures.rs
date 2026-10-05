@@ -175,22 +175,52 @@ fn disconnect_after_receive() -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut request = case.request();
     request.direction = SshDirection::Push;
+    let called = Cell::new(0);
     let outcome = transfer(
         &case.service,
         request,
         &mut session,
         Transfer::Push,
-        &Cell::new(0),
+        &called,
         || {
             case.fixture
                 .disconnect_at(FixtureBoundary::AfterReceivePack)
         },
     );
+    let status_withheld = case.fixture.receive_status_withheld();
+    crate::ssh_harness::observation(&[506, u128::from(outcome.is_ok())]);
+    if !status_withheld {
+        // Fixed categories only: never expose a backend diagnostic, path or OID.
+        let category = match outcome.as_ref().map_err(|error| &error.kind) {
+            Ok(_) => 0,
+            Err(SshTransportErrorKind::TransportUnavailable) => 1,
+            Err(SshTransportErrorKind::RemoteUnavailable) => 2,
+            Err(SshTransportErrorKind::ProtocolFailure) => 3,
+            Err(SshTransportErrorKind::KeyRejected) => 4,
+            Err(SshTransportErrorKind::HostTrustChanged) => 5,
+            Err(SshTransportErrorKind::KeySourceChanged) => 6,
+            Err(SshTransportErrorKind::SelectionChanged) => 7,
+            Err(SshTransportErrorKind::EndpointChanged) => 8,
+            Err(_) => 9,
+        };
+        let remote_matches = git2::Repository::open_bare(case.fixture.repository_path())
+            .and_then(|server| server.refname_to_id("refs/heads/pushed"))
+            .is_ok_and(|remote| remote == oid);
+        crate::ssh_harness::observation(&[
+            507,
+            category,
+            called.get() as u128,
+            case.fixture.helper_invocations() as u128,
+            case.fixture.accepted_keys().len() as u128,
+            case.fixture.active_helpers() as u128,
+            case.fixture.completed_helpers() as u128,
+            u128::from(remote_matches),
+        ]);
+    }
     assert!(
-        case.fixture.receive_status_withheld(),
+        status_withheld,
         "fixture must withhold the actual receive-pack status"
     );
-    crate::ssh_harness::observation(&[506, u128::from(outcome.is_ok())]);
     if let Err(error) = outcome {
         transport_failure(&error.kind);
     }
