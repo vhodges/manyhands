@@ -1,7 +1,7 @@
 ---
 title: "Application Runtime and Polling RFC"
 date: 2026-10-05
-status: draft
+status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,13 +12,14 @@ id: "01M46S07YFY257T74TAB0Y3AZZ"
 
 ## Status, scope and authority
 
-This draft supplies the shared runtime contract required by the
+This approved RFC supplies the shared runtime contract required by the
 [desktop](desktop-information-architecture-and-editor.md) and
 [CLI](cli-contract.md) RFCs. It implements `MH-COLLAB-004/006`,
 `MH-INDEX-002`, `MH-CRED-001`, `MH-CLI-001` and `MH-NFR-003/004/006/008`
 under the [PRD v0.5](../PRD/mvp.md) and [architecture RFC](mvp-rfc.md).
-It requires approval and the source amendments in the
-[review register](wave-03-rfc-review.md) before implementation.
+The product owner approved it on 2026-10-05. The
+[review register](wave-03-rfc-review.md) records adopted source amendments and
+remaining feasibility and implementation gates.
 
 [Wave 02](../Waves/wave-02-collaboration.md) owns one-shot poll, transport,
 reservations, merge, publication and cleanup. This RFC owns when front ends
@@ -144,13 +145,13 @@ behind. Poll-triggered indexing shares the desktop worker's lifetime.
 
 On shutdown, stop admitting work, request cancellation, and let each operation
 reach an approved safe point. Flush progress and desktop drafts; invalidate
-credentials after worker use ends. Proposed graceful drain budget is ten
+credentials after worker use ends. The graceful drain budget is ten
 seconds. At its expiry, report incomplete recovery and preserve journals; never
 claim cancellation rolled back completed changes. A forced process termination
 is tested as interruption, not implemented as arbitrary worker-thread killing.
 
 Whether the locked transport can deliver bounded safe-point shutdown during
-DNS/connect stalls must be proven before this runtime is approved for execution.
+DNS/connect stalls must be proven before runtime implementation begins.
 If it cannot, revise in-process timeout/cancellation handling or amend the
 shutdown contract. A separate helper service is not an assumed fallback.
 Extending a timeout silently or reclaiming a still-live reservation is not an

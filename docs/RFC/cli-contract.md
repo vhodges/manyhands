@@ -1,7 +1,7 @@
 ---
 title: "CLI Contract RFC"
 date: 2026-10-05
-status: draft
+status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,13 +12,14 @@ id: "01M46S07YFTWMB56ZFSS00BKMN"
 
 ## Status and goals
 
-This draft specifies `manyhands-cli` for people, agents and CI. It implements
+This approved RFC specifies `manyhands-cli` for people, agents and CI. It implements
 `MH-CLI-001` and the equivalent repository, credential, content, discussion,
 index and collaboration operations in [PRD v0.5](../PRD/mvp.md), subject to the
-[architecture RFC](mvp-rfc.md). It requires approval before implementation.
+[architecture RFC](mvp-rfc.md). The product owner approved it on 2026-10-05;
+Wave/Cycle planning and implementation gates still apply.
 The [runtime RFC](application-runtime-and-polling.md) owns polling and session
 lifetime; the [desktop RFC](desktop-information-architecture-and-editor.md)
-defines the graphical counterpart. Outstanding decisions and verification gates
+defines the graphical counterpart. Remaining feasibility and verification gates
 are in the [review register](wave-03-rfc-review.md).
 
 The CLI is a headless adapter over shared domain services. It runs without a
@@ -323,9 +324,9 @@ rollback. Platform-native stop handling follows the runtime RFC.
 
 ## Alternatives, risks and required evidence
 
-Structured file/stdin input is proposed over large flag sets or an implicit
+Structured file/stdin input is selected over large flag sets or an implicit
 editor because it preserves multiline input and explicit concurrency tokens.
-One final JSON object is proposed over streaming all commands because callers
+One final JSON object is selected over streaming all commands because callers
 can inspect a single authoritative outcome.
 Noninteractive secret ingestion and credential IPC are excluded by the selected
 session model; this limits protected-key automation and is deliberate.

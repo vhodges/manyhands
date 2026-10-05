@@ -528,10 +528,20 @@ remaining decision as a blocker rather than silently relying on an assumption.
 | Authentication and credential handling | Git identity prompt, shared-key generation/import/storage/removal, session passphrases, startup polling unlock, SSH-only transport, redaction. | Wave 2 remote work |
 | Desktop information architecture and editor | Navigation, open-item and context recovery presentation, accessible controls, polling status/pause/recovery, Markdown editing and conflict resolution. | Wave 3 desktop gate |
 | CLI contract | Command taxonomy, safe input/output boundaries, polling configuration/status and explicit one-shot execution, JSON schema, recovery states, exit statuses, conflict interaction. | Wave 3 CLI gate |
+| Application runtime and polling | Shared operation adapters, desktop-owned background worker, process-local credential sessions, progress, cancellation and shutdown. | Wave 3 runtime and front-end integration gates |
 | Test and compatibility strategy | Fixture repositories, polling and lifecycle fault injection, real remote journeys, cross-platform and Git matrix, performance limits. | Each Wave gate |
 
 The focused RFCs MAY be drafted in parallel. Their decisions MUST be approved
 in dependency order before the Wave that relies on them begins.
+
+The product owner approved the
+[desktop/editor](desktop-information-architecture-and-editor.md),
+[CLI](cli-contract.md), and [runtime](application-runtime-and-polling.md) RFCs
+on 2026-10-05. The runtime is the shared operation-adapter and desktop-worker
+authority; it introduces no CLI resident mode or shared service. The
+[approval register](wave-03-rfc-review.md) records remaining feasibility and
+evidence gates. Approval of these contracts does not satisfy those gates or
+replace Wave/Cycle planning and implementation authorization.
 
 ## Wave and Cycle Governance
 
@@ -568,7 +578,7 @@ The initial delivery sequence is:
 | --- | --- | --- |
 | Wave 1: Foundations | Canonical content, repository configuration, local editing contexts, checkpoints, and rebuildable discovery operate against real local repositories. | PRD version 0.3 and foundational RFCs approved; local lifecycle and index-rebuild evidence complete. |
 | Wave 2: Collaboration | SSH polling and synchronization, pending publication, comments, conflict recovery, document promotion, and ticket closure operate safely against real remotes. | Authentication and Git recovery RFCs approved; polling, remote, conflict, promotion, closure, retry, and cleanup evidence complete. |
-| Wave 3: Dogfooding | Desktop and CLI provide the complete accessible MVP workflow and demonstrate the PRD journeys on supported platforms. | Desktop, CLI, and test RFCs approved; real-repository end-to-end evidence complete. |
+| Wave 3: Dogfooding | Desktop and CLI provide the complete accessible MVP workflow and demonstrate the PRD journeys on supported platforms. | Desktop, CLI, runtime and test RFCs approved; remaining feasibility gates satisfied and real-repository end-to-end evidence complete. |
 
 This table establishes sequencing, not a substitute for Cycle documents. No
 implementation Cycle may be started until its Wave entry gate and direct RFC

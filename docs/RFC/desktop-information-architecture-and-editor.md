@@ -1,7 +1,7 @@
 ---
 title: "Desktop Information Architecture and Editor RFC"
 date: 2026-10-05
-status: draft
+status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,13 +12,13 @@ id: "01M46S07YFKRH50D9NTHZ302AK"
 
 ## Status and intent
 
-This proposal defines the desktop portion of Wave 03 under the approved
-[PRD v0.5](../PRD/mvp.md) and [architecture RFC](mvp-rfc.md). It is not
-implementation authority until approved. The product owner selected **rich-text
+This RFC was approved by the product owner on 2026-10-05. It defines the
+desktop portion of Wave 03 under [PRD v0.5](../PRD/mvp.md) and the
+[architecture RFC](mvp-rfc.md). The product owner selected **rich-text
 editing with a Markdown source mode** during drafting on 2026-10-05.
 The product owner also selected in-application canonical Markdown conflict
-resolution with guided external recovery for other conflicts. Remaining
-decisions below are proposals, with approval blockers recorded in the
+resolution with guided external recovery for other conflicts. The approved
+design retains the feasibility and implementation gates recorded in the
 [review register](wave-03-rfc-review.md).
 
 The intended outcome is a complete collaboration workflow for a person who
@@ -96,7 +96,7 @@ and undo history. Switching modes is not a save. A failed parse keeps the draft
 in source mode with precise diagnostics. Toolbar actions and paste must remain
 usable by keyboard. Rich paste converts only supported structure; plain-text
 paste is always available. Spellchecking, collaborative cursors, embedded
-webviews and arbitrary HTML execution are outside the proposal.
+webviews and arbitrary HTML execution are outside this RFC's scope.
 
 Rendering does not execute HTML/scripts or automatically load remote images.
 Relative document links resolve within the repository's permitted document
@@ -113,7 +113,7 @@ Save validates, checkpoints through the domain service and refreshes discovery.
 Save does not publish. The UI distinguishes unsaved, saved locally, checkpoint
 failed, discovery refresh pending and publication pending.
 
-Proposed crash recovery uses an owner-protected, application-local draft store
+Crash recovery uses an owner-protected, application-local draft store
 separate from SQLite, operation journals and canonical content. It writes
 atomically after at most one second of inactivity, and flushes before a graceful
 tab/application close. The UI reports when recovery persistence fails and never
@@ -281,7 +281,7 @@ was not selected by the product owner.
 
 ## Acceptance evidence
 
-The following are required additions to the approved test strategy:
+The approved test strategy adopts the following required evidence:
 
 - Golden source fixtures cover unknown YAML values, CRLF, Unicode, embedded
   HTML, unsupported extensions, tables and mixed formatting. Mode switches and
@@ -297,4 +297,5 @@ The following are required additions to the approved test strategy:
   cancellation shows safe-point progress and stale completion cannot lose text.
 
 These are planned checks, not completed evidence. The review register defines
-the native-platform matrix and source amendments needed before implementation.
+the native-platform matrix, adopted source amendments and remaining
+implementation gates.

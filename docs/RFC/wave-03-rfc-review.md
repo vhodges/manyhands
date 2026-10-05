@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 RFC Review and Decision Register"
 date: 2026-10-05
-status: draft
+status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,8 +12,10 @@ id: "01M46S07YFKEMG0WX39DQX7C1G"
 
 ## Purpose and planning baseline
 
-This is the review index for Wave 03's proposed RFCs, not a Wave document,
-Cycle plan or implementation approval. The product owner requested early RFC
+This records the product owner's approval of the three Wave 03 RFCs on
+2026-10-05, including their decisions, source amendments and evidence gates.
+The reviewed branch tip was `f560295`. It is not a Wave document, Cycle plan
+or implementation approval. The product owner requested early RFC
 authoring while another session implements Wave 02 Cycle 03. This checkout
 does not modify that session's ticket, branch or worktree. This planning branch
 includes the product-owner-directed PRD 0.5 scope amendment and matching source
@@ -25,10 +27,10 @@ which includes fetched `origin/main` at
 `89ce24d0c5b99c817ec81615fe610f65d7c81a99`. The new branch
 `planning/wave-03-rfcs` was created and rebased onto local `main` before edits,
 in `.worktrees/wave-03-rfcs`. Wave 02 remains in progress; its future APIs must
-be checked at the Wave 03 entry gate. These drafts describe contracts, not
+be checked at the Wave 03 entry gate. These approved RFCs describe contracts, not
 completed implementation or verification.
 
-## Proposed RFC set
+## Approved RFC set
 
 | Document | Decision boundary |
 | --- | --- |
@@ -39,45 +41,47 @@ completed implementation or verification.
 The architecture explicitly requires the first two. The third factors out
 decisions that would otherwise be duplicated and potentially contradictory.
 The existing [test strategy](test-and-compatibility-strategy.md) remains the
-test authority; the evidence proposal below extends it, rather than creating
-a competing test RFC. All new files remain `draft` pending review.
+test authority; it adopts the evidence gate below. The three RFCs and this
+approval register are `approved`. Approval establishes design authority; it
+does not claim completed feasibility work, authorize implementation, or authorize
+pushing or merging the planning branch.
 
 ## Decisions, gaps and blockers
 
-| ID | Finding and proposed resolution | State / owner / gate |
+| ID | Decision or remaining risk | State / owner / gate |
 | --- | --- | --- |
 | W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. Carry forward the charter's minor preference for `zorite-editor`, with extraction from Velotype as the alternative. | Product-owner mode direction recorded 2026-10-05; candidate preference comes from the charter. Technical Lead must evaluate pinned candidates for a single compatible GPUI graph, fidelity, host integration and native input before editor Cycle planning. No library selection is approved yet. |
 | W3-02 | Background polling/indexing runs in a desktop-owned worker. CLI daemon mode is removed; explicit one-shot poll/refresh remains. No separate executable, shared singleton or IPC. | Product-owner clarification adopted in PRD 0.5 on 2026-10-05; supersedes the earlier daemon unlock/restart choice. |
-| W3-03 | A clean worktree can have unsaved in-memory drafts. Propose protected crash-recovery files, base observations and explicit stale-edit review. | Proposed; Product Owner/Technical Lead approval required for persistence scope and crash guarantee before editor planning. |
+| W3-03 | A clean worktree can have unsaved in-memory drafts. Use protected crash-recovery files, base observations and explicit stale-edit review. | Approved with the RFC set on 2026-10-05; Technical Lead must verify persistence failures and the stated crash guarantee during editor work. |
 | W3-04 | Ticket branches can contain code; resolve canonical Markdown in-app and provide explicit external-tool guidance for other conflicts. | Product-owner direction recorded 2026-10-05. Keep the owned-path boundary and prove safe re-observation after external repair. |
 | W3-05 | Concurrent resident-poller coordination is not required. Remove scheduler election, atomic due-slot claiming and process heartbeat records; retain existing Wave 02 leases/reservations for actual operations. | Resolved by the W3-02 scope clarification. No new scheduler-coordination protocol or test matrix. |
-| W3-06 | Desktop unlock blocking must remain distinct from persisted user pause. Its worker shares the desktop credential session; CLI credentials last one invocation. | Proposed interaction refinement before runtime planning; no cross-process readiness or unlock coordination. |
-| W3-07 | Libgit2 cancellation callbacks do not themselves prove bounded shutdown in every transport phase. Propose ten-second graceful drain budget with visible incomplete recovery. | Feasibility gate; Technical Lead must demonstrate native behavior or approve a cancellation design before runtime implementation. |
-| W3-08 | CLI retries need durable request identity and stable comment IDs; current domain requests do not provide the complete external protocol. | Proposed; CLI/Git/persistence contract review before CLI mutation planning. Cache loss can require explicit recovery. |
+| W3-06 | Desktop unlock blocking must remain distinct from persisted user pause. Its worker shares the desktop credential session; CLI credentials last one invocation. | Approved with the RFC set; verify during runtime implementation. No cross-process readiness or unlock coordination. |
+| W3-07 | Libgit2 cancellation callbacks do not themselves prove bounded shutdown in every transport phase. Use a ten-second graceful drain budget with visible incomplete recovery. | Feasibility gate; Technical Lead must demonstrate native behavior or approve a cancellation design before runtime implementation. |
+| W3-08 | CLI retries need durable request identity and stable comment IDs; current domain requests do not provide the complete external protocol. | Approved contract; audit actual domain APIs before CLI mutation planning and verify replay/cache-loss recovery during implementation. |
 | W3-09 | Repair/adoption, folder creation, identity configuration, key public export and confirmation previews need an API audit. UI controls cannot manufacture safe missing domain behavior. | Technical Lead must map to existing operations or propose narrowly scoped additions in Wave 03 Cycles. |
-| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Proposed native evidence matrix below; Release Owner must arrange machines/runners before final Wave planning. |
+| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Approved native evidence matrix below; Release Owner must arrange machines/runners before final Wave planning. |
 | W3-11 | A ticket close integrates the full context branch and can remove a worktree containing non-item files. | Effect preview must enumerate paths and preserve dirty/unexpected work; reconcile with Wave 02 closure preflight before close UI planning. |
 | W3-12 | Short-ID research is not an approved replacement for canonical ULIDs. | Keep full IDs for mutation and copy controls. Aliases need a separate collision/ambiguity contract if requested. |
 
-W3-01, W3-02 and W3-04 record product choices, not approval of the whole RFC set.
-Unanswered proposals remain proposals; elapsed review time is not approval.
+Approval resolves the design decisions above. Editor dependency selection,
+transport shutdown feasibility, the Wave 02 API audit and native evidence
+remain outstanding work; approval does not mark those gates satisfied.
 
-## Required source amendments on approval
+## Adopted source amendments
 
-The narrow PRD 0.5 scope amendment and corresponding daemon-removal updates are
-already recorded on this branch at the product owner's direction. They do not
-approve the remaining draft design. Before Wave 03 implementation, approval
-must adopt the following remaining decisions in their owning documents and
-resolve any intervening Wave 02 changes:
+The PRD 0.5 scope amendment and the following source amendments are adopted on
+this branch under the product owner's approval. They define Wave 03 obligations
+and do not imply changes to Wave 02 implementation. Reconcile intervening
+Wave 02 changes before Wave 03 planning/implementation.
 
-| Approved source | Proposed amendment |
+| Approved source | Adopted amendment |
 | --- | --- |
 | [Architecture](mvp-rfc.md) | Add shared runtime as the operation-adapter and desktop-worker authority; add it to the Wave 03 entry dependencies. Preserve every existing consent and single-context rule. |
 | [Repository/index](repository-index-persistence-and-refresh.md) | Separate user pause from desktop unlock suspension and define ownership of draft files outside the rebuildable cache. Define CLI request/confirmation observation records and cache-loss recovery without storing bodies/secrets. No resident-poller coordination schema is needed. |
 | [Authentication](authentication-and-credential-handling.md) | Define desktop/worker session sharing and separate unlock suspension from user pause. Specify terminal-only one-shot CLI secret input and absence of cross-process secret transfer. |
 | [Git workflow](git-workflow-and-conflict-recovery.md) | Bind external confirmation/request identity to observed effects and resume only unchanged remaining work. Record W3-04's explicit external-repair/re-observation path without expanding the owned canonical write boundary. |
 | [Canonical schema](canonical-content-and-comment-schema.md) | Clarify that display/repair never changes canonical identity implicitly, unknown metadata values survive edits, and unsupported rich-text constructs preserve source. No schema or ID migration is proposed. |
-| [Test strategy](test-and-compatibility-strategy.md) | Adopt the Wave 03 matrix and acceptance obligations in this register and the three draft RFCs. Preserve all Wave 01/02 evidence. |
+| [Test strategy](test-and-compatibility-strategy.md) | Adopt the Wave 03 matrix and acceptance obligations in this register and the three approved RFCs. Preserve all Wave 01/02 evidence. |
 
 PRD 0.5 records the selected desktop-only background execution model. No PRD
 amendment is needed for the selected editor. If further decisions weaken a PRD
@@ -85,7 +89,7 @@ journey, change supported platforms, introduce ticket
 reopening or require non-developers to use Git for canonical conflict recovery,
 explicit PRD revision is required rather than a hidden limitation.
 
-## Proposed Wave 03 evidence gate
+## Approved Wave 03 evidence gate
 
 All six PRD journeys require desktop evidence, with corresponding explicit
 operations exercised through the CLI using real local
@@ -109,12 +113,12 @@ and verifies the same domain effects without claiming resident scheduling.
 | Desktop worker and credentials | One worker shared across windows, pause versus unlock, manual priority, transport stalls, key/remote change, suspend/clock jump and graceful/forced stop. Retain domain tests for explicit CLI overlap; omit concurrent resident-poller orchestration. |
 | Trusted collaborators | At least two people using separate clones complete a shared-item edit/conflict/discussion journey; record observed usability problems and retest fixes. |
 
-Proposed responsiveness evidence uses delayed file/network operations and a
+Required responsiveness evidence uses delayed file/network operations and a
 repeatable fixture of 1,000 items plus a 100 KiB mixed-syntax document. The
 measurement target is p95 local input response below 100 ms and cancellation
 feedback within one second on a recorded reference machine; network completion
-is not subject to those timings. These are acceptance targets requiring approval
-and measurement, not current performance claims or hard document-size limits.
+is not subject to those timings. These are approved acceptance targets requiring
+measurement, not current performance claims or hard document-size limits.
 Larger/unsupported content remains preserved with an explicit usable source
 fallback; no silent truncation is allowed.
 
@@ -129,18 +133,19 @@ Cargo directly under the existing approved exception. Documentation-only RFC
 authoring validates links, front matter, examples, consistency and Git diff;
 it does not claim runtime tests or native journey evidence.
 
-## Suggested dependency order after review
+## Next planning steps
 
-First resolve product scope and editor/runtime feasibility, then approve the
-three RFCs and corresponding source amendments. Refresh this branch against
-main after Wave 02 settles and audit actual APIs, transport and fixture evidence.
+Resolve the remaining editor/runtime feasibility gates. Refresh this branch
+against main after Wave 02 settles and audit actual APIs, transport and fixture
+evidence against the approved contracts.
 Then author the Wave 03 document with its ordered Cycles, entry/exit gates and
 one Manyhands ticket per Cycle before each implementation plan. Do not infer
 that early RFC authoring authorizes implementation or makes Wave 02 complete.
 
 Runtime/adapter contracts should precede front-end integration; independent
-desktop layout and read-only CLI work can be planned once their contracts are
-approved. Editor fidelity and recovery must be proved before polishing rich
-interactions. End-to-end/native evidence should accumulate throughout the Wave
+desktop layout and read-only CLI work now have approved RFC contracts.
+Individual Cycles still require planning and authorization. Editor fidelity
+and recovery must be proved before polishing rich interactions.
+End-to-end/native evidence should accumulate throughout the Wave
 rather than wait for its final Cycle. Exact Cycle allocation is intentionally
 left to subsequent Wave planning after these risks are resolved.

@@ -197,6 +197,35 @@ inaccessible, renamed, unrecognized, and unmaterialized contexts remain locally
 preserved and appear as recovery problems. A poll never pushes, checkpoints,
 merges, rebases, stashes, overwrites, discards, or cleans up state.
 
+## Approved Wave 03 Persistence Extensions
+
+The product owner approved these extensions on 2026-10-05 through the
+[desktop](desktop-information-architecture-and-editor.md),
+[CLI](cli-contract.md) and [runtime](application-runtime-and-polling.md) RFCs.
+They are Wave 03 obligations, not claims about the existing schema or APIs.
+
+Explicit user pause remains durable repository policy. Desktop unlock
+suspension is session state and MUST NOT overwrite that policy. The desktop
+owns its background worker; no process-heartbeat registry, poller election or
+cross-process due-slot schema is required. Existing leases and reservations
+continue to protect repository operations.
+
+Recoverable editor drafts live in versioned, owner-protected application-local
+files outside SQLite and operation journals. They retain the source/base text
+needed for recovery, never credentials, and follow the desktop RFC's atomic
+write, flush, restore and explicit-discard rules. They are not canonical item
+state. Index rebuild and registration removal MUST NOT delete them; successful
+save retires only the draft revision proved checkpointed.
+
+CLI mutations persist non-secret request identity, semantic-input digest where
+appropriate, target observations, operation linkage and completed effects.
+Confirmation records bind the exact previewed action and observed effects and
+expire as specified by the CLI RFC. Neither record stores Markdown bodies,
+private-key material, passphrases or passphrase-derived digests. Request replay
+must reconcile Git/canonical state; cache loss that prevents safe replay returns
+recovery-required rather than silently repeating an effect. These records do
+not replace the repository lease or make SQLite authoritative.
+
 ## Wave 1 Acceptance
 
 Wave 1 persistence work is complete when real temporary repositories show that:
