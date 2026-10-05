@@ -337,12 +337,13 @@ after receive-pack. No raw server detail is a public recovery value.
 
 ## Final Verification And Handoff
 
-Completed locally on Rust revision `753bb72`: all four required gates passed,
-581 tests including 27 fixture and 45 transport cases, no failures or ignored
-tests. CLI smoke passed; desktop startup succeeded on an active display before
-deliberate Ctrl-C. Whole-branch review and scoped endpoint-fix review are complete;
-all findings are resolved. Native execution remains pending authorized CI, as
-recorded in Task 2 and the Cycle's final verification table.
+Latest full local verification on Rust revision `2061b0c`: all four required gates
+passed, 582 tests including 28 fixture and 45 transport cases, no failures or
+ignored tests. CLI smoke passed; desktop startup succeeded on an active display
+before deliberate Ctrl-C. Whole-branch and scoped fix reviews are complete; all
+findings are resolved. Authorized PR #9 is open. Both Linux and both Windows
+targets passed on `696a036` in native run 37383857982; intermittent macOS assertions
+remain under investigation. The Cycle records current evidence and pending gates.
 
 Run from the ticket worktree:
 

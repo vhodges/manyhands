@@ -157,11 +157,11 @@ Each includes the potential rework or user cost if the decision proves wrong.
 
 ## Final Local Verification
 
-Final Rust revision: `753bb72`. All four required Devenv commands passed:
+Latest fully verified local Rust revision: `2061b0c`. All four required Devenv commands passed:
 `cargo check --all-features --locked`, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features --locked -- -D warnings`, and
-`cargo test --all-features --locked`. The full suite passed 581 tests, including
-86 library tests, 27 real SSH fixture cases, 45 real transport cases, and nine
+`cargo test --all-features --locked`. The full suite passed 582 tests, including
+86 library tests, 28 real SSH fixture cases, 45 real transport cases, and nine
 documentation tests, with no failures or ignored tests. Full local log:
 `/tmp/manyhands-cycle03-final-tests.log`.
 
@@ -174,107 +174,70 @@ documentation tests, with no failures or ignored tests. Full local log:
 | Privacy | Raw stdout/stderr scanned before filtering; populated DB/WAL/backups/journal/Git state scanned. Temporary stdout, stderr, and retained-WAL-backup secret injections each failed safely; mutations removed and clean cases passed. |
 | Stalled transport | Exact 10,000/30,000 ms settings verified. Handshake/authentication/advertisement/transfer stalls returned at about 30 seconds; delayed command acknowledgment plus cleanup took about 45 seconds. A progressing transfer succeeded after 42.093 seconds. DNS, multiple address attempts, and cleanup remain outside a total deadline guarantee. |
 | Regression and frontends | All required gates passed. CLI smoke exited zero on the final Rust revision. Desktop launched on an active display without startup errors and remained running until deliberate Ctrl-C (intentional exit 1); endpoint fixes did not change startup wiring. |
-| Native platforms | Pending. The five-target workflow includes the new tests, but no new native CI run has been published. Linux x86-64 local evidence does not establish Linux ARM64, Windows x86-64/ARM64, or macOS ARM64 acceptance. |
+| Native platforms | Both Linux and both Windows targets passed on `696a036` in run 37383857982. macOS ARM64 remains unresolved; see the native CI evidence below. |
 
-Implementation is ready for publication review. No push, PR, merge, ticket
-closure, or worktree cleanup has been performed. Native CI remains an explicit
-exit gate; the ticket stays open. The execution ledger and review reports remain
-in the ticket worktree for continuation.
+PR #9 is open. Native macOS CI remains an explicit exit gate; the ticket stays
+open. No merge, ticket closure, or worktree cleanup has been performed. The
+execution ledger and review reports remain in the ticket worktree.
 
 ## Publication And Native CI Follow-up
 
 The user authorized push/PR on 2026-10-05. [PR #9](https://github.com/vhodges/manyhands/pull/9)
-preserves the original remote checkpoint with merge `5519991`; the resulting
-file tree was verified identical to reviewed `d5deb20`.
+preserves the original remote checkpoint with merge `5519991`; its file tree
+was verified identical to reviewed `d5deb20`. No force push was used.
 
-[Initial native run](https://github.com/vhodges/manyhands/actions/runs/37373092577)
-passed macOS ARM64 and Linux ARM64. Linux x86-64 was cancelled before execution;
-both Windows jobs failed setup because standalone Git builtin aliases were absent.
-Reviewed fix `c9c3dc3` supports fixed Git builtin commands as a test-only fallback.
-Its real SSH regression checks advertisement, push OID, command restrictions,
-helper cleanup, and repository removal. Independent scoped review approved it
-without findings. All four required local gates passed again: 582 tests, including
-28 fixture and 45 transport cases, no failures or ignored tests. Production
-startup wiring is unchanged, so the recorded frontend smokes still apply.
+Reviewed native compatibility corrections:
 
-Additional ruling: resolve Git once and use fixed builtin subcommands when
-standalone helpers are absent, preserving standalone preference, the exact SSH
-allowlist, separate owned repository arguments, and no shell. Potential cost if
-wrong: revise the test helper discovery/invocation boundary.
+- `c9c3dc3`: resolve Git once and support fixed upload-pack/receive-pack builtins
+  when standalone aliases are absent. A real SSH regression covers advertisement,
+  push OID, command restrictions, cleanup, and repository removal.
+- `fee629d`: preserve native Windows Perl/OpenSSL instead of prepending Git's
+  MSYS tool directory; probe native Perl and IPC::Cmd before building.
+- `ee8153e`: compare platform-dependent credential enums with lossless i64
+  widening and scope the Unix-only Read import correctly. Preserve dependency
+  caches after failed jobs without changing locked keys or skipping checks.
 
-Native acceptance remains pending a complete run on this amended revision.
+Each correction received independent scoped review without outstanding findings.
+Both Linux and both Windows targets passed build, tests, and artifact upload in
+[run 37380377825](https://github.com/vhodges/manyhands/actions/runs/37380377825),
+and passed again on `696a036` in
+[run 37383857982](https://github.com/vhodges/manyhands/actions/runs/37383857982).
+Windows helper packaging, native toolchain selection, and ABI corrections have
+native runtime evidence.
 
-### Windows Toolchain And Intermittent macOS Follow-up
+macOS has intermittently failed three strict assertions: the withheld receive
+status in disconnect_after_receive, KeyRejected in reconnect_key_policy, and
+UnlockFailed in renewed_rejection_evicts_secret. In the latest run, the first
+reconnect-policy checks passed before renewed rejection failed. Earlier native
+macOS runs and local repetitions passed, but no root cause is established.
+Passing reruns alone are not accepted as an explanation or fix.
 
-CI follow-up after run 37375603743: Linux x86-64/ARM64 passed. Both Windows
-jobs passed helper provisioning but failed vendored OpenSSL configuration because
-the workflow's Git usr/bin override selected incompatible MSYS Perl. Workflow-only
-fix fee629d removes that override, preserves native OpenSSL, and probes native
-Perl/IPC::Cmd early. Independent scoped review approved it without findings.
+Reviewed diagnostic commits `5ca6680`, `be1bd82`, and `2061b0c` preserve every assertion
+and report fixed numeric outcome, operation-phase, server-authentication, helper,
+and linked-backend observations. Controlled injected failures exercised the
+diagnostic branches and retained the expected assertion failures; mutations were
+removed. The macOS-only probe added in `0d4eed0` runs exact cases in fresh
+invocations after the unchanged full suite and stops on the first failure.
+Shared cfg(test) transfer/backend instrumentation in `2061b0c` records numeric
+return categories and backend code/class/authentication flags before caller
+assertions. Independent review found no issues; all four local gates passed with
+582 tests. The probe now covers all three observed cases, at most 30 triples,
+stopping immediately on a failure. This gathers evidence without claiming a
+behavioral fix.
 
-macOS failed disconnect_after_receive at the withheld-status assertion before
-remote-result checks. Observation 189 was a panic source line, not a backend
-error. Thirty isolated local repetitions passed. No root cause is established.
-Diagnostic-only 5ca6680 preserves every assertion and captures the withheld flag
-before logging fixed numeric outcome/helper/ref-match categories. A controlled
-failure proved the diagnostic branch while retaining the assertion. Independent
-review approved the instrumentation without findings.
+Additional implementation rulings and potential costs:
 
-All four required local gates pass on 5ca6680: 582 tests, including 28 fixture
-and 45 transport cases, no failures or ignored tests. Full log remains
-/tmp/manyhands-cycle03-final-tests.log; previous runs are preserved separately.
+10. Prefer resolved standalone Git helpers, with fixed builtin fallback, exact
+    owned repository arguments, and no shell. Cost: revise the fixture discovery
+    or invocation boundary.
+11. Collect numeric-only phase evidence and preserve immediately captured failed
+    conditions. Cost: revise test instrumentation; diagnostics do not prove a fix.
+12. Preserve compiled dependency caches after failed native jobs. Cost: clear or
+    revise cache policy; cached dependencies never constitute acceptance results.
+13. Repeat affected macOS cases in a bounded probe after the full suite, failing
+    immediately on an error. Cost: extra CI time or revision/removal of the
+    investigative step once sufficient evidence is available.
 
-Ruling: collect numeric-only phase evidence while preserving the immediately
-captured failed condition. Potential cost if wrong: revise test instrumentation.
-This is not a behavioral fix or proof that the intermittent failure is resolved.
-
-Run 37377199859 on fee629d passed macOS and Linux ARM64 before instrumentation;
-Windows build and Linux x86-64 results are still pending at this checkpoint.
-A passing rerun is non-reproduction, not a root-cause explanation. Native
-acceptance and the intermittent macOS concern remain explicitly tracked.
-
-Follow-up revision ee8153e corrects Windows credential-type test comparisons
-with lossless i64 widening, preserving exact equality, and scopes the Unix-only
-Read import correctly. Both Windows architectures in run 37377199859 reached
-this same test-compilation failure after successful release builds; all three
-non-Windows jobs passed. Independent review approved the correction and the
-authorized cache-on-failure setting without findings. All four required local
-gates passed on ee8153e: 582 tests, no failures or ignored tests.
-
-Additional ruling: preserve compiled dependency caches after failed native jobs
-using the action's supported option. Lockfile/toolchain keys and every test stay
-in place. Potential cost if wrong: clear or revise the cache policy; cached
-dependencies never constitute a passing test result.
-
-The next native run must verify Windows compilation/runtime and the diagnostic
-revision. The earlier macOS failure remains unexplained despite subsequent
-passes; numeric instrumentation provides evidence if it recurs.
-
-### Native Windows Evidence And macOS Phase Probe
-
-Native run 37380377825 on f8c834c passed both Linux targets. Both Windows
-architectures passed release build, credential/SSH tests, and artifact upload;
-Windows ARM64 cache finalization was still running when evidence was collected.
-The reviewed helper, native Perl, and credential ABI corrections now have native
-Windows runtime evidence.
-
-macOS failed earlier in reconnect_key_policy, observation 234 identifying the
-strict KeyRejected assertion. This prevented the prior lost-response diagnostics
-from running. There is still no confirmed common root cause.
-
-Reviewed commits 0d4eed0 and be1bd82 add a bounded macOS probe of both exact cases
-and test-only numeric phase evidence: fixed typed outcome categories, existing
-operation hooks, server authentication/connection counts, helper counts, and
-linked libgit2 version/features. Assertions and protocol behavior remain intact.
-A controlled early reconnect failure validated the diagnostic branch and retained
-the assertion failure; the mutation was removed. All four required local gates
-passed on be1bd82: 582 tests, no failures or ignored tests. Independent review
-found no issues.
-
-Ruling: repeat both exact macOS cases in fresh invocations after the unchanged
-full suite, at most 30 pairs, and stop on the first failure. Potential cost if
-wrong: extra CI time or revision/removal of the investigative step. This cannot
-turn failures into a pass by retrying and makes no behavioral fix claim.
-
-Next publication carries the reviewed evidence-gathering changes. Native macOS
-acceptance remains unresolved; ticket stays open, with no merge or cleanup.
+Detailed checkpoints, individual run outcomes, and review evidence are retained
+in the ticket comments and execution ledger. Native macOS acceptance remains
+unresolved; merge, closure, and cleanup are not authorized by PR publication.

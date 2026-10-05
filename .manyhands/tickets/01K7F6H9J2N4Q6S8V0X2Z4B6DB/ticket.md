@@ -60,5 +60,6 @@ validation, rejection-driven session eviction, and native encrypted Ed25519 use.
 Post-transfer failure recovery belongs to subsequent lifecycle Cycles.
 
 Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) is open. Native
-CI follow-up fixes and an unexplained intermittent macOS lost-response assertion
-are tracked in the Cycle and comments. Windows native acceptance remains pending.
+CI follow-up corrections passed both Linux and both Windows targets on `696a036`
+in run 37383857982. Intermittent macOS transfer/rejection assertions remain
+unresolved and are tracked in the Cycle and comments. The ticket remains open.
