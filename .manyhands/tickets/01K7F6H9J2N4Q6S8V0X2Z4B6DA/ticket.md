@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DA"
 title: "Wave 02 Cycle 02: Generated Keys And Session Unlock"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -46,12 +46,15 @@ recovery.
 
 All seven implementation tasks are complete and passed independent task review.
 The local Devenv check, formatting, Clippy, and all-feature tests passed
-(478 tests, zero failures/ignored). CLI and interactive desktop smoke tests passed.
+(480 tests, zero failures/ignored). CLI and interactive desktop smoke tests passed.
 The implementation plan and checkpoint comments record detailed evidence.
 
 Independent whole-branch code review is approved after two test-only fixes
 (portable canonical-path expectations and secret-free assertion failures).
-The amended tree passed all 478 tests and required checks; the symlinked-temp
-regression also passed. Native Windows, macOS, and Linux ARM runtime checks
-remain pending until the new CI jobs execute. Keep this ticket open
-until the required review/platform evidence and authorized integration are complete.
+The amended tree passed all 480 tests and required checks; the symlinked-temp
+regression also passed. Native release builds and credential tests passed on
+Linux x86-64/ARM64, Windows x86-64/ARM64, and macOS ARM64 in
+[CI run 37331922078](https://github.com/vhodges/manyhands/actions/runs/37331922078).
+
+The user approved merging [PR #8](https://github.com/vhodges/manyhands/pull/8).
+This ticket is closed in the final pre-merge update after review and verification.
