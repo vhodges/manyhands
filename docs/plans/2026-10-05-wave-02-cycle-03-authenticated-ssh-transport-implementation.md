@@ -81,14 +81,14 @@ closure, and worktree cleanup remain separate authorization/lifecycle stages.
 | `src/repository.rs` | Module export and shared SSH eligibility (Task 1); trust marker before corrupt-registry replacement (Task 3). |
 | `src/repository/transport/{trust,callbacks}.rs` | Pin persistence and callback policy (Task 3). |
 | `src/repository/discovery.rs` | Host-pin migration call (Task 3). |
-| `src/repository/transport/operation.rs` | Session/connection driver (Task 4). |
+| `src/repository/transport/{operation,remote}.rs` | Session/connection flow and scoped transfer adapter (Task 4). |
 | `src/repository/keys/session.rs` | Non-secret cache-presence query and typed unlock reason (Task 4). |
 | `tests/support/ssh_remote.rs`, `tests/support/ssh_server.rs`, `tests/support/ssh_harness.rs` | Disposable SSH fixture ownership, restricted session/helper relay, and custom-main runner (Task 2). |
 | `src/runtime.rs`, `src/lib.rs`, `src/main.rs`, `src/bin/manyhands-cli.rs` | Safe pre-thread timeout bootstrap and startup wiring (Task 2). |
 | `tests/ssh_fixture.rs`, `tests/ssh_transport.rs` | Fixture and public-operation evidence (Tasks 2–5). |
-| `src/repository/transport/tests.rs` | Private-driver transfer tests using shared fixture (Tasks 3–5). |
+| `src/repository/transport/{tests,operation_tests}.rs` | Private policy/driver tests and dispatchers using the shared fixture (Tasks 3–5). |
 | `tests/ssh_transport/privacy.rs` | Isolated privacy subprocess (Task 5). |
-| `Cargo.toml`, `Cargo.lock`, `.github/workflows/build.yml` | Backend features, test dependencies, native fixture provisioning (Tasks 2, 5). |
+| `Cargo.toml`, `Cargo.lock`, `.github/workflows/build.yml` | Backend features, test dependencies, native fixture provisioning (Tasks 2, 4, 5). |
 
 Order: baseline, Task 1, Task 2, Task 3, Task 4, Task 5. Task 2's fixture is
 independently testable and Task 3's policy tests precede session integration.
@@ -244,8 +244,12 @@ combined checks so recovery-marker and pin changes are checked together.
 
 ## Task 4: Integrate Session Unlock And Scoped Connection Verification
 
-**Files:** create `transport/operation.rs`, `tests/ssh_transport.rs`; modify
-transport/mod.rs, transport/tests.rs, keys/session.rs, tests/session_credentials.rs.
+**Files:** create `transport/operation.rs` (preparation/rechecks/session flow),
+`transport/remote.rs` (scoped adapter and fresh transfer callbacks),
+`transport/operation_tests.rs` (private dispatcher/seam tests),
+`tests/ssh_transport.rs` and scenario modules under `tests/ssh_transport/`; modify
+transport/mod.rs, keys/session.rs, keys/mod.rs, keys/inspection.rs,
+and tests/session_credentials.rs.
 
 **Interfaces:** implement `RepositoryService::verify_ssh_transport` and
 `with_authenticated_remote` with the scoped `AuthenticatedSshRemote` adapter
@@ -262,39 +266,39 @@ keys/session.rs and keys/mod.rs, add `reason` to `UnlockRequest`, and update
 existing constructors/tests. The transport ambiguity path carries the design's
 fixed guidance; existing known-encrypted callers retain `ProtectedKey`.
 
-- [ ] Add real tests for plain and encrypted generated/imported keys; include
+- [x] Add real tests for plain and encrypted generated/imported keys; include
   backend-compatible external RSA PEM. Assert accepted client public identity,
   successful advertisement read, provider call count (zero for plain, one for
   repeated encrypted use), and no verification-side Git mutation.
-- [ ] Add failure tests: absent selection, missing/denied/nonregular source,
+- [x] Add failure tests: absent selection, missing/denied/nonregular source,
   malformed/unsupported key, wrong key, wrong passphrase, cancelled/unavailable
   provider, rejected cached secret, source replacement, new session, and a server
   permitting anonymous auth. Assert typed category, no automatic repeated prompt,
   unchanged registrations/bytes, and an explicit later retry can succeed.
-- [ ] Assert that ambiguous failure calls the provider once with
+- [x] Assert that ambiguous failure calls the provider once with
   `AuthenticationAmbiguous`, including a wrong unencrypted key. The request must
   explain both possible causes; cancellation or rejection cannot prompt again.
-- [ ] Add deterministic seams after preparation, after provider response, and
+- [x] Add deterministic seams after preparation, after provider response, and
   after authenticated connection. Change selection/source/URL/pin at each
   applicable seam and assert the transfer closure invocation count stays zero.
   A provider that performs a registry selection operation must not deadlock.
-- [ ] Run `devenv shell -- cargo test --locked --test ssh_transport --test session_credentials`
+- [x] Run `devenv shell -- cargo test --locked --test ssh_transport --test session_credentials`
   and private transport tests; record intended failures.
-- [ ] Implement prepare/connect/prompt/retry/finalize/use/drop flow with fresh
+- [x] Implement prepare/connect/prompt/retry/finalize/use/drop flow with fresh
   callbacks each connection. Resolve direction-specific endpoint and use the
   exact validated endpoint. Provider runs after failed callbacks are dropped.
   Bound one secret-bearing attempt per operation and cache only backend success.
-- [ ] Distinguish confirmed connection success from failures during remote Git
+- [x] Distinguish confirmed connection success from failures during remote Git
   service startup/advertisement. Test post-authentication advertisement failure:
   no false invalid-passphrase claim and no newly cached unverified secret.
-- [ ] Prove fetch and push through the private driver in fixture repositories
+- [x] Prove fetch and push through the private driver in fixture repositories
   with explicit test refspecs and expected OIDs. Prove that renewed callbacks
   on reconnect use the same selected key and host policy. Do not add public
   production fetch/push or lifecycle APIs.
-- [ ] Test a per-ref push rejection whose top-level Git call succeeds; the
+- [x] Test a per-ref push rejection whose top-level Git call succeeds; the
   adapter must return `PushRejected` and discard server text. Verify callback
   replacement by fetch/push cannot bypass host/key policy or rejection checks.
-- [ ] Rerun to green; record cache/lock/state-preservation evidence and commit
+- [x] Rerun to green; record cache/lock/state-preservation evidence and commit
   `feat: integrate session credentials with authenticated transport`.
 
 ## Task 5: Prove Failure Privacy And Native Compatibility

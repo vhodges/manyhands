@@ -153,7 +153,7 @@ No approval API writes trust without a fresh matching network observation.
 
 The crate-private driver is `with_authenticated_remote<P, T>(&self,
 request: VerifySshTransportRequest, session: &mut SessionCredentials<P>,
-use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_>) -> Result<T, SshTransportError>)
+use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>)
 -> Result<T, SshTransportError>`. Invoke the closure exactly once, after
 authentication and post-connect rechecks, while its `RemoteConnection` remains
 alive. `AuthenticatedSshRemote` is a crate-private scoped adapter, with no raw
@@ -221,7 +221,9 @@ the same user swapping files during a backend path read.
    -> bool` query to the session API so the driver can choose this path without
    exposing or duplicating a secret.
 3. Otherwise try a fresh connection with no passphrase. Plain keys succeed
-   without prompting; unknown/changed host or network failure returns directly.
+   without prompting; unknown/changed host or reliably classified network failure
+   returns directly. Generic SSH failure after observed host/key submission can
+   be indistinguishable from encrypted-key loading, as described below.
 4. If key authentication/loading fails and no secret has been tried, disconnect
    and drop callbacks, then ask the provider once outside callbacks and locks.
    Retry authentication with that supplied secret using `with_passphrase`.
@@ -230,8 +232,9 @@ the same user swapping files during a backend path read.
    Add `UnlockReason::{ProtectedKey, AuthenticationAmbiguous}` and a `reason`
    field to `UnlockRequest`. The ambiguous transport path uses the latter;
    existing known-encrypted-key callers use the former. Supply fixed guidance:
-   "The selected key could not authenticate. It may need a passphrase, or the
-   server may have rejected it. You can supply a passphrase once or cancel."
+   "The SSH connection could not be verified. The key may need a passphrase,
+   the server may have rejected it, or the connection may have failed. You can
+   supply a passphrase once or cancel."
    This carries the approved explanation to future front ends without adding UI.
 5. A repeated credential request, failed backend authentication, source change,
    cancelled unlock, or unavailable provider ends this attempt. Cached-secret
@@ -243,6 +246,16 @@ the same user swapping files during a backend path read.
 7. Recheck prepared state and finalize any approved pin. Invoke the operation
    closure once through the scoped adapter. Keep callbacks and the secret borrow
    alive until the connection ends; never return them or a raw Remote to callers.
+
+Runtime evidence: the locked backend maps encrypted-key loading failures to
+GenericError/Ssh, also possible after authentication during service startup.
+With no typed callback failure, an observed host and selected-key submission,
+that generic category may trigger the one ambiguity-aware prompt if no secret
+has been tried. Failures before key submission or reliably classified host/
+network failures do not prompt. After a supplied secret, retain
+TransportUnavailable when the phase remains ambiguous; do not falsely claim
+UnlockFailed. Real tests cover encrypted success, wrong secret, and failed
+advertisement with exact prompt counts and no unconfirmed cache entry.
 
 `connect_auth` also starts the Git service and reads its advertisement. A failure
 there may occur after SSH authentication. Do not infer authentication success
