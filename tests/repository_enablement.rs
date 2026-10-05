@@ -471,6 +471,68 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
                 .unwrap()
                 == "root_path"
         });
+    let shared_ssh_key_columns = connection
+        .prepare("PRAGMA table_info(shared_ssh_keys)")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let private_key_path_is_unique = connection
+        .prepare("PRAGMA index_list(shared_ssh_keys)")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        })
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|(_, unique)| *unique == 1)
+        .any(|(index, _)| {
+            connection
+                .prepare(&format!("PRAGMA index_info({index})"))
+                .unwrap()
+                .query_row([], |row| row.get::<_, String>(2))
+                .unwrap()
+                == "private_key_path"
+        });
+    let selected_index = connection
+        .prepare("PRAGMA index_list(shared_ssh_keys)")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|(name, _, _)| name == "shared_ssh_keys_one_selected_idx")
+        .unwrap();
+    let selected_index_column: String = connection
+        .prepare("PRAGMA index_info(shared_ssh_keys_one_selected_idx)")
+        .unwrap()
+        .query_row([], |row| row.get(2))
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO shared_ssh_keys (
+                    id, label, ownership, private_key_path, private_source_state,
+                    public_metadata_state, selected
+                ) VALUES (NULL, 'Missing ID', 'imported', '/keys/missing-id', 'available', 'not-provided', 0)",
+                [],
+            )
+            .is_err()
+    );
 
     assert_eq!(
         tables,
@@ -484,6 +546,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "problems",
             "registry_migrations",
             "repositories",
+            "shared_ssh_keys",
         ]
     );
     assert_eq!(
@@ -498,6 +561,204 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
         ]
     );
     assert!(root_path_is_unique);
+    assert_eq!(
+        shared_ssh_key_columns,
+        [
+            ("id".to_owned(), "TEXT".to_owned(), 1, None, 1),
+            ("label".to_owned(), "TEXT".to_owned(), 1, None, 0),
+            ("ownership".to_owned(), "TEXT".to_owned(), 1, None, 0),
+            ("private_key_path".to_owned(), "TEXT".to_owned(), 1, None, 0),
+            ("public_key_path".to_owned(), "TEXT".to_owned(), 0, None, 0),
+            (
+                "public_key_fingerprint".to_owned(),
+                "TEXT".to_owned(),
+                0,
+                None,
+                0
+            ),
+            (
+                "private_source_state".to_owned(),
+                "TEXT".to_owned(),
+                1,
+                None,
+                0
+            ),
+            (
+                "public_metadata_state".to_owned(),
+                "TEXT".to_owned(),
+                1,
+                None,
+                0
+            ),
+            (
+                "selected".to_owned(),
+                "INTEGER".to_owned(),
+                1,
+                Some("0".to_owned()),
+                0
+            ),
+        ]
+    );
+    assert!(private_key_path_is_unique);
+    assert_eq!(
+        selected_index,
+        ("shared_ssh_keys_one_selected_idx".to_owned(), 1, 1)
+    );
+    assert_eq!(selected_index_column, "selected");
+
+    for (id, private_key_path, selected) in [
+        ("key-one", "/keys/one", 1),
+        ("key-two", "/keys/two", 0),
+        ("key-three", "/keys/three", 0),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO shared_ssh_keys (
+                    id, label, ownership, private_key_path, private_source_state,
+                    public_metadata_state, selected
+                ) VALUES (?1, 'Key', 'imported', ?2, 'available', 'not-provided', ?3)",
+                (id, private_key_path, selected),
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO shared_ssh_keys (
+                id, label, ownership, private_key_path, private_source_state,
+                public_metadata_state
+            ) VALUES ('key-default', 'Default', 'generated', '/keys/default', 'missing', 'not-provided')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT selected FROM shared_ssh_keys WHERE id = 'key-default'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    let private_source_states = ["available", "missing", "unavailable"];
+    let public_metadata_states = ["not-provided", "available", "unavailable"];
+    for private_source_state in private_source_states {
+        for public_metadata_state in public_metadata_states {
+            let id = format!("key-{private_source_state}-{public_metadata_state}");
+            let private_key_path = format!("/keys/{id}");
+            connection
+                .execute(
+                    "INSERT INTO shared_ssh_keys (
+                        id, label, ownership, private_key_path, private_source_state,
+                        public_metadata_state, selected
+                    ) VALUES (?1, 'Allowed states', 'imported', ?2, ?3, ?4, 0)",
+                    (
+                        id,
+                        private_key_path,
+                        private_source_state,
+                        public_metadata_state,
+                    ),
+                )
+                .unwrap();
+        }
+    }
+    for private_source_state in private_source_states {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM shared_ssh_keys
+                     WHERE label = 'Allowed states' AND private_source_state = ?1",
+                    [private_source_state],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            public_metadata_states.len() as i64
+        );
+    }
+    for public_metadata_state in public_metadata_states {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM shared_ssh_keys
+                     WHERE label = 'Allowed states' AND public_metadata_state = ?1",
+                    [public_metadata_state],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            private_source_states.len() as i64
+        );
+    }
+    for (id, ownership, private_source_state, public_metadata_state, selected) in [
+        (
+            "key-invalid-ownership",
+            "unknown",
+            "available",
+            "not-provided",
+            0,
+        ),
+        (
+            "key-invalid-private-source-state",
+            "imported",
+            "unknown",
+            "not-provided",
+            0,
+        ),
+        (
+            "key-invalid-public-metadata-state",
+            "imported",
+            "available",
+            "unknown",
+            0,
+        ),
+        (
+            "key-invalid-selected",
+            "imported",
+            "available",
+            "not-provided",
+            2,
+        ),
+    ] {
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO shared_ssh_keys (
+                    id, label, ownership, private_key_path, private_source_state,
+                    public_metadata_state, selected
+                ) VALUES (?1, 'Invalid', ?2, ?3, ?4, ?5, ?6)",
+                    (
+                        id,
+                        ownership,
+                        format!("/keys/{id}"),
+                        private_source_state,
+                        public_metadata_state,
+                        selected,
+                    ),
+                )
+                .is_err()
+        );
+    }
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO shared_ssh_keys (
+                id, label, ownership, private_key_path, private_source_state,
+                public_metadata_state, selected
+            ) VALUES ('key-four', 'Key', 'imported', '/keys/four', 'available', 'not-provided', 1)",
+                [],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO shared_ssh_keys (
+                id, label, ownership, private_key_path, private_source_state,
+                public_metadata_state, selected
+            ) VALUES ('key-five', 'Key', 'imported', '/keys/one', 'available', 'not-provided', 0)",
+                [],
+            )
+            .is_err()
+    );
 
     for (root_path, refresh_required) in [("/repository/zero", 0), ("/repository/one", 1)] {
         connection

@@ -1206,6 +1206,27 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
               ",
         )
         .map_err(RepositoryError::sqlite)?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS shared_ssh_keys (
+                id TEXT PRIMARY KEY NOT NULL,
+                label TEXT NOT NULL,
+                ownership TEXT NOT NULL CHECK (ownership IN ('imported', 'generated')),
+                private_key_path TEXT NOT NULL UNIQUE,
+                public_key_path TEXT,
+                public_key_fingerprint TEXT,
+                private_source_state TEXT NOT NULL CHECK (
+                    private_source_state IN ('available', 'missing', 'unavailable')
+                ),
+                public_metadata_state TEXT NOT NULL CHECK (
+                    public_metadata_state IN ('not-provided', 'available', 'unavailable')
+                ),
+                selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS shared_ssh_keys_one_selected_idx
+                ON shared_ssh_keys(selected) WHERE selected = 1;",
+        )
+        .map_err(RepositoryError::sqlite)?;
     let has_index_operations = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_operations')",

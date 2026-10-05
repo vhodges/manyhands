@@ -2592,6 +2592,100 @@ const CYCLE_02_REPOSITORIES_SCHEMA: &str = "
     );
 ";
 
+const PRE_CYCLE_01_REGISTRY_SCHEMA: &str = "
+    CREATE TABLE repositories (
+        id INTEGER PRIMARY KEY,
+        root_path TEXT NOT NULL UNIQUE,
+        enabled_at INTEGER NOT NULL,
+        accessibility TEXT NOT NULL,
+        config_blob_oid TEXT,
+        refresh_required INTEGER NOT NULL CHECK (refresh_required IN (0, 1))
+    );
+    CREATE TABLE contexts (
+        id INTEGER PRIMARY KEY,
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        branch TEXT,
+        worktree_path TEXT NOT NULL,
+        item_id TEXT,
+        head_oid TEXT,
+        UNIQUE(repository_id, worktree_path)
+    );
+    CREATE TABLE discovered_items (
+        id INTEGER PRIMARY KEY,
+        context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+        item_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        canonical_path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        ticket_type TEXT,
+        status TEXT,
+        project TEXT,
+        team TEXT,
+        closed_at INTEGER,
+        activity_at INTEGER NOT NULL,
+        activity_source TEXT NOT NULL,
+        UNIQUE(context_id, item_id)
+    );
+    CREATE TABLE discovered_comments (
+        id INTEGER PRIMARY KEY,
+        item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+        comment_id TEXT NOT NULL,
+        parent_comment_id TEXT,
+        canonical_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(item_id, comment_id)
+    );
+    CREATE TABLE problems (
+        id INTEGER PRIMARY KEY,
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        context_id INTEGER REFERENCES contexts(id) ON DELETE CASCADE,
+        path TEXT,
+        code TEXT NOT NULL,
+        guidance TEXT NOT NULL,
+        observed_at INTEGER NOT NULL
+    );
+    CREATE TABLE configuration_observations (
+        repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+        state TEXT NOT NULL,
+        primary_branch TEXT,
+        publication_remote TEXT,
+        invalid_code TEXT,
+        guidance TEXT
+    );
+    CREATE INDEX contexts_repository_id_idx ON contexts(repository_id, worktree_path);
+    CREATE INDEX discovered_items_context_id_idx ON discovered_items(context_id, canonical_path);
+    CREATE INDEX discovered_comments_item_id_idx
+        ON discovered_comments(item_id, created_at, comment_id);
+    CREATE INDEX problems_repository_id_idx ON problems(repository_id, context_id, observed_at);
+    CREATE TABLE operation_records (
+        id INTEGER PRIMARY KEY,
+        repository_id INTEGER REFERENCES repositories(id) ON DELETE SET NULL,
+        root_path TEXT NOT NULL,
+        operation_ulid TEXT,
+        action TEXT NOT NULL,
+        target TEXT,
+        item_id TEXT,
+        context_path TEXT,
+        state TEXT NOT NULL,
+        completed_step TEXT,
+        observed_at INTEGER NOT NULL,
+        persisted_context_count INTEGER NOT NULL DEFAULT 0,
+        redacted_error TEXT,
+        index_owner_epoch INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX operation_records_root_path_idx ON operation_records(root_path, observed_at);
+    CREATE UNIQUE INDEX operation_records_root_operation_ulid_idx
+        ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
+    CREATE TABLE operation_record_contexts (
+        operation_record_id INTEGER NOT NULL REFERENCES operation_records(id) ON DELETE CASCADE,
+        worktree_path TEXT NOT NULL,
+        PRIMARY KEY (operation_record_id, worktree_path)
+    );
+    CREATE TABLE registry_migrations (name TEXT PRIMARY KEY);
+    INSERT INTO registry_migrations (name) VALUES ('cycle_05_operation_records');
+";
+
 fn table_exists(connection: &Connection, table: &str) -> bool {
     connection
         .query_row(
@@ -2654,6 +2748,96 @@ fn migration_retains_cycle_02_registration_and_adds_discovery_tables() {
             }
         })
         .unwrap();
+}
+
+#[test]
+fn shared_ssh_key_migration_preserves_pre_cycle_01_registry_schema() {
+    let data = tempfile::tempdir().unwrap();
+    let connection = Connection::open(data.path().join("manyhands.sqlite3")).unwrap();
+    connection
+        .execute_batch(PRE_CYCLE_01_REGISTRY_SCHEMA)
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO repositories (
+                root_path, enabled_at, accessibility, config_blob_oid, refresh_required
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["/pre-cycle-01", 42_i64, "accessible", "config-oid", 1_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let schema_before =
+        service
+            .with_registry_connection_for_testing(|connection| {
+                let registration: (String, i64, String, String, i64) = connection
+                .query_row(
+                    "SELECT root_path, enabled_at, accessibility, config_blob_oid, refresh_required
+                     FROM repositories WHERE root_path = '/pre-cycle-01'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                )
+                .unwrap();
+                assert_eq!(
+                    registration,
+                    (
+                        "/pre-cycle-01".to_owned(),
+                        42,
+                        "accessible".to_owned(),
+                        "config-oid".to_owned(),
+                        1
+                    )
+                );
+                assert!(table_exists(connection, "shared_ssh_keys"));
+                assert_eq!(
+                    connection
+                        .prepare("PRAGMA index_list(shared_ssh_keys)")
+                        .unwrap()
+                        .query_map([], |row| {
+                            Ok((
+                                row.get::<_, String>(1)?,
+                                row.get::<_, i64>(2)?,
+                                row.get::<_, i64>(4)?,
+                            ))
+                        })
+                        .unwrap()
+                        .filter_map(Result::ok)
+                        .find(|(name, _, _)| name == "shared_ssh_keys_one_selected_idx")
+                        .unwrap(),
+                    ("shared_ssh_keys_one_selected_idx".to_owned(), 1, 1)
+                );
+                connection
+                    .prepare(
+                        "SELECT type, name, sql FROM sqlite_master
+                     WHERE sql IS NOT NULL ORDER BY type, name",
+                    )
+                    .unwrap()
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .unwrap()
+                    .collect::<Result<Vec<(String, String, String)>, _>>()
+                    .unwrap()
+            })
+            .unwrap();
+
+    RepositoryService::open_at(data.path()).unwrap();
+
+    let schema_after = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .prepare(
+                    "SELECT type, name, sql FROM sqlite_master
+                     WHERE sql IS NOT NULL ORDER BY type, name",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<(String, String, String)>, _>>()
+                .unwrap()
+        })
+        .unwrap();
+
+    assert_eq!(schema_after, schema_before);
 }
 
 #[test]
