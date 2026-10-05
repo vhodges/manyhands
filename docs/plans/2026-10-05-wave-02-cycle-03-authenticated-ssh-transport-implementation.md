@@ -303,7 +303,8 @@ fixed guidance; existing known-encrypted callers retain `ProtectedKey`.
 
 ## Task 5: Prove Failure Privacy And Native Compatibility
 
-**Files:** create `tests/ssh_transport/privacy.rs`; extend transport tests,
+**Files:** create `tests/ssh_transport/{privacy,failures}.rs` and shared
+`tests/support/ssh_privacy.rs` for raw-output/persistence scanning; extend transport tests,
 SSH fixture and `.github/workflows/build.yml`; update Cycle/design/ticket
 evidence with actual results, leaving unavailable platform gates pending.
 
@@ -311,21 +312,21 @@ evidence with actual results, leaving unavailable platform gates pending.
 boundaries to before auth, after auth/before advertisement, during fetch, and
 after receive-pack. No raw server detail is a public recovery value.
 
-- [ ] Add tests for unavailable loopback endpoint, inaccessible remote repo,
+- [x] Add tests for unavailable loopback endpoint, inaccessible remote repo,
   hostile sideband/rejection text, protocol disconnect, distinct fetch/push host
   pins, and URL rewrite attempts. Before-transfer failures preserve refs,
   FETCH_HEAD, index/worktree/canonical bytes and key state. Post-transfer tests
   inspect actual state and never claim rollback or safe blind push retry.
-- [ ] Add an isolated child privacy scenario with unique correct/incorrect
+- [x] Add an isolated child privacy scenario with unique correct/incorrect
   passphrases, malformed-key markers, private encodings/segments, server text,
   and callback-only username markers. Capture formatted errors, Debug, error
   sources, guidance, stdout/stderr; scan live DB/WAL, backups/journal, and Git
   metadata. Keep private fixtures outside scan roots. Report only fixed failure
   messages, never leaked values or byte diffs.
-- [ ] Run the focused transport tests red/green, then temporarily inject a
+- [x] Run the focused transport tests red/green, then temporarily inject a
   diagnostic leak and a persistence leak to prove the scanner detects each;
   remove mutations and rerun. Record the evidence without secret output.
-- [ ] Extend the existing headless CI test command with `--test ssh_fixture
+- [x] Extend the existing headless CI test command with `--test ssh_fixture
   --test ssh_transport`; keep `--lib` so private-driver tests execute. Preserve
   release builds/artifacts. Require runtime tests on all five native targets;
   do not skip Windows ARM or substitute local-file remotes for SSH proof.
