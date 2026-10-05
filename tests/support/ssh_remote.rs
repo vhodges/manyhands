@@ -53,6 +53,8 @@ pub(super) struct Shared {
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
     pub helpers: AtomicUsize,
+    pub command_path: Mutex<String>,
+    pub commands: Mutex<Vec<Vec<u8>>>,
     pub active_helpers: AtomicUsize,
     pub completed_helpers: AtomicUsize,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
@@ -131,6 +133,8 @@ impl SshRemoteFixture {
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
             helpers: AtomicUsize::new(0),
+            command_path: Mutex::new("/fixture.git".into()),
+            commands: Mutex::new(Vec::new()),
             active_helpers: AtomicUsize::new(0),
             completed_helpers: AtomicUsize::new(0),
             helper_tasks: Mutex::new(Vec::new()),
@@ -204,6 +208,26 @@ impl SshRemoteFixture {
     }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
+    }
+    /// Choose one exact virtual target; helpers always receive the owned repo path.
+    pub fn expect_command_path(&self, path: &str) {
+        assert!(
+            [
+                "fixture.git",
+                "/fixture.git",
+                "~/fixture.git",
+                "~user/fixture.git",
+                "fixture.git?other",
+                "fixture.git#other",
+                "/fixture.git?other",
+                "/fixture.git#other",
+            ]
+            .contains(&path)
+        );
+        *self.shared.command_path.lock().unwrap() = path.into();
+    }
+    pub fn commands(&self) -> Vec<Vec<u8>> {
+        self.shared.commands.lock().unwrap().clone()
     }
     pub fn helper_invocations(&self) -> usize {
         self.shared.helpers.load(Ordering::SeqCst)

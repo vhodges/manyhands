@@ -4,6 +4,29 @@ use super::*;
 use crate::repository::{RepositoryService, keys::*};
 use std::cell::RefCell;
 
+/// Exercise the parser-produced connection spelling against an ephemeral port.
+/// Substitute only authority; never feed the backend-only SCP port syntax back
+/// into the production parser. Path bytes and URL versus SCP form stay intact.
+pub(crate) fn endpoint_connection_at(
+    configured: &str,
+    address: std::net::SocketAddr,
+) -> Result<String, SshTransportErrorKind> {
+    let endpoint = endpoint::parse_ssh_endpoint(configured)?;
+    let username = endpoint.username.as_deref().unwrap();
+    if let Some(rest) = endpoint.connection_url.strip_prefix("ssh://") {
+        let (_, path) = rest.split_once('/').unwrap();
+        Ok(format!("ssh://{username}@{address}/{path}"))
+    } else {
+        let separator = if endpoint.authority.host.contains(':') {
+            "]:"
+        } else {
+            ":"
+        };
+        let (_, path) = endpoint.connection_url.split_once(separator).unwrap();
+        Ok(format!("[{username}@{address}]:{path}"))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Checkpoint {
     Prepared,

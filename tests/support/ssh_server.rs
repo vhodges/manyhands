@@ -177,15 +177,17 @@ impl Handler for Restricted {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let receiving = command == b"git-receive-pack '/fixture.git'";
-        let program = match command {
-            b"git-upload-pack '/fixture.git'" => self.shared.upload.clone(),
-            b"git-receive-pack '/fixture.git'" => self.shared.receive.clone(),
-            _ => {
-                session.channel_failure(id)?;
-                session.close(id)?;
-                return Ok(());
-            }
+        self.shared.commands.lock().unwrap().push(command.to_vec());
+        let path = self.shared.command_path.lock().unwrap().clone();
+        let receiving = command == format!("git-receive-pack '{path}'").as_bytes();
+        let program = if receiving {
+            self.shared.receive.clone()
+        } else if command == format!("git-upload-pack '{path}'").as_bytes() {
+            self.shared.upload.clone()
+        } else {
+            session.channel_failure(id)?;
+            session.close(id)?;
+            return Ok(());
         };
         let Some(channel) = self.channels.remove(&id) else {
             session.channel_failure(id)?;

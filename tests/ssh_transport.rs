@@ -2,6 +2,8 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "ssh_transport/endpoints.rs"]
+mod endpoints;
 #[path = "ssh_transport/failures.rs"]
 mod failures;
 #[path = "ssh_transport/formats.rs"]
@@ -42,6 +44,7 @@ fn main() {
         ),
     ]
     .iter()
+    .chain(endpoints::CASES)
     .chain(session::CASES)
     .chain(transfer::CASES)
     .chain(failures::CASES)

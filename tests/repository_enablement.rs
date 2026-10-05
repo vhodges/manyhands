@@ -1398,6 +1398,16 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         ("ssh", "ssh://git@example.invalid/group/project.git"),
         ("ssh-no-user", "ssh://example.invalid/group/project.git"),
         ("scp", "git@example.invalid:group/project.git"),
+        ("scp-absolute", "git@example.invalid:/group/project.git"),
+        ("scp-home", "git@example.invalid:~/project.git"),
+        ("url-home", "ssh://git@example.invalid/~/project.git"),
+        ("scp-query", "git@example.invalid:project.git?other"),
+        ("scp-fragment", "git@example.invalid:project.git#other"),
+        ("url-query", "ssh://git@example.invalid/project.git?other"),
+        (
+            "url-fragment",
+            "ssh://git@example.invalid/project.git#other",
+        ),
         ("http", "https://example.invalid/group/project.git"),
         ("file", "file:///tmp/project.git"),
         ("local", "/tmp/project.git"),
@@ -1456,7 +1466,16 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         .unwrap();
     stage_configuration(&fixture);
 
-    for name in ["ssh", "ssh-no-user", "scp"] {
+    for name in [
+        "ssh",
+        "ssh-no-user",
+        "scp",
+        "scp-absolute",
+        "scp-home",
+        "url-home",
+        "scp-query",
+        "scp-fragment",
+    ] {
         assert!(matches!(
             service.set_publication_remote(publication_request(&fixture.root, Some(name))),
             Ok(PublicationRemoteOutcome::Changed { .. })
@@ -1488,6 +1507,8 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         "empty-user",
         "ssh-push-http",
         "http-push-ssh",
+        "url-query",
+        "url-fragment",
     ] {
         let error = service
             .set_publication_remote(publication_request(&fixture.root, Some(name)))

@@ -69,6 +69,11 @@ pub(in super::super) fn parse_ssh_endpoint(
 }
 
 fn parse_url_endpoint(rest: &str) -> Result<SshEndpoint, SshTransportErrorKind> {
+    // libgit2 excludes query/fragment suffixes from the SSH service target.
+    // They are unsupported in URLs, while SCP path bytes remain literal.
+    if rest.contains(['?', '#']) {
+        return Err(SshTransportErrorKind::ConfigurationInvalid);
+    }
     let (authority, path) = rest
         .split_once('/')
         .ok_or(SshTransportErrorKind::ConfigurationInvalid)?;
@@ -77,7 +82,7 @@ fn parse_url_endpoint(rest: &str) -> Result<SshEndpoint, SshTransportErrorKind> 
     }
     let (username, host_port) = split_userinfo(authority)?;
     let (host, port) = parse_host_port(host_port)?;
-    endpoint(username, host, port, path)
+    endpoint(username, host, port, path, PathSyntax::Url)
 }
 
 fn parse_scp_endpoint(url: &str) -> Result<SshEndpoint, SshTransportErrorKind> {
@@ -95,7 +100,7 @@ fn parse_scp_endpoint(url: &str) -> Result<SshEndpoint, SshTransportErrorKind> {
         return Err(SshTransportErrorKind::ConfigurationInvalid);
     }
     let host = parse_host(host, true)?;
-    endpoint(username, host, 22, path)
+    endpoint(username, host, 22, path, PathSyntax::Scp)
 }
 
 fn split_scp_authority(url: &str) -> Result<(&str, &str), SshTransportErrorKind> {
@@ -197,11 +202,17 @@ fn parse_host(host: &str, brackets_allowed: bool) -> Result<String, SshTransport
         .ok_or(SshTransportErrorKind::ConfigurationInvalid)
 }
 
+enum PathSyntax {
+    Url,
+    Scp,
+}
+
 fn endpoint(
     username: Option<String>,
     host: String,
     port: u16,
     path: &str,
+    syntax: PathSyntax,
 ) -> Result<SshEndpoint, SshTransportErrorKind> {
     if path.is_empty() {
         return Err(SshTransportErrorKind::ConfigurationInvalid);
@@ -223,7 +234,13 @@ fn endpoint(
     Ok(SshEndpoint {
         authority: SshAuthority { host, port },
         username,
-        connection_url: format!("ssh://{username_prefix}{display_host}{port_suffix}/{path}"),
+        // Preserve path form and bytes: converting relative SCP to an SSH URL
+        // adds a leading slash and selects a different server repository.
+        // Equality deliberately rejects cross-form rewrites conservatively.
+        connection_url: match syntax {
+            PathSyntax::Url => format!("ssh://{username_prefix}{display_host}{port_suffix}/{path}"),
+            PathSyntax::Scp => format!("{username_prefix}{display_host}:{path}"),
+        },
     })
 }
 
@@ -267,7 +284,91 @@ mod tests {
             parse_ssh_endpoint("git@[2001:0db8:0000:0000:0000:0000:0000:0001]:repo").unwrap();
 
         assert_eq!(compressed.authority, expanded.authority);
-        assert_eq!(compressed.connection_url, expanded.connection_url);
+        assert_eq!(expanded.connection_url, "git@[2001:db8::1]:repo");
+        assert!(compressed != expanded);
+    }
+
+    #[test]
+    fn connection_spelling_preserves_repository_path_form() {
+        for (input, expected) in [
+            ("git@EXAMPLE.com:repo.git", "git@example.com:repo.git"),
+            ("git@example.com:/repo.git", "git@example.com:/repo.git"),
+            ("git@example.com:~/repo.git", "git@example.com:~/repo.git"),
+            ("git@example.com:/~/repo.git", "git@example.com:/~/repo.git"),
+            (
+                "git@example.com:~user/repo.git",
+                "git@example.com:~user/repo.git",
+            ),
+            (
+                "ssh://git@example.com/repo.git",
+                "ssh://git@example.com/repo.git",
+            ),
+            (
+                "ssh://git@example.com/~/repo.git",
+                "ssh://git@example.com/~/repo.git",
+            ),
+            (
+                "ssh://git@example.com/~user/repo.git",
+                "ssh://git@example.com/~user/repo.git",
+            ),
+        ] {
+            assert_eq!(parse_ssh_endpoint(input).unwrap().connection_url, expected);
+        }
+        let relative = parse_ssh_endpoint("git@example.com:repo.git").unwrap();
+        let absolute = parse_ssh_endpoint("ssh://git@example.com/repo.git").unwrap();
+        assert!(relative != absolute);
+    }
+
+    #[test]
+    fn url_delimiters_are_rejected_but_scp_delimiters_are_literal() {
+        for suffix in ["?other", "#other", "?", "#"] {
+            assert!(matches!(
+                parse_ssh_endpoint(&format!("ssh://git@example.com/repo.git{suffix}")),
+                Err(SshTransportErrorKind::ConfigurationInvalid)
+            ));
+            let scp = format!("git@example.com:repo.git{suffix}");
+            assert_eq!(parse_ssh_endpoint(&scp).unwrap().connection_url, scp);
+        }
+    }
+
+    #[test]
+    fn path_interpretation_rewrites_are_rejected_in_both_directions() {
+        for direction in [SshDirection::Fetch, SshDirection::Push] {
+            for (from, to) in [
+                ("git@example.com:repo.git", "ssh://git@example.com/repo.git"),
+                ("ssh://git@example.com/repo.git", "git@example.com:repo.git"),
+                ("git@example.com:~/repo.git", "git@example.com:/repo.git"),
+                ("git@example.com:/repo.git", "git@example.com:~/repo.git"),
+                // Cross-form rewrites remain conservatively unsupported even
+                // when this backend would produce the same service target.
+                (
+                    "git@example.com:/repo.git",
+                    "ssh://git@example.com/repo.git",
+                ),
+                (
+                    "git@example.com:~/repo.git",
+                    "ssh://git@example.com/~/repo.git",
+                ),
+            ] {
+                let temp = tempfile::tempdir().unwrap();
+                let repository = Repository::init(temp.path()).unwrap();
+                repository.remote("origin", from).unwrap();
+                let rule = if direction == SshDirection::Fetch {
+                    "insteadOf"
+                } else {
+                    "pushInsteadOf"
+                };
+                repository
+                    .config()
+                    .unwrap()
+                    .set_str(&format!("url.{to}.{rule}"), from)
+                    .unwrap();
+                assert!(matches!(
+                    configured_remote_endpoint(&repository, "origin", direction),
+                    Err(SshTransportErrorKind::ConfigurationInvalid)
+                ));
+            }
+        }
     }
 
     #[test]
@@ -293,6 +394,7 @@ mod tests {
             "ssh://git@%65xample.com/repo",
             "ssh://git@example.com/re po",
             "ssh://git@example.com/re\0po",
+            "[git@example.com:2222]:repo.git",
         ] {
             assert!(
                 matches!(
