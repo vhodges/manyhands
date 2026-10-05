@@ -1,5 +1,9 @@
 use crate::{
-    repository::{RepositoryService, keys::*, transport::*},
+    repository::{
+        RepositoryService,
+        keys::*,
+        transport::{operation_tests::outcome_category, *},
+    },
     ssh_remote::*,
 };
 use std::{
@@ -8,37 +12,6 @@ use std::{
     path::PathBuf,
     rc::Rc,
 };
-
-pub fn outcome_category<T>(outcome: &Result<T, SshTransportError>) -> u128 {
-    match outcome.as_ref().map_err(|error| &error.kind) {
-        Ok(_) => 0,
-        Err(SshTransportErrorKind::TransportUnavailable) => 1,
-        Err(SshTransportErrorKind::RemoteUnavailable) => 2,
-        Err(SshTransportErrorKind::ProtocolFailure) => 3,
-        Err(SshTransportErrorKind::KeyRejected) => 4,
-        Err(SshTransportErrorKind::HostTrustChanged) => 5,
-        Err(SshTransportErrorKind::KeySourceChanged) => 6,
-        Err(SshTransportErrorKind::SelectionChanged) => 7,
-        Err(SshTransportErrorKind::EndpointChanged) => 8,
-        // 9 was the original catch-all; preserve all established category codes.
-        Err(SshTransportErrorKind::ConfigurationInvalid) => 10,
-        Err(SshTransportErrorKind::PublicationRemoteMissing) => 11,
-        Err(SshTransportErrorKind::UsernameRequired) => 12,
-        Err(SshTransportErrorKind::NoSelectedKey) => 13,
-        Err(SshTransportErrorKind::KeyMissing) => 14,
-        Err(SshTransportErrorKind::KeyUnreadable) => 15,
-        Err(SshTransportErrorKind::KeyInvalidOrUnsupported) => 16,
-        Err(SshTransportErrorKind::UnlockCancelled) => 17,
-        Err(SshTransportErrorKind::ProviderUnavailable) => 18,
-        Err(SshTransportErrorKind::UnlockFailed) => 19,
-        Err(SshTransportErrorKind::HostApprovalRequired { .. }) => 20,
-        Err(SshTransportErrorKind::HostReplacementRequired { .. }) => 21,
-        Err(SshTransportErrorKind::HostVerificationUnavailable) => 22,
-        Err(SshTransportErrorKind::RegistryUnavailable) => 23,
-        Err(SshTransportErrorKind::RuntimeUninitialized) => 24,
-        Err(SshTransportErrorKind::PushRejected) => 25,
-    }
-}
 
 pub fn diagnostic_phases() -> (
     crate::repository::transport::operation_tests::HookGuard,

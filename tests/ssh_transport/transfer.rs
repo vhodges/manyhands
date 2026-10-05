@@ -183,17 +183,25 @@ fn transfer_failure_preserves_valid_secret() -> Result<(), FixtureError> {
 fn renewed_rejection_evicts_secret() -> Result<(), FixtureError> {
     let case = Case::new(true)?;
     let (mut session, requests) = session(vec![secret(PASSWORD)]);
-    let error = transfer(
+    let called = Cell::new(0);
+    let (_guard, phases) = diagnostic_phases();
+    let outcome = transfer(
         &case.service,
         case.request(),
         &mut session,
         Transfer::Download,
-        &Cell::new(0),
+        &called,
         || {
             case.fixture.reject_client();
         },
-    )
-    .unwrap_err();
+    );
+    if !outcome
+        .as_ref()
+        .is_err_and(|error| error.kind == SshTransportErrorKind::UnlockFailed)
+    {
+        observe_transport_failure(&case, &outcome, called.get(), &phases);
+    }
+    let error = outcome.unwrap_err();
     assert_eq!(error.kind, SshTransportErrorKind::UnlockFailed);
     assert_eq!(requests.borrow().len(), 1);
     assert!(!session.has_cached_passphrase(&requests.borrow()[0]));
