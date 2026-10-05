@@ -107,6 +107,26 @@ pub(super) fn observe_backend_failure(
         u8::from(attempt.passthrough()),
         u8::from(supplied),
     );
+    if error.class() == git2::ErrorClass::Os {
+        // libgit2 appends strerror(errno), then clears errno. Inspect only fixed
+        // markers; never emit the message (which may contain endpoint data).
+        let message = error.message();
+        let branch = u8::from(message.starts_with("failed to connect to "));
+        let reason = if message.ends_with(": Interrupted system call") {
+            1
+        } else if message.ends_with(": Connection refused") {
+            2
+        } else if message.ends_with(": Bad file descriptor") {
+            3
+        } else if message.ends_with(": Invalid argument") {
+            4
+        } else if message.ends_with(": Too many open files") {
+            5
+        } else {
+            0
+        };
+        println!("SSH_OBSERVATION 512 {branch} {reason}");
+    }
 }
 pub(crate) fn transfer<P: SessionCredentialProvider>(
     service: &RepositoryService,

@@ -117,9 +117,6 @@ jobs:
             throw "Missing release binaries: $($missing -join ', ')"
           }
 
-      - name: Test headless credential and platform contracts
-        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport
-
       - name: Probe macOS SSH reconnect and disconnect ordering
         if: matrix.os == 'macos'
         shell: bash
@@ -133,6 +130,9 @@ jobs:
             cargo test --locked --target "${{ matrix.target }}" --test ssh_transport renewed_rejection_evicts_secret -- --exact
             cargo test --locked --target "${{ matrix.target }}" --test ssh_transport disconnect_after_receive -- --exact
           done
+
+      - name: Test headless credential and platform contracts
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
