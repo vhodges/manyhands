@@ -14,7 +14,7 @@ id: "01M46S07YFTWMB56ZFSS00BKMN"
 
 This draft specifies `manyhands-cli` for people, agents and CI. It implements
 `MH-CLI-001` and the equivalent repository, credential, content, discussion,
-index and collaboration operations in [PRD v0.4](../PRD/mvp.md), subject to the
+index and collaboration operations in [PRD v0.5](../PRD/mvp.md), subject to the
 [architecture RFC](mvp-rfc.md). It requires approval before implementation.
 The [runtime RFC](application-runtime-and-polling.md) owns polling and session
 lifetime; the [desktop RFC](desktop-information-architecture-and-editor.md)
@@ -23,8 +23,9 @@ are in the [review register](wave-03-rfc-review.md).
 
 The CLI is a headless adapter over shared domain services. It runs without a
 display or the `desktop` feature, never launches system Git as its backend,
-and never requires a resident daemon for one-shot commands. A no-argument call
-prints concise help and exits zero, preserving the skeleton smoke-test intent.
+and provides no daemon mode or resident background polling/indexing. A
+no-argument call prints concise help and exits zero, preserving the skeleton
+smoke-test intent.
 
 ## Invocation and target resolution
 
@@ -60,7 +61,7 @@ documented nullable field. Empty strings do not mean clear.
 ## Command taxonomy
 
 `--repo` is required except for `repo list`, `key` commands, `host list`,
-`daemon` commands, `id new` and help/version operations. `--id` selects an item,
+`id new` and help/version operations. `--id` selects an item,
 `--key-id` selects a key, and `--operation-id` selects an operation; their names
 are not interchangeable. Every verb has human and JSON output. Each row lists command-specific inputs;
 IDs, request IDs, observation and consent rules below apply where relevant.
@@ -99,10 +100,9 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization. Unsaved caller files are not implicitly submitted. |
 | `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
 | `index status`, `index refresh`, `index rebuild` | Inspect cache freshness, or local scan/rebuild. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
-| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and runtime readiness; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. |
+| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. Resume never infers permission for a different target/action. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
-| `daemon run`, `daemon status` | Foreground polling for registered repositories, or local status only. No implicit service installation. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
 List ordering is deterministic: repositories by normalized root, documents by
@@ -154,9 +154,8 @@ lifecycle consent. `--json`, `--non-interactive`, or absence of a controlling
 terminal disables all prompts. A JSON command that needs a secret returns
 `unlock_required`; it does not read stdin again or fall back to a key agent.
 For protected keys, interactive one-shot commands unlock for that invocation.
-Per the product-owner decision, an interactive daemon unlocks in its own session
-and must restart to unlock again; no pipe/argument/environment secret channel
-or desktop unlock sharing is included.
+No pipe/argument/environment secret channel or desktop unlock sharing is
+included. There is no resident CLI credential session.
 
 Two-phase confirmation makes automation explicit:
 
@@ -292,7 +291,7 @@ the requested publication action. A normal local save with no sync requested
 returns `0`. A successful list may include nonconforming entries; stale or failed
 requested refresh is incomplete and must be represented separately.
 
-## Conflict, daemon and cancellation behavior
+## Conflict and cancellation behavior
 
 `conflict show` returns operation scope, merge observations and each affected
 path's base/local/remote source and conflict kind. `conflict resolve` takes an
@@ -308,28 +307,24 @@ state and `operation resume` deliberately continues eligible remaining work.
 Neither command stages arbitrary code or treats merely deleting text markers
 as proof that a Git conflict is resolved.
 
-`daemon run --json` is the one streaming exception: stdout is newline-delimited
-v1 event objects with `schema_version`, `event`, `session_id`, increasing integer
-`sequence`, RFC3339 UTC `time` and `data`. Events are `started`, `poll_result`,
-`attention_required`, `stopping`, `stopped`; `poll_result.data` is a normal
-operation envelope. No heartbeats containing source or secrets are emitted.
-`daemon status --json` returns an ordinary one-shot envelope with policy and
-session readiness. JSON daemon mode cannot prompt; protected-key users launch
-human terminal mode and read status in a separate JSON invocation.
+`poll once`, `index refresh` and `index rebuild` complete one explicit operation
+and exit. They do not install a service, launch a child poller or leave a thread
+running after the command completes. `poll status` reports persisted policy and
+observed outcomes; it does not discover or control a desktop process. There is
+no streaming daemon JSON format; every command follows the single-result
+envelope contract. External server/CI scheduling may invoke one-shot commands,
+but resident CLI scheduling is outside the MVP.
 
-Daemon repositories can fail independently without terminating the process.
-Fatal startup failure exits nonzero; a clean requested daemon stop exits zero;
-incomplete drain exits `4`. Ctrl-C for a one-shot operation requests safe-point
-cancellation and exits `130` after the final result when possible. Another forced
-termination is interruption, never evidence of rollback. Platform-native stop
-handling and drain limits follow the runtime RFC.
+Ctrl-C requests safe-point cancellation and exits `130` after the final result
+when possible. Another forced termination is interruption, never evidence of
+rollback. Platform-native stop handling follows the runtime RFC.
 
 ## Alternatives, risks and required evidence
 
 Structured file/stdin input is proposed over large flag sets or an implicit
 editor because it preserves multiline input and explicit concurrency tokens.
 One final JSON object is proposed over streaming all commands because callers
-can inspect a single authoritative outcome. The daemon is explicitly streaming.
+can inspect a single authoritative outcome.
 Noninteractive secret ingestion and credential IPC are excluded by the selected
 session model; this limits protected-key automation and is deliberate.
 
@@ -342,8 +337,11 @@ and altered-request rejection. Verify exact consent bindings, secret redaction,
 unknown/changed hosts, explicit identity, missing keys and non-deletion of
 imported key material.
 
-Run all six PRD journeys with real repositories/SSH transport through the CLI;
-assert Git objects and canonical content, not only output strings. Run daemon
-concurrency/shutdown evidence from the runtime RFC and verify no display or
-desktop dependency is needed. These are future acceptance obligations; the
-current `manyhands-cli` entry point is still an empty scaffold at the draft base.
+Run the explicit CLI counterparts of all six PRD journeys with real repositories
+and SSH transport; assert Git objects and canonical content, not only output
+strings. The background
+journey uses explicit `poll once` to prove the CLI counterpart; automatic
+scheduling is desktop-only. Verify safe cancellation and overlap with a desktop
+operation through the existing domain protocol, no resident worker after exit,
+and no display or desktop dependency. These are future acceptance obligations;
+the current `manyhands-cli` entry point is still an empty scaffold at the draft base.

@@ -113,9 +113,10 @@ Wave 02 does not implement:
 
 - Desktop navigation, prompts, progress display, conflict editor, keyboard
   workflows, or accessibility behavior.
-- CLI command grammar, JSON output, daemon process lifecycle, or resident
-  polling scheduling. Wave 03 invokes the Wave 02 one-shot poll operation at
-  desktop launch and from the CLI daemon.
+- CLI command grammar, JSON output, or resident polling scheduling. Wave 03
+  invokes the Wave 02 one-shot poll operation from a desktop-owned background
+  worker and explicit CLI commands. PRD 0.5 removes CLI daemon mode without
+  changing Wave 02's one-shot operations or repository coordination.
 - OAuth, Git-forge APIs, automatic public-key upload, HTTP(S) publication,
   repository cloning, SSH-agent fallback, or fallback to a user's default key.
 - Filesystem watching, automatic retry scheduling, or a second source of truth
@@ -339,7 +340,7 @@ state; manual-operation priority; clean-only primary/context fast-forwards;
 single materialization of a new recognized context; discovery refresh; and
 visible exceptional state.
 
-**Out of scope:** Resident desktop or CLI-daemon scheduling, automatic retry,
+**Out of scope:** Resident desktop scheduling, automatic retry,
 push, checkpoint, merge, rebase, promotion, closure, and cleanup.
 
 **Exit evidence:** Real remote tests prove clean updates and new-context
@@ -439,16 +440,17 @@ following conditions are met:
 | Polling races a manual lifecycle action | Persist polling state and manual-priority reservation; poll yields or stops only at defined safe points. Prove the ordering with real remote tests. |
 | Remote deletion or malformed state destroys local recovery work | Preserve local worktrees and branches; surface remote observation problems without automatic deletion or overwrite. |
 | Retry duplicates a push, merge, materialization, or cleanup | Record non-secret observed ref and object-ID transitions; reconcile actual Git state before replay; test interruption at each remote lifecycle boundary. |
-| Wave scope leaks into UI or daemon behavior | Keep interfaces, background scheduler ownership, progress presentation, and command contracts in Wave 03. Wave 02 exposes typed domain outcomes only. |
+| Wave scope leaks into UI or background scheduling | Keep interfaces, background scheduler ownership, progress presentation, and command contracts in Wave 03. Wave 02 exposes typed domain outcomes only. |
 | Existing multiple-context wording conflicts with implementation | Approve the shared-branch PRD and RFC amendment in the entry gate; do not implement a hidden alternate branch identity. |
 
 ## Deferred Work
 
 Wave 03 owns desktop information architecture and editor behavior, accessible
 credential and confirmation prompts, interactive conflict resolution,
-progress/cancellation presentation, CLI command and JSON contracts, daemon
-supervision, desktop-launch and daemon polling schedules, and end-to-end
-dogfooding journeys on supported platforms.
+progress/cancellation presentation, CLI command and JSON contracts, desktop
+background polling schedules and worker shutdown, and end-to-end dogfooding
+journeys on supported platforms. CLI resident polling/indexing is deferred
+under PRD 0.5; explicit one-shot CLI polling and index refresh remain in scope.
 
 No Cycle may use a deferred interface or scheduler as a hidden prerequisite. If
 the approved remote protocol or authentication RFC cannot support the required

@@ -31,7 +31,7 @@ Manyhands stores one SQLite database named `manyhands.sqlite3` in the
 operating-system-appropriate application-data directory resolved through
 `directories::ProjectDirs` for application `Manyhands`. The implementation
 MUST enable foreign-key enforcement, use WAL journal mode, and set a bounded
-busy timeout so desktop, CLI, and a CLI daemon can coordinate safely.
+busy timeout so desktop and one-shot CLI operations can coordinate safely.
 
 The database contains application-local state only. It MUST NOT store private
 key data, passphrases, credentials, credential callback values, unredacted
@@ -143,8 +143,8 @@ reconciliation compares a record with actual Git refs, worktrees, commits, and
 canonical files; Git and Markdown state win. A completed commit with a pending
 index refresh is retried as indexing only and never creates a duplicate commit.
 
-Cycle 05 makes cross-process repository coordination mandatory across desktop,
-CLI, and future daemon processes. Each repository-mutating or
+Cycle 05 makes cross-process repository coordination mandatory across desktop
+and CLI processes. Each repository-mutating or
 index-only-refreshing Wave 1 action MUST acquire a repository-scoped exclusive
 advisory lease at the resolved common Git directory. The lease has a fixed
 bounded wait and recoverable busy outcome. Draft preparation and full read-only
@@ -183,7 +183,10 @@ automatic poll time. Polling is enabled by default, uses a five-minute interval,
 accepts an interval from one to sixty minutes, and backs off failed automatic
 polls from one minute exponentially to a fifteen-minute maximum. Manual
 one-shot polls are never delayed by automatic backoff. Wave 2 persists and
-executes one-shot poll behavior; Wave 3 owns launch and daemon scheduling.
+executes one-shot poll behavior; Wave 3 owns scheduling inside the desktop
+process. Per PRD 0.5, the CLI invokes polling/indexing explicitly and has no
+resident mode. No cross-process scheduler election or due-slot protocol is
+required; existing repository-operation leases and reservations remain.
 
 A poll first fetches and records the Git RFC's remote ref set. It may then
 fast-forward only clean, non-conflicted local primary or shared-context branches

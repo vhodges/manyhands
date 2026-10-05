@@ -15,8 +15,10 @@ id: "01M46S07YFKEMG0WX39DQX7C1G"
 This is the review index for Wave 03's proposed RFCs, not a Wave document,
 Cycle plan or implementation approval. The product owner requested early RFC
 authoring while another session implements Wave 02 Cycle 03. This checkout
-does not modify that session's ticket, branch, worktree or approved source
-documents. No Wave 03 Cycle tickets or implementation plans are created yet.
+does not modify that session's ticket, branch or worktree. This planning branch
+includes the product-owner-directed PRD 0.5 scope amendment and matching source
+updates removing CLI resident polling. No Wave 03 Cycle tickets or
+implementation plans are created yet.
 
 Draft base: local `main` at `a21a31aeea5aaf7c03cf7692848ddadb5dde1242`,
 which includes fetched `origin/main` at
@@ -32,7 +34,7 @@ completed implementation or verification.
 | --- | --- |
 | [Desktop information architecture and editor](desktop-information-architecture-and-editor.md) | Navigation, rich-text/source fidelity, drafts, keyboard interactions, consent and conflict presentation. |
 | [CLI contract](cli-contract.md) | Command/input grammar, JSON v1, exits, consent, retry identity and headless workflows. |
-| [Application runtime and polling](application-runtime-and-polling.md) | Shared operation adapters, competing schedulers, process-local credentials and daemon shutdown. |
+| [Application runtime and polling](application-runtime-and-polling.md) | Shared operation adapters, desktop-owned background worker, process-local credentials and safe shutdown. |
 
 The architecture explicitly requires the first two. The third factors out
 decisions that would otherwise be duplicated and potentially contradictory.
@@ -45,11 +47,11 @@ a competing test RFC. All new files remain `draft` pending review.
 | ID | Finding and proposed resolution | State / owner / gate |
 | --- | --- | --- |
 | W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. Carry forward the charter's minor preference for `zorite-editor`, with extraction from Velotype as the alternative. | Product-owner mode direction recorded 2026-10-05; candidate preference comes from the charter. Technical Lead must evaluate pinned candidates for a single compatible GPUI graph, fidelity, host integration and native input before editor Cycle planning. No library selection is approved yet. |
-| W3-02 | Daemon unlock occurs in its own terminal session; restart to unlock again. No desktop credential IPC or secret pipe input. | Product-owner direction recorded 2026-10-05; verify terminal/nonterminal behavior before runtime Cycle exit. |
+| W3-02 | Background polling/indexing runs in a desktop-owned worker. CLI daemon mode is removed; explicit one-shot poll/refresh remains. No separate executable, shared singleton or IPC. | Product-owner clarification adopted in PRD 0.5 on 2026-10-05; supersedes the earlier daemon unlock/restart choice. |
 | W3-03 | A clean worktree can have unsaved in-memory drafts. Propose protected crash-recovery files, base observations and explicit stale-edit review. | Proposed; Product Owner/Technical Lead approval required for persistence scope and crash guarantee before editor planning. |
 | W3-04 | Ticket branches can contain code; resolve canonical Markdown in-app and provide explicit external-tool guidance for other conflicts. | Product-owner direction recorded 2026-10-05. Keep the owned-path boundary and prove safe re-observation after external repair. |
-| W3-05 | Multiple schedulers need atomic due-state recheck plus Wave 02 reservation claim, separate from short local leases. | Proposed; Technical Lead approval and API audit before runtime planning. No replacement of Wave 02 transport protocol. |
-| W3-06 | Session unlock blocking must not become a persisted user pause or prevent another unlocked process from polling. | Proposed; authentication/index refinements required before runtime planning. |
+| W3-05 | Concurrent resident-poller coordination is not required. Remove scheduler election, atomic due-slot claiming and process heartbeat records; retain existing Wave 02 leases/reservations for actual operations. | Resolved by the W3-02 scope clarification. No new scheduler-coordination protocol or test matrix. |
+| W3-06 | Desktop unlock blocking must remain distinct from persisted user pause. Its worker shares the desktop credential session; CLI credentials last one invocation. | Proposed interaction refinement before runtime planning; no cross-process readiness or unlock coordination. |
 | W3-07 | Libgit2 cancellation callbacks do not themselves prove bounded shutdown in every transport phase. Propose ten-second graceful drain budget with visible incomplete recovery. | Feasibility gate; Technical Lead must demonstrate native behavior or approve a cancellation design before runtime implementation. |
 | W3-08 | CLI retries need durable request identity and stable comment IDs; current domain requests do not provide the complete external protocol. | Proposed; CLI/Git/persistence contract review before CLI mutation planning. Cache loss can require explicit recovery. |
 | W3-09 | Repair/adoption, folder creation, identity configuration, key public export and confirmation previews need an API audit. UI controls cannot manufacture safe missing domain behavior. | Technical Lead must map to existing operations or propose narrowly scoped additions in Wave 03 Cycles. |
@@ -62,43 +64,49 @@ Unanswered proposals remain proposals; elapsed review time is not approval.
 
 ## Required source amendments on approval
 
-This branch leaves approved RFCs unchanged while Wave 02 is active. Before
-Wave 03 implementation, approval must adopt the following exact decisions in
-their owning documents and resolve any intervening Wave 02 changes:
+The narrow PRD 0.5 scope amendment and corresponding daemon-removal updates are
+already recorded on this branch at the product owner's direction. They do not
+approve the remaining draft design. Before Wave 03 implementation, approval
+must adopt the following remaining decisions in their owning documents and
+resolve any intervening Wave 02 changes:
 
 | Approved source | Proposed amendment |
 | --- | --- |
-| [Architecture](mvp-rfc.md) | Add shared runtime as the desktop/CLI scheduling authority; add it to the Wave 03 entry dependencies. Preserve every existing consent and single-context rule. |
-| [Repository/index](repository-index-persistence-and-refresh.md) | Add atomic due-and-reserve, separate user pause from session readiness, non-secret runtime session observations, and explicit ownership of draft files outside the rebuildable cache. Define CLI request/confirmation observation records and cache-loss recovery without storing bodies/secrets. |
-| [Authentication](authentication-and-credential-handling.md) | Define process session boundaries and separate unlock suspension from user pause. Specify terminal-only CLI secret input, daemon restart unlock, and absence of cross-process secret transfer. |
+| [Architecture](mvp-rfc.md) | Add shared runtime as the operation-adapter and desktop-worker authority; add it to the Wave 03 entry dependencies. Preserve every existing consent and single-context rule. |
+| [Repository/index](repository-index-persistence-and-refresh.md) | Separate user pause from desktop unlock suspension and define ownership of draft files outside the rebuildable cache. Define CLI request/confirmation observation records and cache-loss recovery without storing bodies/secrets. No resident-poller coordination schema is needed. |
+| [Authentication](authentication-and-credential-handling.md) | Define desktop/worker session sharing and separate unlock suspension from user pause. Specify terminal-only one-shot CLI secret input and absence of cross-process secret transfer. |
 | [Git workflow](git-workflow-and-conflict-recovery.md) | Bind external confirmation/request identity to observed effects and resume only unchanged remaining work. Record W3-04's explicit external-repair/re-observation path without expanding the owned canonical write boundary. |
 | [Canonical schema](canonical-content-and-comment-schema.md) | Clarify that display/repair never changes canonical identity implicitly, unknown metadata values survive edits, and unsupported rich-text constructs preserve source. No schema or ID migration is proposed. |
 | [Test strategy](test-and-compatibility-strategy.md) | Adopt the Wave 03 matrix and acceptance obligations in this register and the three draft RFCs. Preserve all Wave 01/02 evidence. |
 
-No PRD amendment is proposed for the selected editor or terminal-session model.
-If decisions weaken a PRD journey, change supported platforms, introduce ticket
+PRD 0.5 records the selected desktop-only background execution model. No PRD
+amendment is needed for the selected editor. If further decisions weaken a PRD
+journey, change supported platforms, introduce ticket
 reopening or require non-developers to use Git for canonical conflict recovery,
 explicit PRD revision is required rather than a hidden limitation.
 
 ## Proposed Wave 03 evidence gate
 
-All six PRD journeys must run through **both** front ends with real local
+All six PRD journeys require desktop evidence, with corresponding explicit
+operations exercised through the CLI using real local
 repositories and the authenticated SSH fixture: offline checkpoint/later sync,
 concurrent conflict recovery, background discovery, durable threaded discussion,
 confirmed promotion, and confirmed closure with retryable failure. Assert
 canonical bytes, commit/ref ancestry, local/remote context presence and operation
 records in addition to visible results. Local-only promotion/closure and later
-primary sync are separate required variants.
+primary sync are separate required variants. For background discovery, the
+desktop proves automatic scheduling; CLI coverage uses explicit `poll once`
+and verifies the same domain effects without claiming resident scheduling.
 
 | Coverage | Minimum evidence |
 | --- | --- |
 | Existing build target matrix | Preserve Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 builds. This is the current repository matrix, not a new architecture support promise. |
-| Native automated headless tests | Domain, CLI JSON/exits, real SSH, daemon and cross-process coordination on all five existing native targets. Missing fixture support is a tracked blocker, not a skipped passing test. |
+| Native automated headless tests | Domain, CLI JSON/exits, real SSH, one-shot polling/indexing and existing repository-operation coordination on all five native targets. Missing fixture support is a tracked blocker, not a skipped passing test. |
 | Native desktop journeys | Full six journeys on at least one Windows, macOS and Linux Wayland machine, identifying OS version, architecture, compositor where relevant and tested commit. |
 | Additional built architectures | At minimum launch, edit/save, rich-text/source round-trip, keyboard navigation, credential prompt and shutdown smoke evidence for each remaining built target. |
 | Keyboard and input | Entire `MH-NFR-005` workflow on all three OS families; visible focus, dialogs, IME, Unicode, high-DPI and unsupported-source handling. Record screen-reader results separately without claiming untested compliance. |
 | Fault and restart | Kill/restart around draft flush, canonical write, checkpoint, refresh, fetch, merge, push and cleanup; reconcile actual state and demonstrate no duplicated content/effects. |
-| Scheduler and credentials | Two processes, aliases, pause versus unlock, manual priority, transport stalls, key/remote change, suspend/clock jump and graceful/forced stop. |
+| Desktop worker and credentials | One worker shared across windows, pause versus unlock, manual priority, transport stalls, key/remote change, suspend/clock jump and graceful/forced stop. Retain domain tests for explicit CLI overlap; omit concurrent resident-poller orchestration. |
 | Trusted collaborators | At least two people using separate clones complete a shared-item edit/conflict/discussion journey; record observed usability problems and retest fixes. |
 
 Proposed responsiveness evidence uses delayed file/network operations and a

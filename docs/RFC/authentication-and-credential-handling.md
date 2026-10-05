@@ -41,7 +41,7 @@ This RFC defines:
   Git fixture required for Wave 2 evidence.
 
 It does not define remote refs, fetch/push ordering, polling, merge recovery,
-desktop prompts, CLI grammar, daemon scheduling, OAuth, Git-forge APIs,
+desktop prompts, CLI grammar, desktop-worker scheduling, OAuth, Git-forge APIs,
 repository cloning, or application authorization. The Git workflow RFC owns the
 remote lifecycle; the repository/index RFC owns physical persistence; and the
 desktop and CLI RFCs own interaction details.

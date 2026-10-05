@@ -1,6 +1,6 @@
 ---
 title: "MVP/Dogfooding Architecture RFC"
-date: 2026-10-04
+date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && OpenCode"
 manyhands_managed: true
@@ -13,7 +13,7 @@ manyhands_managed: true
 This RFC defines the architectural direction, consent boundaries, and delivery
 governance for the Manyhands collaboration-complete dogfooding release. It is
 the umbrella RFC for the approved product requirements in
-[`docs/PRD/mvp.md`](../PRD/mvp.md), version 0.4.
+[`docs/PRD/mvp.md`](../PRD/mvp.md), version 0.5.
 
 It resolves cross-cutting decisions that must be consistent across content,
 Git, credentials, indexing, desktop, and CLI work. It does not prescribe the
@@ -169,8 +169,8 @@ PRD version 0.3 updates `MH-COLLAB-004` and `MH-COLLAB-006` to permit configured
 remote polling as a narrowly constrained exception to deliberate
 synchronization. For a repository with an SSH publication remote, Manyhands
 MUST enable polling by default, start an initial poll at desktop application
-launch or CLI daemon startup, and allow the user to pause polling or configure
-its interval for that repository.
+launch, and allow the user to pause polling or configure its interval for that
+repository. PRD 0.5 confines resident polling to a desktop-owned worker.
 
 Polling MUST fetch remote state, including new remote branches, and MUST refresh
 discovery after the fetch. It MUST fast-forward the configured primary branch or
@@ -190,12 +190,13 @@ PRD version 0.3 updates `MH-INDEX-002` so configured polling behavior includes t
 discovery and safe local update behavior rather than only an application-local
 index refresh.
 
-PRD version 0.3 updates `MH-CLI-001` to require a documented CLI daemon mode that performs the
-same configured polling lifecycle as the desktop application. One-shot CLI
-commands MUST NOT create an implicit resident poller; they MAY explicitly run a
-single poll, configure polling, or report polling status. The CLI-contract RFC
-owns daemon supervision, process lifetime, locking, and machine-readable event
-details.
+PRD version 0.5 supersedes the earlier CLI-daemon requirement in `MH-CLI-001`.
+Background polling and its index refresh run in a worker within the desktop
+process. There is no separate polling executable, shared singleton service or
+CLI daemon mode in the MVP. CLI commands explicitly run a single poll, refresh
+or rebuild the index, configure polling, or report status, then exit. Server-side
+resident CLI polling is deferred. Coordination of multiple resident pollers is
+not required; existing repository-operation leases and manual priority remain.
 
 ### Shared SSH Key and Startup Unlock
 
@@ -343,13 +344,15 @@ commit so the integrated item history remains inspectable after branch cleanup.
 
 ### Remote Polling Contract
 
-Remote polling runs immediately at desktop application launch and in the CLI's
-documented daemon mode for every repository with an SSH publication remote,
-then at that repository's configured interval. One-shot CLI commands do not
-start a resident poller, but MAY run one explicit poll. The repository/index and
-CLI-contract RFCs MUST define the default interval, bounded retry/backoff,
-scheduler ownership, daemon lifetime, and application-local scheduling state. A
-user MUST be able to pause polling.
+Remote polling starts at desktop application launch in an application-owned
+background worker for every eligible repository with an SSH publication remote,
+then follows its configured interval. Persisted pause and failure backoff are
+respected. The worker stops with the desktop process. CLI commands support an
+explicit single poll and index refresh/rebuild, but never start a resident
+poller. The repository/index and desktop/runtime RFCs define the default
+interval, bounded retry/backoff and application-local scheduling state. A user
+MUST be able to pause polling. No separate executable, singleton service or
+cross-process scheduler ownership protocol is required.
 
 Polling MUST be serialized with manual synchronization, primary
 synchronization, promotion, and ticket closure for the same repository. A
@@ -524,7 +527,7 @@ remaining decision as a blocker rather than silently relying on an assumption.
 | Repository/index persistence and refresh | Local registry, SQLite schema, scan/rebuild/refresh behavior, external changes, polling schedule/backoff, idempotent worktree materialization, scale limits. | Wave 1 discovery work |
 | Authentication and credential handling | Git identity prompt, shared-key generation/import/storage/removal, session passphrases, startup polling unlock, SSH-only transport, redaction. | Wave 2 remote work |
 | Desktop information architecture and editor | Navigation, open-item and context recovery presentation, accessible controls, polling status/pause/recovery, Markdown editing and conflict resolution. | Wave 3 desktop gate |
-| CLI contract | Command taxonomy, safe input/output boundaries, polling configuration/status and daemon mode, JSON schema, recovery states, exit statuses, conflict interaction. | Wave 3 CLI gate |
+| CLI contract | Command taxonomy, safe input/output boundaries, polling configuration/status and explicit one-shot execution, JSON schema, recovery states, exit statuses, conflict interaction. | Wave 3 CLI gate |
 | Test and compatibility strategy | Fixture repositories, polling and lifecycle fault injection, real remote journeys, cross-platform and Git matrix, performance limits. | Each Wave gate |
 
 The focused RFCs MAY be drafted in parallel. Their decisions MUST be approved
@@ -618,8 +621,9 @@ The test and compatibility RFC MUST require evidence for at least these cases:
   key recovery, first-poll unlock cancellation, and secret-redaction checks.
 - Serialization between a scheduled poll and a manual synchronization,
   promotion, or closure operation.
-- Desktop polling and CLI daemon polling with documented one-shot CLI behavior,
-  bounded shutdown, and no concurrent poller corruption.
+- Desktop-owned background polling with bounded shutdown and documented
+  one-shot CLI polling/indexing that leaves no resident worker. Existing domain
+  tests retain safe serialization of desktop polling with explicit CLI actions.
 - Desktop keyboard workflows and CLI human-readable, JSON, no-op, failure, and
   recovery exit behavior.
 
@@ -677,4 +681,4 @@ revision rather than accepted as an implementation limitation.
 | SSH publication remotes poll by default and fast-forward only clean local state. | Adopted in PRD 0.3 | Keeps discovered managed work current without background merge, publication, or cleanup. |
 | One shared deterministic context branch exists per item in each local clone. | Adopted in PRD 0.4 | Collaborators synchronize the same branch and recover conflicts rather than choosing among incompatible parallel contexts. |
 | Index-only refresh is distinct from a remote poll. | Adopted in PRD 0.4 | Preserves the canonical cache boundary while permitting the narrow remote updates the PRD authorizes before indexing. |
-| The CLI provides polling through a documented daemon mode. | Adopted in PRD 0.3 | Gives headless environments the same configured remote-update behavior without surprising one-shot invocations. |
+| Background polling/indexing runs inside the desktop process; the CLI provides one-shot operations only. | Adopted in PRD 0.5; supersedes CLI daemon mode from 0.3 | Matches the desktop use case without a shared service or concurrent resident-poller protocol; server-side resident CLI use is deferred. |

@@ -99,7 +99,7 @@ item write is still missing.
 Cycle 03 callers MUST serialize authoring operations for the same repository.
 Cycle 04 adds durable operation records after observed external steps. Cycle 05
 adds the repository-scoped cross-process lease and reconciliation evidence that
-make serialization mandatory across desktop, CLI, and daemon processes. A manual
+make serialization mandatory across desktop and CLI processes. A manual
 lifecycle action takes precedence over polling once polling is introduced.
 
 When a user creates an item or starts editing an item:

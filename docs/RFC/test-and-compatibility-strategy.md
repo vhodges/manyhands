@@ -163,8 +163,11 @@ without weakening prior evidence:
   disposable bare repositories. It MAY use a test-only local SSH server that
   invokes `git-upload-pack` and `git-receive-pack`; production code remains
   `git2`/libgit2-only and never invokes a system Git executable.
-- Wave 3 adds desktop keyboard journeys, CLI JSON and daemon behavior, native
-  platform journey runs, and trusted-collaborator dogfooding evidence.
+- Wave 3 adds desktop keyboard journeys and application-owned background polling,
+  CLI JSON and explicit one-shot polling/indexing, native platform journey runs,
+  and trusted-collaborator dogfooding evidence. PRD 0.5 removes CLI daemon and
+  concurrent-resident-poller coverage. Existing repository-operation safety
+  tests remain, including explicit CLI operations overlapping desktop polling.
 
 Platform-specific deviations in filesystem case behavior, path normalization,
 Git installations, locking, or credential facilities MUST become documented

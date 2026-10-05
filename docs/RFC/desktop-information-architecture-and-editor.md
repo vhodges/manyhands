@@ -13,7 +13,7 @@ id: "01M46S07YFKRH50D9NTHZ302AK"
 ## Status and intent
 
 This proposal defines the desktop portion of Wave 03 under the approved
-[PRD v0.4](../PRD/mvp.md) and [architecture RFC](mvp-rfc.md). It is not
+[PRD v0.5](../PRD/mvp.md) and [architecture RFC](mvp-rfc.md). It is not
 implementation authority until approved. The product owner selected **rich-text
 editing with a Markdown source mode** during drafting on 2026-10-05.
 The product owner also selected in-application canonical Markdown conflict
@@ -211,6 +211,11 @@ Cancellation leaves local work usable and exposes Unlock/Retry without repeated
 background modal prompts.
 
 ## Architecture, accessibility and feasibility
+
+Background polling and its index refresh run in one application-owned worker
+thread/task inside the desktop process, shared across its windows and stopped
+on exit. No separate polling executable or shared singleton service is used.
+The CLI has only explicit one-shot polling/indexing.
 
 Domain and runtime services remain in the headless library. Desktop modules
 depend directly only on `gpui-kit`, initialize it inside `app.run`, and create
