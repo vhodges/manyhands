@@ -49,6 +49,12 @@ nonconforming and inaccessible entries with a reason and recovery action.
 An empty result, a scan still running, and a failed/stale scan are distinct.
 No boards, project rollups or configurable docking system are required.
 
+Ticket lists default to lifecycle-open tickets, with visible Closed/All filters.
+Closure is determined by lifecycle metadata, independently of free-form status.
+Opening a closed ticket directly by ID remains supported. Filtering does not
+hide malformed entries needing recovery. This default was adopted with Wave 03
+approval on 2026-10-05.
+
 Tabs are keyed by resolved repository identity, item kind and canonical ULID,
 not title or path. Opening the same item focuses its tab. Different items can
 remain open across repositories. A tab shows unsaved state and its context;

@@ -71,7 +71,7 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | --- | --- |
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
 | `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
-| `repo create`, `repo enable` | Input `primary_branch`; create requires an unused/empty target. Missing identity returns recovery before the initialization commit. |
+| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
 | `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. |
 | `repo identity` | Inspect effective name/email and source. |
 | `repo identity-set` | Input `name`, `email`; explicitly writes repository-local Git config, never global config. Confirmation required. |
@@ -109,7 +109,9 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 List ordering is deterministic: repositories by normalized root, documents by
 relative path then ID, tickets by latest content-change time descending then ID,
 and operations by start time then ID. Comment ordering remains schema-defined.
-Ticket list supports exact `--status`, `--type` and `--project` filters. Lists
+Ticket list supports exact `--status`, `--type` and `--project` filters, plus
+`--closure open|closed|all` (default `all`). Closure filtering uses lifecycle
+metadata, independently of free-form status text. Lists
 return all matching results in v1; silent truncation is forbidden. Paging is a
 future additive contract, not an undocumented default limit.
 

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03: Dogfooding"
 date: 2026-10-05
-status: draft
+status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -27,9 +27,11 @@ separate polling executable, shared singleton service or cross-process poller
 election. A future server/CI change watcher that triggers automations belongs
 to a separate PRD/enhancement.
 
-This document is a Wave proposal, not an implementation plan or evidence that
-the Wave entry gate is satisfied. Its Cycles require their own tickets,
-documents, designs, plans, approval and implementation authorization.
+The product owner approved this Wave on 2026-10-05 at reviewed revision
+`4ea2aa9`, including its create/enable identity input and closure-filter
+refinements. Approval establishes the Wave scope and sequence; it does not
+establish entry-gate evidence. Its Cycles require their own tickets, documents,
+designs, plans, approval and implementation authorization.
 
 ## Authority And Traceability
 
@@ -91,7 +93,7 @@ The present worktree continues to hold Wave/RFC planning only.
 
 ## Entry Gate And Readiness Work
 
-A draft Wave can be reviewed while Wave 02 continues. Items 1–3 and the baseline
+Wave approval can precede Wave 02 completion. Items 1–3 and the baseline
 checks in 7 gate the first implementation Cycle. Items 4–6 have the specific
 deadlines below, so Linux work can proceed while native access is arranged:
 
@@ -115,9 +117,10 @@ deadlines below, so Linux work can proceed while native access is arranged:
    measure blocked DNS/connect/SSH/teardown behavior and define responsive
    safe-point stopping without claiming an unsupported total deadline.
 6. Plan implementation and early desktop evidence around Linux, as the product
-   owner selected on 2026-10-05. The Release Owner tracks Windows/macOS tester
-   and machine access as an open dependency, reviewed at each desktop Cycle.
-   Arrange access in time to complete their journeys and additional architecture
+   owner selected on 2026-10-05. The product owner's early beta testers have a
+   mix of Windows and Mac machines. The Release Owner confirms specific tester
+   assignments, OS/architecture coverage and scheduling at each desktop Cycle.
+   Arrange test sessions in time to complete their journeys and additional architecture
    smoke checks before Cycle 13 exits. Linux-only evidence cannot satisfy the
    approved final native matrix.
 7. Required Rust checks pass at the implementation baseline, or a documented
@@ -136,17 +139,17 @@ owning RFC/PRD before planning the affected implementation.
 | --- | --- |
 | Wave 02 allows 10 seconds per TCP address and 30 seconds per blocking SSH call, with DNS/total transfer outside those budgets. A ten-second process-exit promise is unsupported. | Product owner selected a **ten-second feedback threshold**: report still stopping, retain recovery state and wait for a safe point. Runtime/test wording is amended accordingly; native cancellation behavior remains required evidence. |
 | The desktop RFC mistakenly tied the literal ticket status `closed` to lifecycle closure. | Align desktop/CLI wording with the canonical schema: status is free-form; only the explicit close lifecycle writes `closed_at`/`closed_by`. Include an open ticket whose status text is `closed` in tests. |
-| The CLI create/enable input table has no way to provide missing Git identity in noninteractive mode; `repo identity-set` cannot configure a repository that does not yet exist. | Proposed narrow CLI amendment: optional input `identity: {name, email}` for create/enable, included in its explicit confirmation preview before local persistence. Existing library requests already accept identity. Resolve before Cycle 03 planning. |
+| The CLI create/enable input table had no way to provide missing Git identity in noninteractive mode; `repo identity-set` cannot configure a repository that does not yet exist. | Approved with this Wave and adopted in the CLI RFC: optional input `identity: {name, email}` for create/enable, included in its explicit confirmation preview before local persistence. Existing library requests already accept identity. |
 | Prepared confirmations need useful observations even when the destination repository or item does not yet exist. | Cycle 02 binds creation intent to the target parent/path, absence observation and supplied non-secret input; execution rechecks them. Preview must not initialize a repository as a side effect. |
-| The CLI lists closed tickets by default, while the charter suggested hiding them in the desktop. Free-form status cannot serve as a closure filter. | Preserve the approved CLI all-ticket default. Proposed explicit closure filter and desktop default are recorded below for Wave review; do not infer closure from status text. |
+| The CLI lists closed tickets by default, while the charter suggested hiding them in the desktop. Free-form status cannot serve as a closure filter. | Preserve the CLI all-ticket default. The explicit closure filter and desktop default below are approved and adopted in their RFCs; do not infer closure from status text. |
 | Some requested interface operations lack an obvious public API in the baseline. | Cycles 01/03/04 own narrow read, identity, public-key, folder and repair bridges; refresh the audit after Wave 02, rather than exposing internal SQLite/Git manipulation in either front end. |
 | Full command-specific JSON schemas and malformed-content DTO details are not yet published. | Every CLI Cycle publishes schemas/fixtures with its verbs. Cycle 06 cannot exit until the complete command inventory has schemas and documented exit behavior. |
 | Marker-only repair needs an identity and context before it can become conforming; duplicate/mismatched IDs are different problems. | Cycle 04 provides explicit adoption previews, stable ID allocation and retry evidence. Ambiguous identity stays non-editable; no implicit migration during refresh. |
 | A pristine worktree may have an unsaved editor draft, including while a CLI action changes or cleans up its context. | Cycles 08/09 preserve base/current drafts and reject stale writes. A removed context leaves an exportable/recoverable draft; never silently recreate a closed ticket context or lose the draft. |
 | Existing transport bootstrap runs before argument handling and emits plain stderr on failure in the unmerged Cycle 03 design. | Cycle 01 must preserve the pre-thread initialization boundary while adapting handled startup failures to the CLI envelope when `--json` is recognizable. Verify actual merged startup rather than overwriting it. |
 
-The two proposed CLI/discovery refinements require approval with this Wave and
-a corresponding RFC update before their owning Cycle plans are approved:
+The two CLI/discovery refinements were approved with this Wave and adopted in
+the CLI and desktop RFCs:
 
 - Create/enable identity is explicit and confirmed, stored only in repository
   config; missing identity yields recovery without inventing a global identity.
@@ -156,8 +159,7 @@ a corresponding RFC update before their owning Cycle plans are approved:
   approved list ordering and malformed-entry visibility remain unchanged.
 
 These refinements do not add reopening, controlled status vocabularies, cloning,
-or a schema migration. The reviewer can change their presentation before Wave
-approval without changing the canonical closure contract.
+or a schema migration. They preserve the canonical closure contract.
 
 ## Delivery Approach And Boundaries
 
@@ -252,7 +254,7 @@ external Git/key-generation commands.
 **In scope:** Create/enable/remove, confirmed local identity, remote add/remove/
 publication selection, key generation/import/select/clear/unregister/delete,
 host approve/replace, terminal secret interaction and noninteractive recovery.
-Apply the proposed missing-identity input refinement once approved with this Wave.
+Apply the approved missing-identity input refinement.
 Use Cycle 02 for request IDs, confirmation and replay; use scoped transport
 verification for host approval without publishing or refreshing remote refs.
 
@@ -273,7 +275,7 @@ available for agents and project dogfooding.
 
 **In scope:** Document/ticket create/save, document move, folder creation,
 explicit repair/adoption, index refresh/rebuild, identity recovery and the
-proposed closure-filter refinement once approved with this Wave. Preserve unknown metadata, ULIDs and body
+approved closure-filter refinement. Preserve unknown metadata, ULIDs and body
 content; use actual context provisioning and source/destination observations.
 Empty folders are local until they contain tracked content; do not add hidden
 placeholder commits. Index-only actions never fetch or rewrite canonical state.
@@ -473,7 +475,7 @@ real collaborators on supported platforms.
 and explicit CLI counterparts on the final integrated revision, complete native
 architecture/keyboard/input checks, measure responsiveness, and fix defects
 within approved scope. Include two trusted people using separate clones.
-Windows/macOS access is a tracked dependency; Linux work can proceed first,
+Windows/macOS tester assignments and coverage remain tracked; Linux work can proceed first,
 but this Cycle cannot exit with their required native evidence missing.
 Provide runnable CLI examples and desktop recovery instructions with the tested
 build artifacts. Record host OS/display, revision, lockfile, steps and outcomes.
@@ -551,7 +553,7 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 The desktop smoke test requires an active display. Native CI may use Cargo
 directly under the existing approved exception. Tests use isolated home,
 Git/SSH configuration, application data and disposable repositories, never
-developer keys or worktrees. A documentation-only Wave draft does not run or
+developer keys or worktrees. Documentation-only Wave planning does not run or
 claim these implementation checks.
 
 ## Risks And Controls
@@ -566,20 +568,20 @@ claim these implementation checks.
 | Credentials or source leak through diagnostics/JSON | Typed redacted outcomes, terminal-only secret input and isolated privacy fixtures; requested read bodies are distinct from logs/errors. |
 | Early CLI implementation drifts from the published contract | Publish schemas/help with each verb; inventory audit and all exit-class coverage at Cycle 06. |
 | Transport shutdown outlasts the desktop's feedback threshold | Responsive still-stopping state; retain live ownership/secrets until safe completion; test forced interruption separately. |
-| Native access is unavailable late in the Wave | Work on Linux first; Release Owner reviews Windows/macOS access at each desktop Cycle and obtains the missing evidence before Cycle 13 exit. Platform acceptance is not silently reduced. |
+| Beta tester machines do not cover every required native target, or sessions are delayed | Work on Linux first; Release Owner confirms Windows/macOS tester assignments, architectures and scheduling at each desktop Cycle and obtains missing evidence before Cycle 13 exit. Platform acceptance is not silently reduced. |
 | An intermediate desktop is mistaken for the complete product | Mark unavailable workflows; accumulate real evidence per Cycle and require the integrated final gate. |
 | Too much work is packed into one Cycle | Split before its plan is approved if independent deliverables cannot be reviewed/tested together; update this Wave and downstream prerequisites rather than add hidden subcycles. |
 
-## Open Readiness Items And Next Review
+## Approval And Remaining Readiness
 
-This proposal awaits Wave approval. Editor selection, final Wave 02 API/transport
+Wave approval is recorded above. Editor selection, final Wave 02 API/transport
 audit, native tester/machine assignments and implementation-baseline evidence
-remain open; none is implied by approved RFCs or this draft. The product owner
-selected Linux-first work, with Windows/macOS tester access tracked as a
-dependency. That decision sets sequencing and does not waive the final native
-evidence gate.
+remain open; none is implied by design approval. The product owner confirmed
+that early beta testers have Windows and Mac machines. Continue Linux-first
+work, then arrange the required native sessions with those testers and fill
+any architecture coverage gaps. Machine availability is not completed evidence.
 
-Wave approval should also settle the proposed create/enable identity input and
-closure-filter refinements. Then update their owning RFCs, establish the
-readiness evidence, and prepare Cycle 01 in its ticket worktree. This sequence
+The create/enable identity input and closure-filter refinements are adopted in
+their owning RFCs. Establish readiness evidence and prepare Cycle 01 in its
+ticket worktree when its prerequisites are met. This approval record
 does not start implementation, publish the branch or close any ticket.

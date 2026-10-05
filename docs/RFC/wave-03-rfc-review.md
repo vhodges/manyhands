@@ -59,7 +59,7 @@ pushing or merging the planning branch.
 | W3-07 | Ten seconds is a shutdown feedback threshold, not a process-exit deadline. Show still stopping, preserve recovery state/live ownership and wait for the operation to stop safely. | Product-owner clarification during Wave planning, 2026-10-05. Technical Lead must characterize native cancellation and responsive stopping before worker implementation; callbacks alone are not evidence. |
 | W3-08 | CLI retries need durable request identity and stable comment IDs; current domain requests do not provide the complete external protocol. | Approved contract; audit actual domain APIs before CLI mutation planning and verify replay/cache-loss recovery during implementation. |
 | W3-09 | Repair/adoption, folder creation, identity configuration, key public export and confirmation previews need an API audit. UI controls cannot manufacture safe missing domain behavior. | Technical Lead must map to existing operations or propose narrowly scoped additions in Wave 03 Cycles. |
-| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Product owner selected Linux-first work on 2026-10-05. Release Owner tracks Windows/macOS tester/machine access as an open dependency; the complete native evidence matrix remains a Wave exit requirement. |
+| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Product owner selected Linux-first work and confirmed early beta testers have Windows and Mac machines on 2026-10-05. Release Owner tracks specific assignments, architecture coverage and scheduling; the complete native evidence matrix remains a Wave exit requirement. |
 | W3-11 | A ticket close integrates the full context branch and can remove a worktree containing non-item files. | Effect preview must enumerate paths and preserve dirty/unexpected work; reconcile with Wave 02 closure preflight before close UI planning. |
 | W3-12 | Short-ID research is not an approved replacement for canonical ULIDs. | Keep full IDs for mutation and copy controls. Aliases need a separate collision/ambiguity contract if requested. |
 
@@ -67,12 +67,14 @@ Approval resolves the design decisions above. Editor dependency selection,
 transport shutdown feasibility, the Wave 02 API audit and native evidence
 remain outstanding work; approval does not mark those gates satisfied.
 
-The [Wave 03 proposal](../Waves/wave-03-dogfooding.md) assigns these obligations
+The [approved Wave 03](../Waves/wave-03-dogfooding.md) assigns these obligations
 to ordered Cycles. Wave planning also corrected desktop/CLI closure wording to
 match the canonical schema: free-form status, including `closed`, never replaces
-the explicit lifecycle action and its `closed_at`/`closed_by` fields. Proposed
-create/enable identity input and closure-list filters remain Wave review items;
-they are not silently added to the approved command contract.
+the explicit lifecycle action and its `closed_at`/`closed_by` fields. The product
+owner approved the Wave at revision `4ea2aa9` on 2026-10-05, including optional
+create/enable identity input and closure-list filters. Those refinements are now
+adopted in the CLI and desktop RFCs. Wave approval does not establish completed
+feasibility work, native evidence or Cycle implementation authorization.
 
 ## Adopted source amendments
 
@@ -142,8 +144,8 @@ it does not claim runtime tests or native journey evidence.
 
 ## Next planning steps
 
-Review the [Wave 03 proposal](../Waves/wave-03-dogfooding.md), including its
-remaining contract refinements and readiness deadlines. Refresh against main
+Follow the [approved Wave 03](../Waves/wave-03-dogfooding.md) readiness deadlines.
+Refresh against main
 after Wave 02 settles and audit actual APIs, transport and fixture evidence.
 Resolve editor/runtime feasibility before the affected Cycles and create one
 Manyhands ticket per Cycle before each implementation plan. Early RFC/Wave
@@ -154,5 +156,5 @@ desktop layout and read-only CLI work now have approved RFC contracts.
 Individual Cycles still require planning and authorization. Editor fidelity
 and recovery must be proved before polishing rich interactions.
 End-to-end/native evidence should accumulate throughout the Wave
-rather than wait for its final Cycle. The proposed Cycle allocation remains
-subject to Wave review.
+rather than wait for its final Cycle. The Wave's thirteen-Cycle allocation is
+approved; each Cycle still requires its own detailed planning and review.
