@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
     fmt,
-    io::Read,
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread,
@@ -10,7 +9,7 @@ use std::{
 #[cfg(unix)]
 use std::{
     ffi::CString,
-    io::Write,
+    io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,

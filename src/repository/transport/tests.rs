@@ -224,25 +224,31 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
     let prepared = prepared(file.path());
     let attempt = CallbackAttempt::default();
     let url = &prepared.endpoint.connection_url;
+    // libgit2's C enum is signed on MSVC and unsigned elsewhere. Widen both
+    // representations losslessly so the full credential type remains checked.
     assert_eq!(
-        attempt
-            .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
-            .unwrap()
-            .credtype(),
-        git2::CredentialType::USERNAME.bits()
+        i64::from(
+            attempt
+                .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+                .unwrap()
+                .credtype()
+        ),
+        i64::from(git2::CredentialType::USERNAME.bits())
     );
     assert_eq!(
-        attempt
-            .credentials(
-                &prepared,
-                None,
-                url,
-                Some("fixture"),
-                git2::CredentialType::SSH_KEY
-            )
-            .unwrap()
-            .credtype(),
-        git2::CredentialType::SSH_KEY.bits()
+        i64::from(
+            attempt
+                .credentials(
+                    &prepared,
+                    None,
+                    url,
+                    Some("fixture"),
+                    git2::CredentialType::SSH_KEY
+                )
+                .unwrap()
+                .credtype()
+        ),
+        i64::from(git2::CredentialType::SSH_KEY.bits())
     );
     assert_eq!(attempt.key_submissions(), 1);
     assert!(
