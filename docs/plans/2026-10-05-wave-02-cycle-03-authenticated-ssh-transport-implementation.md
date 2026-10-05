@@ -83,7 +83,7 @@ closure, and worktree cleanup remain separate authorization/lifecycle stages.
 | `src/repository/discovery.rs` | Host-pin migration call (Task 3). |
 | `src/repository/transport/operation.rs` | Session/connection driver (Task 4). |
 | `src/repository/keys/session.rs` | Non-secret cache-presence query and typed unlock reason (Task 4). |
-| `tests/support/ssh_remote.rs`, `tests/support/ssh_harness.rs` | Shared disposable SSH Git fixture and custom-main runner (Task 2). |
+| `tests/support/ssh_remote.rs`, `tests/support/ssh_server.rs`, `tests/support/ssh_harness.rs` | Disposable SSH fixture ownership, restricted session/helper relay, and custom-main runner (Task 2). |
 | `src/runtime.rs`, `src/lib.rs`, `src/main.rs`, `src/bin/manyhands-cli.rs` | Safe pre-thread timeout bootstrap and startup wiring (Task 2). |
 | `tests/ssh_fixture.rs`, `tests/ssh_transport.rs` | Fixture and public-operation evidence (Tasks 2–5). |
 | `src/repository/transport/tests.rs` | Private-driver transfer tests using shared fixture (Tasks 3–5). |
@@ -136,9 +136,14 @@ Keep public service method implementation for Task 4.
 
 ## Task 2: Deliver A Restricted Portable SSH Git Fixture
 
-**Files:** create `tests/support/ssh_remote.rs`, `tests/ssh_fixture.rs`; modify
+**Files:** create `tests/support/ssh_remote.rs` (fixture ownership/config),
+`tests/support/ssh_server.rs` (restricted session/helper relay),
+`tests/ssh_fixture.rs`; modify
 Cargo.toml/Cargo.lock, src/runtime.rs, src/lib.rs, both binary entry points,
-and tests/support/ssh_harness.rs. Configure harness=false for both SSH test
+and tests/support/ssh_harness.rs. Use equivalent relative repository-scoped
+visibility in keys/registry.rs and transport/endpoint.rs where custom-host
+source inclusion requires it; do not widen production visibility.
+Configure harness=false for both SSH test
 executables; the Task 4 transport host is added when its cases exist.
 Update CI helper provisioning as needed. Use a dedicated
 support module import rather than adding server dependencies to every fixture.
@@ -152,48 +157,50 @@ helper invocation counters. `FixtureError` formats fixed messages only.
 `run_isolated(case: &str)` launches an exact child test case with fixture-only
 environment set before any Git initialization and bounded process lifetime.
 
-- [ ] Add failing fixture tests for successful allowed-client authentication,
+- [x] Add failing fixture tests for successful allowed-client authentication,
   wrong-key denial, command/path restrictions, EOF/exit forwarding, helper
   lookup with spaces, startup failure, and complete cleanup after failure.
-- [ ] Test and implement the design's unsafe pre-thread runtime initializer and
+- [x] Test and implement the design's unsafe pre-thread runtime initializer and
   fixed errors; call it first in both binaries. Test exact settings read-back
   in the custom-main host before any thread. Preserve GPUI Kit Root/init rules.
-- [ ] Resolve test-only russh/Tokio versions and pin the resulting lockfile;
+- [x] Resolve test-only russh/Tokio versions and pin the resulting lockfile;
   keep existing git2/libgit2/libssh2 versions. Add Windows-target libssh2-sys
   feature unification. Check native helper discovery via `git --exec-path`
   only in tests; provision Git and any external-key fixture generator explicitly
   in CI rather than assuming daemon/system user availability.
-- [ ] Implement the loopback server with only ephemeral host/allowed client
+- [x] Implement the loopback server with only ephemeral host/allowed client
   keys. Map exact upload/receive-pack commands to owned bare repositories;
   spawn helpers with separate arguments and pipes, no shell. Reject every
   other auth method, command, arbitrary path, forwarding, shell, and PTY.
-- [ ] Make child harnesses isolate HOME/USERPROFILE/XDG/Git search paths and
+- [x] Make child harnesses isolate HOME/USERPROFILE/XDG/Git search paths and
   SSH-agent settings. Drain bounded captured diagnostics and redact fixture
   failures. Use a startup timeout and watchdog, plus deterministic teardown.
-- [ ] Run `devenv shell -- cargo test --locked --test ssh_fixture` to green.
+- [x] Run `devenv shell -- cargo test --locked --test ssh_fixture` to green.
   Use small direct git2 fixture clients here; production-policy proof follows.
-- [ ] Characterize the locked backend with deterministic pre-handshake, auth,
+- [x] Characterize the locked backend with deterministic pre-handshake, auth,
   advertisement, and transfer stalls. Record which phases support timed failure
   and which errors distinguish auth rejection from transport failure, without
   matching backend message strings. Validate any timeout bootstrap in an isolated
   process before threads; do not mutate libgit2 global timeouts from test workers.
-- [ ] Verify the accepted 10,000/30,000 ms defaults, a shorter recoverable stall,
+- [x] Verify the accepted 10,000/30,000 ms defaults, a shorter recoverable stall,
   per-call timeout after the applicable threshold with bounded scheduling tolerance,
   and a progressing multi-call transfer lasting longer than 30 seconds. Record phases
   the backend cannot bound; a test watchdog must not turn that gap into a pass.
-- [ ] Before depending on the fixture for all later tasks, obtain native evidence
+- [ ] Native execution pending authorized CI. Before depending on the fixture for all later tasks, obtain native evidence
   for helper invocation and encrypted Ed25519 on both Windows architectures when
   authorized CI is available. Otherwise label that feasibility gate pending and
   do not claim cross-platform fixture support.
-- [ ] Inspect `devenv shell -- cargo tree --locked -e features --target x86_64-pc-windows-msvc -i libssh2-sys`
+- [x] Inspect `devenv shell -- cargo tree --locked -e features --target x86_64-pc-windows-msvc -i libssh2-sys`
   and the ARM64 equivalent; verify both required OpenSSL features. Record resolved
   versions and commit `test: add disposable authenticated SSH Git fixture`.
 
 ## Task 3: Enforce Host Trust And Selected-Key Callback Policy
 
 **Files:** create `transport/trust.rs`, `callbacks.rs`, `tests.rs`; modify
-transport/mod.rs and repository/discovery.rs. Private-driver unit tests include
-the shared SSH fixture by path so production helpers remain crate-private.
+transport/mod.rs, repository/discovery.rs, src/repository.rs recovery hook,
+and tests/recovery_foundation_gate.rs. Pure policy tests stay in the library;
+real private-driver scenarios run through the Task 2 custom SSH test host and
+cfg(test) dispatcher so helpers remain crate-private and bootstrap precedes threads.
 
 **Interfaces:** `read_host_pin(&self, &SshAuthority) -> Result<Option<HostKeyIdentity>, SshTransportErrorKind>`;
 `finalize_host_pin(&self, &SshAuthority, expected: Option<&HostKeyIdentity>,
@@ -223,7 +230,8 @@ typed failure, host observation, and credential-submission counters;
   repeated credential requests, forbidden credential types, authority mismatch,
   and agent/default/helper fallback refusal. Raw callback errors remain fixed.
 - [ ] Run `devenv shell -- cargo test --locked --lib transport` and observe
-  intended failures; then implement migration, CAS trust finalization, and
+  intended pure-policy failures; run real handshake cases in the initialized
+  custom SSH test host. Then implement migration, CAS trust finalization, and
   callbacks using the exact decision table in the design. No prompt or SQL
   write inside callbacks. Preserve the passthrough observation for error mapping.
 - [ ] Rerun to green against the real fixture. Require an observed host check
