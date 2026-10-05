@@ -89,7 +89,9 @@ fn shared_key_registry_fifo_child() {
 }
 
 fn private_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/shared_key_registry_private_fixture")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("shared_key_registry_private_fixture")
 }
 
 const PUBLIC_KEY_COMMENT: &str = "manyhands-cycle01-distinctive-public-comment";
@@ -98,7 +100,9 @@ const PASSPHRASE_SENTINEL: &[u8] = b"CYCLE01_PASSPHRASE_SENTINEL_DO_NOT_PERSIST"
 const PUBLIC_KEY_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk";
 
 fn public_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/shared_key_registry_public_fixture.pub")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("shared_key_registry_public_fixture.pub")
 }
 
 fn assert_registry_storage_excludes(data_directory: &Path, forbidden: &[&[u8]]) {
