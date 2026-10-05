@@ -16,9 +16,19 @@ passphrases only for the application session.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-02-generated-keys-and-unlock.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-02-generated-keys-and-unlock.md`.
+- [x] Create the implementation plan and record its checkpoints as ticket
   comments.
+- [x] Approve the Cycle, detailed design, and implementation plan.
+
+Approved planning documents:
+
+- [Cycle scope](../../../docs/Cycles/wave-02-cycle-02-generated-keys-and-unlock.md)
+- [Detailed design](../../../docs/plans/2026-10-05-wave-02-cycle-02-generated-keys-and-unlock-design.md)
+- [Implementation plan](../../../docs/plans/2026-10-05-wave-02-cycle-02-generated-keys-and-unlock-implementation.md)
+
+The existing ticket branch was rebased onto main at `21eefa4` before planning;
+its resulting checkpoint is `d546264`. The user authorized subagent-driven implementation on 2026-10-05.
 
 ## Entry Gate
 
