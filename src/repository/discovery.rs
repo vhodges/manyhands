@@ -1263,6 +1263,7 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
             .map_err(RepositoryError::sqlite)?;
     }
     super::keys::migrate_material_schema(&transaction)?;
+    super::transport::trust::migrate_host_pins(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     super::recovery::migrate_operation_records(connection)
 }

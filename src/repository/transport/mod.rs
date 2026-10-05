@@ -1,11 +1,25 @@
+mod callbacks;
 pub(super) mod endpoint;
 mod error;
+#[cfg(test)]
+pub(crate) mod tests;
+pub(super) mod trust;
 
 use std::path::PathBuf;
 
 pub use error::{SshTransportError, SshTransportErrorKind};
 
 use super::SharedKeyId;
+
+// Constructed by the scoped operation driver; no Git handles or secret storage.
+#[allow(dead_code)]
+pub(super) struct PreparedSshAttempt {
+    pub(super) registration: super::keys::SharedKeyRegistration,
+    pub(super) source: super::keys::KeySourceToken,
+    pub(super) endpoint: endpoint::SshEndpoint,
+    pub(super) trust: trust::HostTrustSnapshot,
+    pub(super) approval: Option<HostApproval>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SshDirection {

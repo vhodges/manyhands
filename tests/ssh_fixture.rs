@@ -22,6 +22,19 @@ fn main() {
     }
     ssh_harness::run(&[
         ("allowed_client", allowed_client),
+        ("trust_known_hosts", trust_known_hosts),
+        (
+            "trust_pin_overrides_known_hosts",
+            trust_pin_overrides_known_hosts,
+        ),
+        ("trust_recovered_known_hosts", trust_recovered_known_hosts),
+        ("trust_unknown_host", trust_unknown_host),
+        ("trust_exact_approval", trust_exact_approval),
+        ("trust_selected_key_rejected", trust_selected_key_rejected),
+        (
+            "trust_default_key_fallback_refused",
+            trust_default_key_fallback_refused,
+        ),
         ("encrypted_ed25519", encrypted_ed25519),
         ("wrong_key_denied", wrong_key_denied),
         ("other_auth_denied", other_auth_denied),
@@ -82,6 +95,139 @@ fn allowed_client() -> Result<(), FixtureError> {
         vec![fixture.allowed_client_public_key()]
     );
     assert_eq!(fixture.helper_invocations(), 1);
+    Ok(())
+}
+
+fn trust_known_hosts() -> Result<(), FixtureError> {
+    trust_case(0)
+}
+fn trust_pin_overrides_known_hosts() -> Result<(), FixtureError> {
+    trust_case(1)
+}
+fn trust_recovered_known_hosts() -> Result<(), FixtureError> {
+    trust_case(2)
+}
+fn trust_unknown_host() -> Result<(), FixtureError> {
+    trust_case(3)
+}
+fn trust_exact_approval() -> Result<(), FixtureError> {
+    trust_case(4)
+}
+fn trust_selected_key_rejected() -> Result<(), FixtureError> {
+    trust_case(5)
+}
+fn trust_default_key_fallback_refused() -> Result<(), FixtureError> {
+    trust_case(6)
+}
+fn trust_case(mode: u8) -> Result<(), FixtureError> {
+    use repository::transport::{
+        HostApproval, HostKeyIdentity, SshAuthority, SshTransportErrorKind,
+    };
+    let fixture = SshRemoteFixture::start()?;
+    let known_hosts =
+        std::path::PathBuf::from(std::env::var_os("MANYHANDS_SSH_TEST_HOME").ok_or(FixtureError)?)
+            .join(".ssh/known_hosts");
+    if mode != 3 && mode != 4 {
+        let entry = format!(
+            "[127.0.0.1]:{} {}\n",
+            fixture.address().port(),
+            fixed(fixture.host_public_key().to_openssh())?
+        );
+        fixed(std::fs::write(&known_hosts, entry))?;
+    }
+    let before = fixed(std::fs::read(&known_hosts))?;
+    let observed = fixture.host_identity();
+    let old_key = generate_key()?;
+    let old = HostKeyIdentity {
+        algorithm: old_key.algorithm().to_string(),
+        sha256: old_key
+            .public_key()
+            .fingerprint(russh::keys::HashAlg::Sha256)
+            .to_string(),
+    };
+    let authority = SshAuthority {
+        host: "127.0.0.1".into(),
+        port: fixture.address().port(),
+    };
+    let approval = (mode == 4).then(|| HostApproval {
+        authority,
+        expected: None,
+        presented: observed.clone(),
+    });
+    if mode == 5 {
+        fixture.reject_client();
+    }
+    if mode == 6 {
+        let home = std::path::PathBuf::from(
+            std::env::var_os("MANYHANDS_SSH_TEST_HOME").ok_or(FixtureError)?,
+        );
+        let default_key = fixed(russh::keys::load_secret_key(
+            home.join(".ssh/id_ed25519"),
+            None,
+        ))?;
+        fixture.allow_client_public_key(default_key.public_key().clone());
+    }
+    let probe = repository::transport::tests::callback_handshake(
+        &fixture.url(),
+        fixture.client_key_path(),
+        (mode == 1 || mode == 2).then_some(old.clone()),
+        approval,
+        mode == 2,
+    );
+    assert_eq!(probe.observed, Some(observed.clone()));
+    match mode {
+        0 => {
+            assert!(probe.connected);
+            assert!(probe.passthrough);
+            assert_eq!(probe.pin, None);
+        }
+        1 => {
+            assert!(!probe.connected);
+            assert_eq!(
+                probe.failure,
+                Some(SshTransportErrorKind::HostReplacementRequired {
+                    expected: old,
+                    presented: observed
+                })
+            );
+        }
+        2 => {
+            assert!(!probe.connected);
+            assert!(!probe.passthrough);
+            assert_eq!(
+                probe.failure,
+                Some(SshTransportErrorKind::HostApprovalRequired {
+                    presented: observed
+                })
+            );
+        }
+        3 => {
+            assert!(!probe.connected);
+            assert!(probe.passthrough);
+            assert_eq!(probe.backend_code, Some(git2::ErrorCode::Certificate));
+        }
+        4 => {
+            assert!(probe.connected);
+            assert_eq!(probe.pin, Some(observed));
+        }
+        5 | 6 => {
+            assert!(!probe.connected);
+            assert_eq!(probe.failure, Some(SshTransportErrorKind::KeyRejected));
+            assert_eq!(probe.key_submissions, 1);
+            assert!(fixture.accepted_keys().is_empty());
+        }
+        _ => unreachable!(),
+    }
+    if probe.connected {
+        assert_eq!(
+            fixture.accepted_keys(),
+            vec![fixture.allowed_client_public_key()]
+        );
+        assert_eq!(probe.key_submissions, 1);
+    } else {
+        assert_eq!(fixture.helper_invocations(), 0);
+    }
+    assert_eq!(fixed(std::fs::read(&known_hosts))?, before);
     Ok(())
 }
 fn encrypted_ed25519() -> Result<(), FixtureError> {

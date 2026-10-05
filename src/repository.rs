@@ -2856,6 +2856,12 @@ impl RepositoryService {
             Err(error) if is_structural_sqlite_corruption(&error) => {
                 self.run_corrupt_cache_hook(&self.corrupt_cache_critical_hook, operation, root)?;
                 self.check_failure(FailurePoint::BeforeCorruptCacheReplacement, operation, root)?;
+                transport::trust::publish_reapproval_marker(
+                    self.registry_path
+                        .parent()
+                        .expect("registry data directory"),
+                )
+                .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
                 replace_corrupt_registry(&self.registry_path, root)?;
                 let mut connection = open_registry(&self.registry_path, &mut |_| {})
                     .map_err(|error| error.for_operation(operation, root))?;
