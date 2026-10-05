@@ -929,3 +929,530 @@ fn generated_inspection_rejects_links_and_unprotected_private_source() {
         KeyMaterialErrorKind::UnsafePath
     );
 }
+
+use manyhands::repository::keys::DeleteGeneratedKeyOutcome;
+use manyhands::repository::{RepositoryErrorKind, UnregisterSharedKeyOutcome};
+
+fn deletion_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    RepositoryService,
+    KeyStore,
+    SharedKeyRegistration,
+) {
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    let r = created(
+        service
+            .generate_shared_key(
+                &store,
+                request(OperationId::new(), KeyProtection::Unencrypted),
+            )
+            .unwrap(),
+    );
+    (home, data, service, store, r)
+}
+
+#[test]
+fn deletion_removes_exact_owned_pair() {
+    let (home, data, service, store, r) = deletion_fixture();
+    let sentinel = home.path().join("sentinel");
+    fs::write(&sentinel, b"untouched").unwrap();
+    let other = created(
+        service
+            .generate_shared_key(
+                &store,
+                request(OperationId::new(), KeyProtection::Unencrypted),
+            )
+            .unwrap(),
+    );
+    let other_bytes = fs::read(&other.private_key_path).unwrap();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    assert_eq!(review.registration(), &r);
+    let replay_review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    let id = OperationId::new();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, Some(review), true)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::Deleted
+    );
+    assert!(!r.private_key_path.exists() && !r.public_key_path.as_ref().unwrap().exists());
+    assert!(
+        fs::read(&other.private_key_path).unwrap() == other_bytes,
+        "other key changed"
+    );
+    assert!(
+        fs::read(sentinel).unwrap() == b"untouched",
+        "sentinel changed"
+    );
+    fs::write(&r.private_key_path, b"replacement").unwrap();
+    fs::write(r.public_key_path.as_ref().unwrap(), b"replacement-public").unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, Some(replay_review), true)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::AlreadyDeleted
+    );
+    drop(service);
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, None, true)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::AlreadyDeleted
+    );
+    assert!(
+        fs::read(&r.private_key_path).unwrap() == b"replacement",
+        "replacement changed"
+    );
+    assert!(
+        fs::read(r.public_key_path.as_ref().unwrap()).unwrap() == b"replacement-public",
+        "replacement changed"
+    );
+}
+
+#[test]
+fn deletion_cancel_writes_nothing() {
+    let (_home, data, service, store, r) = deletion_fixture();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    let bytes = fs::read(&r.private_key_path).unwrap();
+    let id = OperationId::new();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, Some(review), false)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::Cancelled
+    );
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, None, false)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::Cancelled
+    );
+    assert!(
+        fs::read(&r.private_key_path).unwrap() == bytes,
+        "private source changed"
+    );
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM key_material_operations WHERE operation_id=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(service.list_shared_keys().unwrap(), vec![r]);
+}
+
+#[test]
+fn deletion_rechecks_selection_after_review() {
+    let (_home, data, service, store, r) = deletion_fixture();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    other.select_shared_key(r.id).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, OperationId::new(), Some(review), true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::SelectedKeyMustBeCleared
+    );
+    assert!(r.private_key_path.exists() && r.public_key_path.unwrap().exists());
+}
+
+#[test]
+fn deletion_refuses_imported_selected_and_unproven_generated_rows() {
+    let (home, data, service, store, r) = deletion_fixture();
+    service.select_shared_key(r.id).unwrap();
+    assert_eq!(
+        service
+            .review_generated_key_deletion(&store, r.id)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::SelectedKeyMustBeCleared
+    );
+    service.clear_shared_key_selection().unwrap();
+    for (ownership, expected_path) in [
+        (SharedKeyOwnership::Imported, false),
+        (SharedKeyOwnership::Generated, false),
+        (SharedKeyOwnership::Generated, true),
+    ] {
+        let path = if expected_path {
+            home.path().join(".ssh/manyhands/forged")
+        } else {
+            home.path().join(format!("sentinel-{}", OperationId::new()))
+        };
+        fs::write(&path, b"outside sentinel").unwrap();
+        let RegisterSharedKeyOutcome::Registered(fake) = service
+            .register_shared_key(RegisterSharedKeyRequest {
+                label: "forged".into(),
+                ownership,
+                private_key_path: path.clone(),
+                public_key_path: None,
+            })
+            .unwrap()
+        else {
+            panic!("registration")
+        };
+        if expected_path {
+            let expected = home.path().join(".ssh/manyhands").join(fake.id.to_string());
+            fs::rename(&path, &expected).unwrap();
+            let c = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            c.execute("UPDATE shared_ssh_keys SET private_key_path=?2,public_key_path=?3,public_metadata_state='unavailable' WHERE id=?1", rusqlite::params![fake.id.to_string(),expected.to_str(),expected.with_extension("pub").to_str()]).unwrap();
+        }
+        assert_eq!(
+            service
+                .review_generated_key_deletion(&store, fake.id)
+                .unwrap_err()
+                .kind,
+            if ownership == SharedKeyOwnership::Imported {
+                KeyMaterialErrorKind::ImportedKey
+            } else {
+                KeyMaterialErrorKind::OwnershipUnverified
+            }
+        );
+        let path = if expected_path {
+            home.path().join(".ssh/manyhands").join(fake.id.to_string())
+        } else {
+            path
+        };
+        assert!(
+            fs::read(path).unwrap() == b"outside sentinel",
+            "unowned sentinel changed"
+        );
+    }
+}
+
+#[test]
+fn deletion_refuses_replaced_or_linked_target() {
+    for variant in 0..4 {
+        let (home, _data, service, store, r) = deletion_fixture();
+        let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+        let path = if variant == 3 {
+            r.public_key_path.as_ref().unwrap()
+        } else {
+            &r.private_key_path
+        };
+        let sentinel = home.path().join("sentinel");
+        fs::rename(path, &sentinel).unwrap();
+        let bytes = fs::read(&sentinel).unwrap();
+        match variant {
+            0 | 3 => {
+                fs::copy(&sentinel, path).unwrap();
+            }
+            1 => {
+                fs::hard_link(&sentinel, path).unwrap();
+            }
+            _ => {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&sentinel, path).unwrap();
+                #[cfg(windows)]
+                fs::copy(&sentinel, path).unwrap();
+            }
+        }
+        assert!(
+            service
+                .delete_generated_key(&store, OperationId::new(), Some(review), true)
+                .is_err()
+        );
+        assert!(service.review_generated_key_deletion(&store, r.id).is_err());
+        assert!(
+            fs::read(&sentinel).unwrap() == bytes,
+            "outside source changed"
+        );
+        assert!(path.exists());
+    }
+}
+
+#[test]
+fn deletion_retry_requires_fresh_confirmation() {
+    for (point, phase, private_exists, public_exists) in [
+        (
+            FailurePoint::DeletionAfterIntent,
+            KeyMaterialPhase::Prepared,
+            true,
+            true,
+        ),
+        (
+            FailurePoint::DeletionAfterPrivateUnlink,
+            KeyMaterialPhase::Prepared,
+            false,
+            true,
+        ),
+        (
+            FailurePoint::DeletionAfterPrivatePhase,
+            KeyMaterialPhase::PrivateRemoved,
+            false,
+            true,
+        ),
+        (
+            FailurePoint::DeletionAfterPublicUnlink,
+            KeyMaterialPhase::PrivateRemoved,
+            false,
+            false,
+        ),
+        (
+            FailurePoint::DeletionAfterFilesPhase,
+            KeyMaterialPhase::FilesRemoved,
+            false,
+            false,
+        ),
+        (
+            FailurePoint::DeletionBeforeFinalTransaction,
+            KeyMaterialPhase::FilesRemoved,
+            false,
+            false,
+        ),
+        (
+            FailurePoint::DeletionAfterFinalTransaction,
+            KeyMaterialPhase::Completed,
+            false,
+            false,
+        ),
+    ] {
+        let (_home, data, service, store, r) = deletion_fixture();
+        drop(service);
+        let service =
+            RepositoryService::open_at_with_failure_point_for_testing(data.path(), point).unwrap();
+        let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+        let id = OperationId::new();
+        let DeleteGeneratedKeyOutcome::RecoveryRequired(recovery) = service
+            .delete_generated_key(&store, id, Some(review), true)
+            .unwrap()
+        else {
+            panic!("expected interruption")
+        };
+        assert_eq!(recovery.phase, phase);
+        assert_eq!(recovery.action, KeyMaterialAction::Delete);
+        drop(service);
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(r.private_key_path.exists(), private_exists);
+        assert_eq!(r.public_key_path.as_ref().unwrap().exists(), public_exists);
+        if phase == KeyMaterialPhase::Completed {
+            assert_eq!(
+                service
+                    .delete_generated_key(&store, id, None, true)
+                    .unwrap(),
+                DeleteGeneratedKeyOutcome::AlreadyDeleted
+            );
+        } else {
+            assert_eq!(service.list_shared_keys().unwrap().len(), 1);
+            assert_eq!(
+                service.select_shared_key(r.id).unwrap_err().kind,
+                RepositoryErrorKind::SharedKeyMaterialPending
+            );
+            assert_eq!(
+                service.unregister_shared_key(r.id).unwrap_err().kind,
+                RepositoryErrorKind::SharedKeyMaterialPending
+            );
+            assert_eq!(
+                service
+                    .delete_generated_key(&store, id, None, true)
+                    .unwrap_err()
+                    .kind,
+                KeyMaterialErrorKind::ConfirmationRequired
+            );
+            let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+            assert_eq!(
+                service
+                    .delete_generated_key(&store, OperationId::new(), Some(review), true)
+                    .unwrap_err()
+                    .kind,
+                KeyMaterialErrorKind::Busy
+            );
+            let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+            assert_eq!(
+                service
+                    .delete_generated_key(&store, id, Some(review), true)
+                    .unwrap(),
+                DeleteGeneratedKeyOutcome::Deleted
+            );
+        }
+        assert!(service.list_shared_keys().unwrap().is_empty());
+        assert!(!r.private_key_path.exists() && !r.public_key_path.unwrap().exists());
+    }
+}
+
+#[test]
+fn deletion_retry_preserves_replacement_files() {
+    let (_home, data, service, store, r) = deletion_fixture();
+    drop(service);
+    let service = RepositoryService::open_at_with_failure_point_for_testing(
+        data.path(),
+        FailurePoint::DeletionAfterPrivateUnlink,
+    )
+    .unwrap();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    let id = OperationId::new();
+    service
+        .delete_generated_key(&store, id, Some(review), true)
+        .unwrap();
+    fs::write(&r.private_key_path, b"replacement").unwrap();
+    assert!(service.review_generated_key_deletion(&store, r.id).is_err());
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, None, true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::ConfirmationRequired
+    );
+    assert!(
+        fs::read(&r.private_key_path).unwrap() == b"replacement",
+        "replacement changed"
+    );
+    assert!(r.public_key_path.unwrap().exists());
+}
+
+#[test]
+fn deletion_operation_id_mismatch_changes_nothing() {
+    let (_home, _data, service, store, r) = deletion_fixture();
+    let generation_id = OperationId::new();
+    let other = created(
+        service
+            .generate_shared_key(&store, request(generation_id, KeyProtection::Unencrypted))
+            .unwrap(),
+    );
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, generation_id, Some(review), true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::OperationMismatch
+    );
+    let id = OperationId::new();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    service
+        .delete_generated_key(&store, id, Some(review), true)
+        .unwrap();
+    let review = service
+        .review_generated_key_deletion(&store, other.id)
+        .unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, id, Some(review), true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::OperationMismatch
+    );
+    let other_home = tempfile::tempdir().unwrap();
+    let other_store = KeyStore::for_home(other_home.path()).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&other_store, id, None, true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::OperationMismatch
+    );
+    assert!(other.private_key_path.exists() && other.public_key_path.unwrap().exists());
+    assert!(!other_home.path().join(".ssh").exists());
+}
+
+#[test]
+fn deletion_missing_entries_require_fresh_review() {
+    let (_home, _data, service, store, r) = deletion_fixture();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    fs::remove_file(&r.private_key_path).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, OperationId::new(), Some(review), true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::SourceChanged
+    );
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, OperationId::new(), Some(review), true)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::Deleted
+    );
+}
+
+#[test]
+fn unregister_generated_retains_both_files() {
+    let (_home, _data, service, store, r) = deletion_fixture();
+    let private = fs::read(&r.private_key_path).unwrap();
+    let public = fs::read(r.public_key_path.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        service.unregister_shared_key(r.id).unwrap(),
+        UnregisterSharedKeyOutcome::Unregistered
+    );
+    assert!(
+        fs::read(&r.private_key_path).unwrap() == private,
+        "private source changed"
+    );
+    assert!(
+        fs::read(r.public_key_path.unwrap()).unwrap() == public,
+        "public source changed"
+    );
+    assert_eq!(
+        service
+            .review_generated_key_deletion(&store, r.id)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::NotRegistered
+    );
+}
+
+#[test]
+fn deletion_cancel_without_review_does_not_create_store() {
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, OperationId::new(), None, false)
+            .unwrap(),
+        DeleteGeneratedKeyOutcome::Cancelled
+    );
+    assert!(!home.path().join(".ssh").exists());
+    assert!(service.list_key_material_recovery().unwrap().is_empty());
+}
+
+#[test]
+fn deletion_refuses_in_place_changes_and_changed_creation_evidence() {
+    for change_evidence in [false, true] {
+        let (_home, data, service, store, r) = deletion_fixture();
+        let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+        if change_evidence {
+            let c = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            c.execute("UPDATE owned_generated_keys SET public_file_identity=private_file_identity WHERE key_id=?1", [r.id.to_string()]).unwrap();
+        } else {
+            fs::write(&r.private_key_path, b"changed in place").unwrap();
+        }
+        assert!(
+            service
+                .delete_generated_key(&store, OperationId::new(), Some(review), true)
+                .is_err()
+        );
+        assert!(r.private_key_path.exists() && r.public_key_path.unwrap().exists());
+    }
+}
+
+#[test]
+fn deletion_missing_pair_still_requires_creation_evidence() {
+    let (_home, data, service, store, r) = deletion_fixture();
+    fs::remove_file(&r.private_key_path).unwrap();
+    fs::remove_file(r.public_key_path.as_ref().unwrap()).unwrap();
+    let review = service.review_generated_key_deletion(&store, r.id).unwrap();
+    let c = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    c.execute(
+        "DELETE FROM owned_generated_keys WHERE key_id=?1",
+        [r.id.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        service
+            .delete_generated_key(&store, OperationId::new(), Some(review), true)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::OwnershipUnverified
+    );
+    assert_eq!(service.list_shared_keys().unwrap().len(), 1);
+}

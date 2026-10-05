@@ -210,7 +210,6 @@ impl OwnedKeyFile {
             .validate_file(&self.file, &self.kind.name(self.id), self.kind)?;
         Ok(bytes)
     }
-    #[allow(dead_code, reason = "deletion consumer arrives in Task 6")]
     pub(crate) fn remove(self) -> Result<(), KeyMaterialError> {
         self.owner.store.validate()?;
         self.owner

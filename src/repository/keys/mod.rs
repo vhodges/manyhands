@@ -2,6 +2,8 @@ use std::{fmt, path::PathBuf};
 
 use super::OperationId;
 
+mod deletion;
+pub use deletion::GeneratedKeyDeletionReview;
 mod generation;
 mod inspection;
 mod registry;
@@ -334,4 +336,12 @@ pub enum GeneratedKeyUnlockOutcome {
     ImportedValidationDeferred(SharedKeyRegistration),
     Cancelled,
     ProviderUnavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeleteGeneratedKeyOutcome {
+    Deleted,
+    AlreadyDeleted,
+    Cancelled,
+    RecoveryRequired(KeyMaterialRecovery),
 }

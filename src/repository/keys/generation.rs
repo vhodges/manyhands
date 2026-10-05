@@ -10,18 +10,18 @@ use ssh_key::{Cipher, HashAlg, Kdf, LineEnding, PrivateKey, PublicKey};
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
-struct MaterialOperation {
-    operation_id: OperationId,
-    key_id: SharedKeyId,
-    action: KeyMaterialAction,
-    label: Option<String>,
-    private_path: String,
-    public_path: String,
-    private_identity: Option<Vec<u8>>,
-    public_identity: Option<Vec<u8>>,
-    fingerprint: Option<String>,
-    phase: KeyMaterialPhase,
-    failure: Option<String>,
+pub(super) struct MaterialOperation {
+    pub(super) operation_id: OperationId,
+    pub(super) key_id: SharedKeyId,
+    pub(super) action: KeyMaterialAction,
+    pub(super) label: Option<String>,
+    pub(super) private_path: String,
+    pub(super) public_path: String,
+    pub(super) private_identity: Option<Vec<u8>>,
+    pub(super) public_identity: Option<Vec<u8>>,
+    pub(super) fingerprint: Option<String>,
+    pub(super) phase: KeyMaterialPhase,
+    pub(super) failure: Option<String>,
 }
 
 fn error(kind: KeyMaterialErrorKind) -> KeyMaterialError {
@@ -333,7 +333,7 @@ fn verify_pair(guard: &OwnedStoreGuard, op: &MaterialOperation) -> Result<(), Ke
     }
     Ok(())
 }
-fn decode_identity(value: Option<&[u8]>) -> Result<FileIdentity, KeyMaterialError> {
+pub(super) fn decode_identity(value: Option<&[u8]>) -> Result<FileIdentity, KeyMaterialError> {
     let value = value
         .and_then(|v| std::str::from_utf8(v).ok())
         .ok_or_else(|| error(KeyMaterialErrorKind::OwnershipUnverified))?;
@@ -379,7 +379,10 @@ fn registration(
     }
     Ok(r)
 }
-fn save_progress(c: &Connection, op: &MaterialOperation) -> Result<(), KeyMaterialError> {
+pub(super) fn save_progress(
+    c: &Connection,
+    op: &MaterialOperation,
+) -> Result<(), KeyMaterialError> {
     c.execute("UPDATE key_material_operations SET phase=?2,private_file_identity=?3,public_file_identity=?4,public_key_fingerprint=?5,failure_code=?6 WHERE operation_id=?1", params![op.operation_id.to_string(), phase_value(op.phase),op.private_identity,op.public_identity,op.fingerprint,op.failure]).map_err(registry_error)?;
     Ok(())
 }
@@ -409,7 +412,7 @@ impl MaterialOperation {
         }
         Ok(())
     }
-    fn recovery(&self) -> KeyMaterialRecovery {
+    pub(super) fn recovery(&self) -> KeyMaterialRecovery {
         let recovery_action = match (self.action, self.phase) {
             (_, KeyMaterialPhase::RetainedForInspection | KeyMaterialPhase::Completed) => {
                 RecoveryAction::InspectRetainedFiles
@@ -430,7 +433,7 @@ impl MaterialOperation {
         }
     }
 }
-fn read_operation(
+pub(super) fn read_operation(
     c: &Connection,
     id: OperationId,
 ) -> Result<Option<MaterialOperation>, KeyMaterialError> {
@@ -481,7 +484,7 @@ fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
         _ => Err(error(KeyMaterialErrorKind::RegistryUnavailable)),
     }
 }
-fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
+pub(super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
     match kind {
         KeyMaterialErrorKind::RegistryUnavailable => "registry-unavailable",
         KeyMaterialErrorKind::SourceMissing => "source-missing",

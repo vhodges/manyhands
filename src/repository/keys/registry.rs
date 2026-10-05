@@ -163,6 +163,7 @@ impl RepositoryService {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        require_no_pending_material(&transaction, id, operation, data_directory)?;
         transaction
             .execute(
                 "UPDATE shared_ssh_keys SET selected = 0 WHERE selected = 1",
@@ -235,6 +236,7 @@ impl RepositoryService {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        require_no_pending_material(&transaction, id, operation, data_directory)?;
         let selected = transaction
             .query_row(
                 "SELECT selected FROM shared_ssh_keys WHERE id = ?1",
@@ -607,4 +609,26 @@ pub(in crate::repository) fn migrate_material_schema(
                 ON key_material_operations(key_id) WHERE phase <> 'completed';",
         )
         .map_err(RepositoryError::sqlite)
+}
+
+fn require_no_pending_material(
+    connection: &rusqlite::Connection,
+    id: SharedKeyId,
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<(), RepositoryError> {
+    let pending: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM key_material_operations WHERE key_id=?1 AND phase <> 'completed')",
+        [id.to_string()], |row| row.get(0),
+    ).map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+    if pending {
+        Err(RepositoryError::new(
+            operation,
+            Some(data_directory.to_owned()),
+            RepositoryErrorKind::SharedKeyMaterialPending,
+            "key material recovery is pending; review the operation and confirm recovery before selecting or unregistering the key",
+        ))
+    } else {
+        Ok(())
+    }
 }

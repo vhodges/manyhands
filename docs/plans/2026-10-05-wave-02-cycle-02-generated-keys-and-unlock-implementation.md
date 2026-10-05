@@ -297,31 +297,31 @@ no public arbitrary-token constructor is needed.
 Use existing selected registration and the Task 4 session API; return public
 metadata only. Imported reads never use ssh-key.
 
-- [ ] Add `import_readability_does_not_parse_private_material` using deliberately
+- [x] Add `import_readability_does_not_parse_private_material` using deliberately
   non-key bytes: expect ImportedReadable and unchanged bytes/registration.
   Cover missing, inaccessible, directory, FIFO, companion absent, and symlink
   to a readable regular file. For FIFO use a child-process timeout so failure
   cannot hang the test suite. No SSH operation is attempted.
-- [ ] Add `generated_unlock_round_trip_reuses_session`,
+- [x] Add `generated_unlock_round_trip_reuses_session`,
   `unencrypted_selected_key_does_not_prompt`, `generated_unlock_cancel_preserves_state`,
   `generated_unlock_wrong_passphrase_preserves_registration`,
   `selected_key_changes_during_prompt`, and `key_source_changes_during_prompt`.
   Use provider hooks to mutate selection through a second service while the
   prompt is pending, proving no cache/store lock is held. Assert changed state
   returns SelectionChanged/SourceChanged and invalidates the cached value.
-- [ ] Add `generated_unlock_bounds_file_and_kdf_work` (over 64 KiB, modified
+- [x] Add `generated_unlock_bounds_file_and_kdf_work` (over 64 KiB, modified
   cipher/round count, malformed input) and `generated_unlock_checks_public_identity`.
   Assert typed failures before expensive KDF work, with no raw parser output.
-- [ ] Run
+- [x] Run
   `devenv shell -- cargo test --locked --test key_material import` and
   `devenv shell -- cargo test --locked --test key_material unlock`;
   expect failures before implementation.
-- [ ] Implement nonblocking regular-file inspection, bounded generated reads,
+- [x] Implement nonblocking regular-file inspection, bounded generated reads,
   profile checks, decryption/fingerprint validation, post-prompt observation,
   and selection recheck. Return ImportedValidationDeferred without prompting
   when generated unlock is called with an imported selection. Do not persist
   passphrase, decrypted material, or content-derived private hashes.
-- [ ] Run focused tests and the Cycle 01 registry target. Run the complete
+- [x] Run focused tests and the Cycle 01 registry target. Run the complete
   `key_material` target too, so the selection/source
   race cases run even when their names do not match the focused filters.
   Record the Cycle 03 integration obligations (backend validation, rejected-secret eviction,

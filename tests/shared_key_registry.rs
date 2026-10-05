@@ -1471,3 +1471,53 @@ fn unregistering_an_absent_key_reports_not_registered() {
         UnregisterSharedKeyOutcome::NotRegistered
     );
 }
+
+#[test]
+fn pending_material_blocks_selection_without_clearing_another_key() {
+    use manyhands::repository::FailurePoint;
+    use manyhands::repository::keys::{
+        GenerateSharedKeyOutcome, GenerateSharedKeyRequest, KeyProtection, KeyStore,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at_with_failure_point_for_testing(
+        data.path(),
+        FailurePoint::DeletionAfterIntent,
+    )
+    .unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    let make_key = || {
+        let GenerateSharedKeyOutcome::Created(r) = service
+            .generate_shared_key(
+                &store,
+                GenerateSharedKeyRequest {
+                    operation_id: OperationId::new(),
+                    label: "key".into(),
+                    protection: KeyProtection::Unencrypted,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("expected creation")
+        };
+        r
+    };
+    let pending = make_key();
+    let selected = make_key();
+    service.select_shared_key(selected.id).unwrap();
+    let review = service
+        .review_generated_key_deletion(&store, pending.id)
+        .unwrap();
+    service
+        .delete_generated_key(&store, OperationId::new(), Some(review), true)
+        .unwrap();
+    let error = service.select_shared_key(pending.id).unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::SharedKeyMaterialPending);
+    assert_eq!(
+        service.unregister_shared_key(pending.id).unwrap_err().kind,
+        RepositoryErrorKind::SharedKeyMaterialPending
+    );
+    let rows = service.list_shared_keys().unwrap();
+    assert_eq!(rows.iter().find(|r| r.selected).unwrap().id, selected.id);
+    assert!(rows.iter().any(|r| r.id == pending.id));
+}
