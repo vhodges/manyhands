@@ -4,6 +4,8 @@ mod production;
 pub use production::*;
 #[path = "support/ssh_harness.rs"]
 mod ssh_harness;
+#[path = "support/ssh_privacy.rs"]
+mod ssh_privacy;
 #[path = "support/ssh_remote.rs"]
 mod ssh_remote;
 
@@ -99,27 +101,37 @@ fn allowed_client() -> Result<(), FixtureError> {
 }
 
 fn trust_known_hosts() -> Result<(), FixtureError> {
-    trust_case(0)
+    trust_case(TrustCase::KnownHosts)
 }
 fn trust_pin_overrides_known_hosts() -> Result<(), FixtureError> {
-    trust_case(1)
+    trust_case(TrustCase::PinOverridesKnownHosts)
 }
 fn trust_recovered_known_hosts() -> Result<(), FixtureError> {
-    trust_case(2)
+    trust_case(TrustCase::RecoveredKnownHosts)
 }
 fn trust_unknown_host() -> Result<(), FixtureError> {
-    trust_case(3)
+    trust_case(TrustCase::UnknownHost)
 }
 fn trust_exact_approval() -> Result<(), FixtureError> {
-    trust_case(4)
+    trust_case(TrustCase::ExactApproval)
 }
 fn trust_selected_key_rejected() -> Result<(), FixtureError> {
-    trust_case(5)
+    trust_case(TrustCase::SelectedKeyRejected)
 }
 fn trust_default_key_fallback_refused() -> Result<(), FixtureError> {
-    trust_case(6)
+    trust_case(TrustCase::DefaultKeyFallbackRefused)
 }
-fn trust_case(mode: u8) -> Result<(), FixtureError> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrustCase {
+    KnownHosts,
+    PinOverridesKnownHosts,
+    RecoveredKnownHosts,
+    UnknownHost,
+    ExactApproval,
+    SelectedKeyRejected,
+    DefaultKeyFallbackRefused,
+}
+fn trust_case(mode: TrustCase) -> Result<(), FixtureError> {
     use repository::transport::{
         HostApproval, HostKeyIdentity, SshAuthority, SshTransportErrorKind,
     };
@@ -127,7 +139,7 @@ fn trust_case(mode: u8) -> Result<(), FixtureError> {
     let known_hosts =
         std::path::PathBuf::from(std::env::var_os("MANYHANDS_SSH_TEST_HOME").ok_or(FixtureError)?)
             .join(".ssh/known_hosts");
-    if mode != 3 && mode != 4 {
+    if mode != TrustCase::UnknownHost && mode != TrustCase::ExactApproval {
         let entry = format!(
             "[127.0.0.1]:{} {}\n",
             fixture.address().port(),
@@ -149,15 +161,15 @@ fn trust_case(mode: u8) -> Result<(), FixtureError> {
         host: "127.0.0.1".into(),
         port: fixture.address().port(),
     };
-    let approval = (mode == 4).then(|| HostApproval {
+    let approval = (mode == TrustCase::ExactApproval).then(|| HostApproval {
         authority,
         expected: None,
         presented: observed.clone(),
     });
-    if mode == 5 {
+    if mode == TrustCase::SelectedKeyRejected {
         fixture.reject_client();
     }
-    if mode == 6 {
+    if mode == TrustCase::DefaultKeyFallbackRefused {
         let home = std::path::PathBuf::from(
             std::env::var_os("MANYHANDS_SSH_TEST_HOME").ok_or(FixtureError)?,
         );
@@ -170,18 +182,19 @@ fn trust_case(mode: u8) -> Result<(), FixtureError> {
     let probe = repository::transport::tests::callback_handshake(
         &fixture.url(),
         fixture.client_key_path(),
-        (mode == 1 || mode == 2).then_some(old.clone()),
+        (mode == TrustCase::PinOverridesKnownHosts || mode == TrustCase::RecoveredKnownHosts)
+            .then_some(old.clone()),
         approval,
-        mode == 2,
+        mode == TrustCase::RecoveredKnownHosts,
     );
     assert_eq!(probe.observed, Some(observed.clone()));
     match mode {
-        0 => {
+        TrustCase::KnownHosts => {
             assert!(probe.connected);
             assert!(probe.passthrough);
             assert_eq!(probe.pin, None);
         }
-        1 => {
+        TrustCase::PinOverridesKnownHosts => {
             assert!(!probe.connected);
             assert_eq!(
                 probe.failure,
@@ -191,7 +204,7 @@ fn trust_case(mode: u8) -> Result<(), FixtureError> {
                 })
             );
         }
-        2 => {
+        TrustCase::RecoveredKnownHosts => {
             assert!(!probe.connected);
             assert!(!probe.passthrough);
             assert_eq!(
@@ -201,22 +214,21 @@ fn trust_case(mode: u8) -> Result<(), FixtureError> {
                 })
             );
         }
-        3 => {
+        TrustCase::UnknownHost => {
             assert!(!probe.connected);
             assert!(probe.passthrough);
             assert_eq!(probe.backend_code, Some(git2::ErrorCode::Certificate));
         }
-        4 => {
+        TrustCase::ExactApproval => {
             assert!(probe.connected);
             assert_eq!(probe.pin, Some(observed));
         }
-        5 | 6 => {
+        TrustCase::SelectedKeyRejected | TrustCase::DefaultKeyFallbackRefused => {
             assert!(!probe.connected);
             assert_eq!(probe.failure, Some(SshTransportErrorKind::KeyRejected));
             assert_eq!(probe.key_submissions, 1);
             assert!(fixture.accepted_keys().is_empty());
         }
-        _ => unreachable!(),
     }
     if probe.connected {
         assert_eq!(

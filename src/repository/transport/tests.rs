@@ -603,3 +603,32 @@ fn transport_marker_symlink_unreadable_and_publication_failure_are_closed() {
     assert!(result.is_err());
     assert!(!marker.exists());
 }
+
+/// Callback-only hostile username never enters repository configuration.
+#[allow(dead_code)]
+pub(crate) fn callback_privacy(
+    key: &std::path::Path,
+    username: &str,
+) -> (SshTransportError, String) {
+    let prepared = prepared(key);
+    let attempt = CallbackAttempt::default();
+    let backend = attempt
+        .credentials(
+            &prepared,
+            None,
+            "ssh://fixture@example.invalid/repository.git",
+            Some(username),
+            git2::CredentialType::SSH_KEY,
+        )
+        .err()
+        .expect("callback username must reject");
+    let error = SshTransportError {
+        root: "/safe/root".into(),
+        remote_name: "origin".into(),
+        direction: SshDirection::Fetch,
+        selected_key_id: Some(prepared.registration.id),
+        authority: Some(prepared.endpoint.authority),
+        kind: attempt.failure().expect("callback failure must be typed"),
+    };
+    (error, format!("{backend}; {backend:?}"))
+}

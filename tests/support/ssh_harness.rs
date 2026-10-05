@@ -66,10 +66,23 @@ pub fn run(cases: &[Case]) {
         }
         return;
     }
-    let filter = args.iter().find(|arg| !arg.starts_with('-'));
+    let options = match parse_options(&args) {
+        Ok(options) => options,
+        Err(_) => {
+            eprintln!("unsupported SSH runner options");
+            std::process::exit(2);
+        }
+    };
+    let filter = options.filter.as_ref();
     let mut count = 0;
     for (name, _) in cases {
-        if filter.is_some_and(|filter| !name.contains(filter)) {
+        if filter.is_some_and(|filter| {
+            !(if options.exact {
+                *name == filter
+            } else {
+                name.contains(filter)
+            })
+        }) {
             continue;
         }
         if args.iter().any(|arg| arg == "--list") {
@@ -113,7 +126,10 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
         home.join(".ssh/id_ed25519"),
         fixed(default_key.to_openssh(russh::keys::ssh_key::LineEnding::LF))?.as_bytes(),
     ))?;
+    let probes = isolation.path().join("private probes");
+    fixed(std::fs::create_dir(&probes))?;
     let mut command = Command::new(fixed(std::env::current_exe())?);
+    command.env(super::ssh_privacy::PROBES, &probes);
     command
         .args(["--ssh-case", case])
         .stdout(Stdio::piped())
@@ -152,8 +168,9 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
     let mut child = fixed(command.spawn())?;
     let stdout = child.stdout.take().ok_or(FixtureError)?;
     let stderr = child.stderr.take().ok_or(FixtureError)?;
-    // Drain continuously with bounded buffers. Child diagnostics may contain
-    // backend strings or keys, so they are never copied into parent failures.
+    // Drain all raw output into bounded buffers; overflow is a failure. Wait for
+    // child completion before loading its probes, then scan before filtering.
+    // Neither raw diagnostics nor probes are ever copied into parent failures.
     let out = std::thread::spawn(move || drain(stdout));
     let err = std::thread::spawn(move || drain(stderr));
     let deadline = Instant::now() + Duration::from_secs(100);
@@ -174,7 +191,16 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
             }
         }
     };
-    if let Ok(output) = out.join() {
+    let output = out.join();
+    let errors = err.join();
+    let output = fixed(output)??;
+    let errors = fixed(errors)??;
+    if case == "transport_privacy" {
+        let probes = super::ssh_privacy::load(&probes)?;
+        super::ssh_privacy::clean(&output, &probes)?;
+        super::ssh_privacy::clean(&errors, &probes)?;
+    }
+    {
         for line in String::from_utf8_lossy(&output).lines() {
             if let Some(numbers) = line.strip_prefix("SSH_OBSERVATION ")
                 && numbers
@@ -185,7 +211,6 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
             }
         }
     }
-    let _ = err.join();
     result
 }
 pub fn observation(values: &[u128]) {
@@ -198,15 +223,104 @@ pub fn observation(values: &[u128]) {
             .join(" ")
     );
 }
-fn drain(mut stream: impl Read) -> Vec<u8> {
+const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+fn drain(mut stream: impl Read) -> Result<Vec<u8>, FixtureError> {
     let mut buffer = [0; 4096];
     let mut retained = Vec::new();
-    while let Ok(count) = stream.read(&mut buffer) {
+    let mut overflow = false;
+    loop {
+        let count = fixed(stream.read(&mut buffer))?;
         if count == 0 {
             break;
         }
-        let room = 16_384usize.saturating_sub(retained.len());
-        retained.extend_from_slice(&buffer[..count.min(room)]);
+        if retained.len() + count <= CAPTURE_LIMIT && !overflow {
+            retained.extend_from_slice(&buffer[..count]);
+        } else {
+            overflow = true;
+        }
     }
-    retained
+    if overflow {
+        Err(FixtureError)
+    } else {
+        Ok(retained)
+    }
+}
+struct Options {
+    filter: Option<String>,
+    exact: bool,
+}
+fn parse_options(args: &[String]) -> Result<Options, FixtureError> {
+    let mut options = Options {
+        filter: None,
+        exact: false,
+    };
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--test-threads" => {
+                let value = args.next().ok_or(FixtureError)?;
+                if value.parse::<usize>().ok().filter(|n| *n > 0).is_none() {
+                    return Err(FixtureError);
+                }
+            }
+            "--exact" => options.exact = true,
+            "--list" | "--nocapture" | "--show-output" | "--quiet" => {}
+            _ if arg.starts_with("--test-threads=") => {
+                if arg[15..].parse::<usize>().ok().filter(|n| *n > 0).is_none() {
+                    return Err(FixtureError);
+                }
+            }
+            _ if !arg.starts_with('-') && options.filter.is_none() => {
+                options.filter = Some(arg.clone())
+            }
+            _ => return Err(FixtureError),
+        }
+    }
+    Ok(options)
+}
+pub fn runner_options_regression() -> Result<(), FixtureError> {
+    let output = fixed(
+        Command::new(fixed(std::env::current_exe())?)
+            .args(["--list", "--test-threads", "1"])
+            .output(),
+    )?;
+    assert!(
+        output.status.success(),
+        "supported runner options must succeed"
+    );
+    assert!(
+        output.stdout.windows(6).any(|w| w == b": test"),
+        "runner options must not become a filter"
+    );
+    assert!(parse_options(&["--test-threads".into(), "0".into()]).is_err());
+    assert!(parse_options(&["--unsupported".into()]).is_err());
+    Ok(())
+}
+pub fn raw_output_regression() -> Result<(), FixtureError> {
+    let mut bytes = vec![b'x'; 20_478];
+    bytes.extend_from_slice(b"private-stream-probe");
+    let captured = drain(&bytes[..])?;
+    let probes = vec![b"private-stream-probe".to_vec()];
+    assert!(
+        super::ssh_privacy::clean(&captured, &probes).is_err(),
+        "raw output scanner must detect beyond-prefix and read-boundary leaks"
+    );
+    assert!(
+        super::ssh_privacy::clean(b"clean", &[]).is_err(),
+        "missing probes must fail closed"
+    );
+    assert!(
+        super::ssh_privacy::clean(b"clean", &[vec![]]).is_err(),
+        "empty probes must fail closed"
+    );
+    super::ssh_privacy::clean(b"clean", &probes)?;
+    Ok(())
+}
+
+pub fn capture_limit_regression() -> Result<(), FixtureError> {
+    assert!(
+        drain(std::io::repeat(b'x').take((CAPTURE_LIMIT + 1) as u64)).is_err(),
+        "capture overflow must fail closed"
+    );
+    Ok(())
 }

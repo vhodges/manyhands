@@ -291,6 +291,7 @@ fn anonymous_rejected() -> Result<(), FixtureError> {
 fn normalized_url_rewrite_rejected() -> Result<(), FixtureError> {
     for direction in [SshDirection::Fetch, SshDirection::Push] {
         let case = Case::new(false)?;
+        crate::failures::seed(&case)?;
         let repo = fixed(git2::Repository::open(&case.root))?;
         let raw = format!(
             "ssh://fixture@127.0.0.1:0{}/fixture.git",
@@ -306,6 +307,7 @@ fn normalized_url_rewrite_rejected() -> Result<(), FixtureError> {
         fixed(
             fixed(repo.config())?.set_str(&format!("url.{changed}.{rule}"), &case.fixture.url()),
         )?;
+        let before = crate::failures::Preservation::capture(&case)?;
         let (mut session, requests) = session(vec![]);
         let mut request = case.request();
         request.direction = direction;
@@ -317,6 +319,7 @@ fn normalized_url_rewrite_rejected() -> Result<(), FixtureError> {
         assert!(requests.borrow().is_empty());
         assert!(case.fixture.accepted_keys().is_empty());
         assert_eq!(case.fixture.helper_invocations(), 0);
+        before.check(&case)?;
     }
     Ok(())
 }

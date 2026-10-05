@@ -198,13 +198,17 @@ fn unavailable_retry() -> Result<(), FixtureError> {
 }
 fn retry(first: PassphraseResponse, expected: SshTransportErrorKind) -> Result<(), FixtureError> {
     let case = Case::new(true)?;
+    crate::failures::seed(&case)?;
+    let before = crate::failures::Preservation::capture(&case)?;
     let (mut credentials, requests) = session(vec![first, secret(PASSWORD)]);
     let error = case.verify(&mut credentials).unwrap_err();
     assert_eq!(error.kind, expected);
     assert_eq!(error.selected_key_id, Some(case.registration.id));
     assert_eq!(requests.borrow().len(), 1);
     assert!(!credentials.has_cached_passphrase(&requests.borrow()[0]));
+    before.check(&case)?;
     fixed(case.verify(&mut credentials))?;
+    before.check(&case)?;
     assert_eq!(requests.borrow().len(), 2);
     Ok(())
 }

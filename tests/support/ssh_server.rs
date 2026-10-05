@@ -177,6 +177,7 @@ impl Handler for Restricted {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        let receiving = command == b"git-receive-pack '/fixture.git'";
         let program = match command {
             b"git-upload-pack '/fixture.git'" => self.shared.upload.clone(),
             b"git-receive-pack '/fixture.git'" => self.shared.receive.clone(),
@@ -213,7 +214,7 @@ impl Handler for Restricted {
         let shared = self.shared.clone();
         let handle = session.handle();
         let task = tokio::spawn(async move {
-            relay(channel, child, handle, shared).await;
+            relay(channel, child, handle, shared, receiving).await;
         });
         self.shared.helper_tasks.lock().unwrap().push(task);
         Ok(())
@@ -262,6 +263,7 @@ async fn relay(
     mut child: tokio::process::Child,
     handle: server::Handle,
     shared: Arc<Shared>,
+    receiving: bool,
 ) {
     let id = channel.id();
     let mut input = child.stdin.take();
@@ -278,6 +280,8 @@ async fn relay(
     let mut transfer_started = false;
     let mut transfer_checked = false;
     let mut advertisement_checked = false;
+    let mut hostile_pending = Vec::new();
+    let mut hostile_sideband_sent = false;
     loop {
         if status.is_some() && !output_open {
             break;
@@ -310,12 +314,25 @@ async fn relay(
                             transfer_checked = true;
                             if boundary(&shared, FixtureBoundary::Transfer).await.is_err() { break; }
                         }
+                        if receiving && transfer_started && matches!(*shared.fault.lock().unwrap(), Some(Fault::Disconnect(FixtureBoundary::AfterReceivePack))) {
+                            // Wait for the actual helper to commit its ref update, then lose
+                            // its status response. This intentionally cannot imply rollback.
+                            status = Some(child.wait().await);
+                            shared.receive_status_withheld.store(true, Ordering::SeqCst);
+                            break;
+                        }
                         let fault = *shared.fault.lock().unwrap();
                         if transfer_started && let Some(Fault::Pace(delay)) = fault {
                             tokio::select! { _ = tokio::time::sleep(delay) => {}, _ = shutdown.changed() => break }
                         }
+                        let hostile = shared.hostile.lock().unwrap().clone();
+                        let payload = if receiving && transfer_started && let Some(marker) = hostile {
+                            hostile_pending.extend_from_slice(&outgoing[..count]);
+                            match hostile_packets(&mut hostile_pending, marker.as_bytes(), &mut hostile_sideband_sent) { Ok(bytes) => bytes, Err(_) => break }
+                        } else { outgoing[..count].to_vec() };
+                        if payload.is_empty() { continue; }
                         let sent = tokio::select! {
-                            result = handle.data(id, outgoing[..count].to_vec()) => result,
+                            result = handle.data(id, payload) => result,
                             _ = shutdown.changed() => break,
                         };
                         if sent.is_err() { break; }
@@ -341,4 +358,46 @@ async fn relay(
     let _ = handle.close(id).await;
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
+}
+
+// Receive-pack report-status is pkt-line framed, possibly nested in sideband 1.
+// Buffer incomplete packets so arbitrary process read boundaries cannot lose probes.
+fn hostile_packets(
+    pending: &mut Vec<u8>,
+    marker: &[u8],
+    sideband_sent: &mut bool,
+) -> Result<Vec<u8>, FixtureError> {
+    let mut output = Vec::new();
+    while pending.len() >= 4 {
+        let size = fixed(usize::from_str_radix(
+            fixed(std::str::from_utf8(&pending[..4]))?,
+            16,
+        ))?;
+        let size = if size == 0 {
+            4
+        } else if size < 4 {
+            return Err(FixtureError);
+        } else {
+            size
+        };
+        if pending.len() < size {
+            break;
+        }
+        let mut packet: Vec<_> = pending.drain(..size).collect();
+        if packet.get(4) == Some(&1) && !*sideband_sent {
+            output.extend_from_slice(format!("{:04x}", marker.len() + 6).as_bytes());
+            output.push(2);
+            output.extend_from_slice(marker);
+            output.push(b'\n');
+            *sideband_sent = true;
+        }
+        let needle = b"non-fast-forward";
+        for index in 0..=packet.len().saturating_sub(needle.len()) {
+            if packet.get(index..index + needle.len()) == Some(needle.as_slice()) {
+                packet[index..index + needle.len()].copy_from_slice(marker);
+            }
+        }
+        output.extend(packet);
+    }
+    Ok(output)
 }

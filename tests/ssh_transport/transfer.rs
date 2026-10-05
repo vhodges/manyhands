@@ -57,7 +57,7 @@ fn download() -> Result<(), FixtureError> {
     );
     Ok(())
 }
-fn commit(case: &Case) -> Result<git2::Oid, FixtureError> {
+pub fn commit(case: &Case) -> Result<git2::Oid, FixtureError> {
     let repo = fixed(git2::Repository::open(&case.root))?;
     let tree = fixed(fixed(repo.treebuilder(None))?.write())?;
     let tree = fixed(repo.find_tree(tree))?;

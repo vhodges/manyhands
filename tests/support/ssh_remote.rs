@@ -37,6 +37,7 @@ pub enum FixtureBoundary {
     ExecAcknowledgement,
     Advertisement,
     Transfer,
+    AfterReceivePack,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Fault {
@@ -56,6 +57,8 @@ pub(super) struct Shared {
     pub completed_helpers: AtomicUsize,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
+    pub hostile: Mutex<Option<String>>,
+    pub receive_status_withheld: AtomicBool,
     pub repository: PathBuf,
     pub upload: PathBuf,
     pub receive: PathBuf,
@@ -132,6 +135,8 @@ impl SshRemoteFixture {
             completed_helpers: AtomicUsize::new(0),
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
+            hostile: Mutex::new(None),
+            receive_status_withheld: AtomicBool::new(false),
             repository: repo_path,
             upload: helpers.0,
             receive: helpers.1,
@@ -158,6 +163,16 @@ impl SshRemoteFixture {
         })
     }
 
+    pub fn receive_status_withheld(&self) -> bool {
+        self.shared.receive_status_withheld.load(Ordering::SeqCst)
+    }
+    pub fn hostile_rejection(&self, marker: &str) {
+        assert!(
+            marker.len() == b"non-fast-forward".len(),
+            "hostile marker must preserve packet width"
+        );
+        *self.shared.hostile.lock().unwrap() = Some(marker.into());
+    }
     pub fn url(&self) -> String {
         format!("ssh://fixture@{}/fixture.git", self.address)
     }
