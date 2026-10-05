@@ -10,7 +10,7 @@ use manyhands::{
     },
 };
 use rusqlite::Connection;
-use std::{sync::mpsc, thread, time::Duration};
+use std::{process::Command, sync::mpsc, thread, time::Duration};
 
 mod support;
 
@@ -1395,6 +1395,7 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
 
     for (name, url) in [
         ("ssh", "ssh://git@example.invalid/group/project.git"),
+        ("ssh-no-user", "ssh://example.invalid/group/project.git"),
         ("scp", "git@example.invalid:group/project.git"),
         ("http", "https://example.invalid/group/project.git"),
         ("file", "file:///tmp/project.git"),
@@ -1406,6 +1407,15 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         ("empty-port", "ssh://git@example.invalid:/project.git"),
         ("text-port", "ssh://git@example.invalid:abc/project.git"),
         ("large-port", "ssh://git@example.invalid:65536/project.git"),
+        ("zero-port", "ssh://git@example.invalid:0/project.git"),
+        (
+            "encoded-authority",
+            "ssh://git@%65xample.invalid/project.git",
+        ),
+        (
+            "password-userinfo",
+            "ssh://git:secret@example.invalid/project.git",
+        ),
         ("file-scp", "file:repository.git"),
         ("https-scp", "https:repository.git"),
         ("http-scp", "http:repository.git"),
@@ -1445,7 +1455,7 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         .unwrap();
     stage_configuration(&fixture);
 
-    for name in ["ssh", "scp"] {
+    for name in ["ssh", "ssh-no-user", "scp"] {
         assert!(matches!(
             service.set_publication_remote(publication_request(&fixture.root, Some(name))),
             Ok(PublicationRemoteOutcome::Changed { .. })
@@ -1467,6 +1477,9 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         "empty-port",
         "text-port",
         "large-port",
+        "zero-port",
+        "encoded-authority",
+        "password-userinfo",
         "file-scp",
         "https-scp",
         "http-scp",
@@ -1475,6 +1488,135 @@ fn publication_remote_requires_ssh_fetch_and_effective_push_urls() {
         "ssh-push-http",
         "http-push-ssh",
     ] {
+        let error = service
+            .set_publication_remote(publication_request(&fixture.root, Some(name)))
+            .unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::InvalidPublicationRemote);
+    }
+}
+
+#[test]
+fn publication_remote_rejects_same_host_local_url_rewrites() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    service
+        .add_remote(add_remote_request(
+            &fixture.root,
+            "origin",
+            "git@example.invalid:group/project.git",
+        ))
+        .unwrap();
+    stage_configuration(&fixture);
+    fixture
+        .repository
+        .config()
+        .unwrap()
+        .set_str(
+            "url.ssh://other@example.invalid/rewritten/.insteadOf",
+            "git@example.invalid:",
+        )
+        .unwrap();
+
+    let error = service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPublicationRemote);
+}
+
+#[test]
+fn publication_remote_rejects_same_host_local_push_url_rewrites() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    service
+        .add_remote(add_remote_request(
+            &fixture.root,
+            "origin",
+            "git@example.invalid:group/project.git",
+        ))
+        .unwrap();
+    stage_configuration(&fixture);
+    fixture
+        .repository
+        .config()
+        .unwrap()
+        .set_str(
+            "url.ssh://git@example.invalid/rewritten/.pushInsteadOf",
+            "git@example.invalid:",
+        )
+        .unwrap();
+
+    let error = service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPublicationRemote);
+}
+
+#[test]
+fn publication_remote_rejects_global_fetch_and_push_url_rewrites() {
+    const CHILD_MARKER: &str = "MANYHANDS_GLOBAL_REWRITE_TEST_CHILD";
+    const CONFIG_DIRECTORY: &str = "MANYHANDS_GLOBAL_REWRITE_CONFIG_DIRECTORY";
+
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let global = tempfile::tempdir().unwrap();
+        std::fs::write(
+            global.path().join(".gitconfig"),
+            "[url \"ssh://other@example.invalid/rewritten/\"]\n\
+             \tinsteadOf = fetch-alias:\n\
+             [url \"ssh://git@example.invalid/rewritten/\"]\n\
+             \tpushInsteadOf = push-alias:\n",
+        )
+        .unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "publication_remote_rejects_global_fetch_and_push_url_rewrites",
+                "--nocapture",
+            ])
+            .env(CHILD_MARKER, "1")
+            .env(CONFIG_DIRECTORY, global.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "global rewrite child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let global = std::env::var_os(CONFIG_DIRECTORY).unwrap();
+    // This exact-test child is the only code in its process using libgit2, so no
+    // concurrent configuration access can overlap this global search-path setup.
+    unsafe { git2::opts::set_search_path(ConfigLevel::Global, global).unwrap() };
+
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    for (name, url) in [
+        ("fetch-rewritten", "fetch-alias:group/project.git"),
+        ("push-rewritten", "push-alias:group/project.git"),
+    ] {
+        service
+            .add_remote(add_remote_request(&fixture.root, name, url))
+            .unwrap();
+    }
+    stage_configuration(&fixture);
+
+    for name in ["fetch-rewritten", "push-rewritten"] {
         let error = service
             .set_publication_remote(publication_request(&fixture.root, Some(name)))
             .unwrap_err();
