@@ -1,6 +1,14 @@
+// The public error contract retains owned context and both host identities for
+// replacement approval. Operations are infrequent; keep that typed value API.
+#![allow(clippy::result_large_err)]
+
 mod callbacks;
 pub(super) mod endpoint;
 mod error;
+mod operation;
+#[cfg(test)]
+pub(crate) mod operation_tests;
+mod remote;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(super) mod trust;
@@ -12,7 +20,6 @@ pub use error::{SshTransportError, SshTransportErrorKind};
 use super::SharedKeyId;
 
 // Constructed by the scoped operation driver; no Git handles or secret storage.
-#[allow(dead_code)]
 pub(super) struct PreparedSshAttempt {
     pub(super) registration: super::keys::SharedKeyRegistration,
     pub(super) source: super::keys::KeySourceToken,

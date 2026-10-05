@@ -15,8 +15,6 @@ pub(super) struct CallbackAttempt {
     username_submissions: Cell<u8>,
 }
 
-// Consumed by the operation driver in Task 4.
-#[allow(dead_code)]
 impl CallbackAttempt {
     pub(super) fn failure(&self) -> Option<SshTransportErrorKind> {
         self.failure.borrow().clone()
@@ -143,7 +141,6 @@ fn certificate_identity(certificate: &git2::cert::Cert<'_>) -> Option<HostKeyIde
     })
 }
 
-#[allow(dead_code)]
 pub(super) fn build_callbacks<'a>(
     prepared: &'a PreparedSshAttempt,
     passphrase: Option<&'a str>,

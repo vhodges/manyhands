@@ -136,6 +136,15 @@ struct Restricted {
 }
 impl Handler for Restricted {
     type Error = russh::Error;
+    async fn auth_none(&mut self, user: &str) -> Result<Auth, Self::Error> {
+        Ok(
+            if user == "fixture" && self.shared.anonymous.load(Ordering::SeqCst) {
+                Auth::Accept
+            } else {
+                Auth::reject()
+            },
+        )
+    }
     async fn auth_publickey(
         &mut self,
         user: &str,

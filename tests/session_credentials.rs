@@ -1,6 +1,6 @@
 use manyhands::repository::keys::{
     KeySourceToken, PassphraseResponse, PassphraseUseFailure, SecretPassphrase,
-    SessionCredentialProvider, SessionCredentials, SessionUnlockFailure, SharedKeyId,
+    SessionCredentialProvider, SessionCredentials, SessionUnlockFailure, SharedKeyId, UnlockReason,
     UnlockRequest,
 };
 use std::{cell::Cell, collections::VecDeque, fs, rc::Rc};
@@ -45,6 +45,7 @@ fn observed_request(label: &str) -> (tempfile::TempDir, UnlockRequest) {
             key_id: SharedKeyId::new(),
             label: label.to_owned(),
             source,
+            reason: UnlockReason::ProtectedKey,
         },
     )
 }
@@ -54,6 +55,7 @@ fn successful_unlock_prompts_once_per_session() {
     let (_source, request) = observed_request("primary");
     let (provider, calls) = CountingProvider::new([supplied("correct horse")]);
     let mut session = SessionCredentials::new(provider);
+    assert!(!session.has_cached_passphrase(&request));
 
     for _ in 0..2 {
         assert_eq!(
@@ -65,6 +67,14 @@ fn successful_unlock_prompts_once_per_session() {
         );
     }
     assert_eq!(calls.get(), 1);
+    assert!(session.has_cached_passphrase(&request));
+    let mut different = request.clone();
+    different.key_id = SharedKeyId::new();
+    assert!(!session.has_cached_passphrase(&different));
+    let (_other, other) = observed_request("other");
+    different = request.clone();
+    different.source = other.source;
+    assert!(!session.has_cached_passphrase(&different));
 
     let (provider, second_session_calls) = CountingProvider::new([supplied("correct horse")]);
     let mut second_session = SessionCredentials::new(provider);
@@ -207,6 +217,7 @@ fn source_metadata_change_requires_a_new_prompt() {
         key_id: SharedKeyId::new(),
         label: "primary".to_owned(),
         source: KeySourceToken::observe(&path).unwrap(),
+        reason: UnlockReason::ProtectedKey,
     };
     let (provider, calls) = CountingProvider::new([supplied("first"), supplied("second")]);
     let mut session = SessionCredentials::new(provider);
@@ -287,7 +298,7 @@ fn credential_wrappers_have_exact_redacted_or_opaque_formatting() {
         (
             format!("{request:?}"),
             format!(
-                "UnlockRequest {{ key_id: {:?}, label: \"public label\", source: KeySourceToken([OPAQUE]) }}",
+                "UnlockRequest {{ key_id: {:?}, label: \"public label\", source: KeySourceToken([OPAQUE]), reason: ProtectedKey }}",
                 request.key_id
             ),
         ),

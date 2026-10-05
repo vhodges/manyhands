@@ -41,9 +41,13 @@ name = "manyhands-cli"
 path = "src/bin/manyhands-cli.rs"
 
 [dev-dependencies]
-russh = { version = "=0.63.3", default-features = false, features = ["ring"] }
+russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "process", "sync", "time", "io-util"] }
 
 [[test]]
 name = "ssh_fixture"
+harness = false
+
+[[test]]
+name = "ssh_transport"
 harness = false

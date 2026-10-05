@@ -49,6 +49,7 @@ pub(super) struct Shared {
     pub host: Mutex<PrivateKey>,
     pub allowed: Mutex<PublicKey>,
     pub reject: AtomicBool,
+    pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
     pub helpers: AtomicUsize,
     pub active_helpers: AtomicUsize,
@@ -124,6 +125,7 @@ impl SshRemoteFixture {
             host: Mutex::new(host),
             allowed: Mutex::new(client.public_key().clone()),
             reject: AtomicBool::new(false),
+            anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
             helpers: AtomicUsize::new(0),
             active_helpers: AtomicUsize::new(0),
@@ -158,6 +160,10 @@ impl SshRemoteFixture {
 
     pub fn url(&self) -> String {
         format!("ssh://fixture@{}/fixture.git", self.address)
+    }
+    /// Explicit adversarial mode; normal fixtures deny none authentication.
+    pub fn accept_anonymous(&self) {
+        self.shared.anonymous.store(true, Ordering::SeqCst);
     }
     pub fn address(&self) -> SocketAddr {
         self.address
@@ -211,6 +217,9 @@ impl SshRemoteFixture {
     }
     pub fn reject_client(&self) {
         self.shared.reject.store(true, Ordering::SeqCst);
+    }
+    pub fn restore_client(&self) {
+        self.shared.reject.store(false, Ordering::SeqCst);
     }
     pub fn disconnect_at(&self, boundary: FixtureBoundary) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Disconnect(boundary));

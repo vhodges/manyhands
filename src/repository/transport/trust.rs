@@ -95,9 +95,8 @@ pub(super) fn approval_matches(
     })
 }
 
-// These private entry points are consumed by the next operation-driver task.
-#[allow(dead_code)]
 impl RepositoryService {
+    #[cfg(test)]
     pub(in super::super) fn read_host_pin(
         &self,
         authority: &SshAuthority,
@@ -125,6 +124,7 @@ impl RepositoryService {
     }
     /// Pin-only convenience. Operations must use finalize_host_trust with their
     /// original marker snapshot to detect recovery across network work.
+    #[cfg(test)]
     pub(in super::super) fn finalize_host_pin(
         &self,
         authority: &SshAuthority,
