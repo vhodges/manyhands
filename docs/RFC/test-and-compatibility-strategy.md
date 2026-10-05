@@ -222,6 +222,9 @@ shutdown, keyboard/IME behavior and the register's native-platform matrix.
 Record measurements for the approved responsiveness targets and native
 trusted-collaborator journeys as specified in the register. RFC approval does
 not count as feasibility, performance, compatibility or release evidence.
-Editor integration and bounded transport shutdown retain their explicit
-pre-implementation feasibility gates. There is no CLI daemon or concurrent
+Editor integration and responsive safe-point shutdown retain their explicit
+feasibility gates before their dependent implementation. Exercise operations
+that exceed the ten-second feedback threshold: the UI reports still stopping,
+retains live ownership/recovery state and waits safely; no total process-exit
+deadline is asserted. There is no CLI daemon or concurrent
 resident-poller orchestration gate in this release.

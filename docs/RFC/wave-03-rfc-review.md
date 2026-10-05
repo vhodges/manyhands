@@ -56,16 +56,23 @@ pushing or merging the planning branch.
 | W3-04 | Ticket branches can contain code; resolve canonical Markdown in-app and provide explicit external-tool guidance for other conflicts. | Product-owner direction recorded 2026-10-05. Keep the owned-path boundary and prove safe re-observation after external repair. |
 | W3-05 | Concurrent resident-poller coordination is not required. Remove scheduler election, atomic due-slot claiming and process heartbeat records; retain existing Wave 02 leases/reservations for actual operations. | Resolved by the W3-02 scope clarification. No new scheduler-coordination protocol or test matrix. |
 | W3-06 | Desktop unlock blocking must remain distinct from persisted user pause. Its worker shares the desktop credential session; CLI credentials last one invocation. | Approved with the RFC set; verify during runtime implementation. No cross-process readiness or unlock coordination. |
-| W3-07 | Libgit2 cancellation callbacks do not themselves prove bounded shutdown in every transport phase. Use a ten-second graceful drain budget with visible incomplete recovery. | Feasibility gate; Technical Lead must demonstrate native behavior or approve a cancellation design before runtime implementation. |
+| W3-07 | Ten seconds is a shutdown feedback threshold, not a process-exit deadline. Show still stopping, preserve recovery state/live ownership and wait for the operation to stop safely. | Product-owner clarification during Wave planning, 2026-10-05. Technical Lead must characterize native cancellation and responsive stopping before worker implementation; callbacks alone are not evidence. |
 | W3-08 | CLI retries need durable request identity and stable comment IDs; current domain requests do not provide the complete external protocol. | Approved contract; audit actual domain APIs before CLI mutation planning and verify replay/cache-loss recovery during implementation. |
 | W3-09 | Repair/adoption, folder creation, identity configuration, key public export and confirmation previews need an API audit. UI controls cannot manufacture safe missing domain behavior. | Technical Lead must map to existing operations or propose narrowly scoped additions in Wave 03 Cycles. |
-| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Approved native evidence matrix below; Release Owner must arrange machines/runners before final Wave planning. |
+| W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Product owner selected Linux-first work on 2026-10-05. Release Owner tracks Windows/macOS tester/machine access as an open dependency; the complete native evidence matrix remains a Wave exit requirement. |
 | W3-11 | A ticket close integrates the full context branch and can remove a worktree containing non-item files. | Effect preview must enumerate paths and preserve dirty/unexpected work; reconcile with Wave 02 closure preflight before close UI planning. |
 | W3-12 | Short-ID research is not an approved replacement for canonical ULIDs. | Keep full IDs for mutation and copy controls. Aliases need a separate collision/ambiguity contract if requested. |
 
 Approval resolves the design decisions above. Editor dependency selection,
 transport shutdown feasibility, the Wave 02 API audit and native evidence
 remain outstanding work; approval does not mark those gates satisfied.
+
+The [Wave 03 proposal](../Waves/wave-03-dogfooding.md) assigns these obligations
+to ordered Cycles. Wave planning also corrected desktop/CLI closure wording to
+match the canonical schema: free-form status, including `closed`, never replaces
+the explicit lifecycle action and its `closed_at`/`closed_by` fields. Proposed
+create/enable identity input and closure-list filters remain Wave review items;
+they are not silently added to the approved command contract.
 
 ## Adopted source amendments
 
@@ -135,17 +142,17 @@ it does not claim runtime tests or native journey evidence.
 
 ## Next planning steps
 
-Resolve the remaining editor/runtime feasibility gates. Refresh this branch
-against main after Wave 02 settles and audit actual APIs, transport and fixture
-evidence against the approved contracts.
-Then author the Wave 03 document with its ordered Cycles, entry/exit gates and
-one Manyhands ticket per Cycle before each implementation plan. Do not infer
-that early RFC authoring authorizes implementation or makes Wave 02 complete.
+Review the [Wave 03 proposal](../Waves/wave-03-dogfooding.md), including its
+remaining contract refinements and readiness deadlines. Refresh against main
+after Wave 02 settles and audit actual APIs, transport and fixture evidence.
+Resolve editor/runtime feasibility before the affected Cycles and create one
+Manyhands ticket per Cycle before each implementation plan. Early RFC/Wave
+authoring does not authorize implementation or make Wave 02 complete.
 
 Runtime/adapter contracts should precede front-end integration; independent
 desktop layout and read-only CLI work now have approved RFC contracts.
 Individual Cycles still require planning and authorization. Editor fidelity
 and recovery must be proved before polishing rich interactions.
 End-to-end/native evidence should accumulate throughout the Wave
-rather than wait for its final Cycle. Exact Cycle allocation is intentionally
-left to subsequent Wave planning after these risks are resolved.
+rather than wait for its final Cycle. The proposed Cycle allocation remains
+subject to Wave review.

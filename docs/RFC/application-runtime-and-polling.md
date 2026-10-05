@@ -145,17 +145,20 @@ behind. Poll-triggered indexing shares the desktop worker's lifetime.
 
 On shutdown, stop admitting work, request cancellation, and let each operation
 reach an approved safe point. Flush progress and desktop drafts; invalidate
-credentials after worker use ends. The graceful drain budget is ten
-seconds. At its expiry, report incomplete recovery and preserve journals; never
+credentials after worker use ends. Ten seconds is a feedback threshold, not a
+process-exit deadline. If work remains, show “still stopping,” keep the UI
+responsive, preserve drafts/journals and wait safely for the operation to stop.
+Do not reclaim live reservations or discard credentials still in use. Never
 claim cancellation rolled back completed changes. A forced process termination
 is tested as interruption, not implemented as arbitrary worker-thread killing.
 
-Whether the locked transport can deliver bounded safe-point shutdown during
-DNS/connect stalls must be proven before runtime implementation begins.
-If it cannot, revise in-process timeout/cancellation handling or amend the
-shutdown contract. A separate helper service is not an assumed fallback.
-Extending a timeout silently or reclaiming a still-live reservation is not an
-acceptable substitute.
+Before worker implementation begins, characterize the locked transport's
+safe-point cancellation during DNS/connect/SSH/teardown stalls and verify that
+stopping feedback remains responsive. Wave 02's per-address/per-call timeouts
+do not establish a total operation deadline; cancellation may wait for a
+blocking call to return. This safe-wait contract was clarified by the product
+owner during Wave planning on 2026-10-05. A separate helper service is not an
+assumed fallback, and live-operation ownership must be retained while waiting.
 
 ## Alternatives and risks
 
@@ -167,8 +170,8 @@ acceptable substitute.
 
 The largest data-loss risk is assuming a clean worktree means no unsaved editor
 draft; the desktop's observation checks are mandatory even with perfect poll
-serialization. Native transport cancellation is a feasibility blocker, not a
-promise inferred from a callback API.
+serialization. Native cancellation and responsive stopping require evidence;
+they cannot be inferred from a callback API.
 
 ## Required evidence
 

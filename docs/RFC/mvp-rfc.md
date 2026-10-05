@@ -631,7 +631,8 @@ The test and compatibility RFC MUST require evidence for at least these cases:
   key recovery, first-poll unlock cancellation, and secret-redaction checks.
 - Serialization between a scheduled poll and a manual synchronization,
   promotion, or closure operation.
-- Desktop-owned background polling with bounded shutdown and documented
+- Desktop-owned background polling with responsive safe-point shutdown,
+  still-stopping feedback after ten seconds, and documented
   one-shot CLI polling/indexing that leaves no resident worker. Existing domain
   tests retain safe serialization of desktop polling with explicit CLI actions.
 - Desktop keyboard workflows and CLI human-readable, JSON, no-op, failure, and

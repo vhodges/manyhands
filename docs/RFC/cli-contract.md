@@ -94,8 +94,8 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `document move` | Input source `observation`, `destination_path`, `destination_observation`; preserve ID and checkpoint both paths. |
 | `document repair`, `ticket repair` | Input exact `path`, `observation`, corrected complete `source`; preview and explicit confirmation. Validate identity/schema and use an owned authoring context, never patch primary as a shortcut. |
 | `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. |
-| `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Creating an already-closed ticket is rejected. |
-| `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Closed-state transitions require `ticket close`; reopening is outside MVP. |
+| `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Closure metadata cannot be supplied; free-form status may be `closed` without making the ticket lifecycle-closed. |
+| `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Project status does not control closure; `ticket close` owns `closed_at`/`closed_by`. Reopening is outside MVP. |
 | `comment list` | `--id` selects the parent item; return ordered roots/replies with parent IDs and visible malformed entries. |
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`. One checkpoint then immediate configured sync; no-remote means local pending. |
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization. Unsaved caller files are not implicitly submitted. |

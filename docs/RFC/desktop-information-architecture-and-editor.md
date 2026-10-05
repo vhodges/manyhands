@@ -68,8 +68,10 @@ Rich text is the default body editor. Source mode exposes the exact Markdown
 body; metadata has named controls in both modes. A separate inspect/repair
 source view exposes complete canonical YAML and Markdown when conformity
 requires repair. IDs and lifecycle-owned closure fields cannot be changed by
-an ordinary metadata edit. Setting a ticket status to `closed` invokes the
-confirmed close workflow; it is not a shortcut around closure.
+an ordinary metadata edit. Ticket status remains a free-form project value,
+including the literal `closed`; changing it does not perform closure. Only the
+explicit confirmed Close ticket action writes `closed_at`/`closed_by` and runs
+integration/cleanup. The UI distinguishes project status from lifecycle closure.
 
 The minimum rich-text vocabulary is paragraphs, headings, emphasis, strong
 text, links, ordered/unordered/task lists, block quotes, fenced code and tables.
