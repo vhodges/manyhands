@@ -14,7 +14,9 @@
 
 ## Development
 
-- Run all Rust commands through Devenv: `devenv shell -- cargo <command>`.
+- Run local and agent Rust commands through Devenv: `devenv shell -- cargo <command>`.
+  Existing GitHub Actions native runners may run Cargo directly for builds and
+  tests (user-approved exception, 2026-10-05).
 - Before submitting Rust changes, run:
   ```sh
   devenv shell -- cargo check --all-features --locked

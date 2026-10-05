@@ -3,10 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use manyhands::repository::keys::{KeyMaterialAction, KeyMaterialError, KeyMaterialErrorKind};
 use manyhands::repository::{
-    GeneratedKeyDeletionPreflight, LeaseKind, PrivateKeySourceState, PublicKeyMetadataState,
-    REGISTRY_FILE, RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService, SharedKeyId, SharedKeyOwnership,
+    GeneratedKeyDeletionPreflight, LeaseKind, OperationId, PrivateKeySourceState,
+    PublicKeyMetadataState, REGISTRY_FILE, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
+    RepositoryErrorKind, RepositoryOperation, RepositoryService, SharedKeyId, SharedKeyOwnership,
     SharedKeySelectionOutcome, UnregisterSharedKeyOutcome,
 };
 
@@ -88,7 +89,9 @@ fn shared_key_registry_fifo_child() {
 }
 
 fn private_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/shared_key_registry_private_fixture")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("shared_key_registry_private_fixture")
 }
 
 const PUBLIC_KEY_COMMENT: &str = "manyhands-cycle01-distinctive-public-comment";
@@ -97,7 +100,9 @@ const PASSPHRASE_SENTINEL: &[u8] = b"CYCLE01_PASSPHRASE_SENTINEL_DO_NOT_PERSIST"
 const PUBLIC_KEY_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk";
 
 fn public_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/shared_key_registry_public_fixture.pub")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("shared_key_registry_public_fixture.pub")
 }
 
 fn assert_registry_storage_excludes(data_directory: &Path, forbidden: &[&[u8]]) {
@@ -145,6 +150,218 @@ fn registration_request(
         private_key_path,
         public_key_path: None,
     }
+}
+
+fn registry_table_columns(connection: &rusqlite::Connection, table: &str) -> Vec<String> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+        ))
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn material_errors_expose_only_fixed_secret_free_guidance() {
+    let key_id: manyhands::repository::keys::SharedKeyId = SharedKeyId::new();
+    let error = KeyMaterialError {
+        operation: KeyMaterialAction::Unlock,
+        key_id: Some(key_id),
+        operation_id: Some(OperationId::new()),
+        kind: KeyMaterialErrorKind::UnlockFailed,
+    };
+
+    assert_eq!(
+        error.guidance(),
+        "the generated key could not be unlocked; verify the passphrase and try again"
+    );
+    assert_eq!(error.to_string(), error.guidance());
+}
+
+#[test]
+fn material_schema_preserves_cycle01_rows_and_selection() {
+    let data = tempfile::tempdir().unwrap();
+    let registry_path = data.path().join(REGISTRY_FILE);
+    let imported_id = SharedKeyId::new();
+    let generated_id = SharedKeyId::new();
+    let imported_path = data.path().join("imported-key");
+    let generated_path = data.path().join("generated-key");
+    let connection = rusqlite::Connection::open(&registry_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE shared_ssh_keys (
+                id TEXT PRIMARY KEY NOT NULL,
+                label TEXT NOT NULL,
+                ownership TEXT NOT NULL CHECK (ownership IN ('imported', 'generated')),
+                private_key_path TEXT NOT NULL UNIQUE,
+                public_key_path TEXT,
+                public_key_fingerprint TEXT,
+                private_source_state TEXT NOT NULL CHECK (
+                    private_source_state IN ('available', 'missing', 'unavailable')
+                ),
+                public_metadata_state TEXT NOT NULL CHECK (
+                    public_metadata_state IN ('not-provided', 'available', 'unavailable')
+                ),
+                selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1))
+            );
+            CREATE UNIQUE INDEX shared_ssh_keys_one_selected_idx
+                ON shared_ssh_keys(selected) WHERE selected = 1;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO shared_ssh_keys (
+                id, label, ownership, private_key_path, public_key_path,
+                public_key_fingerprint, private_source_state, public_metadata_state, selected
+            ) VALUES (?1, 'Imported key', 'imported', ?2, NULL, NULL, 'missing', 'not-provided', 1)",
+            rusqlite::params![imported_id.to_string(), imported_path.to_str().unwrap()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO shared_ssh_keys (
+                id, label, ownership, private_key_path, public_key_path,
+                public_key_fingerprint, private_source_state, public_metadata_state, selected
+            ) VALUES (?1, 'Generated key', 'generated', ?2, NULL, NULL, 'missing', 'not-provided', 0)",
+            rusqlite::params![generated_id.to_string(), generated_path.to_str().unwrap()],
+        )
+        .unwrap();
+    drop(connection);
+
+    for _ in 0..2 {
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let registrations = service.list_shared_keys().unwrap();
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations[0].id, imported_id);
+        assert_eq!(registrations[0].ownership, SharedKeyOwnership::Imported);
+        assert!(registrations[0].selected);
+        assert_eq!(registrations[1].id, generated_id);
+        assert_eq!(registrations[1].ownership, SharedKeyOwnership::Generated);
+        assert!(!registrations[1].selected);
+    }
+
+    let connection = rusqlite::Connection::open(registry_path).unwrap();
+    for table in ["owned_generated_keys", "key_material_operations"] {
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap(),
+            "material migration must create {table}"
+        );
+    }
+    assert_eq!(
+        registry_table_columns(&connection, "owned_generated_keys"),
+        [
+            "key_id",
+            "private_key_path",
+            "public_key_path",
+            "private_file_identity",
+            "public_file_identity",
+            "public_key_fingerprint",
+        ]
+    );
+    assert_eq!(
+        registry_table_columns(&connection, "key_material_operations"),
+        [
+            "operation_id",
+            "key_id",
+            "action",
+            "generation_label",
+            "private_key_path",
+            "public_key_path",
+            "private_file_identity",
+            "public_file_identity",
+            "public_key_fingerprint",
+            "phase",
+            "failure_code",
+        ]
+    );
+    for table in ["owned_generated_keys", "key_material_operations"] {
+        for column in registry_table_columns(&connection, table) {
+            assert!(
+                !column.contains("secret")
+                    && !column.contains("passphrase")
+                    && !column.contains("private_key_hash")
+                    && !column.contains("confirmation"),
+                "material schema must not persist protected data: {table}.{column}"
+            );
+        }
+    }
+}
+
+#[test]
+fn material_schema_is_idempotent_and_rejects_invalid_phases() {
+    let data = tempfile::tempdir().unwrap();
+    for _ in 0..2 {
+        drop(RepositoryService::open_at(data.path()).unwrap());
+    }
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let key_id = SharedKeyId::new().to_string();
+    let private_path = data.path().join("private-key");
+    let public_path = data.path().join("private-key.pub");
+    let insert = "INSERT INTO key_material_operations (
+        operation_id, key_id, action, generation_label, private_key_path, public_key_path, phase
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+
+    for (action, phase) in [
+        ("generate", "prepared"),
+        ("delete", "reserved"),
+        ("rotate", "reserved"),
+        ("generate", "unknown"),
+    ] {
+        let result = connection.execute(
+            insert,
+            rusqlite::params![
+                OperationId::new().to_string(),
+                key_id,
+                action,
+                "Material key",
+                private_path.to_str().unwrap(),
+                public_path.to_str().unwrap(),
+                phase,
+            ],
+        );
+        assert!(result.is_err(), "{action}/{phase} must be rejected");
+    }
+
+    connection
+        .execute(
+            insert,
+            rusqlite::params![
+                OperationId::new().to_string(),
+                key_id,
+                "generate",
+                "Material key",
+                private_path.to_str().unwrap(),
+                public_path.to_str().unwrap(),
+                "reserved",
+            ],
+        )
+        .unwrap();
+    let duplicate_incomplete = connection.execute(
+        insert,
+        rusqlite::params![
+            OperationId::new().to_string(),
+            key_id,
+            "delete",
+            Option::<String>::None,
+            private_path.to_str().unwrap(),
+            public_path.to_str().unwrap(),
+            "prepared",
+        ],
+    );
+    assert!(
+        duplicate_incomplete.is_err(),
+        "only one incomplete material operation may exist for a key"
+    );
 }
 
 #[test]
@@ -1257,4 +1474,54 @@ fn unregistering_an_absent_key_reports_not_registered() {
         service.unregister_shared_key(SharedKeyId::new()).unwrap(),
         UnregisterSharedKeyOutcome::NotRegistered
     );
+}
+
+#[test]
+fn pending_material_blocks_selection_without_clearing_another_key() {
+    use manyhands::repository::FailurePoint;
+    use manyhands::repository::keys::{
+        GenerateSharedKeyOutcome, GenerateSharedKeyRequest, KeyProtection, KeyStore,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at_with_failure_point_for_testing(
+        data.path(),
+        FailurePoint::DeletionAfterIntent,
+    )
+    .unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    let make_key = || {
+        let GenerateSharedKeyOutcome::Created(r) = service
+            .generate_shared_key(
+                &store,
+                GenerateSharedKeyRequest {
+                    operation_id: OperationId::new(),
+                    label: "key".into(),
+                    protection: KeyProtection::Unencrypted,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("expected creation")
+        };
+        r
+    };
+    let pending = make_key();
+    let selected = make_key();
+    service.select_shared_key(selected.id).unwrap();
+    let review = service
+        .review_generated_key_deletion(&store, pending.id)
+        .unwrap();
+    service
+        .delete_generated_key(&store, OperationId::new(), Some(review), true)
+        .unwrap();
+    let error = service.select_shared_key(pending.id).unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::SharedKeyMaterialPending);
+    assert_eq!(
+        service.unregister_shared_key(pending.id).unwrap_err().kind,
+        RepositoryErrorKind::SharedKeyMaterialPending
+    );
+    let rows = service.list_shared_keys().unwrap();
+    assert_eq!(rows.iter().find(|r| r.selected).unwrap().id, selected.id);
+    assert!(rows.iter().any(|r| r.id == pending.id));
 }
