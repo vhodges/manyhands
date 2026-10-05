@@ -208,12 +208,14 @@ fn reconnect_host_policy() -> Result<(), FixtureError> {
 fn reconnect(host: bool) -> Result<(), FixtureError> {
     let case = Case::new(false)?;
     let (mut session, _) = session(vec![]);
+    let called = Cell::new(0);
+    let (_guard, phases) = diagnostic_phases();
     let result = transfer(
         &case.service,
         case.request(),
         &mut session,
         Transfer::Download,
-        &Cell::new(0),
+        &called,
         || {
             if host {
                 case.fixture.rotate_host_key().unwrap();
@@ -222,6 +224,21 @@ fn reconnect(host: bool) -> Result<(), FixtureError> {
             }
         },
     );
+    let expected = result.as_ref().is_err_and(|error| {
+        if host {
+            matches!(
+                error.kind,
+                SshTransportErrorKind::HostApprovalRequired { .. }
+                    | SshTransportErrorKind::HostReplacementRequired { .. }
+                    | SshTransportErrorKind::HostTrustChanged
+            )
+        } else {
+            error.kind == SshTransportErrorKind::KeyRejected
+        }
+    });
+    if !expected {
+        observe_transport_failure(&case, &result, called.get(), &phases);
+    }
     let error = result.unwrap_err();
     if host {
         assert!(matches!(

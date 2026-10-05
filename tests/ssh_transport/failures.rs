@@ -176,6 +176,7 @@ fn disconnect_after_receive() -> Result<(), FixtureError> {
     let mut request = case.request();
     request.direction = SshDirection::Push;
     let called = Cell::new(0);
+    let (_guard, phases) = diagnostic_phases();
     let outcome = transfer(
         &case.service,
         request,
@@ -190,19 +191,9 @@ fn disconnect_after_receive() -> Result<(), FixtureError> {
     let status_withheld = case.fixture.receive_status_withheld();
     crate::ssh_harness::observation(&[506, u128::from(outcome.is_ok())]);
     if !status_withheld {
+        observe_transport_failure(&case, &outcome, called.get(), &phases);
         // Fixed categories only: never expose a backend diagnostic, path or OID.
-        let category = match outcome.as_ref().map_err(|error| &error.kind) {
-            Ok(_) => 0,
-            Err(SshTransportErrorKind::TransportUnavailable) => 1,
-            Err(SshTransportErrorKind::RemoteUnavailable) => 2,
-            Err(SshTransportErrorKind::ProtocolFailure) => 3,
-            Err(SshTransportErrorKind::KeyRejected) => 4,
-            Err(SshTransportErrorKind::HostTrustChanged) => 5,
-            Err(SshTransportErrorKind::KeySourceChanged) => 6,
-            Err(SshTransportErrorKind::SelectionChanged) => 7,
-            Err(SshTransportErrorKind::EndpointChanged) => 8,
-            Err(_) => 9,
-        };
+        let category = outcome_category(&outcome);
         let remote_matches = git2::Repository::open_bare(case.fixture.repository_path())
             .and_then(|server| server.refname_to_id("refs/heads/pushed"))
             .is_ok_and(|remote| remote == oid);

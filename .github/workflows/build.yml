@@ -120,15 +120,16 @@ jobs:
       - name: Test headless credential and platform contracts
         run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport
 
-      - name: Probe macOS receive-pack disconnect ordering
+      - name: Probe macOS SSH reconnect and disconnect ordering
         if: matrix.os == 'macos'
         shell: bash
         run: |
-          # Gather native evidence for the intermittent missing-boundary failure.
+          # Gather native evidence for intermittent reconnect/boundary failures.
           # Stop on the first failure; these are independent cases, not retries.
           set -euo pipefail
           for attempt in {1..30}; do
-            echo "macOS disconnect probe $attempt/30"
+            echo "macOS SSH probe $attempt/30"
+            cargo test --locked --target "${{ matrix.target }}" --test ssh_transport reconnect_key_policy -- --exact
             cargo test --locked --target "${{ matrix.target }}" --test ssh_transport disconnect_after_receive -- --exact
           done
 

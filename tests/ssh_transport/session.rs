@@ -2,7 +2,96 @@ use crate::{
     repository::{RepositoryService, keys::*, transport::*},
     ssh_remote::*,
 };
-use std::{cell::RefCell, collections::VecDeque, path::PathBuf, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    path::PathBuf,
+    rc::Rc,
+};
+
+pub fn outcome_category<T>(outcome: &Result<T, SshTransportError>) -> u128 {
+    match outcome.as_ref().map_err(|error| &error.kind) {
+        Ok(_) => 0,
+        Err(SshTransportErrorKind::TransportUnavailable) => 1,
+        Err(SshTransportErrorKind::RemoteUnavailable) => 2,
+        Err(SshTransportErrorKind::ProtocolFailure) => 3,
+        Err(SshTransportErrorKind::KeyRejected) => 4,
+        Err(SshTransportErrorKind::HostTrustChanged) => 5,
+        Err(SshTransportErrorKind::KeySourceChanged) => 6,
+        Err(SshTransportErrorKind::SelectionChanged) => 7,
+        Err(SshTransportErrorKind::EndpointChanged) => 8,
+        // 9 was the original catch-all; preserve all established category codes.
+        Err(SshTransportErrorKind::ConfigurationInvalid) => 10,
+        Err(SshTransportErrorKind::PublicationRemoteMissing) => 11,
+        Err(SshTransportErrorKind::UsernameRequired) => 12,
+        Err(SshTransportErrorKind::NoSelectedKey) => 13,
+        Err(SshTransportErrorKind::KeyMissing) => 14,
+        Err(SshTransportErrorKind::KeyUnreadable) => 15,
+        Err(SshTransportErrorKind::KeyInvalidOrUnsupported) => 16,
+        Err(SshTransportErrorKind::UnlockCancelled) => 17,
+        Err(SshTransportErrorKind::ProviderUnavailable) => 18,
+        Err(SshTransportErrorKind::UnlockFailed) => 19,
+        Err(SshTransportErrorKind::HostApprovalRequired { .. }) => 20,
+        Err(SshTransportErrorKind::HostReplacementRequired { .. }) => 21,
+        Err(SshTransportErrorKind::HostVerificationUnavailable) => 22,
+        Err(SshTransportErrorKind::RegistryUnavailable) => 23,
+        Err(SshTransportErrorKind::RuntimeUninitialized) => 24,
+        Err(SshTransportErrorKind::PushRejected) => 25,
+    }
+}
+
+pub fn diagnostic_phases() -> (
+    crate::repository::transport::operation_tests::HookGuard,
+    Rc<[Cell<u128>; 3]>,
+) {
+    use crate::repository::transport::operation_tests::{Checkpoint, install_hook};
+    let counts = Rc::new([Cell::new(0), Cell::new(0), Cell::new(0)]);
+    let observed = counts.clone();
+    let guard = install_hook(move |point| {
+        let index = match point {
+            Checkpoint::Prepared => 0,
+            Checkpoint::Authenticated => 1,
+            Checkpoint::ProviderReturned => 2,
+        };
+        observed[index].set(observed[index].get() + 1);
+    });
+    (guard, counts)
+}
+
+pub fn observe_transport_failure<T>(
+    case: &Case,
+    outcome: &Result<T, SshTransportError>,
+    called: usize,
+    phases: &[Cell<u128>; 3],
+) {
+    let [connections, offers, checks, rejections] = case.fixture.authentication_counts();
+    crate::ssh_harness::observation(&[
+        508,
+        outcome_category(outcome),
+        called as u128,
+        phases[0].get(),
+        phases[1].get(),
+        phases[2].get(),
+        connections as u128,
+        offers as u128,
+        checks as u128,
+        rejections as u128,
+        case.fixture.accepted_keys().len() as u128,
+        case.fixture.helper_invocations() as u128,
+        case.fixture.active_helpers() as u128,
+        case.fixture.completed_helpers() as u128,
+    ]);
+    let version = git2::Version::get();
+    let (major, minor, patch) = version.libgit2_version();
+    crate::ssh_harness::observation(&[
+        509,
+        major.into(),
+        minor.into(),
+        patch.into(),
+        u128::from(version.vendored()),
+        u128::from(version.ssh()),
+    ]);
+}
 
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("verify_plain", verify_plain),
