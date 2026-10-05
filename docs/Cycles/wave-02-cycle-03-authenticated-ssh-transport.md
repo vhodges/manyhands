@@ -180,3 +180,26 @@ Implementation is ready for publication review. No push, PR, merge, ticket
 closure, or worktree cleanup has been performed. Native CI remains an explicit
 exit gate; the ticket stays open. The execution ledger and review reports remain
 in the ticket worktree for continuation.
+
+## Publication And Native CI Follow-up
+
+The user authorized push/PR on 2026-10-05. [PR #9](https://github.com/vhodges/manyhands/pull/9)
+preserves the original remote checkpoint with merge `5519991`; the resulting
+file tree was verified identical to reviewed `d5deb20`.
+
+[Initial native run](https://github.com/vhodges/manyhands/actions/runs/37373092577)
+passed macOS ARM64 and Linux ARM64. Linux x86-64 was cancelled before execution;
+both Windows jobs failed setup because standalone Git builtin aliases were absent.
+Reviewed fix `c9c3dc3` supports fixed Git builtin commands as a test-only fallback.
+Its real SSH regression checks advertisement, push OID, command restrictions,
+helper cleanup, and repository removal. Independent scoped review approved it
+without findings. All four required local gates passed again: 582 tests, including
+28 fixture and 45 transport cases, no failures or ignored tests. Production
+startup wiring is unchanged, so the recorded frontend smokes still apply.
+
+Additional ruling: resolve Git once and use fixed builtin subcommands when
+standalone helpers are absent, preserving standalone preference, the exact SSH
+allowlist, separate owned repository arguments, and no shell. Potential cost if
+wrong: revise the test helper discovery/invocation boundary.
+
+Native acceptance remains pending a complete run on this amended revision.
