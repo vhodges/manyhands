@@ -186,8 +186,6 @@ pub(super) fn backend_failure(
     error: &git2::Error,
     supplied: bool,
 ) -> SshTransportErrorKind {
-    #[cfg(test)]
-    super::operation_tests::observe_backend_failure(attempt, error, supplied);
     if let Some(kind) = attempt.failure() {
         return if supplied && super::operation::authentication_failure(&kind) {
             SshTransportErrorKind::UnlockFailed

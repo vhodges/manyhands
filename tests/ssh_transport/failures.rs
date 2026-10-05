@@ -175,39 +175,18 @@ fn disconnect_after_receive() -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut request = case.request();
     request.direction = SshDirection::Push;
-    let called = Cell::new(0);
-    let (_guard, phases) = diagnostic_phases();
     let outcome = transfer(
         &case.service,
         request,
         &mut session,
         Transfer::Push,
-        &called,
+        &Cell::new(0),
         || {
             case.fixture
                 .disconnect_at(FixtureBoundary::AfterReceivePack)
         },
     );
     let status_withheld = case.fixture.receive_status_withheld();
-    crate::ssh_harness::observation(&[506, u128::from(outcome.is_ok())]);
-    if !status_withheld {
-        observe_transport_failure(&case, &outcome, called.get(), &phases);
-        // Fixed categories only: never expose a backend diagnostic, path or OID.
-        let category = outcome_category(&outcome);
-        let remote_matches = git2::Repository::open_bare(case.fixture.repository_path())
-            .and_then(|server| server.refname_to_id("refs/heads/pushed"))
-            .is_ok_and(|remote| remote == oid);
-        crate::ssh_harness::observation(&[
-            507,
-            category,
-            called.get() as u128,
-            case.fixture.helper_invocations() as u128,
-            case.fixture.accepted_keys().len() as u128,
-            case.fixture.active_helpers() as u128,
-            case.fixture.completed_helpers() as u128,
-            u128::from(remote_matches),
-        ]);
-    }
     assert!(
         status_withheld,
         "fixture must withhold the actual receive-pack status"

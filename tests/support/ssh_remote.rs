@@ -67,10 +67,6 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
-    pub connections: AtomicUsize,
-    pub key_offers: AtomicUsize,
-    pub auth_checks: AtomicUsize,
-    pub auth_rejections: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
     pub commands: Mutex<Vec<Vec<u8>>>,
@@ -153,10 +149,6 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
-            connections: AtomicUsize::new(0),
-            key_offers: AtomicUsize::new(0),
-            auth_checks: AtomicUsize::new(0),
-            auth_rejections: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
             commands: Mutex::new(Vec::new()),
@@ -246,14 +238,6 @@ impl SshRemoteFixture {
     }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
-    }
-    pub fn authentication_counts(&self) -> [usize; 4] {
-        [
-            self.shared.connections.load(Ordering::SeqCst),
-            self.shared.key_offers.load(Ordering::SeqCst),
-            self.shared.auth_checks.load(Ordering::SeqCst),
-            self.shared.auth_rejections.load(Ordering::SeqCst),
-        ]
     }
     /// Choose one exact virtual target; helpers always receive the owned repo path.
     pub fn expect_command_path(&self, path: &str) {

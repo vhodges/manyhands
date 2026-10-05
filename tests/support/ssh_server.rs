@@ -105,7 +105,6 @@ pub(super) async fn serve(
             _ = shutdown.changed() => break,
             result = listener.accept() => {
                 let Ok((socket, _)) = result else { break };
-                shared.connections.fetch_add(1, Ordering::SeqCst);
                 let shared = shared.clone();
                 sessions.spawn(async move {
                     if boundary(&shared, FixtureBoundary::Handshake).await.is_err() { return; }
@@ -161,21 +160,11 @@ impl Handler for Restricted {
             },
         )
     }
-    async fn auth_publickey_offered(
-        &mut self,
-        _: &str,
-        _: &russh::keys::PublicKey,
-    ) -> Result<Auth, Self::Error> {
-        self.shared.key_offers.fetch_add(1, Ordering::SeqCst);
-        // Preserve russh's default: the signed authentication checks below decide.
-        Ok(Auth::Accept)
-    }
     async fn auth_publickey(
         &mut self,
         user: &str,
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
-        self.shared.auth_checks.fetch_add(1, Ordering::SeqCst);
         boundary(&self.shared, FixtureBoundary::Authentication).await?;
         if user == "fixture"
             && !self.shared.reject.load(Ordering::SeqCst)
@@ -184,7 +173,6 @@ impl Handler for Restricted {
             self.shared.accepted.lock().unwrap().push(key.to_bytes()?);
             Ok(Auth::Accept)
         } else {
-            self.shared.auth_rejections.fetch_add(1, Ordering::SeqCst);
             Ok(Auth::reject())
         }
     }

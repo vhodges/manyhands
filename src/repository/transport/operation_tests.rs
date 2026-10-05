@@ -61,73 +61,6 @@ pub(crate) enum Transfer {
     Push,
     RejectedPush,
 }
-pub(crate) fn outcome_category<T>(outcome: &Result<T, SshTransportError>) -> u128 {
-    match outcome.as_ref().map_err(|error| &error.kind) {
-        Ok(_) => 0,
-        Err(SshTransportErrorKind::TransportUnavailable) => 1,
-        Err(SshTransportErrorKind::RemoteUnavailable) => 2,
-        Err(SshTransportErrorKind::ProtocolFailure) => 3,
-        Err(SshTransportErrorKind::KeyRejected) => 4,
-        Err(SshTransportErrorKind::HostTrustChanged) => 5,
-        Err(SshTransportErrorKind::KeySourceChanged) => 6,
-        Err(SshTransportErrorKind::SelectionChanged) => 7,
-        Err(SshTransportErrorKind::EndpointChanged) => 8,
-        // 9 was the original catch-all; preserve all established category codes.
-        Err(SshTransportErrorKind::ConfigurationInvalid) => 10,
-        Err(SshTransportErrorKind::PublicationRemoteMissing) => 11,
-        Err(SshTransportErrorKind::UsernameRequired) => 12,
-        Err(SshTransportErrorKind::NoSelectedKey) => 13,
-        Err(SshTransportErrorKind::KeyMissing) => 14,
-        Err(SshTransportErrorKind::KeyUnreadable) => 15,
-        Err(SshTransportErrorKind::KeyInvalidOrUnsupported) => 16,
-        Err(SshTransportErrorKind::UnlockCancelled) => 17,
-        Err(SshTransportErrorKind::ProviderUnavailable) => 18,
-        Err(SshTransportErrorKind::UnlockFailed) => 19,
-        Err(SshTransportErrorKind::HostApprovalRequired { .. }) => 20,
-        Err(SshTransportErrorKind::HostReplacementRequired { .. }) => 21,
-        Err(SshTransportErrorKind::HostVerificationUnavailable) => 22,
-        Err(SshTransportErrorKind::RegistryUnavailable) => 23,
-        Err(SshTransportErrorKind::RuntimeUninitialized) => 24,
-        Err(SshTransportErrorKind::PushRejected) => 25,
-    }
-}
-pub(super) fn observe_backend_failure(
-    attempt: &super::callbacks::CallbackAttempt,
-    error: &git2::Error,
-    supplied: bool,
-) {
-    // Enum values and flags only; never print the backend's message or identity.
-    println!(
-        "SSH_OBSERVATION 511 {} {} {} {} {} {} {}",
-        error.code() as u128,
-        error.class() as u128,
-        attempt.key_submissions(),
-        u8::from(attempt.observed_host().is_some()),
-        u8::from(attempt.failure().is_some()),
-        u8::from(attempt.passthrough()),
-        u8::from(supplied),
-    );
-    if error.class() == git2::ErrorClass::Os {
-        // libgit2 appends strerror(errno), then clears errno. Inspect only fixed
-        // markers; never emit the message (which may contain endpoint data).
-        let message = error.message();
-        let branch = u8::from(message.starts_with("failed to connect to "));
-        let reason = if message.ends_with(": Interrupted system call") {
-            1
-        } else if message.ends_with(": Connection refused") {
-            2
-        } else if message.ends_with(": Bad file descriptor") {
-            3
-        } else if message.ends_with(": Invalid argument") {
-            4
-        } else if message.ends_with(": Too many open files") {
-            5
-        } else {
-            0
-        };
-        println!("SSH_OBSERVATION 512 {branch} {reason}");
-    }
-}
 pub(crate) fn transfer<P: SessionCredentialProvider>(
     service: &RepositoryService,
     request: VerifySshTransportRequest,
@@ -136,7 +69,7 @@ pub(crate) fn transfer<P: SessionCredentialProvider>(
     called: &std::cell::Cell<usize>,
     before_transfer: impl FnOnce(),
 ) -> Result<Vec<git2::Oid>, SshTransportError> {
-    let outcome = service.with_authenticated_remote(request, session, |remote| {
+    service.with_authenticated_remote(request, session, |remote| {
         called.set(called.get() + 1);
         let advertised = remote
             .advertisement()?
@@ -151,15 +84,7 @@ pub(crate) fn transfer<P: SessionCredentialProvider>(
             Transfer::RejectedPush => remote.push(&["+refs/heads/pushed:refs/heads/main"])?,
         }
         Ok(advertised)
-    });
-    // This dispatcher is cfg(test) only. Keep every returned outcome observable
-    // before a case-specific assertion, without printing any error data.
-    println!(
-        "SSH_OBSERVATION 510 {} {}",
-        outcome_category(&outcome),
-        called.get()
-    );
-    outcome
+    })
 }
 pub(crate) fn install_pin(service: &RepositoryService, approval: &HostApproval) {
     let snapshot = service.read_host_trust(&approval.authority).unwrap();

@@ -1,70 +1,8 @@
 use crate::{
-    repository::{
-        RepositoryService,
-        keys::*,
-        transport::{operation_tests::outcome_category, *},
-    },
+    repository::{RepositoryService, keys::*, transport::*},
     ssh_remote::*,
 };
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    path::PathBuf,
-    rc::Rc,
-};
-
-pub fn diagnostic_phases() -> (
-    crate::repository::transport::operation_tests::HookGuard,
-    Rc<[Cell<u128>; 3]>,
-) {
-    use crate::repository::transport::operation_tests::{Checkpoint, install_hook};
-    let counts = Rc::new([Cell::new(0), Cell::new(0), Cell::new(0)]);
-    let observed = counts.clone();
-    let guard = install_hook(move |point| {
-        let index = match point {
-            Checkpoint::Prepared => 0,
-            Checkpoint::Authenticated => 1,
-            Checkpoint::ProviderReturned => 2,
-        };
-        observed[index].set(observed[index].get() + 1);
-    });
-    (guard, counts)
-}
-
-pub fn observe_transport_failure<T>(
-    case: &Case,
-    outcome: &Result<T, SshTransportError>,
-    called: usize,
-    phases: &[Cell<u128>; 3],
-) {
-    let [connections, offers, checks, rejections] = case.fixture.authentication_counts();
-    crate::ssh_harness::observation(&[
-        508,
-        outcome_category(outcome),
-        called as u128,
-        phases[0].get(),
-        phases[1].get(),
-        phases[2].get(),
-        connections as u128,
-        offers as u128,
-        checks as u128,
-        rejections as u128,
-        case.fixture.accepted_keys().len() as u128,
-        case.fixture.helper_invocations() as u128,
-        case.fixture.active_helpers() as u128,
-        case.fixture.completed_helpers() as u128,
-    ]);
-    let version = git2::Version::get();
-    let (major, minor, patch) = version.libgit2_version();
-    crate::ssh_harness::observation(&[
-        509,
-        major.into(),
-        minor.into(),
-        patch.into(),
-        u128::from(version.vendored()),
-        u128::from(version.ssh()),
-    ]);
-}
+use std::{cell::RefCell, collections::VecDeque, path::PathBuf, rc::Rc};
 
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("verify_plain", verify_plain),
