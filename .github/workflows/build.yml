@@ -46,6 +46,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
+            git \
+            openssl \
             libasound2-dev \
             libfontconfig-dev \
             libglib2.0-dev \
@@ -56,6 +58,40 @@ jobs:
             libx11-xcb-dev \
             libxkbcommon-x11-dev \
             pkg-config
+
+      - name: Install macOS fixture dependencies
+        if: matrix.os == 'macos'
+        run: |
+          brew install git openssl@3
+          brew --prefix openssl@3 | sed 's|$|/bin|' >> "$GITHUB_PATH"
+
+      - name: Provision native SSH fixture helpers
+        shell: pwsh
+        run: |
+          # Git is supplied by all five native runner images. Resolve its own
+          # helper directory rather than relying on an SSH daemon or shell.
+          $git = (Get-Command git -ErrorAction Stop).Source
+          $execPath = (& $git --exec-path).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Git helper discovery failed" }
+          $suffix = "${{ matrix.executable-suffix }}"
+          foreach ($name in @("git-upload-pack", "git-receive-pack")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $execPath "$name$suffix") -PathType Leaf)) {
+              throw "Required Git helper is unavailable"
+            }
+          }
+          # The later external RSA PEM fixture uses the openssl executable.
+          # Git for Windows ships it alongside its runtime utilities.
+          if ($IsWindows) {
+            $gitRoot = Split-Path (Split-Path $git)
+            $opensslDirectory = Join-Path $gitRoot "usr/bin"
+            if (Test-Path -LiteralPath (Join-Path $opensslDirectory "openssl.exe")) {
+              $env:PATH = "$opensslDirectory;$env:PATH"
+              $opensslDirectory | Out-File -FilePath $env:GITHUB_PATH -Append
+            }
+          }
+          $openssl = (Get-Command openssl -ErrorAction Stop).Source
+          & $openssl version
+          if ($LASTEXITCODE -ne 0) { throw "External key fixture generator is unavailable" }
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,7 +119,7 @@ jobs:
           }
 
       - name: Test headless credential and platform contracts
-        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4

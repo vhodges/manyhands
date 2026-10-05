@@ -5,13 +5,13 @@ use git2::Repository;
 use super::{SshAuthority, SshDirection, SshTransportErrorKind};
 
 #[derive(Clone, PartialEq, Eq)]
-pub(in crate::repository) struct SshEndpoint {
-    pub(in crate::repository) authority: SshAuthority,
-    pub(in crate::repository) username: Option<String>,
-    pub(in crate::repository) connection_url: String,
+pub(in super::super) struct SshEndpoint {
+    pub(in super::super) authority: SshAuthority,
+    pub(in super::super) username: Option<String>,
+    pub(in super::super) connection_url: String,
 }
 
-pub(in crate::repository) fn configured_remote_endpoint(
+pub(in super::super) fn configured_remote_endpoint(
     repository: &Repository,
     remote_name: &str,
     direction: SshDirection,
@@ -51,7 +51,7 @@ pub(in crate::repository) fn configured_remote_endpoint(
     Ok(configured)
 }
 
-pub(in crate::repository) fn parse_ssh_endpoint(
+pub(in super::super) fn parse_ssh_endpoint(
     url: &str,
 ) -> Result<SshEndpoint, SshTransportErrorKind> {
     if url.is_empty()
