@@ -375,7 +375,7 @@ raw SQL text. Material APIs report Busy for the same condition.
 
 **Interfaces:** Reuse the test APIs above. Add no transport capability.
 
-- [ ] Add `credential_outputs_and_storage_exclude_secrets`. Exercise generation,
+- [x] Add `credential_outputs_and_storage_exclude_secrets`. Exercise generation,
   wrong passphrase, cancellation, denied IO, malformed input, registration
   failure, and deletion interruption. Scan all isolated application-data files
   (SQLite/WAL/journals/recovery backups) and captured errors/Debug/log output for
@@ -383,15 +383,15 @@ raw SQL text. Material APIs report Busy for the same condition.
   Assert booleans with fixed messages so a failure never prints a secret.
   Expected private/public key files under isolated SSH home are separate from
   the app-data scan. Include an active WAL reader so WAL assertions are real.
-- [ ] Run the privacy tests; fix actual exposed paths without suppressing
+- [x] Run the privacy tests; fix actual exposed paths without suppressing
   assertions. Review ssh-key encoding/encryption error paths and document the
   zeroization limits described in the design. Do not claim total process-memory
   erasure from storage scans.
-- [ ] Amend AGENTS.md's Rust-command rule to state that local/agent commands use
+- [x] Amend AGENTS.md's Rust-command rule to state that local/agent commands use
   Devenv and existing GitHub Actions native runners may execute Cargo directly
   for builds and tests. The user explicitly approved this exception during
   planning. Do not change local Devenv files for this exception.
-- [ ] Add a test step to the existing five-target matrix, before artifact upload:
+- [x] Add a test step to the existing five-target matrix, before artifact upload:
 
   ```sh
   cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material
@@ -400,7 +400,7 @@ raw SQL text. Material APIs report Busy for the same condition.
   Preserve release builds, target coverage, and artifact checks. These headless
   tests need no display or SSH server. Assert that each native runner executes
   its platform tests; do not silently skip an entire backend under cfg guards.
-- [ ] Format and run the complete local verification:
+- [x] Format and run the complete local verification:
 
   ```sh
   devenv shell -- cargo fmt
@@ -415,12 +415,12 @@ raw SQL text. Material APIs report Busy for the same condition.
   Require exit zero. If an active display is available, run
   `devenv shell -- cargo run --locked --features desktop --bin manyhands` and
   confirm launch; otherwise record desktop smoke as not run.
-- [ ] Review the final diff for source/lockfile consistency, no tracked secret
+- [x] Review the final diff for source/lockfile consistency, no tracked secret
   fixtures, no real-home IO, no imported parser restriction, and no transport
   or UI scope expansion. Record local and CI results separately. Windows/macOS
   runtime evidence remains pending until those jobs actually pass; do not claim
   the platform gate is satisfied by adding workflow text.
-- [ ] Record review-ready status only after checks relevant to the review have
+- [x] Record review-ready status only after checks relevant to the review have
   run, explicitly listing any outstanding platform evidence. Request code review
   of ownership validation, path races, journal reconciliation, cache eviction,
   Windows ACLs, and secret formatting. Fix findings and rerun affected checks.
