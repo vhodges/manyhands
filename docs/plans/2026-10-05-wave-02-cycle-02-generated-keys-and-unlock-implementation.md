@@ -97,10 +97,10 @@ the user's choice. Do not launch implementation workers before plan approval.
 
 **Files:** Ticket comments only; no product changes.
 
-- [ ] Verify this worktree/branch is still the ticket's, record its HEAD, and
+- [x] Verify this worktree/branch is still the ticket's, record its HEAD, and
   check whether main advanced. Rebase before new work only after preserving any
   approved planning changes; never discard a dirty worktree or force-push.
-- [ ] Run each command and require exit zero:
+- [x] Run each command and require exit zero:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -109,7 +109,7 @@ the user's choice. Do not launch implementation workers before plan approval.
   devenv shell -- cargo test --all-features --locked
   ```
 
-- [ ] Record exact results, source/lockfile identity, and baseline problems in
+- [x] Record exact results, source/lockfile identity, and baseline problems in
   a new canonical ticket comment. Diagnose baseline failures before attributing
   them to this Cycle. Prior Cycle evidence is context, not a fresh test result.
 

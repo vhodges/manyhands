@@ -1259,6 +1259,7 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
         transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
             .map_err(RepositoryError::sqlite)?;
     }
+    super::keys::migrate_material_schema(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     super::recovery::migrate_operation_records(connection)
 }

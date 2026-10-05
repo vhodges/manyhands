@@ -1,0 +1,610 @@
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    ffi::OsString,
+    io::Read,
+    path::{Component, Path, PathBuf},
+};
+
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+
+use super::super::{
+    IndexAvailability, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    RepositoryService, cache_read_guard, cache_write_guard, migrate_registry, open_registry,
+    open_registry_read_only,
+};
+use super::{
+    GeneratedKeyDeletionPreflight, PrivateKeySourceState, PublicKeyMetadataState,
+    RegisterSharedKeyOutcome, RegisterSharedKeyRequest, SharedKeyId, SharedKeyOwnership,
+    SharedKeyRegistration, SharedKeySelectionOutcome, UnregisterSharedKeyOutcome,
+};
+
+const MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES: u64 = 16 * 1024;
+
+impl RepositoryService {
+    pub fn register_shared_key(
+        &self,
+        request: RegisterSharedKeyRequest,
+    ) -> Result<RegisterSharedKeyOutcome, RepositoryError> {
+        let operation = RepositoryOperation::RegisterSharedKey;
+        let data_directory = self.registry_data_directory();
+        if request.label.trim().is_empty() {
+            return Err(invalid_shared_key_metadata(operation, data_directory));
+        }
+        let (private_key_path, private_key_path_value) =
+            normalize_shared_key_path(&request.private_key_path, operation, data_directory)?;
+        let (public_key_path, public_key_path_value) = request
+            .public_key_path
+            .as_deref()
+            .map(|path| normalize_shared_key_path(path, operation, data_directory))
+            .transpose()?
+            .map_or((None, None), |(path, value)| (Some(path), Some(value)));
+        let private_source_state = private_key_source_state(&private_key_path);
+        let (public_key_fingerprint, public_metadata_state) =
+            public_key_metadata(public_key_path.as_deref());
+
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        migrate_registry(&mut connection)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let existing: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM shared_ssh_keys WHERE private_key_path = ?1",
+                [&private_key_path_value],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        if let Some(existing) = existing {
+            let existing = SharedKeyId::parse(&existing)
+                .map_err(|_| invalid_shared_key_metadata(operation, data_directory))?;
+            transaction
+                .commit()
+                .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+            return Ok(RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing });
+        }
+
+        let registration = SharedKeyRegistration {
+            id: SharedKeyId::new(),
+            label: request.label,
+            ownership: request.ownership,
+            private_key_path,
+            public_key_path,
+            public_key_fingerprint,
+            private_source_state,
+            public_metadata_state,
+            selected: false,
+        };
+        transaction
+            .execute(
+                "INSERT INTO shared_ssh_keys (
+                    id, label, ownership, private_key_path, public_key_path,
+                    public_key_fingerprint, private_source_state, public_metadata_state, selected
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)",
+                params![
+                    registration.id.to_string(),
+                    registration.label,
+                    shared_key_ownership_value(registration.ownership),
+                    private_key_path_value,
+                    public_key_path_value,
+                    registration.public_key_fingerprint,
+                    private_key_source_state_value(registration.private_source_state),
+                    public_key_metadata_state_value(registration.public_metadata_state),
+                ],
+            )
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        transaction
+            .commit()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        Ok(RegisterSharedKeyOutcome::Registered(registration))
+    }
+
+    pub fn list_shared_keys(&self) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
+        let operation = RepositoryOperation::ListSharedKeys;
+        let data_directory = self.registry_data_directory();
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        migrate_registry(&mut connection)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let registrations = read_shared_key_registrations(&transaction, operation, data_directory)?;
+        transaction
+            .commit()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        Ok(registrations)
+    }
+
+    pub fn preflight_generated_key_deletion(
+        &self,
+        id: SharedKeyId,
+    ) -> Result<GeneratedKeyDeletionPreflight, RepositoryError> {
+        let operation = RepositoryOperation::PreflightGeneratedKeyDeletion;
+        let data_directory = self.registry_data_directory();
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
+        let connection = open_registry_read_only(&self.registry_path)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let registration = read_shared_key_registrations(&connection, operation, data_directory)?
+            .into_iter()
+            .find(|registration| registration.id == id);
+        Ok(match registration {
+            None => GeneratedKeyDeletionPreflight::NotRegistered,
+            Some(registration) if registration.ownership == SharedKeyOwnership::Imported => {
+                GeneratedKeyDeletionPreflight::ImportedKey
+            }
+            Some(registration) if registration.selected => {
+                GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared
+            }
+            Some(registration) => GeneratedKeyDeletionPreflight::ConfirmationRequired(registration),
+        })
+    }
+
+    pub fn select_shared_key(
+        &self,
+        id: SharedKeyId,
+    ) -> Result<SharedKeySelectionOutcome, RepositoryError> {
+        let operation = RepositoryOperation::SelectSharedKey;
+        let data_directory = self.registry_data_directory();
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        migrate_registry(&mut connection)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        transaction
+            .execute(
+                "UPDATE shared_ssh_keys SET selected = 0 WHERE selected = 1",
+                [],
+            )
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        if transaction
+            .execute(
+                "UPDATE shared_ssh_keys SET selected = 1 WHERE id = ?1",
+                [id.to_string()],
+            )
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?
+            == 0
+        {
+            transaction
+                .rollback()
+                .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+            return Err(invalid_shared_key_metadata(operation, data_directory));
+        }
+        let registration = read_shared_key_registrations(&transaction, operation, data_directory)?
+            .into_iter()
+            .find(|registration| registration.id == id)
+            .ok_or_else(|| invalid_shared_key_metadata(operation, data_directory))?;
+        transaction
+            .commit()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        Ok(SharedKeySelectionOutcome::Selected(registration))
+    }
+
+    pub fn clear_shared_key_selection(&self) -> Result<SharedKeySelectionOutcome, RepositoryError> {
+        let operation = RepositoryOperation::ClearSharedKeySelection;
+        let data_directory = self.registry_data_directory();
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        migrate_registry(&mut connection)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let cleared = transaction
+            .execute(
+                "UPDATE shared_ssh_keys SET selected = 0 WHERE selected = 1",
+                [],
+            )
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        transaction
+            .commit()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        Ok(if cleared == 0 {
+            SharedKeySelectionOutcome::AlreadyCleared
+        } else {
+            SharedKeySelectionOutcome::Cleared
+        })
+    }
+
+    pub fn unregister_shared_key(
+        &self,
+        id: SharedKeyId,
+    ) -> Result<UnregisterSharedKeyOutcome, RepositoryError> {
+        let operation = RepositoryOperation::UnregisterSharedKey;
+        let data_directory = self.registry_data_directory();
+        self.require_shared_key_registry(operation)?;
+        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        migrate_registry(&mut connection)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let selected = transaction
+            .query_row(
+                "SELECT selected FROM shared_ssh_keys WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        let outcome = match selected {
+            None => UnregisterSharedKeyOutcome::NotRegistered,
+            Some(1) => UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared,
+            Some(0) => {
+                transaction
+                    .execute(
+                        "DELETE FROM shared_ssh_keys WHERE id = ?1",
+                        [id.to_string()],
+                    )
+                    .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+                UnregisterSharedKeyOutcome::Unregistered
+            }
+            Some(_) => return Err(invalid_shared_key_metadata(operation, data_directory)),
+        };
+        transaction
+            .commit()
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        Ok(outcome)
+    }
+
+    fn registry_data_directory(&self) -> &Path {
+        self.registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+    }
+
+    fn require_shared_key_registry(
+        &self,
+        operation: RepositoryOperation,
+    ) -> Result<(), RepositoryError> {
+        self.availability
+            .lock()
+            .map_err(|_| shared_key_registry_unavailable(operation, self.registry_data_directory()))
+            .and_then(|availability| {
+                matches!(*availability, IndexAvailability::Ready)
+                    .then_some(())
+                    .ok_or_else(|| {
+                        shared_key_registry_unavailable(operation, self.registry_data_directory())
+                    })
+            })
+    }
+}
+
+fn invalid_shared_key_metadata(
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(data_directory.to_owned()),
+        RepositoryErrorKind::InvalidSharedKeyMetadata,
+        "the shared key metadata is invalid",
+    )
+}
+
+fn invalid_shared_key_source_path(
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(data_directory.to_owned()),
+        RepositoryErrorKind::InvalidSharedKeySourcePath,
+        "the shared key source path is invalid",
+    )
+}
+
+fn shared_key_registry_unavailable(
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(data_directory.to_owned()),
+        RepositoryErrorKind::SharedKeyRegistryUnavailable,
+        "the shared key registry is unavailable",
+    )
+}
+
+fn normalize_shared_key_path(
+    path: &Path,
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<(PathBuf, String), RepositoryError> {
+    if !path.is_absolute() || path.to_str().is_none() {
+        return Err(invalid_shared_key_source_path(operation, data_directory));
+    }
+
+    let mut normalized = PathBuf::new();
+    let mut segments = Vec::<OsString>::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                segments.pop();
+            }
+            Component::Normal(segment) => segments.push(segment.to_owned()),
+        }
+    }
+    for segment in segments {
+        normalized.push(segment);
+    }
+    let value = normalized
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid_shared_key_source_path(operation, data_directory))?;
+    Ok((normalized, value))
+}
+
+fn private_key_source_state(path: &Path) -> PrivateKeySourceState {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => PrivateKeySourceState::Available,
+        Ok(_) => PrivateKeySourceState::Unavailable,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            PrivateKeySourceState::Missing
+        }
+        Err(_) => PrivateKeySourceState::Unavailable,
+    }
+}
+
+fn public_key_metadata(path: Option<&Path>) -> (Option<String>, PublicKeyMetadataState) {
+    let Some(path) = path else {
+        return (None, PublicKeyMetadataState::NotProvided);
+    };
+    let Some(contents) = bounded_public_key_contents(path) else {
+        return (None, PublicKeyMetadataState::Unavailable);
+    };
+    let Ok(contents) = std::str::from_utf8(&contents) else {
+        return (None, PublicKeyMetadataState::Unavailable);
+    };
+    match ssh_key::PublicKey::from_openssh(contents) {
+        Ok(public_key) => (
+            Some(public_key.fingerprint(Default::default()).to_string()),
+            PublicKeyMetadataState::FingerprintAvailable,
+        ),
+        Err(_) => (None, PublicKeyMetadataState::Unavailable),
+    }
+}
+
+fn bounded_public_key_contents(path: &Path) -> Option<Vec<u8>> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let mut file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES {
+        return None;
+    }
+
+    let mut contents = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES)
+        .read_to_end(&mut contents)
+        .ok()?;
+    let metadata = file.metadata().ok()?;
+    (metadata.is_file() && metadata.len() <= MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES).then_some(contents)
+}
+
+fn shared_key_ownership_value(ownership: SharedKeyOwnership) -> &'static str {
+    match ownership {
+        SharedKeyOwnership::Imported => "imported",
+        SharedKeyOwnership::Generated => "generated",
+    }
+}
+
+fn private_key_source_state_value(state: PrivateKeySourceState) -> &'static str {
+    match state {
+        PrivateKeySourceState::Available => "available",
+        PrivateKeySourceState::Missing => "missing",
+        PrivateKeySourceState::Unavailable => "unavailable",
+    }
+}
+
+fn public_key_metadata_state_value(state: PublicKeyMetadataState) -> &'static str {
+    match state {
+        PublicKeyMetadataState::NotProvided => "not-provided",
+        PublicKeyMetadataState::FingerprintAvailable => "available",
+        PublicKeyMetadataState::Unavailable => "unavailable",
+    }
+}
+
+fn read_shared_key_registrations(
+    connection: &rusqlite::Connection,
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
+    let rows = connection
+        .prepare(
+            "SELECT id, label, ownership, private_key_path, public_key_path,
+                    public_key_fingerprint, private_source_state, public_metadata_state, selected
+             FROM shared_ssh_keys ORDER BY rowid",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+    rows.into_iter()
+        .map(|row| shared_key_registration_from_row(row, operation, data_directory))
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn shared_key_registration_from_row(
+    row: (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        i64,
+    ),
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<SharedKeyRegistration, RepositoryError> {
+    let (
+        id,
+        label,
+        ownership,
+        private_key_path,
+        public_key_path,
+        public_key_fingerprint,
+        private_source_state,
+        public_metadata_state,
+        selected,
+    ) = row;
+    if label.trim().is_empty() {
+        return Err(invalid_shared_key_metadata(operation, data_directory));
+    }
+    let id = SharedKeyId::parse(&id)
+        .map_err(|_| invalid_shared_key_metadata(operation, data_directory))?;
+    let ownership = match ownership.as_str() {
+        "imported" => SharedKeyOwnership::Imported,
+        "generated" => SharedKeyOwnership::Generated,
+        _ => return Err(invalid_shared_key_metadata(operation, data_directory)),
+    };
+    let private_key_path = shared_key_stored_path(&private_key_path, operation, data_directory)?;
+    let public_key_path = public_key_path
+        .as_deref()
+        .map(|path| shared_key_stored_path(path, operation, data_directory))
+        .transpose()?;
+    let private_source_state = match private_source_state.as_str() {
+        "available" => PrivateKeySourceState::Available,
+        "missing" => PrivateKeySourceState::Missing,
+        "unavailable" => PrivateKeySourceState::Unavailable,
+        _ => return Err(invalid_shared_key_metadata(operation, data_directory)),
+    };
+    let public_metadata_state = match public_metadata_state.as_str() {
+        "not-provided" if public_key_path.is_none() && public_key_fingerprint.is_none() => {
+            PublicKeyMetadataState::NotProvided
+        }
+        "available"
+            if public_key_path.is_some()
+                && public_key_fingerprint
+                    .as_deref()
+                    .is_some_and(valid_public_key_fingerprint) =>
+        {
+            PublicKeyMetadataState::FingerprintAvailable
+        }
+        "unavailable" if public_key_path.is_some() && public_key_fingerprint.is_none() => {
+            PublicKeyMetadataState::Unavailable
+        }
+        _ => return Err(invalid_shared_key_metadata(operation, data_directory)),
+    };
+    let selected = match selected {
+        0 => false,
+        1 => true,
+        _ => return Err(invalid_shared_key_metadata(operation, data_directory)),
+    };
+    Ok(SharedKeyRegistration {
+        id,
+        label,
+        ownership,
+        private_key_path,
+        public_key_path,
+        public_key_fingerprint,
+        private_source_state,
+        public_metadata_state,
+        selected,
+    })
+}
+
+fn valid_public_key_fingerprint(value: &str) -> bool {
+    value.starts_with("SHA256:")
+        && value
+            .parse::<ssh_key::Fingerprint>()
+            .is_ok_and(|fingerprint| fingerprint.to_string() == value)
+}
+
+fn shared_key_stored_path(
+    value: &str,
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<PathBuf, RepositoryError> {
+    let path = Path::new(value);
+    let (path, _) = normalize_shared_key_path(path, operation, data_directory)
+        .map_err(|_| invalid_shared_key_metadata(operation, data_directory))?;
+    Ok(path)
+}
+
+pub(in crate::repository) fn migrate_material_schema(
+    transaction: &Transaction<'_>,
+) -> Result<(), RepositoryError> {
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS owned_generated_keys (
+                key_id TEXT PRIMARY KEY NOT NULL,
+                private_key_path TEXT NOT NULL,
+                public_key_path TEXT NOT NULL,
+                private_file_identity BLOB NOT NULL,
+                public_file_identity BLOB NOT NULL,
+                public_key_fingerprint TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS key_material_operations (
+                operation_id TEXT PRIMARY KEY NOT NULL,
+                key_id TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('generate', 'delete')),
+                generation_label TEXT,
+                private_key_path TEXT NOT NULL,
+                public_key_path TEXT NOT NULL,
+                private_file_identity BLOB,
+                public_file_identity BLOB,
+                public_key_fingerprint TEXT,
+                phase TEXT NOT NULL,
+                failure_code TEXT,
+                CHECK (
+                    (action = 'generate' AND phase IN (
+                        'reserved', 'private-written', 'pair-written', 'completed',
+                        'retained-for-inspection'
+                    )) OR
+                    (action = 'delete' AND phase IN (
+                        'prepared', 'private-removed', 'files-removed', 'completed',
+                        'retained-for-inspection'
+                    ))
+                ),
+                CHECK (
+                    (action = 'generate' AND generation_label IS NOT NULL
+                        AND trim(generation_label) <> '') OR
+                    (action = 'delete' AND generation_label IS NULL)
+                )
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS key_material_operations_one_incomplete_per_key_idx
+                ON key_material_operations(key_id) WHERE phase <> 'completed';",
+        )
+        .map_err(RepositoryError::sqlite)
+}
