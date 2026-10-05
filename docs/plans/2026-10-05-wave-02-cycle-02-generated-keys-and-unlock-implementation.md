@@ -212,14 +212,14 @@ one key ID and derives its two paths; registration finalization inserts that
 ID rather than calling the existing public register method. Keep helpers private
 and use the Task 2 handle API.
 
-- [ ] Add `generation_plain_and_encrypted_round_trip`: parse the emitted own
+- [x] Add `generation_plain_and_encrypted_round_trip`: parse the emitted own
   files in the fixture, assert Ed25519, matching public fingerprint, OpenSSH
   format, empty comments, selected=false, expected paths, and protection flags.
   For encryption assert AES-256-CTR, bcrypt rounds=16, correct-passphrase success,
   and incorrect-passphrase failure using booleans that cannot print material.
   Add `generation_rejects_empty_or_nul_passphrase` and preserve whitespace and
   Unicode in `generation_preserves_passphrase_bytes`.
-- [ ] Add `generation_replay_never_creates_a_second_pair`,
+- [x] Add `generation_replay_never_creates_a_second_pair`,
   `generation_reservation_identity_is_registration_identity`,
   `generation_registry_failure_preserves_protected_files`, and
   `generation_crash_gap_does_not_adopt_unproven_files`. Inject interruption after
@@ -228,10 +228,10 @@ and use the Task 2 handle API.
   row absence before verified completion, unchanged collision bytes, and one
   registration after a valid retry. No test treats metadata-only generated rows
   as creation evidence.
-- [ ] Run
+- [x] Run
   `devenv shell -- cargo test --locked --test key_material generation`;
   expect compilation/assertion failures before implementation.
-- [ ] Enable ssh-key generation/encryption/OS RNG features and add zeroize.
+- [x] Enable ssh-key generation/encryption/OS RNG features and add zeroize.
   Update Cargo.lock through Devenv Cargo. Introduce `SecretPassphrase` and
   `InvalidPassphrase` in session.rs now, with the design's consuming constructor
   and redacted formatting; Task 4 adds the provider around this primitive.
@@ -239,12 +239,12 @@ and use the Task 2 handle API.
   buffers and the design's reservation/write/flush/finalization sequence.
   Extract public metadata only; never log a private parse/IO error. Implement
   conservative retry and `list_key_material_recovery`, with no startup mutation.
-- [ ] Run the focused tests; verify completed replay after later file removal
+- [x] Run the focused tests; verify completed replay after later file removal
   returns actionable missing-source/recovery state and does not resurrect files.
   Scan fixture app-data for secret material with a non-printing helper.
   Add a deterministic entropy-failure hook and assert RandomnessUnavailable
   leaves no files or registration and emits no raw RNG error.
-- [ ] Record checkpoint and limitations; suggested commit:
+- [x] Record checkpoint and limitations; suggested commit:
   `feat: generate and register protected Ed25519 keys`.
 
 ## Task 4: Implement Caller-Owned Session Credentials

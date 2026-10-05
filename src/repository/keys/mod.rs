@@ -5,7 +5,10 @@ use super::OperationId;
 mod generation;
 mod registry;
 pub mod session;
-pub use session::{InvalidPassphrase, SecretPassphrase};
+pub use session::{
+    InvalidPassphrase, KeySourceToken, PassphraseResponse, PassphraseUseFailure, SecretPassphrase,
+    SessionCredentialProvider, SessionCredentials, SessionUnlockFailure, UnlockRequest,
+};
 pub(crate) mod storage;
 pub use storage::KeyStore;
 
