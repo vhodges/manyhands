@@ -210,31 +210,35 @@ runs in the existing migration. Operation-local `CallbackAttempt` owns only
 typed failure, host observation, and credential-submission counters;
 `build_callbacks<'a>(&'a PreparedSshAttempt, Option<&'a str>, &'a CallbackAttempt)
 -> git2::RemoteCallbacks<'a>` uses interior mutation for that private state.
-`PreparedSshAttempt` holds the selected registration/source/endpoint/pin snapshot.
+`PreparedSshAttempt` holds registration, source, endpoint, trust, and approval.
+`HostTrustSnapshot { pin, reapproval_required }` is read/finalized through
+`read_host_trust`/`finalize_host_trust` under one cache guard; Task 4 uses those
+combined checks so recovery-marker and pin changes are checked together.
+`CallbackAttempt` exposes observed_host, failure, passthrough, and key_submissions.
 
-- [ ] Add failing migration and trust tests for preserved registry rows, port
+- [x] Add failing migration and trust tests for preserved registry rows, port
   separation, malformed stored identity, unknown host, matching approval,
   mismatched approval, changed pin, exact replacement, idempotent duplicate
   approval, two services racing different approvals, and registry failure.
-- [ ] Implement the design's durable `ssh-host-trust-reapproval-required` marker
+- [x] Implement the design's durable `ssh-host-trust-reapproval-required` marker
   in transport/trust.rs and invoke it before corrupt-registry rename in
   src/repository.rs. Extend tests/recovery_foundation_gate.rs and transport tests:
   matching known_hosts cannot bypass fresh approval after pin loss; interruptions,
   repeated recovery, and concurrent readers fail closed; marker publication
   failure prevents replacement. Ordinary rebuild preserves pins. Never clear the
   marker automatically or claim pins are reconstructible from Git/known_hosts.
-- [ ] Add actual handshake tests: matching known_hosts permits an unpinned
+- [x] Add actual handshake tests: matching known_hosts permits an unpinned
   host; a conflicting Manyhands pin rejects that same otherwise-trusted host;
   missing comparable identity fails; known_hosts bytes never change.
-- [ ] Add callback tests for explicit SSH key and username-only negotiation,
+- [x] Add callback tests for explicit SSH key and username-only negotiation,
   repeated credential requests, forbidden credential types, authority mismatch,
   and agent/default/helper fallback refusal. Raw callback errors remain fixed.
-- [ ] Run `devenv shell -- cargo test --locked --lib transport` and observe
+- [x] Run `devenv shell -- cargo test --locked --lib transport` and observe
   intended pure-policy failures; run real handshake cases in the initialized
   custom SSH test host. Then implement migration, CAS trust finalization, and
   callbacks using the exact decision table in the design. No prompt or SQL
   write inside callbacks. Preserve the passthrough observation for error mapping.
-- [ ] Rerun to green against the real fixture. Require an observed host check
+- [x] Rerun to green against the real fixture. Require an observed host check
   even for a valid inherited known_hosts entry. Record and commit
   `feat: enforce selected SSH key and explicit host trust`.
 
