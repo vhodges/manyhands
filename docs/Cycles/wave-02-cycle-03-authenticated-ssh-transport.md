@@ -107,3 +107,76 @@ retry of mutating operations remain explicit downstream work.
 
 Record planning, baseline, each implementation task, verification, and review
 as ticket comments. Keep the ticket open until code-review or PR approval.
+
+## Implementation Review Evidence
+
+All five implementation tasks received independent specification and quality
+review. Whole-branch review against `a21a31a` found two endpoint defects: SCP
+normalization could change relative repository paths, and URL query/fragment
+suffixes could differ from the backend service path. Commit `753bb72` preserves
+SCP syntax/path bytes, rejects URL suffixes before networking, and conservatively
+rejects cross-form rewrites. A scoped independent re-review approved both fixes
+and found no new breakage. All earlier task-review findings are resolved.
+
+The endpoint regressions include 28 exact upload/receive command observations,
+plus two backend port-syntax characterization observations. Test-only authority
+substitution preserves path bytes and does not expand production parser syntax.
+The full-suite schema expectation was also corrected in `3e87c1b` to include the
+intentional host-pin table; the strict ordered-table assertion remains.
+
+## Recorded Implementation Rulings
+
+These are implementation decisions within the approved scope, in decision order.
+Each includes the potential rework or user cost if the decision proves wrong.
+
+1. Initialize backend limits before threads in both binaries and custom SSH test
+   hosts; require initialized status in the driver. Cost: revise startup/test
+   integration if the boundary proves unsuitable.
+2. Split fixture ownership/configuration from the restricted server/helper relay.
+   Cost: redraw the test-only module boundary.
+3. Use equivalent relative repository visibility for source inclusion in custom
+   test hosts, without widening public APIs. Cost: revise test-host integration.
+4. Read and finalize the recovery marker and host pin together under one guard.
+   Cost: revise the private trust snapshot interface and its driver consumer.
+5. Split operation/session flow, scoped remote adapter, and private test dispatch
+   into focused modules. Cost: consolidate or adjust those private boundaries.
+6. Give the private remote adapter separate repository and connection-borrow
+   lifetimes. Cost: revise its private borrowing interface and covering tests.
+7. Permit the approved single ambiguity prompt after a generic SSH failure only
+   when host observation and selected-key submission occurred, no typed policy
+   failure occurred, and no secret was tried. Guidance includes possible
+   connection failure; subsequent generic failure remains uncached and typed as
+   transport unavailable. Cost: an unnecessary one-time prompt after a connection
+   or service failure; richer backend evidence may refine this later.
+8. Share a privacy scanner across focused failure/privacy test modules. Cost:
+   revise the test-only scanner/module boundary. Capture overflow, missing probes,
+   and drain failures fail closed.
+9. Preserve SCP syntax/path bytes, reject URL query/fragment delimiters, and reject
+   cross-form rewrites conservatively. Cost: a benign rewrite may require an
+   explicit URL, or safe equivalence handling may need refinement.
+
+## Final Local Verification
+
+Final Rust revision: `753bb72`. All four required Devenv commands passed:
+`cargo check --all-features --locked`, `cargo fmt --check`,
+`cargo clippy --all-targets --all-features --locked -- -D warnings`, and
+`cargo test --all-features --locked`. The full suite passed 581 tests, including
+86 library tests, 27 real SSH fixture cases, 45 real transport cases, and nine
+documentation tests, with no failures or ignored tests. Full local log:
+`/tmp/manyhands-cycle03-final-tests.log`.
+
+| Acceptance contract | Final evidence |
+| --- | --- |
+| Selected key and endpoints | Real generated/imported Ed25519 and external RSA PEM authentication; fetch/push OIDs; wrong/default/anonymous rejection; exact path commands and zero-network invalid/rewrite preflight. |
+| Unlock | Eleven session tests plus real transport cases cover bounded prompting, successful cache reuse, wrong-secret exclusion, cancellation/unavailable provider, and rejection/source-change eviction. |
+| Host trust | Real unknown/stale/replacement/known_hosts/port cases, 50 recovery tests, corrupt replacement requiring fresh approval, combined trust snapshot/CAS races, and distinct fetch/push pins. |
+| State preservation | Populated refs, objects, index, dirty worktree, FETCH_HEAD, canonical content, registrations, and private-key bytes compared across before-transfer failures and retries. Lost push response test observes the changed remote without promising rollback. |
+| Privacy | Raw stdout/stderr scanned before filtering; populated DB/WAL/backups/journal/Git state scanned. Temporary stdout, stderr, and retained-WAL-backup secret injections each failed safely; mutations removed and clean cases passed. |
+| Stalled transport | Exact 10,000/30,000 ms settings verified. Handshake/authentication/advertisement/transfer stalls returned at about 30 seconds; delayed command acknowledgment plus cleanup took about 45 seconds. A progressing transfer succeeded after 42.093 seconds. DNS, multiple address attempts, and cleanup remain outside a total deadline guarantee. |
+| Regression and frontends | All required gates passed. CLI smoke exited zero on the final Rust revision. Desktop launched on an active display without startup errors and remained running until deliberate Ctrl-C (intentional exit 1); endpoint fixes did not change startup wiring. |
+| Native platforms | Pending. The five-target workflow includes the new tests, but no new native CI run has been published. Linux x86-64 local evidence does not establish Linux ARM64, Windows x86-64/ARM64, or macOS ARM64 acceptance. |
+
+Implementation is ready for publication review. No push, PR, merge, ticket
+closure, or worktree cleanup has been performed. Native CI remains an explicit
+exit gate; the ticket stays open. The execution ledger and review reports remain
+in the ticket worktree for continuation.

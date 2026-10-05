@@ -191,6 +191,16 @@ ports/IP literals, and ambiguous encodings. Do not resolve DNS aliases into one
 trust identity. Share the structural parser with publication eligibility so
 configuration and transport agree; preserve existing valid SSH cases in tests.
 
+Preserve SCP connection syntax and its opaque repository path; converting it to
+an ordinary SSH URL can change relative, absolute, or home-relative meaning.
+Keep URL paths in their original path form. Reject query/fragment delimiters in
+`ssh://` URLs before networking because the locked backend omits those suffixes
+from its service path. Literal `?` and `#` remain opaque SCP path bytes.
+Conservatively reject cross-form rewrites rather than claiming path equivalence.
+Real backend tests assert exact upload/receive service commands; a test-only
+authority/port substitution permits ephemeral-port SCP characterization without
+expanding the production syntax or changing path bytes.
+
 Use the configured URL username. With no explicit username, return
 `UsernameRequired` with guidance to configure one rather than guessing from
 the OS account or key. A syntactically valid username-less remote may remain

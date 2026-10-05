@@ -22,22 +22,29 @@ remote callbacks and prove authenticated transport against a real fixture.
   and planning checkpoint comment.
 - [x] Obtain approval of the Cycle, design, and plan: user approved on 2026-10-05
   and selected subagent-driven development.
-- [ ] Implement and record each task's verification and decisions as comments.
+- [x] Implement and record each task's verification and decisions as comments.
+- [x] Complete local final gates and independent whole-branch review/fix review.
+- [ ] Obtain native CI evidence after authorized publication.
 
-Implementation status: authorized and starting with subagent-driven development.
+Implementation status: locally verified and independently reviewed; native CI pending.
 The user approved scope, design, and plan on 2026-10-05, including Q1–Q3 and
 10,000/30,000 ms timeout defaults and the documented per-address/per-blocking-call
-backend limits. Implement the resolved pre-thread bootstrap and test-host design
-before the connection-driver task. Track task/review state in the
-plan-specific execution ledger and ticket comments; keep the ticket open.
+backend limits. The pre-thread bootstrap and test-host design were implemented
+before the connection-driver task. Task/review state is recorded in
+the plan-specific execution ledger and ticket comments; the ticket remains open.
+
+Final Rust revision `753bb72` passes all four required Devenv gates: 581 tests,
+including 27 SSH fixture and 45 transport cases, with no failures or ignored
+tests. CLI smoke exits zero; desktop launched on an active display and was
+deliberately stopped after successful startup. All task and final review findings
+are resolved. See the Cycle's final verification table for contract evidence.
 
 ## Entry Gate
 
 The source RFCs and Wave are approved. Cycle 02's closing comment records
 approved PR #8, 480 passing tests, and successful native CI on all five targets.
-Before implementation, approve these Cycle 03 artifacts, repeat the current-main
-preflight, and run the required local baseline checks. Prior recorded evidence
-does not replace a fresh baseline against the implementation checkout.
+Cycle 03 artifacts were approved, the current-main preflight repeated, and all
+required local baseline checks passed before implementation (480 tests).
 
 Planning rebase: fetched origin/main at `89ce24d`; included local main at
 `a21a31a` (four additional tooling/skills/research commits). Ticket HEAD moved

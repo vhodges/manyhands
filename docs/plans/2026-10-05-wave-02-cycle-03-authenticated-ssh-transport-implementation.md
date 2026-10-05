@@ -330,12 +330,19 @@ after receive-pack. No raw server detail is a public recovery value.
   --test ssh_transport`; keep `--lib` so private-driver tests execute. Preserve
   release builds/artifacts. Require runtime tests on all five native targets;
   do not skip Windows ARM or substitute local-file remotes for SSH proof.
-- [ ] Run the final gate below, record results/native evidence and remaining
+- [x] Run the final local gate below, record results/native evidence and remaining
   limitations. Commit `test: prove SSH transport privacy and platform contracts`.
-- [ ] Request independent whole-branch code review, address findings, and rerun
+- [x] Request independent whole-branch code review, address findings, and rerun
   affected checks. Keep the ticket open until code-review or PR approval.
 
 ## Final Verification And Handoff
+
+Completed locally on Rust revision `753bb72`: all four required gates passed,
+581 tests including 27 fixture and 45 transport cases, no failures or ignored
+tests. CLI smoke passed; desktop startup succeeded on an active display before
+deliberate Ctrl-C. Whole-branch review and scoped endpoint-fix review are complete;
+all findings are resolved. Native execution remains pending authorized CI, as
+recorded in Task 2 and the Cycle's final verification table.
 
 Run from the ticket worktree:
 
@@ -357,4 +364,4 @@ Each task comment records changes, decisions, commands/results, and current
 HEAD. Final evidence maps every Cycle acceptance row to tests/results. Keep
 Cycle 04's ref/reservation/polling work and Cycle 05's sync policy explicit.
 Do not close this ticket, publish divergent history, merge, or remove the
-worktree as part of this planning handoff.
+worktree as part of this local implementation handoff.
