@@ -97,9 +97,9 @@ commit during authorized implementation.
 
 ## Baseline Checkpoint
 
-- [ ] Read AGENTS.md and implementing-a-cycle; repeat its fetch/rebase/ancestry
+- [x] Read AGENTS.md and implementing-a-cycle; repeat its fetch/rebase/ancestry
   preflight at implementation start. Preserve unrelated edits.
-- [ ] Run the four required commands listed under the final gate below before
+- [x] Run the four required commands listed under the final gate below before
   Rust changes. Record results, base/head SHAs, approved design, chosen execution
   method, and any pre-existing failures in the ticket.
 
@@ -116,23 +116,23 @@ validated authority, optional username, and private connection URL.
 `SshTransportError::guidance(&self) -> &'static str` returns only fixed text.
 Keep public service method implementation for Task 4.
 
-- [ ] Add failing parser tests: `ssh://git@EXAMPLE.com/repo` and
+- [x] Add failing parser tests: `ssh://git@EXAMPLE.com/repo` and
   `git@example.com:repo` yield host `example.com`, port `22`; explicit `2222`
   differs; equivalent bracketed IPv6 normalizes to the same IP. Reject HTTP(S),
   `C:\\repo`, `file:/repo`, password-bearing userinfo, port 0/65536, empty path,
   malformed brackets, encoded authority ambiguity, whitespace and NUL.
-- [ ] Add tests preserving prior repository eligibility cases and accepting a
+- [x] Add tests preserving prior repository eligibility cases and accepting a
   structurally valid username-less SSH URL; credential use later returns
   `UsernameRequired`. Error formatting and `source()` must expose no backend
   error/URL and use fixed category text.
-- [ ] Run `devenv shell -- cargo test --locked --lib transport` and targeted
+- [x] Run `devenv shell -- cargo test --locked --lib transport` and targeted
   repository-enablement tests; record the intended missing-contract failures.
-- [ ] Implement the types/parser/error map. Replace duplicated structural SSH
+- [x] Implement the types/parser/error map. Replace duplicated structural SSH
   checks with this parser without changing remote mutation/confirmation behavior.
-- [ ] Read raw configured URLs separately from effective Remote URLs. Test local
+- [x] Read raw configured URLs separately from effective Remote URLs. Test local
   and global `insteadOf`/`pushInsteadOf`, including same-host username/path changes;
   refuse a changed effective endpoint before any connection or credential use.
-- [ ] Rerun those tests to green; record and commit `feat: define SSH transport contracts`.
+- [x] Rerun those tests to green; record and commit `feat: define SSH transport contracts`.
 
 ## Task 2: Deliver A Restricted Portable SSH Git Fixture
 
