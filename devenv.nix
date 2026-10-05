@@ -31,6 +31,8 @@
     glib
     gtk3
     gh
+    sprite
+    codex
   ];
 
   # https://devenv.sh/languages/
