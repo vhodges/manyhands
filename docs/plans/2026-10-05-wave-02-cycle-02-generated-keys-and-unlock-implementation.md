@@ -260,7 +260,7 @@ handle metadata without reading bytes, using Task 2's source observer.
 Integration fixtures create temporary regular files and observe their tokens;
 no public arbitrary-token constructor is needed.
 
-- [ ] Add a counting provider and test `successful_unlock_prompts_once_per_session`:
+- [x] Add a counting provider and test `successful_unlock_prompts_once_per_session`:
 
   ```rust
   assert_eq!(provider_calls_after_two_valid_uses, 1);
@@ -272,18 +272,18 @@ no public arbitrary-token constructor is needed.
   and `clear_and_invalidate_drop_cached_secret`. Assert successful use of A,
   use of B, then A prompts three times. Rejected cached material is evicted,
   without recursively prompting in the same call.
-- [ ] Run `devenv shell -- cargo test --locked --test session_credentials`;
+- [x] Run `devenv shell -- cargo test --locked --test session_credentials`;
   expect failures before implementing the provider/cache.
-- [ ] Implement the one-entry zeroizing cache, redacted formatting, ownership
+- [x] Implement the one-entry zeroizing cache, redacted formatting, ownership
   transfer, borrowed callback access, and clear/drop paths. Use structural tests
   and an instrumented drop witness for eviction; never inspect freed memory or
   expose a production secret getter for tests. Reject NUL and empty supplied
   secrets without retaining them.
-- [ ] Run session tests and direct formatting checks for every public wrapper.
+- [x] Run session tests and direct formatting checks for every public wrapper.
   Assert no public credential type can serialize; use compile-fail documentation
   tests only where they exercise that actual privacy boundary. Record that
   callback consumers are trusted not to copy or log borrowed secrets.
-- [ ] Record checkpoint; suggested commit:
+- [x] Record checkpoint; suggested commit:
   `feat: retain unlock secrets only in caller-owned sessions`.
 
 ## Task 5: Inspect Selected Sources And Validate Generated Unlock

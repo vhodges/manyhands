@@ -201,7 +201,7 @@ impl RepositoryService {
         }).map_err(|mut e| { e.operation = KeyMaterialAction::ListRecovery; e })
     }
 
-    fn material_registry<T>(
+    pub(super) fn material_registry<T>(
         &self,
         work: impl FnOnce(&mut Connection) -> Result<T, KeyMaterialError>,
     ) -> Result<T, KeyMaterialError> {

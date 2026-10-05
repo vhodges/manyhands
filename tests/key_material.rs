@@ -124,12 +124,18 @@ fn generation_replay_never_creates_a_second_pair() {
     assert!(fs::read(&r.private_key_path).unwrap() == original);
     assert_eq!(service.list_shared_keys().unwrap().len(), 1);
     fs::remove_file(&r.private_key_path).unwrap();
-    assert!(matches!(
-        service
-            .generate_shared_key(&store, request(id, KeyProtection::Unencrypted))
-            .unwrap(),
-        GenerateSharedKeyOutcome::RecoveryRequired(_)
-    ));
+    let GenerateSharedKeyOutcome::RecoveryRequired(recovery) = service
+        .generate_shared_key(&store, request(id, KeyProtection::Unencrypted))
+        .unwrap()
+    else {
+        panic!("missing source must require inspection")
+    };
+    assert_eq!(recovery.phase, KeyMaterialPhase::Completed);
+    assert_eq!(
+        recovery.recovery_action,
+        RecoveryAction::InspectRetainedFiles
+    );
+    assert_eq!(recovery.failure_code.unwrap().as_str(), "source-missing");
     assert!(!r.private_key_path.exists());
 }
 #[test]
@@ -174,6 +180,16 @@ fn generation_interruption_recovery_boundaries() {
             panic!("expected interruption")
         };
         assert_eq!(recovery.phase, phase);
+        assert_eq!(recovery.recovery_action, RecoveryAction::RetryGeneration);
+        let expected_code = if point == FailurePoint::GenerationBeforeFinalTransaction {
+            "registry-unavailable"
+        } else {
+            "storage-unavailable"
+        };
+        assert_eq!(
+            recovery.failure_code.as_ref().unwrap().as_str(),
+            expected_code
+        );
         assert!(service.list_shared_keys().unwrap().is_empty());
         assert_eq!(service.list_key_material_recovery().unwrap().len(), 1);
         let retried = service
@@ -185,7 +201,7 @@ fn generation_interruption_recovery_boundaries() {
             assert_eq!(service.list_shared_keys().unwrap().len(), 1);
         } else {
             assert!(
-                matches!(retried, GenerateSharedKeyOutcome::RecoveryRequired(ref r) if r.phase == KeyMaterialPhase::RetainedForInspection && r.recovery_action == RecoveryAction::InspectRetainedFiles)
+                matches!(retried, GenerateSharedKeyOutcome::RecoveryRequired(ref r) if r.phase == KeyMaterialPhase::RetainedForInspection && r.recovery_action == RecoveryAction::InspectRetainedFiles && r.failure_code.as_ref().unwrap().as_str() == expected_code)
             );
             assert!(service.list_shared_keys().unwrap().is_empty());
         }
@@ -311,7 +327,7 @@ fn generation_crash_gap_does_not_adopt_unproven_files() {
         .generate_shared_key(&store, request(id, KeyProtection::Unencrypted))
         .unwrap();
     assert!(
-        matches!(outcome,GenerateSharedKeyOutcome::RecoveryRequired(r) if r.phase == KeyMaterialPhase::RetainedForInspection)
+        matches!(outcome,GenerateSharedKeyOutcome::RecoveryRequired(r) if r.phase == KeyMaterialPhase::RetainedForInspection && r.recovery_action == RecoveryAction::InspectRetainedFiles && r.failure_code.as_ref().unwrap().as_str() == "storage-unavailable")
     );
     assert!(fs::read(&path).unwrap() == b"collision marker");
     assert!(service.list_shared_keys().unwrap().is_empty());
@@ -328,7 +344,7 @@ fn generation_completed_retry_does_not_restore_unregistered_key() {
     let store = KeyStore::for_home(home.path()).unwrap();
     let id = OperationId::new();
     assert!(
-        matches!(service.generate_shared_key(&store, request(id,KeyProtection::Unencrypted)).unwrap(),GenerateSharedKeyOutcome::RecoveryRequired(r) if r.phase == KeyMaterialPhase::Completed)
+        matches!(service.generate_shared_key(&store, request(id,KeyProtection::Unencrypted)).unwrap(),GenerateSharedKeyOutcome::RecoveryRequired(r) if r.phase == KeyMaterialPhase::Completed && r.recovery_action == RecoveryAction::InspectRetainedFiles && r.failure_code.as_ref().unwrap().as_str() == "registry-unavailable")
     );
     let r = created(
         service
@@ -377,4 +393,539 @@ fn generation_reused_operation_rejects_different_label_and_store() {
     );
     assert!(!other_home.path().join(".ssh").exists());
     assert!(fs::read(&r.private_key_path).unwrap() == original);
+}
+
+use manyhands::repository::keys::{
+    GeneratedKeyUnlockOutcome, KeyMaterialAction, PassphraseResponse, RegisterSharedKeyOutcome,
+    RegisterSharedKeyRequest, SelectedKeyInspection, SessionCredentialProvider, SessionCredentials,
+    SharedKeyOwnership, SharedKeyRegistration, UnlockRequest,
+};
+use std::{cell::Cell, collections::VecDeque, rc::Rc};
+
+struct UnlockProvider {
+    calls: Rc<Cell<usize>>,
+    responses: VecDeque<PassphraseResponse>,
+    hook: Option<Box<dyn FnOnce()>>,
+}
+impl SessionCredentialProvider for UnlockProvider {
+    fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
+        self.calls.set(self.calls.get() + 1);
+        if let Some(hook) = self.hook.take() {
+            hook();
+        }
+        self.responses
+            .pop_front()
+            .expect("unexpected passphrase prompt")
+    }
+}
+fn supplied(value: &str) -> PassphraseResponse {
+    PassphraseResponse::Supplied(SecretPassphrase::new(value.to_owned()).unwrap())
+}
+fn credentials(
+    responses: impl IntoIterator<Item = PassphraseResponse>,
+) -> (SessionCredentials<UnlockProvider>, Rc<Cell<usize>>) {
+    let calls = Rc::new(Cell::new(0));
+    (
+        SessionCredentials::new(UnlockProvider {
+            calls: calls.clone(),
+            responses: responses.into_iter().collect(),
+            hook: None,
+        }),
+        calls,
+    )
+}
+struct SelectedFixture {
+    _home: tempfile::TempDir,
+    data: tempfile::TempDir,
+    service: RepositoryService,
+    store: KeyStore,
+    registration: SharedKeyRegistration,
+    password: String,
+}
+impl SelectedFixture {
+    fn new(encrypted: bool) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let store = KeyStore::for_home(home.path()).unwrap();
+        let password = format!("unlock-{}", OperationId::new());
+        let protection = if encrypted {
+            KeyProtection::Passphrase(SecretPassphrase::new(password.clone()).unwrap())
+        } else {
+            KeyProtection::Unencrypted
+        };
+        let mut registration = created(
+            service
+                .generate_shared_key(&store, request(OperationId::new(), protection))
+                .unwrap(),
+        );
+        service.select_shared_key(registration.id).unwrap();
+        registration.selected = true;
+        Self {
+            _home: home,
+            data,
+            service,
+            store,
+            registration,
+            password,
+        }
+    }
+}
+fn import_selected(service: &RepositoryService, path: &std::path::Path) -> SharedKeyRegistration {
+    let RegisterSharedKeyOutcome::Registered(mut r) = service
+        .register_shared_key(RegisterSharedKeyRequest {
+            label: "external".into(),
+            ownership: SharedKeyOwnership::Imported,
+            private_key_path: path.to_owned(),
+            public_key_path: None,
+        })
+        .unwrap()
+    else {
+        panic!("expected registration")
+    };
+    service.select_shared_key(r.id).unwrap();
+    r.selected = true;
+    r
+}
+#[test]
+fn import_readability_does_not_parse_private_material() {
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    assert_eq!(
+        service.inspect_selected_key(&store).unwrap(),
+        SelectedKeyInspection::NoSelection
+    );
+    let path = home.path().join("not-a-key");
+    let bytes = b"deliberately not any private key encoding";
+    fs::write(&path, bytes).unwrap();
+    let r = import_selected(&service, &path);
+    assert!(
+        matches!(service.inspect_selected_key(&store).unwrap(), SelectedKeyInspection::ImportedReadable { registration, .. } if registration == r)
+    );
+    let (mut session, calls) = credentials([]);
+    assert_eq!(
+        service.unlock_generated_key(&store, &mut session).unwrap(),
+        GeneratedKeyUnlockOutcome::ImportedValidationDeferred(r.clone())
+    );
+    assert_eq!(calls.get(), 0);
+    assert_eq!(service.list_shared_keys().unwrap(), vec![r]);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert!(!home.path().join(".ssh").exists());
+}
+#[test]
+fn import_missing_and_directory_retain_registration() {
+    for directory in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let store = KeyStore::for_home(home.path()).unwrap();
+        let path = home.path().join("source");
+        if directory {
+            fs::create_dir(&path).unwrap();
+        }
+        let r = import_selected(&service, &path);
+        let e = service.inspect_selected_key(&store).unwrap_err();
+        assert_eq!(
+            e.kind,
+            if directory {
+                KeyMaterialErrorKind::NotRegularFile
+            } else {
+                KeyMaterialErrorKind::SourceMissing
+            }
+        );
+        assert_eq!(e.operation, KeyMaterialAction::Inspect);
+        assert_eq!(e.key_id, Some(r.id));
+        assert_eq!(service.list_shared_keys().unwrap(), vec![r]);
+    }
+}
+#[cfg(unix)]
+#[test]
+fn import_symlink_and_inaccessible_source() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let store = KeyStore::for_home(home.path()).unwrap();
+    let path = home.path().join("source");
+    let link = home.path().join("link");
+    fs::write(&path, b"opaque external bytes").unwrap();
+    symlink(&path, &link).unwrap();
+    let r = import_selected(&service, &link);
+    assert!(matches!(
+        service.inspect_selected_key(&store).unwrap(),
+        SelectedKeyInspection::ImportedReadable { .. }
+    ));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
+    // A root test process can read mode-000 sources by definition.
+    if unsafe { libc::geteuid() } != 0 {
+        assert_eq!(
+            service.inspect_selected_key(&store).unwrap_err().kind,
+            KeyMaterialErrorKind::SourceUnreadable
+        );
+    }
+    assert_eq!(service.list_shared_keys().unwrap(), vec![r]);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn import_fifo_is_rejected_without_blocking() {
+    use std::{
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    const CHILD: &str = "MANYHANDS_IMPORT_FIFO_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let home = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let store = KeyStore::for_home(home.path()).unwrap();
+        let path = home.path().join("fifo");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        import_selected(&service, &path);
+        assert_eq!(
+            service.inspect_selected_key(&store).unwrap_err().kind,
+            KeyMaterialErrorKind::NotRegularFile
+        );
+        return;
+    }
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "import_fifo_is_rejected_without_blocking"])
+        .env(CHILD, "1")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("FIFO inspection blocked");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+#[test]
+fn generated_unlock_round_trip_reuses_session() {
+    let f = SelectedFixture::new(true);
+    assert!(
+        matches!(f.service.inspect_selected_key(&f.store).unwrap(), SelectedKeyInspection::Generated { registration, .. } if registration == f.registration)
+    );
+    let (mut session, calls) = credentials([supplied(&f.password)]);
+    for _ in 0..2 {
+        assert_eq!(
+            f.service
+                .unlock_generated_key(&f.store, &mut session)
+                .unwrap(),
+            GeneratedKeyUnlockOutcome::Ready(f.registration.clone())
+        );
+    }
+    assert_eq!(calls.get(), 1);
+    session.clear();
+    let (mut other, other_calls) = credentials([supplied(&f.password)]);
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut other)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    assert_eq!(other_calls.get(), 1);
+}
+#[test]
+fn unencrypted_selected_key_does_not_prompt() {
+    let f = SelectedFixture::new(false);
+    let (mut session, calls) = credentials([]);
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(f.registration)
+    );
+    assert_eq!(calls.get(), 0);
+    f.service.clear_shared_key_selection().unwrap();
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::NoSelection
+    );
+}
+#[test]
+fn generated_unlock_cancel_preserves_state() {
+    let f = SelectedFixture::new(true);
+    let original = fs::read(&f.registration.private_key_path).unwrap();
+    let (mut session, calls) = credentials([
+        PassphraseResponse::Cancelled,
+        PassphraseResponse::Unavailable,
+        supplied(&f.password),
+    ]);
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Cancelled
+    );
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::ProviderUnavailable
+    );
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    assert_eq!(calls.get(), 3);
+    assert_eq!(
+        f.service.list_shared_keys().unwrap(),
+        vec![f.registration.clone()]
+    );
+    assert_eq!(
+        fs::read(&f.registration.private_key_path).unwrap(),
+        original
+    );
+    assert!(f.service.list_key_material_recovery().unwrap().is_empty());
+}
+#[test]
+fn generated_unlock_wrong_passphrase_preserves_registration() {
+    let f = SelectedFixture::new(true);
+    let (mut session, calls) = credentials([supplied("wrong"), supplied(&f.password)]);
+    let e = f
+        .service
+        .unlock_generated_key(&f.store, &mut session)
+        .unwrap_err();
+    assert_eq!(e.kind, KeyMaterialErrorKind::UnlockFailed);
+    assert_eq!(e.operation, KeyMaterialAction::Unlock);
+    assert_eq!(e.key_id, Some(f.registration.id));
+    assert!(!format!("{e:?}").contains(&f.password));
+    assert_eq!(
+        f.service.list_shared_keys().unwrap(),
+        vec![f.registration.clone()]
+    );
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    assert_eq!(calls.get(), 2);
+}
+#[test]
+fn selected_key_changes_during_prompt() {
+    let f = SelectedFixture::new(true);
+    let other = RepositoryService::open_at(f.data.path()).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut session = SessionCredentials::new(UnlockProvider {
+        calls: calls.clone(),
+        responses: [supplied(&f.password), supplied(&f.password)].into(),
+        hook: Some(Box::new(move || {
+            other.clear_shared_key_selection().unwrap();
+        })),
+    });
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::SelectionChanged
+    );
+    f.service.select_shared_key(f.registration.id).unwrap();
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    assert_eq!(calls.get(), 2);
+}
+#[test]
+fn key_source_changes_during_prompt() {
+    let f = SelectedFixture::new(true);
+    let path = f.registration.private_key_path.clone();
+    let original = fs::read(&path).unwrap();
+    let store = f.store.clone();
+    let other = RepositoryService::open_at(f.data.path()).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut session = SessionCredentials::new(UnlockProvider {
+        calls: calls.clone(),
+        responses: [supplied(&f.password), supplied(&f.password)].into(),
+        hook: Some(Box::new(move || {
+            // Generating through a second service proves the store lock is released.
+            other
+                .generate_shared_key(
+                    &store,
+                    request(OperationId::new(), KeyProtection::Unencrypted),
+                )
+                .unwrap();
+            fs::write(path, b"changed while prompting").unwrap();
+        })),
+    });
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::SourceChanged
+    );
+    fs::write(&f.registration.private_key_path, original).unwrap();
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    assert_eq!(calls.get(), 2);
+}
+#[test]
+fn generated_unlock_bounds_file_and_kdf_work() {
+    let f = SelectedFixture::new(false);
+    let original = fs::read(&f.registration.private_key_path).unwrap();
+    let key = ssh_key::PrivateKey::from_openssh(&original).unwrap();
+    let mut invalid = vec![vec![b'x'; 65537], b"malformed sensitive material".to_vec()];
+    for (cipher, rounds) in [
+        (ssh_key::Cipher::Aes256Cbc, 16),
+        (ssh_key::Cipher::Aes256Ctr, 1),
+    ] {
+        invalid.push(
+            key.encrypt_with(
+                cipher,
+                ssh_key::Kdf::Bcrypt {
+                    salt: vec![1; 16],
+                    rounds,
+                },
+                42,
+                b"test",
+            )
+            .unwrap()
+            .to_openssh(ssh_key::LineEnding::LF)
+            .unwrap()
+            .as_bytes()
+            .to_vec(),
+        );
+    }
+    // Modify the serialized work factor without performing that expensive KDF.
+    let encrypted = ssh_key::PrivateKey::from_openssh(invalid.last().unwrap()).unwrap();
+    let mut encoded = encrypted.to_bytes().unwrap();
+    let rounds_offset = encoded.windows(16).position(|v| v == [1; 16]).unwrap() + 16;
+    encoded[rounds_offset..rounds_offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+    invalid.push(
+        ssh_key::PrivateKey::from_bytes(&encoded)
+            .unwrap()
+            .to_openssh(ssh_key::LineEnding::LF)
+            .unwrap()
+            .as_bytes()
+            .to_vec(),
+    );
+    let (mut session, calls) = credentials([]);
+    for bytes in invalid {
+        fs::write(&f.registration.private_key_path, bytes).unwrap();
+        let e = f
+            .service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap_err();
+        assert_eq!(e.kind, KeyMaterialErrorKind::InvalidGeneratedKey);
+        assert_eq!(e.operation, KeyMaterialAction::Unlock);
+        assert!(!format!("{e:?}").contains("sensitive"));
+    }
+    assert_eq!(calls.get(), 0);
+}
+#[test]
+fn generated_unlock_checks_public_identity() {
+    let f = SelectedFixture::new(false);
+    let (mut session, calls) = credentials([]);
+    assert!(matches!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap(),
+        GeneratedKeyUnlockOutcome::Ready(_)
+    ));
+    let replacement = created(
+        f.service
+            .generate_shared_key(
+                &f.store,
+                request(OperationId::new(), KeyProtection::Unencrypted),
+            )
+            .unwrap(),
+    );
+    fs::write(
+        &f.registration.private_key_path,
+        fs::read(replacement.private_key_path).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::InvalidGeneratedKey
+    );
+    assert_eq!(calls.get(), 0);
+}
+#[test]
+fn generated_inspection_requires_creation_evidence_and_expected_paths() {
+    let f = SelectedFixture::new(false);
+    let other_home = tempfile::tempdir().unwrap();
+    let other_store = KeyStore::for_home(other_home.path()).unwrap();
+    assert_eq!(
+        f.service
+            .inspect_selected_key(&other_store)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::UnsafePath
+    );
+    assert!(!other_home.path().join(".ssh").exists());
+    let c = rusqlite::Connection::open(f.data.path().join(REGISTRY_FILE)).unwrap();
+    c.execute(
+        "DELETE FROM owned_generated_keys WHERE key_id=?1",
+        [f.registration.id.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        f.service.inspect_selected_key(&f.store).unwrap_err().kind,
+        KeyMaterialErrorKind::OwnershipUnverified
+    );
+    let (mut session, _) = credentials([]);
+    assert_eq!(
+        f.service
+            .unlock_generated_key(&f.store, &mut session)
+            .unwrap_err()
+            .kind,
+        KeyMaterialErrorKind::OwnershipUnverified
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_inspection_rejects_links_and_unprotected_private_source() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let f = SelectedFixture::new(false);
+    fs::set_permissions(
+        &f.registration.private_key_path,
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    assert_eq!(
+        f.service.inspect_selected_key(&f.store).unwrap_err().kind,
+        KeyMaterialErrorKind::ProtectionUnavailable
+    );
+    fs::set_permissions(
+        &f.registration.private_key_path,
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let moved = f._home.path().join("moved");
+    fs::rename(&f.registration.private_key_path, &moved).unwrap();
+    symlink(&moved, &f.registration.private_key_path).unwrap();
+    assert_eq!(
+        f.service.inspect_selected_key(&f.store).unwrap_err().kind,
+        KeyMaterialErrorKind::UnsafePath
+    );
 }

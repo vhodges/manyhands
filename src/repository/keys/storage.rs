@@ -283,6 +283,10 @@ fn error(kind: KeyMaterialErrorKind) -> KeyMaterialError {
     }
 }
 fn io_error(e: io::Error) -> KeyMaterialError {
+    #[cfg(unix)]
+    if e.raw_os_error() == Some(libc::ELOOP) {
+        return error(KeyMaterialErrorKind::UnsafePath);
+    }
     error(match e.kind() {
         io::ErrorKind::NotFound => KeyMaterialErrorKind::SourceMissing,
         io::ErrorKind::PermissionDenied => KeyMaterialErrorKind::ProtectionUnavailable,

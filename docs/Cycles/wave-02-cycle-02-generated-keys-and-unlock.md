@@ -83,3 +83,16 @@ No real user key is generated or deleted by developing or testing this Cycle.
 Record planning, baseline, implementation checkpoints, verification, and review
 as ticket comments. Keep the ticket open until code-review or PR approval; do
 not confuse approval of this plan with approval of the finished code.
+
+### Cycle 03 credential integration obligations
+
+- Validate imported formats and encrypted keys with the actual SSH backend;
+  readable sources and `git2::Cred::ssh_key` construction do not prove successful
+  decryption or authentication.
+- Connect backend rejection to `SessionCredentials::invalidate(key_id)` so a
+  rejected cached secret is evicted. Cache only a backend-validated attempt and
+  keep provider calls outside Git, registry, and key-store locks.
+- Verify the locked `libssh2-sys` 0.3.3 OpenSSL features on Windows and exercise
+  real transport there before claiming compatibility.
+- Pause or cancel background polling when credentials are cancelled or their
+  provider is unavailable; retries must be an explicit new attempt.

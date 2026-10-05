@@ -93,6 +93,13 @@ pub struct KeySourceToken {
 }
 
 impl KeySourceToken {
+    pub(super) fn from_owned(path: PathBuf, identity: super::storage::FileIdentity) -> Self {
+        Self {
+            path,
+            encoded_identity: identity.encode(),
+        }
+    }
+
     /// Observes a readable regular source without reading its contents.
     pub fn observe(path: &Path) -> Result<Self, KeyMaterialError> {
         let path = path.canonicalize().map_err(|error| KeyMaterialError {

@@ -3,6 +3,7 @@ use std::{fmt, path::PathBuf};
 use super::OperationId;
 
 mod generation;
+mod inspection;
 mod registry;
 pub mod session;
 pub use session::{
@@ -311,4 +312,26 @@ pub enum GenerateSharedKeyOutcome {
     Created(SharedKeyRegistration),
     AlreadyCreated(SharedKeyRegistration),
     RecoveryRequired(KeyMaterialRecovery),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelectedKeyInspection {
+    NoSelection,
+    ImportedReadable {
+        registration: SharedKeyRegistration,
+        source: KeySourceToken,
+    },
+    Generated {
+        registration: SharedKeyRegistration,
+        source: KeySourceToken,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GeneratedKeyUnlockOutcome {
+    Ready(SharedKeyRegistration),
+    NoSelection,
+    ImportedValidationDeferred(SharedKeyRegistration),
+    Cancelled,
+    ProviderUnavailable,
 }
