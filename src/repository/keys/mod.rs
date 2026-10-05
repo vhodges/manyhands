@@ -2,7 +2,10 @@ use std::{fmt, path::PathBuf};
 
 use super::OperationId;
 
+mod generation;
 mod registry;
+pub mod session;
+pub use session::{InvalidPassphrase, SecretPassphrase};
 pub(crate) mod storage;
 pub use storage::KeyStore;
 
@@ -271,4 +274,24 @@ pub struct KeyMaterialRecovery {
     pub phase: KeyMaterialPhase,
     pub failure_code: Option<KeyMaterialFailureCode>,
     pub recovery_action: RecoveryAction,
+}
+
+#[derive(Debug)]
+pub enum KeyProtection {
+    Unencrypted,
+    Passphrase(SecretPassphrase),
+}
+
+#[derive(Debug)]
+pub struct GenerateSharedKeyRequest {
+    pub operation_id: OperationId,
+    pub label: String,
+    pub protection: KeyProtection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenerateSharedKeyOutcome {
+    Created(SharedKeyRegistration),
+    AlreadyCreated(SharedKeyRegistration),
+    RecoveryRequired(KeyMaterialRecovery),
 }

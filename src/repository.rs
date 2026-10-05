@@ -626,6 +626,13 @@ pub enum RegistryConnectionPhase {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    GenerationEntropyUnavailable,
+    GenerationAfterReservation,
+    GenerationAfterExclusiveCreate,
+    GenerationAfterPrivateWrite,
+    GenerationAfterPublicWrite,
+    GenerationBeforeFinalTransaction,
+    GenerationAfterFinalTransaction,
     BeforeRepositoryInitialization,
     AfterRepositoryInitialization,
     BeforeConfigurationWrite,

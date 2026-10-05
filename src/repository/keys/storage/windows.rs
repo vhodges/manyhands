@@ -93,6 +93,7 @@ impl Store {
         }
         Ok(())
     }
+    #[allow(dead_code, reason = "deletion consumer arrives in Task 6")]
     pub(super) fn remove(&self, file: &File, _name: &str) -> Result<(), KeyMaterialError> {
         let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
         if unsafe {
@@ -423,6 +424,7 @@ pub(super) fn identity(file: &File) -> Result<FileIdentity, KeyMaterialError> {
         ],
     })
 }
+#[allow(dead_code, reason = "inspection consumer arrives in Task 5")]
 pub(super) fn observe_regular_source(path: &Path) -> Result<FileIdentity, KeyMaterialError> {
     // Imported paths follow reparse points, but device/pipe namespace paths are
     // rejected before opening, avoiding a blocking named-pipe connect.

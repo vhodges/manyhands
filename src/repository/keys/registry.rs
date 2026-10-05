@@ -263,13 +263,13 @@ impl RepositoryService {
         Ok(outcome)
     }
 
-    fn registry_data_directory(&self) -> &Path {
+    pub(super) fn registry_data_directory(&self) -> &Path {
         self.registry_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
     }
 
-    fn require_shared_key_registry(
+    pub(super) fn require_shared_key_registry(
         &self,
         operation: RepositoryOperation,
     ) -> Result<(), RepositoryError> {
@@ -427,7 +427,7 @@ fn public_key_metadata_state_value(state: PublicKeyMetadataState) -> &'static st
     }
 }
 
-fn read_shared_key_registrations(
+pub(super) fn read_shared_key_registrations(
     connection: &rusqlite::Connection,
     operation: RepositoryOperation,
     data_directory: &Path,

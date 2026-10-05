@@ -98,6 +98,7 @@ impl Store {
         validate_regular(file, kind)?;
         same_entry(&self.directory, name, file)
     }
+    #[allow(dead_code, reason = "deletion consumer arrives in Task 6")]
     pub(super) fn remove(&self, file: &File, name: &str) -> Result<(), KeyMaterialError> {
         // A same-user adversarial rename between this check and unlinkat is outside
         // the threat model. Cooperating material operations hold the store lock.
@@ -221,6 +222,7 @@ pub(super) fn identity(file: &File) -> Result<FileIdentity, KeyMaterialError> {
         ],
     })
 }
+#[allow(dead_code, reason = "inspection consumer arrives in Task 5")]
 pub(super) fn observe_regular_source(path: &Path) -> Result<FileIdentity, KeyMaterialError> {
     // O_NONBLOCK prevents FIFOs and devices from hanging before fstat rejects them.
     let _ = CString::new(path.as_os_str().as_bytes())

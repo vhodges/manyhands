@@ -1,13 +1,4 @@
 //! Handle-based protected storage. Raw material operations stay inside the crate.
-// APIs are consumed by the subsequent generation/session tasks in this Cycle.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "raw storage consumers arrive in Cycle 02 Tasks 3–6"
-    )
-)]
-
 use super::{KeyMaterialAction, KeyMaterialError, KeyMaterialErrorKind, SharedKeyId};
 use fs4::fs_std::FileExt;
 use std::{
@@ -188,6 +179,38 @@ impl OwnedKeyFile {
         self.identity = platform::identity(&self.file)?;
         Ok(())
     }
+    /// Read through a bounded protected handle; never reopen a secret by raw path.
+    pub(crate) fn read_secret(&mut self) -> Result<zeroize::Zeroizing<Vec<u8>>, KeyMaterialError> {
+        use std::io::{Read, Seek, SeekFrom};
+        const LIMIT: u64 = 16 * 1024;
+        self.owner.store.validate()?;
+        self.owner
+            .store
+            .validate_file(&self.file, &self.kind.name(self.id), self.kind)?;
+        if platform::identity(&self.file)? != self.identity {
+            return Err(error(KeyMaterialErrorKind::SourceChanged));
+        }
+        let size = self.file.metadata().map_err(io_error)?.len();
+        if size > LIMIT {
+            return Err(error(KeyMaterialErrorKind::InvalidGeneratedKey));
+        }
+        // Reserve the entire bound up front so concurrent growth cannot make
+        // Vec reallocate and leave a previous secret allocation unerased.
+        let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity((LIMIT + 1) as usize));
+        self.file.seek(SeekFrom::Start(0)).map_err(io_error)?;
+        Read::by_ref(&mut self.file)
+            .take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io_error)?;
+        if bytes.len() as u64 > LIMIT || platform::identity(&self.file)? != self.identity {
+            return Err(error(KeyMaterialErrorKind::SourceChanged));
+        }
+        self.owner
+            .store
+            .validate_file(&self.file, &self.kind.name(self.id), self.kind)?;
+        Ok(bytes)
+    }
+    #[allow(dead_code, reason = "deletion consumer arrives in Task 6")]
     pub(crate) fn remove(self) -> Result<(), KeyMaterialError> {
         self.owner.store.validate()?;
         self.owner
@@ -244,6 +267,7 @@ impl FileIdentity {
     }
 }
 
+#[allow(dead_code, reason = "inspection consumer arrives in Task 5")]
 pub(crate) fn observe_regular_source(path: &Path) -> Result<FileIdentity, KeyMaterialError> {
     platform::observe_regular_source(path).map_err(|mut e| {
         e.operation = KeyMaterialAction::Inspect;

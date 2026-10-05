@@ -72,6 +72,7 @@ if implementation delivery includes authorized commits.
 | `src/repository.rs` | Preserve old key re-exports, delegate extracted registry methods; Tasks 1, 6. |
 | `src/repository/keys/mod.rs` | Public material API and service orchestration; Tasks 1, 3, 5, 6. |
 | `src/repository/keys/registry.rs` | Existing metadata SQL and new ownership/progress helpers; Tasks 1, 3, 6. |
+| `src/repository/keys/generation.rs` | Focused generation/journal orchestration, preserving service API; Task 3. |
 | `src/repository/keys/session.rs` | Secret wrapper in Task 3; provider and cache in Task 4. |
 | `src/repository/keys/storage.rs` | KeyStore and platform-neutral owned handle contract; Task 2. |
 | `src/repository/keys/storage/unix.rs` | Directory-relative Unix protection and deletion; Task 2. |
@@ -173,7 +174,7 @@ behavior tests as internal unit tests; key_storage integration tests cover
 configuration-only public constructors. Task 7 CI includes --lib to run the
 private storage tests on each native platform.
 
-- [ ] Add `creates_private_storage_without_permission_window`,
+- [x] Add `creates_private_storage_without_permission_window`,
   `refuses_unsafe_existing_store`, `refuses_existing_private_path`,
   `refuses_symlink_or_reparse_substitution`, `refuses_private_hardlinks`, and
   `two_services_serialize_owned_file_changes`. Assert private creation succeeds
@@ -181,20 +182,20 @@ private storage tests on each native platform.
   remains byte-for-byte intact, and contention returns Busy without SQL/file
   mutation. Test denied protection deterministically, not by assuming root
   cannot open a chmod-000 file.
-- [ ] Run `devenv shell -- cargo test --locked --test key_storage`; expect missing
+- [x] Run `devenv shell -- cargo test --locked --test key_storage`; expect missing
   API/behavior failures before implementation. Keep secret bytes out of failure
   formatting by asserting booleans.
-- [ ] Implement exclusive creation, pinned descendants, owner/mode or DACL
+- [x] Implement exclusive creation, pinned descendants, owner/mode or DACL
   verification before writes, flush, and safe removal. Add target-specific
   windows-sys features listed in the design; use existing libc and fs4 on Unix.
   Never implement Windows permissions with the read-only file attribute or
   create permissively and chmod afterwards.
-- [ ] Add native Windows checks for owner SID, protected DACL, and absence of
+- [x] Add native Windows checks for owner SID, protected DACL, and absence of
   effective grants to other SIDs, including inherited Everyone access. Exercise
   reparse points on hosts where they can be created; record an explicit fixture
   limitation if the runner lacks privileges, retaining deterministic backend
   rejection tests. Unix tests assert `mode & 0o777 == 0o700/0o600/0o644`.
-- [ ] Run local `key_storage` tests and record which platform ran. Windows and
+- [x] Run local `key_storage` tests and record which platform ran. Windows and
   macOS runtime results are collected in Task 7, not inferred from Linux.
   Suggested commit: `feat: create owner-protected SSH key storage`.
 
