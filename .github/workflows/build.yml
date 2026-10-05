@@ -68,14 +68,13 @@ jobs:
       - name: Provision native SSH fixture helpers
         shell: pwsh
         run: |
-          # Git is supplied by all five native runner images. Resolve its own
-          # helper directory rather than relying on an SSH daemon or shell.
+          # Git for Windows may omit standalone aliases for built-in helpers.
+          # Check the same capabilities used by the shell-free fixture fallback.
           $git = (Get-Command git -ErrorAction Stop).Source
-          $execPath = (& $git --exec-path).Trim()
+          $builtins = & $git --list-cmds=builtins
           if ($LASTEXITCODE -ne 0) { throw "Git helper discovery failed" }
-          $suffix = "${{ matrix.executable-suffix }}"
-          foreach ($name in @("git-upload-pack", "git-receive-pack")) {
-            if (-not (Test-Path -LiteralPath (Join-Path $execPath "$name$suffix") -PathType Leaf)) {
+          foreach ($name in @("upload-pack", "receive-pack")) {
+            if ($builtins -notcontains $name) {
               throw "Required Git helper is unavailable"
             }
           }

@@ -1,5 +1,5 @@
 //! Restricted SSH sessions and owned, shell-free Git helper processes.
-use super::{Fault, FixtureBoundary, FixtureError, Shared, fixed};
+use super::{Fault, FixtureBoundary, FixtureError, GitHelper, Shared, fixed};
 use russh::{
     Channel, ChannelId,
     server::{self, Auth, Handler, Msg, Session},
@@ -19,8 +19,16 @@ use tokio::{
 
 pub(super) fn discover_helpers(
     directory: Option<&Path>,
-) -> Result<(PathBuf, PathBuf), FixtureError> {
-    let mut command = Command::new("git");
+) -> Result<(GitHelper, GitHelper), FixtureError> {
+    // Resolve once so subsequent helper launches do not repeat PATH lookup.
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let path = std::env::var_os("PATH").ok_or(FixtureError)?;
+    let git = std::env::split_paths(&path)
+        .map(|directory| directory.join(format!("git{suffix}")))
+        .find(|program| program.is_file())
+        .ok_or(FixtureError)?;
+    let git = fixed(std::path::absolute(git))?;
+    let mut command = Command::new(&git);
     if let Some(directory) = directory {
         command.env("GIT_EXEC_PATH", directory);
     }
@@ -56,13 +64,20 @@ pub(super) fn discover_helpers(
     }
     let value = fixed(String::from_utf8(bytes))?;
     let directory = PathBuf::from(value.trim_end_matches(['\r', '\n']));
-    let suffix = if cfg!(windows) { ".exe" } else { "" };
-    let upload = directory.join(format!("git-upload-pack{suffix}"));
-    let receive = directory.join(format!("git-receive-pack{suffix}"));
-    if !upload.is_file() || !receive.is_file() {
-        return Err(FixtureError);
-    }
-    Ok((upload, receive))
+    let helper = |name| {
+        let program = directory.join(format!("git-{name}{suffix}"));
+        if program.is_file() {
+            program.into()
+        } else {
+            // Git for Windows may omit dashed aliases for built-in commands.
+            // Only these fixed subcommands are used; no SSH input becomes argv.
+            GitHelper {
+                program: git.clone(),
+                argument: Some(name),
+            }
+        }
+    };
+    Ok((helper("upload-pack"), helper("receive-pack")))
 }
 
 async fn boundary(shared: &Shared, point: FixtureBoundary) -> Result<(), russh::Error> {
@@ -194,7 +209,8 @@ impl Handler for Restricted {
             return Ok(());
         };
         boundary(&self.shared, FixtureBoundary::ExecAcknowledgement).await?;
-        let child = tokio::process::Command::new(program)
+        let child = tokio::process::Command::new(&program.program)
+            .args(program.argument)
             .arg(&self.shared.repository)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -47,6 +47,7 @@ fn main() {
         ("startup_failure", startup_failure),
         ("helper_spawn_failure", helper_spawn_failure),
         ("helper_lookup_spaces", helper_lookup_spaces),
+        ("builtin_helpers_round_trip", builtin_helpers_round_trip),
         ("cleanup_failure", cleanup_failure),
         ("cleanup_live_helper", cleanup_live_helper),
         ("recoverable_stall", recoverable_stall),
@@ -300,6 +301,14 @@ fn host_rotation_and_rejection() -> Result<(), FixtureError> {
 }
 fn push_round_trip() -> Result<(), FixtureError> {
     let fixture = SshRemoteFixture::start()?;
+    push_to_fixture(&fixture)?;
+    assert_eq!(
+        fixture.accepted_keys(),
+        vec![fixture.allowed_client_public_key()]
+    );
+    Ok(())
+}
+fn push_to_fixture(fixture: &SshRemoteFixture) -> Result<(), FixtureError> {
     let root = fixed(tempfile::tempdir())?;
     let repo = fixed(git2::Repository::init(root.path()))?;
     let tree_id = fixed(fixed(repo.treebuilder(None))?.write())?;
@@ -319,10 +328,6 @@ fn push_round_trip() -> Result<(), FixtureError> {
     fixed(remote.push(&["refs/heads/pushed:refs/heads/pushed"], Some(&mut options)))?;
     let server_repo = fixed(git2::Repository::open_bare(fixture.repository_path()))?;
     assert_eq!(fixed(server_repo.refname_to_id("refs/heads/pushed"))?, oid);
-    assert_eq!(
-        fixture.accepted_keys(),
-        vec![fixture.allowed_client_public_key()]
-    );
     Ok(())
 }
 fn other_auth_denied() -> Result<(), FixtureError> {
@@ -396,8 +401,12 @@ fn async_case<F: std::future::Future<Output = Result<(), FixtureError>>>(
 }
 fn restricted_commands() -> Result<(), FixtureError> {
     let fixture = SshRemoteFixture::start()?;
+    reject_commands(&fixture)
+}
+fn reject_commands(fixture: &SshRemoteFixture) -> Result<(), FixtureError> {
+    let helpers_before = fixture.helper_invocations();
     async_case(async {
-        let client = client(&fixture).await?;
+        let client = client(fixture).await?;
         for command in [
             "git-upload-pack '/other.git'",
             "git-upload-pack '/fixture.git'; exit",
@@ -434,7 +443,7 @@ fn restricted_commands() -> Result<(), FixtureError> {
                 .is_err()
         );
         assert!(client.tcpip_forward("127.0.0.1", 0).await.is_err());
-        assert_eq!(fixture.helper_invocations(), 0);
+        assert_eq!(fixture.helper_invocations(), helpers_before);
         Ok(())
     })
 }
@@ -465,8 +474,8 @@ fn startup_failure() -> Result<(), FixtureError> {
     let root = fixed(tempfile::tempdir())?;
     assert!(
         SshRemoteFixture::start_with_helpers((
-            root.path().join("missing"),
-            root.path().join("missing")
+            root.path().join("missing").into(),
+            root.path().join("missing").into()
         ))
         .is_err()
     );
@@ -485,7 +494,7 @@ fn helper_lookup_spaces() -> Result<(), FixtureError> {
     fixed(std::fs::write(&receive, b""))?;
     assert_eq!(
         ssh_remote::discover_helpers_at(directory.path())?,
-        (upload, receive)
+        (upload.into(), receive.into())
     );
     Ok(())
 }
@@ -493,13 +502,41 @@ fn helper_spawn_failure() -> Result<(), FixtureError> {
     let directory = fixed(tempfile::tempdir())?;
     let invalid = directory.path().join("invalid executable");
     fixed(std::fs::write(&invalid, b"invalid executable"))?;
-    let mut fixture = SshRemoteFixture::start_with_helpers((invalid.clone(), invalid))?;
+    let mut fixture =
+        SshRemoteFixture::start_with_helpers((invalid.clone().into(), invalid.into()))?;
     let path = fixture.root().to_owned();
     assert!(advertise(&fixture, fixture.client_key_path(), None).is_err());
     assert_eq!(fixture.helper_invocations(), 0);
     fixture.shutdown()?;
     drop(fixture);
     assert!(!path.exists());
+    Ok(())
+}
+fn builtin_helpers_round_trip() -> Result<(), FixtureError> {
+    // Git for Windows can omit the dashed executable aliases. Exercise that
+    // packaging on every platform without changing the process environment.
+    let directory = fixed(
+        tempfile::Builder::new()
+            .prefix("empty Git exec path ")
+            .tempdir(),
+    )?;
+    let helpers = ssh_remote::discover_helpers_at(directory.path())?;
+    let mut fixture = SshRemoteFixture::start_with_helpers(helpers)?;
+    assert!(
+        fixed(advertise(&fixture, fixture.client_key_path(), None))?.contains(&fixture.commit_id())
+    );
+    push_to_fixture(&fixture)?;
+    assert_eq!(fixture.helper_invocations(), 2);
+    assert_eq!(
+        fixture.accepted_keys(),
+        vec![fixture.allowed_client_public_key(); 2]
+    );
+    reject_commands(&fixture)?;
+    let root = fixture.root().to_owned();
+    fixture.shutdown()?;
+    assert_eq!(fixture.active_helpers(), 0);
+    drop(fixture);
+    assert!(!root.exists());
     Ok(())
 }
 fn cleanup_failure() -> Result<(), FixtureError> {

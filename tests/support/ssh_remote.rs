@@ -30,6 +30,21 @@ pub fn fixed<T, E>(result: Result<T, E>) -> Result<T, FixtureError> {
     result.map_err(|_| FixtureError)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitHelper {
+    program: PathBuf,
+    argument: Option<&'static str>,
+}
+
+impl From<PathBuf> for GitHelper {
+    fn from(program: PathBuf) -> Self {
+        Self {
+            program,
+            argument: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FixtureBoundary {
     Handshake,
@@ -62,8 +77,8 @@ pub(super) struct Shared {
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
     pub repository: PathBuf,
-    pub upload: PathBuf,
-    pub receive: PathBuf,
+    pub upload: GitHelper,
+    pub receive: GitHelper,
     pub shutdown: watch::Receiver<bool>,
 }
 
@@ -83,8 +98,8 @@ impl SshRemoteFixture {
         Self::start_with_helpers(server::discover_helpers(None)?)
     }
 
-    pub fn start_with_helpers(helpers: (PathBuf, PathBuf)) -> Result<Self, FixtureError> {
-        if !helpers.0.is_file() || !helpers.1.is_file() {
+    pub fn start_with_helpers(helpers: (GitHelper, GitHelper)) -> Result<Self, FixtureError> {
+        if !helpers.0.program.is_file() || !helpers.1.program.is_file() {
             return Err(FixtureError);
         }
         let directory = fixed(
@@ -291,7 +306,7 @@ impl SshRemoteFixture {
     }
 }
 
-pub fn discover_helpers_at(directory: &Path) -> Result<(PathBuf, PathBuf), FixtureError> {
+pub fn discover_helpers_at(directory: &Path) -> Result<(GitHelper, GitHelper), FixtureError> {
     server::discover_helpers(Some(directory))
 }
 
