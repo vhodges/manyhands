@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6D9"
 title: "Wave 02 Cycle 01: Shared-Key Registry"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -16,8 +16,8 @@ shared-key selection without using a network transport.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-01-shared-key-registry.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-01-shared-key-registry.md`.
+- [x] Create the implementation plan and record its checkpoints as ticket
   comments.
 
 ## Entry Gate
