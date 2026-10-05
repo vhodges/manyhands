@@ -1024,7 +1024,10 @@ fn collect_source(
         }
     }
     let relative = match path.strip_prefix(root) {
-        Ok(path) => path.to_owned(),
+        // Canonical item paths use '/' even when filesystem enumeration uses
+        // native separators. Join components without changing their contents:
+        // a literal backslash in a Unix filename must still fail validation.
+        Ok(path) => PathBuf::from(path.iter().collect::<Vec<_>>().join(OsStr::new("/"))),
         Err(_) => {
             problems.push(source_problem(
                 path,
@@ -1259,6 +1262,7 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
         transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
             .map_err(RepositoryError::sqlite)?;
     }
+    super::keys::migrate_material_schema(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     super::recovery::migrate_operation_records(connection)
 }
@@ -1706,6 +1710,74 @@ mod tests {
             .worktree(worktree_item_id, &worktree, Some(&options))
             .unwrap();
         worktree
+    }
+
+    #[test]
+    fn collected_native_paths_use_canonical_separators() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixtures = [
+            ("docs/nested/document.md", document_source()),
+            (
+                ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md",
+                ticket_source(),
+            ),
+            (
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md",
+                comment_source(),
+            ),
+        ];
+        for (relative, source) in fixtures {
+            // Joining components creates native separators, including on Windows.
+            let path = relative
+                .split('/')
+                .fold(directory.path().to_owned(), |path, part| path.join(part));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let mut sources = Vec::new();
+        let mut problems = Vec::new();
+
+        collect_root_sources(directory.path(), &mut sources, &mut problems);
+
+        assert!(problems.is_empty());
+        assert_eq!(sources.len(), fixtures.len());
+        for (expected, _) in fixtures {
+            assert!(
+                sources
+                    .iter()
+                    .any(|(path, _)| path.to_str() == Some(expected))
+            );
+        }
+        let validation = canonical::validate_context(sources);
+        assert!(validation.problems.is_empty(), "{:?}", validation.problems);
+        assert_eq!(validation.items.len(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collected_literal_backslash_filename_stays_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("docs")).unwrap();
+        fs::write(
+            directory.path().join(r"docs/nested\document.md"),
+            document_source(),
+        )
+        .unwrap();
+        let mut sources = Vec::new();
+        let mut problems = Vec::new();
+
+        collect_root_sources(directory.path(), &mut sources, &mut problems);
+
+        assert!(problems.is_empty());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].0.to_str(), Some(r"docs/nested\document.md"));
+        let validation = canonical::validate_context(sources);
+        assert!(validation.items.is_empty());
+        assert_eq!(validation.problems.len(), 1);
+        assert_eq!(
+            validation.problems[0].code,
+            canonical::ValidationCode::InvalidPath
+        );
     }
 
     #[test]

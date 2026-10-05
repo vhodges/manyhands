@@ -20,11 +20,15 @@ libc = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-ssh-key = "0.6.7"
+ssh-key = { version = "0.6.7", features = ["ed25519", "encryption", "getrandom"] }
+zeroize = "1"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 ulid = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_Threading"] }
 
 [[bin]]
 name = "manyhands"
