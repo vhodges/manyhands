@@ -157,11 +157,11 @@ Each includes the potential rework or user cost if the decision proves wrong.
 
 ## Final Local Verification
 
-Latest fully verified local Rust revision: `6c3b2bd`. All four required Devenv commands passed:
+Latest fully verified local Rust revision: `8e5ef0e`. All four required Devenv commands passed:
 `cargo check --all-features --locked`, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features --locked -- -D warnings`, and
-`cargo test --all-features --locked`. The full suite passed 582 tests, including
-86 library tests, 28 real SSH fixture cases, 45 real transport cases, and nine
+`cargo test --all-features --locked`. The full suite passed 585 tests, including
+86 library tests, 31 real SSH fixture cases, 45 real transport cases, and nine
 documentation tests, with no failures or ignored tests. Full local log:
 `/tmp/manyhands-cycle03-final-tests.log`.
 
@@ -237,6 +237,11 @@ Additional implementation rulings and potential costs:
 13. Repeat affected macOS cases in a bounded probe before the full suite, failing
     immediately on an error. Cost: extra CI time or revision/removal of the
     investigative step once sufficient evidence is available.
+14. Isolate fixture Git-child SIGCHLD from the isolated client test thread while
+    allowing server runtime workers to receive it and reap helpers. Restore the
+    exact client mask after cleanup, including unwinding. Cost: Unix test signal
+    routing and guard complexity; a separate server process is a larger fallback.
+    Production signal handling, errors, retries, and backend policy remain intact.
 
 Detailed checkpoints, individual run outcomes, and review evidence are retained
 in the ticket comments and execution ledger. Native macOS acceptance remains
@@ -255,3 +260,27 @@ and moves the unchanged probe before the full suite for earlier failure evidence
 Both steps remain required for green CI. All four local gates passed again with
 582 tests; independent review found no issues. No production behavior or fixture
 signal routing has changed. The exact native cause and correction remain open.
+
+[Run 37387522542](https://github.com/vhodges/manyhands/actions/runs/37387522542)
+on `e53f293` again passed both Linux and both Windows targets. macOS failed
+disconnect_after_receive at probe 6 with observation `512 1 1`: its TCP
+connection wait was interrupted by a signal before SSH host/key callbacks. This
+confirms EINTR as the native OS reason. The controlled SIGCHLD reproduction and
+in-process fixture helper lifecycle identify test-server child signals as the
+concrete isolation target. A fixture-only correction is being implemented under
+ruling 14; native confirmation of that correction remains required.
+
+Fixture correction `8e5ef0e` implements ruling 14. A thread-bound guard covers
+each isolated Unix case inside catch_unwind, restoring the full caller mask after
+fixture cleanup; server async and blocking workers explicitly receive SIGCHLD.
+Windows and production transport behavior are unchanged. Three regressions prove
+normal/error/unwind restoration, real helper reaping with overlapping fixtures,
+and protection of an actual poll wait from targeted SIGCHLD. The old harness
+failed the interruption check; a client-only guard failed worker-routing coverage;
+the complete correction passes both.
+
+Independent scoped review approved the correction without findings. All four
+required local gates pass: 585 tests, including 31 Unix fixture and 45 transport
+cases, no failures or ignored tests. Windows fixture count remains 28 because
+the three signal cases are Unix-specific. The 30-triple macOS probe and unchanged
+full matrix remain required before native acceptance.
