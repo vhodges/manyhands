@@ -337,7 +337,7 @@ after receive-pack. No raw server detail is a public recovery value.
 
 ## Final Verification And Handoff
 
-Latest full local verification on Rust revision `2061b0c`: all four required gates
+Latest full local verification on Rust revision `6c3b2bd`: all four required gates
 passed, 582 tests including 28 fixture and 45 transport cases, no failures or
 ignored tests. CLI smoke passed; desktop startup succeeded on an active display
 before deliberate Ctrl-C. Whole-branch and scoped fix reviews are complete; all

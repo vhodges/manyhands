@@ -157,7 +157,7 @@ Each includes the potential rework or user cost if the decision proves wrong.
 
 ## Final Local Verification
 
-Latest fully verified local Rust revision: `2061b0c`. All four required Devenv commands passed:
+Latest fully verified local Rust revision: `6c3b2bd`. All four required Devenv commands passed:
 `cargo check --all-features --locked`, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features --locked -- -D warnings`, and
 `cargo test --all-features --locked`. The full suite passed 582 tests, including
@@ -234,10 +234,24 @@ Additional implementation rulings and potential costs:
     conditions. Cost: revise test instrumentation; diagnostics do not prove a fix.
 12. Preserve compiled dependency caches after failed native jobs. Cost: clear or
     revise cache policy; cached dependencies never constitute acceptance results.
-13. Repeat affected macOS cases in a bounded probe after the full suite, failing
+13. Repeat affected macOS cases in a bounded probe before the full suite, failing
     immediately on an error. Cost: extra CI time or revision/removal of the
     investigative step once sufficient evidence is available.
 
 Detailed checkpoints, individual run outcomes, and review evidence are retained
 in the ticket comments and execution ledger. Native macOS acceptance remains
 unresolved; merge, closure, and cleanup are not authorized by PR publication.
+
+Latest investigation: [run 37385680755](https://github.com/vhodges/manyhands/actions/runs/37385680755)
+passed both Linux and both Windows targets. macOS passed its full suite, then
+failed the bounded probe at repetition 13. Shared observations identify an
+OS-class error before host verification/key submission, despite the fixture
+accepting the new TCP connection. A real local reproduction showed that SIGCHLD
+can interrupt the pinned libgit2 TCP wait and produce this error shape; native
+confirmation of the exact OS reason is still pending.
+
+Reviewed diagnostic amendment `6c3b2bd` emits only fixed numeric OS-reason codes
+and moves the unchanged probe before the full suite for earlier failure evidence.
+Both steps remain required for green CI. All four local gates passed again with
+582 tests; independent review found no issues. No production behavior or fixture
+signal routing has changed. The exact native cause and correction remain open.
