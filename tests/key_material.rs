@@ -42,7 +42,12 @@ fn generation_plain_and_encrypted_round_trip() {
         assert!(!r.selected);
         assert_eq!(
             r.private_key_path,
-            home.path().join(".ssh/manyhands").join(r.id.to_string())
+            home.path()
+                .canonicalize()
+                .unwrap()
+                .join(".ssh")
+                .join("manyhands")
+                .join(r.id.to_string())
         );
         assert_eq!(
             r.public_key_path.as_ref().unwrap(),

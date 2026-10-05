@@ -58,7 +58,7 @@ fn successful_unlock_prompts_once_per_session() {
     for _ in 0..2 {
         assert_eq!(
             session.with_passphrase(request.clone(), |passphrase| {
-                assert_eq!(passphrase, "correct horse");
+                assert!(passphrase == "correct horse", "passphrase bytes changed");
                 Ok(passphrase.len())
             }),
             Ok(13)
