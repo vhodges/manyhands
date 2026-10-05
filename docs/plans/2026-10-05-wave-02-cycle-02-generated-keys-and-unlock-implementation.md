@@ -125,24 +125,24 @@ Result<(), RepositoryError>`. Define shared material error and recovery types
 from the design now; generation/session/deletion request types arrive with
 their implementing tasks. Do not add secret fields to SharedKeyRegistration.
 
-- [ ] Add `material_schema_preserves_cycle01_rows_and_selection` and
+- [x] Add `material_schema_preserves_cycle01_rows_and_selection` and
   `material_schema_is_idempotent_and_rejects_invalid_phases`. Start from the
   exact current schema, retain an imported row, a generated metadata row, and
   selected state; assert both new tables exist after reopening twice. Assert
   invalid action/phase combinations and two incomplete operations for one key
   fail. Inspect table columns to exclude secrets/confirmation flags.
-- [ ] Run
+- [x] Run
   `devenv shell -- cargo test --locked --test shared_key_registry material_schema`;
   expect missing-table assertions to fail before implementation.
-- [ ] Move only existing shared-key types, methods, path/public metadata helpers,
+- [x] Move only existing shared-key types, methods, path/public metadata helpers,
   and their constants into the focused modules. Keep public names and Cycle 01
   behavior unchanged. Add schema migration in the existing transaction, with
   columns, phases, and constraints from the design. Do not route app-global
   records through repository lifecycle records.
-- [ ] Run the new tests plus existing `shared_key_registry`,
+- [x] Run the new tests plus existing `shared_key_registry`,
   `repository_enablement`, and `discovery_rebuild` targets using
   `devenv shell -- cargo test --locked --test <target>`. Expect all to pass.
-- [ ] Record metadata checkpoint; suggested commit:
+- [x] Record metadata checkpoint; suggested commit:
   `refactor: isolate key registry and add material recovery records`.
 
 ## Task 2: Establish Platform-Protected Owned Storage
@@ -167,6 +167,11 @@ Also produce private `observe_regular_source(path: &Path) ->
 Result<FileIdentity, KeyMaterialError>`, which opens read-only without blocking,
 checks the opened handle is regular, and observes metadata without reading
 bytes. Unlike owned-store opening, this observer permits imported symlinks.
+
+Execution refinement: keep storage operations private and run their detailed
+behavior tests as internal unit tests; key_storage integration tests cover
+configuration-only public constructors. Task 7 CI includes --lib to run the
+private storage tests on each native platform.
 
 - [ ] Add `creates_private_storage_without_permission_window`,
   `refuses_unsafe_existing_store`, `refuses_existing_private_path`,
@@ -388,7 +393,7 @@ raw SQL text. Material APIs report Busy for the same condition.
 - [ ] Add a test step to the existing five-target matrix, before artifact upload:
 
   ```sh
-  cargo test --locked --target ${{ matrix.target }} --test shared_key_registry --test key_storage --test session_credentials --test key_material
+  cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material
   ```
 
   Preserve release builds, target coverage, and artifact checks. These headless

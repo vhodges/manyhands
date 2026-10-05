@@ -3,6 +3,8 @@ use std::{fmt, path::PathBuf};
 use super::OperationId;
 
 mod registry;
+pub(crate) mod storage;
+pub use storage::KeyStore;
 
 pub(super) use registry::migrate_material_schema;
 

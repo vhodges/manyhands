@@ -26,6 +26,9 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 ulid = "1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_Threading"] }
+
 [[bin]]
 name = "manyhands"
 path = "src/main.rs"
