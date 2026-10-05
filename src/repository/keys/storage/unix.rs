@@ -122,7 +122,8 @@ fn open_at(parent: &File, name: &str, flags: i32, mode: libc::mode_t) -> std::io
             parent.as_raw_fd(),
             name.as_ptr(),
             flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-            mode,
+            // mode_t is u16 on macOS; C variadic arguments need promotion.
+            mode as libc::c_uint,
         )
     };
     if fd < 0 {

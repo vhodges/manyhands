@@ -8669,6 +8669,7 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("project");
         std::fs::create_dir(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
         let owned = OwnedTarget::new(&root).unwrap();
         std::fs::write(root.join("preserve.txt"), "preserve\n").unwrap();
 
