@@ -161,7 +161,7 @@ acceptable substitute.
 | Alternative | Assessment |
 | --- | --- |
 | Desktop-owned background worker | Selected product direction. Uses the desktop's credentials and lifetime, reusing Wave 02 one-shot operations. |
-| CLI resident polling for servers/CI | Deferred by the product owner. Explicit CLI poll/refresh remains available to external automation. |
+| CLI change watcher for servers/CI | Possible future enhancement to detect repository changes and trigger automations, not a service for ordinary user machines. Requires its own PRD/design; explicit CLI poll/refresh remains available now. |
 | Shared singleton service or coordinated resident pollers | Not required. Adds process ownership/IPC beyond the selected use case. |
 
 The largest data-loss risk is assuming a clean worktree means no unsaved editor

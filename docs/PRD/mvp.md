@@ -658,6 +658,14 @@ Follow-on work adds planning and board views, scorecards, team rollups, and proj
 
 Follow-on work adds templates and scaffolding for repository content and workflows.
 
+### Server-Side Change Watching and Automation
+
+A possible future PRD/enhancement may add CLI daemon mode for server or CI
+environments: watch for repository changes and trigger automations. This is
+an automation use case, not a background service for ordinary user machines
+or a companion required by the desktop application. It is outside the MVP;
+event/trigger semantics and automation execution belong to that future design.
+
 ### Git Forge Key Provisioning
 
 Follow-on work adds optional automation for uploading a user's SSH public key to supported Git forges. This work must not require users to upload app-generated keys or replace existing configured SSH keys.

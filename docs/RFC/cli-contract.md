@@ -313,7 +313,9 @@ running after the command completes. `poll status` reports persisted policy and
 observed outcomes; it does not discover or control a desktop process. There is
 no streaming daemon JSON format; every command follows the single-result
 envelope contract. External server/CI scheduling may invoke one-shot commands,
-but resident CLI scheduling is outside the MVP.
+but resident CLI scheduling is outside the MVP. A possible future daemon is
+intended for server-side change watching and automation triggers, not ordinary
+user-machine polling; it requires a separate PRD/enhancement design.
 
 Ctrl-C requests safe-point cancellation and exits `130` after the final result
 when possible. Another forced termination is interruption, never evidence of
