@@ -33,8 +33,8 @@ backend limits. The pre-thread bootstrap and test-host design were implemented
 before the connection-driver task. Task/review state is recorded in
 the plan-specific execution ledger and ticket comments; the ticket remains open.
 
-Final Rust revision `753bb72` passes all four required Devenv gates: 581 tests,
-including 27 SSH fixture and 45 transport cases, with no failures or ignored
+Latest Rust revision `ee8153e` passes all four required Devenv gates: 582 tests,
+including 28 SSH fixture and 45 transport cases, with no failures or ignored
 tests. CLI smoke exits zero; desktop launched on an active display and was
 deliberately stopped after successful startup. All task and final review findings
 are resolved. See the Cycle's final verification table for contract evidence.
@@ -58,3 +58,7 @@ and network failures are typed, redacted, and non-mutating before transfer.
 The plan additionally proves real push, host-pin precedence, imported backend
 validation, rejection-driven session eviction, and native encrypted Ed25519 use.
 Post-transfer failure recovery belongs to subsequent lifecycle Cycles.
+
+Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) is open. Native
+CI follow-up fixes and an unexplained intermittent macOS lost-response assertion
+are tracked in the Cycle and comments. Windows native acceptance remains pending.
