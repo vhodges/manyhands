@@ -78,16 +78,15 @@ jobs:
               throw "Required Git helper is unavailable"
             }
           }
-          # The later external RSA PEM fixture uses the openssl executable.
-          # Git for Windows ships it alongside its runtime utilities.
+          # Preserve the runner's native tools: Git's usr/bin also contains an
+          # MSYS Perl that cannot configure the vendored MSVC OpenSSL build.
           if ($IsWindows) {
-            $gitRoot = Split-Path (Split-Path $git)
-            $opensslDirectory = Join-Path $gitRoot "usr/bin"
-            if (Test-Path -LiteralPath (Join-Path $opensslDirectory "openssl.exe")) {
-              $env:PATH = "$opensslDirectory;$env:PATH"
-              $opensslDirectory | Out-File -FilePath $env:GITHUB_PATH -Append
-            }
+            $perl = (Get-Command perl -ErrorAction Stop).Source
+            Write-Output "OpenSSL build Perl: $perl"
+            & $perl -MIPC::Cmd -e 'exit($^O ne q(MSWin32))'
+            if ($LASTEXITCODE -ne 0) { throw "Native Perl with IPC::Cmd is required" }
           }
+          # Native runner OpenSSL generates the later external RSA PEM fixture.
           $openssl = (Get-Command openssl -ErrorAction Stop).Source
           & $openssl version
           if ($LASTEXITCODE -ne 0) { throw "External key fixture generator is unavailable" }
