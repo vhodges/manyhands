@@ -44,7 +44,7 @@ a competing test RFC. All new files remain `draft` pending review.
 
 | ID | Finding and proposed resolution | State / owner / gate |
 | --- | --- | --- |
-| W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. | Product-owner direction recorded 2026-10-05. Technical Lead must prove editor feasibility before editor Cycle planning. |
+| W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. Carry forward the charter's minor preference for `zorite-editor`, with extraction from Velotype as the alternative. | Product-owner mode direction recorded 2026-10-05; candidate preference comes from the charter. Technical Lead must evaluate pinned candidates for a single compatible GPUI graph, fidelity, host integration and native input before editor Cycle planning. No library selection is approved yet. |
 | W3-02 | Daemon unlock occurs in its own terminal session; restart to unlock again. No desktop credential IPC or secret pipe input. | Product-owner direction recorded 2026-10-05; verify terminal/nonterminal behavior before runtime Cycle exit. |
 | W3-03 | A clean worktree can have unsaved in-memory drafts. Propose protected crash-recovery files, base observations and explicit stale-edit review. | Proposed; Product Owner/Technical Lead approval required for persistence scope and crash guarantee before editor planning. |
 | W3-04 | Ticket branches can contain code; resolve canonical Markdown in-app and provide explicit external-tool guidance for other conflicts. | Product-owner direction recorded 2026-10-05. Keep the owned-path boundary and prove safe re-observation after external repair. |

@@ -74,10 +74,12 @@ confirmed close workflow; it is not a shortcut around closure.
 The minimum rich-text vocabulary is paragraphs, headings, emphasis, strong
 text, links, ordered/unordered/task lists, block quotes, fenced code and tables.
 Source mode supports all valid UTF-8 body text accepted by the canonical layer.
-The editor MUST retain the original source plus source spans for parsed blocks.
-Rich-text edits patch the affected spans; rendering MUST NOT serialize the
-entire document. Changed blocks may use documented canonical formatting, but
-untouched blocks, unsupported syntax and unknown metadata values are preserved.
+The editor MUST retain the original source and map rendered edits back to it.
+A source-first editor with display/source offsets or a block editor with source
+spans can satisfy this contract; a custom parsed-block engine is not required.
+Rich-text edits change only the affected source; rendering MUST NOT serialize
+the entire document. Changed blocks may use documented canonical formatting,
+but untouched blocks, unsupported syntax and unknown metadata values are preserved.
 
 Examples of syntax outside that vocabulary include embedded HTML, custom
 directives and extensions the renderer does not understand. They appear as
@@ -225,14 +227,52 @@ unsaved work or failure. Native accessibility semantics and IME behavior require
 evidence on supported platforms; keyboard support is the PRD minimum, not proof
 of screen-reader conformance.
 
-Before selecting editor dependencies or planning implementation, run a bounded
-feasibility investigation of the locked GPUI Kit stack: source-span editing,
-undo across modes, IME/Unicode input, focus, tables, large documents and accessible
-conflict controls. No existing rich-text capability is assumed. Failure blocks
-the editor decision; changing to a source-only product requires renewed product
-agreement. A webview engine is an alternative needing a separate dependency,
-security and accessibility review. Source-plus-preview was considered and was
-not selected by the product owner.
+### Editor candidates from the charter
+
+The [charter's initial technical directions](../charter.md#initial-technical-decisions-and-directions)
+name `zorite-editor` with a minor preference and extracting an editor from
+Velotype as an alternative. This RFC carries that preference forward:
+**evaluate Zorite first, then Velotype if Zorite cannot meet the contract at
+reasonable integration cost**. Building a new editor is not the default.
+
+The following is a source/documentation assessment, not a compiled integration
+result. Upstream branches and published packages can differ; a feasibility
+record must pin the exact artifact/revision evaluated.
+
+| Candidate | Evidence and fit | Evaluation risk |
+| --- | --- | --- |
+| `zorite-editor` — preferred first evaluation | The crate documents a host-agnostic GPUI editor with live Markdown styling, raw mode when styling is absent, undo/redo, IME and display/source offset mapping. Its crate manifest declares MIT. [API documentation](https://docs.rs/zorite-editor/0.10.0/zorite_editor/), [crate manifest](https://github.com/packetThrower/zorite/blob/main/crates/zorite-editor/Cargo.toml). | Prove mode switching, table edits, source fidelity and host-controlled save behavior. Determine which block providers/adapters are required; do not infer full integration from the feature list. |
+| Editor extracted from Velotype — alternative | Its README describes native rich-text/source modes, an editable block model, fallback source and canonical Markdown serialization. Its manifest declares Apache-2.0 and `gpui` 0.2. [README](https://github.com/manyougz/velotype#readme), [manifest](https://github.com/manyougz/velotype/blob/main/Cargo.toml). | Extraction must separate window/file/save/network behavior from editing. Canonical reserialization needs particular scrutiny against unchanged-source preservation; its GPUI dependency requires compatibility work. |
+
+At this planning base, Manyhands locks `gpui-kit` 0.6.6 and `gpui-pre` 0.3.6.
+Zorite's inspected workspace uses `gpui-pre` with a `0.3` version requirement
+under the dependency name `gpui`; its documentation requires the host and editor
+to resolve one GPUI version. That suggests a closer dependency fit, but does
+not prove compatibility with 0.3.6 or with the published package.
+[Workspace manifest](https://github.com/packetThrower/zorite/blob/main/Cargo.toml),
+[integration documentation](https://packetthrower.github.io/zorite/reference/crates/zorite-editor/).
+
+Manyhands code must continue to use GPUI through `gpui_kit::*`, with no separate
+direct `gpui` dependency. An editor's transitive GPUI dependency must resolve to
+the same package/version/source used by GPUI Kit so its entity types interoperate.
+Neither copying an upstream example's imports nor adding a second GPUI graph
+is an acceptable integration shortcut. Keep editor dependencies desktop-only.
+Record licenses/notices for the actual reused files and dependency closure;
+do not infer the editor crate's license from its parent application's license.
+
+Before selecting a dependency or planning editor implementation, compare a
+pinned candidate against the fidelity fixtures and test mode switching with
+shared undo, metadata separation, tables, IME/Unicode, keyboard focus, large
+documents, draft recovery and external-change replacement. Host-controlled
+image/link loading and save hooks must enforce this RFC's boundaries. The
+result must identify required adapters, unresolved native-platform checks and
+maintenance cost, then recommend adoption, adaptation or rejection.
+
+Failure blocks the editor selection; changing to a source-only product requires
+renewed product agreement. Only after evaluating the charter's candidates
+should a custom or webview editor be proposed with its additional scope and
+dependency/accessibility implications. Source-plus-preview was considered and
+was not selected by the product owner.
 
 ## Acceptance evidence
 
