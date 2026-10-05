@@ -138,12 +138,14 @@ impl SshRemoteFixture {
         let listener = fixed(TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)))?;
         fixed(listener.set_nonblocking(true))?;
         let address = fixed(listener.local_addr())?;
-        let runtime = fixed(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build(),
-        )?;
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.worker_threads(2).enable_all();
+        #[cfg(unix)]
+        builder.on_thread_start(|| {
+            crate::ssh_harness::signals::server_thread_start()
+                .expect("fixture worker signal setup failed");
+        });
+        let runtime = fixed(builder.build())?;
         let (stop, shutdown) = watch::channel(false);
         let shared = Arc::new(Shared {
             host: Mutex::new(host),
@@ -192,6 +194,19 @@ impl SshRemoteFixture {
 
     pub fn receive_status_withheld(&self) -> bool {
         self.shared.receive_status_withheld.load(Ordering::SeqCst)
+    }
+    #[cfg(unix)]
+    pub fn worker_child_signal_masks(&self) -> Result<[bool; 2], FixtureError> {
+        self.runtime.as_ref().ok_or(FixtureError)?.block_on(async {
+            let worker = fixed(
+                tokio::spawn(async { crate::ssh_harness::signals::child_signal_blocked() }).await,
+            )??;
+            let blocking = fixed(
+                tokio::task::spawn_blocking(crate::ssh_harness::signals::child_signal_blocked)
+                    .await,
+            )??;
+            Ok([worker, blocking])
+        })
     }
     pub fn hostile_rejection(&self, marker: &str) {
         assert!(

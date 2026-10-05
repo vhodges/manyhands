@@ -8,6 +8,9 @@ mod ssh_harness;
 mod ssh_privacy;
 #[path = "support/ssh_remote.rs"]
 mod ssh_remote;
+#[cfg(unix)]
+#[path = "support/ssh_signal_tests.rs"]
+mod ssh_signal_tests;
 
 use ssh_remote::{FixtureBoundary, FixtureError, SshRemoteFixture, fixed, generate_key};
 use std::{
@@ -23,6 +26,12 @@ fn main() {
         std::process::exit(1);
     }
     ssh_harness::run(&[
+        #[cfg(unix)]
+        ("signal_mask_restored", ssh_signal_tests::mask_restored),
+        #[cfg(unix)]
+        ("signal_poll_protected", ssh_signal_tests::poll_protected),
+        #[cfg(unix)]
+        ("fixture_signal_routing", ssh_signal_tests::fixture_routing),
         ("allowed_client", allowed_client),
         ("trust_known_hosts", trust_known_hosts),
         (

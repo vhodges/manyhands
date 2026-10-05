@@ -1,5 +1,7 @@
 //! A real main must bootstrap before this runner creates any threads.
 #![allow(dead_code)]
+#[path = "ssh_signals.rs"]
+pub(crate) mod signals;
 use super::ssh_remote::{FixtureError, fixed};
 use std::{
     io::Read,
@@ -59,7 +61,8 @@ pub fn run(cases: &[Case]) {
         else {
             std::process::exit(2)
         };
-        let ok = std::panic::catch_unwind(*case).is_ok_and(|result| result.is_ok());
+        let ok = std::panic::catch_unwind(|| signals::run_case(*case))
+            .is_ok_and(|result| result.is_ok());
         if !ok {
             eprintln!("SSH fixture case failed");
             std::process::exit(1);
