@@ -549,6 +549,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "registry_migrations",
             "repositories",
             "shared_ssh_keys",
+            "ssh_host_pins",
         ]
     );
     assert_eq!(
