@@ -16,8 +16,8 @@ then refresh discovery.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-05-clean-deliberate-synchronization.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-05-clean-deliberate-synchronization.md`.
+- [x] Create the detailed design and implementation plan; record its checkpoints as ticket
   comments.
 
 ## Entry Gate
