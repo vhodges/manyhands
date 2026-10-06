@@ -81,6 +81,22 @@ pub(super) fn discover_helpers(
 }
 
 async fn boundary(shared: &Shared, point: FixtureBoundary) -> Result<(), russh::Error> {
+    if point == FixtureBoundary::Advertisement {
+        let hold = shared.advertisement_hold.lock().unwrap().take();
+        if let Some(hold) = hold {
+            hold.reached
+                .send(())
+                .map_err(|_| russh::Error::Disconnect)?;
+            let mut shutdown = shared.shutdown.clone();
+            // Release is explicit. Controller unwind, fixture shutdown, or a
+            // stalled controller all disconnect instead of publishing the batch.
+            tokio::select! {
+                released = hold.release => released.map_err(|_| russh::Error::Disconnect)?,
+                _ = shutdown.changed() => return Err(russh::Error::Disconnect),
+                _ = tokio::time::sleep(Duration::from_secs(20)) => return Err(russh::Error::Disconnect),
+            }
+        }
+    }
     let fault = *shared.fault.lock().unwrap();
     match fault {
         Some(Fault::Disconnect(at)) if at == point => Err(russh::Error::Disconnect),

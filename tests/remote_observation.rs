@@ -43,6 +43,7 @@ fn main() {
         authenticated_exceptional_states_preserve_local_contexts,
         authenticated_absence_after_cache_loss_stays_history_unknown,
         authenticated_poll_yields_and_cancels_before_publishing,
+        abandoned_advertisement_hold_aborts_without_publishing,
         authenticated_batch_failure_is_atomic_and_restartable,
     );
 }
@@ -589,7 +590,6 @@ fn authenticated_absence_after_cache_loss_stays_history_unknown() {
 // Catches premature batch publication or reservation release while an authenticated
 // poll is in flight. The competing service uses public APIs, without recorder hooks.
 fn authenticated_poll_yields_and_cancels_before_publishing() {
-    use std::time::{Duration, Instant};
     for cancel in [false, true] {
         let case = ObservationCase::new();
         let prior = case.observe();
@@ -602,22 +602,11 @@ fn authenticated_poll_yields_and_cancels_before_publishing() {
         let manual = case.request();
         let data = case.enabled.data_directory.path().to_owned();
         let remote = &case.remote;
-        let helpers = remote.helper_invocations();
-        remote.stall_at(
-            ssh_remote::FixtureBoundary::Advertisement,
-            Duration::from_secs(2),
-        );
+        let hold = remote.hold_advertisement().unwrap();
         std::thread::scope(|scope| {
             let poll = &poll;
             let controller = scope.spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while remote.helper_invocations() == helpers {
-                    assert!(
-                        Instant::now() < deadline,
-                        "authenticated helper never started"
-                    );
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                hold.wait_until_held().unwrap();
                 let service = RepositoryService::open_at(&data).unwrap();
                 assert_eq!(
                     service
@@ -655,6 +644,7 @@ fn authenticated_poll_yields_and_cancels_before_publishing() {
                         .len(),
                     1
                 );
+                hold.release().unwrap();
             });
             let result = case
                 .enabled
@@ -688,7 +678,6 @@ fn authenticated_poll_yields_and_cancels_before_publishing() {
             remote.accepted_keys(),
             vec![remote.allowed_client_public_key(); 2]
         );
-        remote.pace_transfer(Duration::ZERO);
         let completed = case.observe();
         assert_eq!(completed.snapshot().observations().len(), 2);
         assert!(
@@ -696,6 +685,46 @@ fn authenticated_poll_yields_and_cancels_before_publishing() {
             "poll/manual handoff changed Git"
         );
     }
+}
+
+// Catches a lost controller leaving a fixture hung or publishing an unapproved batch.
+fn abandoned_advertisement_hold_aborts_without_publishing() {
+    let case = ObservationCase::new();
+    let prior = case.observe();
+    case.remote
+        .set_observation_ref(ObservationRef::RemoteTicket, true)
+        .unwrap();
+    let before = case.preservation();
+    let hold = case.remote.hold_advertisement().unwrap();
+    std::thread::scope(|scope| {
+        let controller = scope.spawn(move || {
+            hold.wait_until_held().unwrap();
+            // Mirrors unwinding the controller before its explicit release.
+            drop(hold);
+        });
+        let result = case
+            .enabled
+            .service
+            .observe_publication_remote(case.request(), &mut SessionCredentials::new(NoPrompt));
+        controller.join().unwrap();
+        assert!(matches!(
+            result,
+            Err(repository::RemoteObservationError::Transport(_))
+        ));
+    });
+    let after = case
+        .enabled
+        .service
+        .remote_snapshot(&case.local.root)
+        .unwrap();
+    assert_eq!(after.observations(), prior.snapshot().observations());
+    assert_eq!(after.contexts(), prior.snapshot().contexts());
+    assert!(before == case.preservation());
+    assert_eq!(
+        case.observe().snapshot().observations().len(),
+        2,
+        "aborted hold must be consumed"
+    );
 }
 
 // Catches a partial batch, deletion, or leaked raw SQLite error when the second

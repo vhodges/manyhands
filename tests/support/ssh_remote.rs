@@ -18,6 +18,25 @@ use std::{
 };
 use tokio::{runtime::Runtime, sync::watch};
 
+/// Dropping the controller aborts the held advertisement instead of releasing it.
+pub struct AdvertisementHold {
+    reached: std::sync::mpsc::Receiver<()>,
+    release: tokio::sync::oneshot::Sender<()>,
+}
+pub(super) struct AdvertisementGate {
+    pub reached: std::sync::mpsc::Sender<()>,
+    pub release: tokio::sync::oneshot::Receiver<()>,
+}
+impl AdvertisementHold {
+    pub fn wait_until_held(&self) -> Result<(), FixtureError> {
+        fixed(self.reached.recv_timeout(Duration::from_secs(10)))
+    }
+
+    pub fn release(self) -> Result<(), FixtureError> {
+        fixed(self.release.send(()))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FixtureError;
 
@@ -93,6 +112,7 @@ pub(super) struct Shared {
     pub completed_helpers: AtomicUsize,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
+    pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
     pub repository: PathBuf,
@@ -113,6 +133,20 @@ pub struct SshRemoteFixture {
 }
 
 impl SshRemoteFixture {
+    pub fn hold_advertisement(&self) -> Result<AdvertisementHold, FixtureError> {
+        let mut gate = fixed(self.shared.advertisement_hold.lock())?;
+        if gate.is_some() {
+            return Err(FixtureError);
+        }
+        let (ready, reached) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *gate = Some(AdvertisementGate {
+            reached: ready,
+            release: released,
+        });
+        Ok(AdvertisementHold { reached, release })
+    }
+
     pub fn set_observation_ref(
         &self,
         reference: ObservationRef,
@@ -194,6 +228,7 @@ impl SshRemoteFixture {
             completed_helpers: AtomicUsize::new(0),
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
+            advertisement_hold: Mutex::new(None),
             hostile: Mutex::new(None),
             receive_status_withheld: AtomicBool::new(false),
             repository: repo_path,
