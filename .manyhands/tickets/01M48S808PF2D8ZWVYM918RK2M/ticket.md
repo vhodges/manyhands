@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "in-progress"
+status: "review-ready"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -60,6 +60,26 @@ unauthorized.
 Progress, task ranges, review findings and verification are tracked in the
 [execution ledger](../../../docs/plans/2026-10-06-wave-03-readiness-exploration-execution.md).
 The controller records canonical ticket comments at task checkpoints.
+
+### Findings and remaining decision
+
+- [API inventory](../../../docs/research/wave-03-api-audit.md): 106 provisional
+  source rows, independently reviewed; final-main re-audit remains required.
+- [Zorite feasibility](../../../docs/research/wave-03-editor-feasibility.md): exact
+  graph fits Kit, but mandatory load normalization violates source preservation.
+- [Velotype assessment](../../../docs/research/wave-03-velotype-assessment.md):
+  pinned source also loses original bytes; preservation/GPUI-port/I/O extraction
+  work exceeds thin host adapters. Independently reviewed source-only findings.
+
+The six-command baseline passed. Cargo/source/lockfile trial edits are restored;
+retained changes are documentation only. Tasks 4–6 were not executed under the
+approved stop boundary; no actual editor/native/performance proof is claimed.
+Documentation/evidence checks passed; whole-branch independent review is pending.
+
+After reviewing the findings, the user must approve any next bounded candidate
+revision/API assessment or extraction/port design. No candidate is selected,
+no product fallback is adopted, and no further executable adaptation is
+implicitly authorized. The ticket remains lifecycle-open.
 
 ## Approved Planning Artifacts
 

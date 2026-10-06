@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 Readiness Exploration Execution Ledger"
 date: 2026-10-06
-status: in-progress
+status: review-ready
 author: "Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -68,8 +68,8 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 | 4 fixture/session | not executed: preservation stop | none; no probe/test dependency retained | not applicable | Requires a separately accepted candidate/path before executable continuation. |
 | 5 native host | not executed: preservation stop | none | not applicable | No workaround, core patch or alternative version authorized. |
 | 6 native evidence | not executed: preservation stop | no editor-native evidence | not applicable | Native/fidelity/performance obligations remain unverified. |
-| 7 recommendation/fallback | dispatching source-only assessment | pinned Velotype source/report only | pending | Identify exact extraction/compatibility/preservation costs; checkpoint before execution. |
-| 8 verification/handoff | pending | none | pending | Final checks, whole-branch review; keep ticket open. |
+| 7 recommendation/fallback | complete; unchanged fallback blocked | `94672ab..f040268`, pinned source-only report | READY / report OK (`283fbe40`) | User chooses any new bounded investigation; no executable extraction. |
+| 8 verification/handoff | documentation/evidence checks passed; final review pending | `target/readiness-evidence/final/`; retained Rust/Cargo/Devenv/CI files unchanged | whole-branch review pending | Inspect complete committed range; keep ticket open for new direction approval. |
 
 ## Decisions, blockers and review dispositions
 
@@ -206,10 +206,89 @@ feasibility result and stop/rollback, not candidate adoption. Review artifacts:
 workflow `7d0447ab-7950-4bc4-8ea6-af3f132b5b46`,
 `editor-dependency/{handoff,review}.md`.
 
-Task 7's already-approved source-only Velotype assessment is next. Tasks 4–6
-are not executed, not called passing or unnecessary native acceptance. A
-candidate-version change, fork/core adaptation, extraction or product-scope
+Task 7's already-approved source-only Velotype assessment followed this gate.
+Tasks 4–6 were not executed, not called passing or unnecessary native acceptance.
+A candidate-version change, fork/core adaptation, extraction or product-scope
 change requires the prescribed new user decision.
+
+## Task 7 source-only fallback and recommendation
+
+Implementer `ff51d0a1-451b-4081-946b-3b4e0afa2ca9` committed only
+[Velotype assessment](../research/wave-03-velotype-assessment.md), range
+`94672ab7585f558d87d998ed29d8f984c85e7054..f040268ad5d0e6f57dced2ff7721f08140c94677`.
+Inspected upstream pin `ed65977be94f2f2703037fcb8b6cbab2e7579571`, manifest 0.7.2.
+Immutable source/tree/registry provenance, exact source snapshots, module hashes,
+license qualifications and committed diff are retained under ignored
+`target/readiness-evidence/velotype-assessment/`.
+
+Source findings: CRLF normalization, whole-tree serialization and lost original
+native-block spellings/final newline violate unchanged-source preservation.
+Outer shared history exists but cannot recover bytes discarded before snapshots.
+Upstream registry GPUI 0.2.2 is a different package ID from Kit's GPUI-pre 0.3.6;
+intact editor owns save/drop/image-paste/cache/file/HTTP/URL/export behavior.
+A viable extraction would require preservation/core/ownership/port design and
+maintenance beyond the approved thin adapters. This is source characterization,
+not an executed fidelity test, compiler failure or proof of product impossibility.
+
+Fresh reviewer `283fbe40-7ff9-475e-9970-f25017765c29` inspected exact committed
+diff and pinned sources: no issues, Task7 report READY / Merge verdict OK.
+Parent accepts report/recommendation; no dependency or product fallback selected.
+Worker documentation/hash/source checks passed; no candidate build, Rust command,
+upstream test or live API/SSH operation was run. The upstream 818-node lock
+inventory is not a resolved extracted dependency closure or full legal clearance.
+Reports: workflow `1296377a-621b-4a77-8318-4758a51f8fa3`,
+`velotype-assessment/{handoff,review}.md`.
+
+Recommendation: retain both negative findings; do not extract Velotype merely
+to reconfirm explicit source blockers. A smaller Zorite source-preservation
+API/revision investigation is worthwhile only with a concrete immutable lead
+and new approval. Alternatively authorize a separate design-only Velotype
+preservation/ownership/GPUI-port investigation if fork maintenance is acceptable,
+name another bounded source-only candidate, or pause for review. No actual
+revision/API fix is promised and no executable adaptation follows automatically.
+
+## Final requirements-to-evidence handoff
+
+| Requirement | Actual evidence/status | Remaining gate |
+| --- | --- | --- |
+| R1 pin/core graph | Zorite exact published graph fit source/metadata-inspected; Velotype source core identity differs | No compiled Kit/editor entity proof; changed candidate/port needs new approval. |
+| R2 host containment | Pinned source/API/licenses inspected; Velotype direct I/O ownership identified | No native containment negatives; extracted policy/closure unresolved. |
+| R3 no-op bytes | Both pinned candidates have source-inspected preservation blockers | No workaround authorized; actual-editor snapshots not executed. |
+| R4 edits/undo | Source paths characterized; Velotype snapshots cannot restore already-lost original bytes | No executable focused-edit/cross-mode undo evidence. |
+| R5 rich vocabulary | Candidate API/module surfaces characterized only | No native per-construct/table/keyboard acceptance. |
+| R6 native usability | Baseline Linux sockets inspected only | No editor launch/IME/clipboard/native matrix proof. |
+| R7 dirty seam | Host implementation stopped before Task 4 | No production draft store or toy-host preservation claim. |
+| R8 responsiveness | Not measured | No rendered-input p95/native proof; final performance target unchanged. |
+| R9 API inventory | 106 provisional source rows, corrections independently reviewed | Repeat against completed Wave 02 main before W3 Cycle 01. |
+| R10 recommendation | Both source reports independently reviewed; costs and next approval named | User selects any further bounded investigation; not adoption. |
+
+## Task 8 verification and delivery boundary
+
+All retained branch changes are canonical Markdown: planning/authorization,
+API inventory, pinned editor reports, execution ledger, ticket and comments.
+No changes remain to Cargo.toml/Cargo.lock, src, tests, Devenv or CI compared to
+baseline `29f3f5a`. Required Rust baseline commands already passed on the
+identical retained Rust/lockfile tree; do not rerun them for docs-only bookkeeping.
+No desktop/probe/native smoke was performed because the editor lane stopped
+before host implementation. Baseline CLI smoke is distinct from editor evidence.
+
+Controller `target/readiness-evidence/final/doc-check.cjs` passed (exit 0):
+restricted scalar frontmatter/required fields/ULID uniqueness, relative links
+and line/heading anchors, Markdown/Git whitespace, unchanged baseline
+Cargo/Devenv/source/test/CI tree, plus **all 83 Task3 and 873 Task7 evidence file
+hashes** independently recomputed. Results are in `final/doc-validation.json`
+and `final/doc-validation.stderr`. This is documentation/evidence validation,
+not general YAML parsing through the domain parser or actual editor testing.
+A final rerun accompanies the complete committed handoff. No effective Git hook
+was configured; only conventional sample hook files existed at validation time.
+
+Whole-branch fresh review is pending at this checkpoint. Supply exact full-branch
+diff and known artifacts, not only clean working-tree status.
+Final review does not authorize publishing,
+merging, ticket closure, cleanup, candidate selection or excluded adaptations.
+Ticket is review-ready and lifecycle-open. The next material decision is the
+new bounded investigation direction, not a claim that Wave 03 is implementable
+or complete. The already-approved RFC/Wave gates remain unchanged.
 
 ## Verification policy
 
