@@ -49,8 +49,8 @@ existing-worktree requirement.
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
 - Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
 - Task 3: complete; independent review accepted at `f4ecbd50504a77a70c0528a892b135e46db155ce`; required normal local gates pass.
-- Task 4: implementation and assigned integration evidence complete; independent review pending.
-- Task 5: pending.
+- Task 4: complete; parent accepts full range through `ca88e002537e919899a13d61ab784d459206c953` with retained normal-gate timing qualification (below).
+- Task 5: implementation, assigned real-fixture/privacy/CI configuration and local gates complete at `9dcd410f87ff3414e99d9d0d26ee611bc484ad59`; independent review and parent acceptance pending.
 - Task 6: pending.
 
 ## Verification and review
@@ -1135,3 +1135,169 @@ Existing client counters are not server transaction evidence. Actual five-native
 target CI, desktop smoke where available, final gates/whole-Cycle review, and
 publication remain pending. Push/PR, merge, closure and cleanup are unauthorized;
 ticket stays open. This acceptance checkpoint changes documentation/comment only.
+
+## Task 5 — real wire acceptance candidate — 2026-10-06T19:34:00Z
+
+Exact task base: `0601c6bf76485fa98e9935e36266631a32efa793`.
+Implementation checkpoint: `9dcd410f87ff3414e99d9d0d26ee611bc484ad59`
+(`test: prove real synchronization outcomes and replay`). This evidence-only
+checkpoint follows it. Final full HEAD/clean status are bound in
+`/tmp/manyhands-cycle05-task5-review-head.txt`; exact **base-to-final-HEAD** diff
+in `/tmp/manyhands-cycle05-task5-review.diff`. Independent read-only review and
+parent acceptance are REQUIRED and pending; this is not whole-Cycle acceptance.
+
+Read AGENTS, implementing-a-cycle skill/reference, all approved Cycle/design/
+implementation/execution artifacts, fixture/custom-host seams, and accepted
+Task 4 source/regressions. Reused exact branch/worktree and already-completed
+fresh-main preflight; no fetch, rebase, branch/worktree change or Task 1–4 edit.
+Main's unrelated files and other worktrees are untouched. No production source,
+public policy, schema, dependency, Cargo.lock/devenv input, frontend, scheduler,
+force/rollback/merge/reset/materialization/promotion or new journal was added.
+Canonical setup/clone/commit/ref controls are git2, not shell/system Git setup.
+Only existing fixture helpers launch shell-free upload-pack/receive-pack children.
+
+### Owned seams and supervisor rulings
+
+- Added `tests/remote_synchronization.rs`, custom `harness=false` target following
+  existing real pre-thread initialization/source-inclusion conventions. All cases
+  run in isolated owned children; no ignored/native-placeholder cases.
+- Minimal `tests/support/ssh_remote.rs` controls plus **explicitly approved**
+  `tests/support/ssh_server.rs` relay extension (the actual child stream seam).
+  `tests/support/mod.rs` needed no change. Existing SSH-host cases/source remain
+  untouched and pass in the full gate.
+- Closed bounded pkt-line parser retains at most one <=65,520-byte packet and
+  32 validated branch commands, stops at command flush, and ignores opaque pack
+  bytes. Fragmentation/flush/oversize regression runs in the new host. Default
+  stream bytes/order remain unchanged. One-shot CAS-race injection holds at most
+  81,904 original prefix/first-read bytes, verifies the original advertised old
+  OID, advances ONLY the owned bare primary, then forwards original client bytes.
+- `ReceiveUpdate { reference, old_oid, new_oid, accepted }` is fixture-only safe
+  metadata. Attempted commands are distinct from receive-pack advertisement-only
+  sessions. Acceptance additionally requires completed helper success, a changed
+  command OID, and actual owned remote ref == candidate. Each acceptance test
+  pairs these counters with independent before/after bare refs. Counts do NOT
+  claim process invocation equals transaction, an advertisement equals push, or
+  direct fixture/peer ref controls are receive-pack transactions.
+- AfterReceivePack loss now applies only to a real parsed update, waits (bounded
+  five seconds) for child completion, proves the actual new ref, and withholds
+  the status before it reaches the client. Fixture shutdown still owns/reaps only
+  its helper children. Advertisement-only sessions cannot trigger this effect.
+- Supervisor accepted complementary nonFF evidence: genuine divergent Push
+  ancestry rejects BEFORE any update command; an already-sent ordinary update
+  against advertised old OID is rejected by the **real receiver** after a
+  competing divergent write. The latter is **EXPECTED-OLD/CAS race rejection**,
+  NOT a denyNonFastForwards-policy response. Separate native
+  receive.denyCurrentBranch=refuse proves receiver-policy refusal. No forced
+  refspec or forged command was used to manufacture server rejection.
+- CI adds `--test remote_synchronization` to the existing shared headless command,
+  therefore all five existing native matrix entries retain it. No dispatch/push
+  or actual native execution. Configuration is NOT platform proof.
+
+### Coverage matrix: actual named cases and evidence
+
+All names below are in the dedicated new target unless explicitly qualified.
+Every public operation uses the real service and authenticated disposable SSH;
+`World` creates TWO actual authenticated clones. Peer primary and context updates
+also traverse real SSH. Bare-owned fixture writes intentionally model competing
+changes/deletion/divergence, not imaginary accepted receive transactions.
+
+| Requirement | Named case(s) | Wire/local/recovery/privacy evidence |
+| --- | --- | --- |
+| Primary current, FF, locally ahead | `primary_current_fast_forward_local_ahead` | Current/FF send 0 updates; peer advancement transfers over SSH; branch, required file bytes and index tree equal advanced commit; local-ahead sends exactly 1 accepted ordinary old->candidate update; FETCH_HEAD bytes and unrelated tracking ref preserved. |
+| Context first/current/FF/local-ahead | `context_first_current_fast_forward_local_ahead` | First sends 1 accepted zero->context update; current sends none; second authenticated clone fetches context and publishes next commit; target bytes/ref/index reflect FF; locally ahead sends 1 accepted next->candidate update; primary ref/HEAD/index/tracked bytes remain equal. |
+| Ordinary receiver-policy rejection and only unfinished effect retry | `receiver_rejection_and_exact_restart` | Real command received, candidate not accepted, remote old ref and complete local physical image unchanged; removal of receiver refusal + explicit same-ID restart adds exactly 1 accepted update, not a duplicate accepted effect. Hostile receiver text redacted. |
+| Divergent receiver expected-old race | `receiver_expected_old_divergent_race` | Actual unchanged original old/new command received after one competing owned write; sibling commit ancestry proved; 0 accepted candidate updates, competing ref remains; no authority/refresh, PushPrepared retained, local image unchanged. |
+| Distinct endpoints with real ancestry | `distinct_push_ancestry_and_tracking` | Separate exact host approvals; shared real commit objects seed genuine ancestor at Push; 1 accepted Push update, unchanged Fetch ref/tracking evidence; Push-only sibling object downloaded, both divergent graph relations false, 0 further sent commands; typed rejection, no local mutation. |
+| Dirty/conflicted primary | `primary_dirty_conflicted_preservation` | Real staged index conflicts or dirty tracked bytes; full local refs/HEAD/index/files/status digest unchanged; 0 new authentication or update. |
+| Dirty/wrong/detached context | `context_dirty_wrong_detached_preservation` | Actual deterministic linked worktree, bytes/index/refs/status unchanged in all three modes; 0 network authentication. Accepted Task 4 wrong-registered-worktree regression remains unchanged. |
+| Primary and remote-context divergence | `primary_divergence_preservation`, `context_remote_divergence_preservation` | Genuine sibling commits; typed MergeRequired; complete physical images unchanged; no update command. |
+| Virtual context FF then primary divergence | `context_virtual_primary_divergence_preservation` | Context could FF to remote, but divergent primary blocks BEFORE any local update; both physical images and original context OID preserved. |
+| Remote changes during fetch | `remote_change_during_fetch` | Existing private post-download seam advances actual owned remote between advertisements; ExternalChange before local effect; unchanged physical state. |
+| Verified first Push then immediate deletion | `verified_context_immediate_deletion` | Complete verified first publication then actual deletion without intervening Fetch-present observation; RemoteContextDeleted, 0 additional updates, absent server ref and local state preserved. |
+| Incompatible-generation history | `incompatible_generation_history_unknown` | Distinct separately trusted absent Push destination after verified publication/deletion; old Push generation not borrowed; HistoryUnknown and no effect. Existing accepted ordinary HistoryUnknown regression also preserved. |
+| Lost acknowledgment AFTER accepted effect | `post_accept_disconnect_exact_restart` | Actual old->candidate ref, completed helper and status-withheld flag; error is NOT authority; ordinary duplicate performs 0 calls; fresh service + explicit exact-ID restart proves candidate on same original Push; total candidate accepted effects = 1, unchanged commit inventory/local image, one refresh record. |
+| Persistence fails AFTER accepted effect | `post_accept_persistence_exact_restart` | Trigger aborts PushVerified write after real receiver acceptance; same exact restart proof and one-effect/one-refresh/unchanged-commit assertions as disconnect. |
+| Published/AlreadyCurrent discovery failure | `published_index_pending_refresh_only`, `already_current_index_pending_refresh_only` | Exact authoritative IndexPending; one initial discovery callback; retry only refreshes (second callback), no commands/auth/updates/ref/worktree effect; endpoint changed after authority cannot replace frozen outcome; completed replay has no scan. |
+| Completed refresh, index flag write failure | `completed_refresh_index_flag_no_rescan` | Exact authority retained; repeated failing-flag and successful same-ID replay have 0 additional scans/commands/auth/updates, unchanged physical image. |
+| Raw secret-bearing endpoint input | `hostile_endpoint_redaction` | Actual configured hostile URL rejected before authentication, unchanged local image; formatted Debug/Display and durable-store scan exclude raw URL. |
+| Parser/control fidelity | `receiver_command_fragmentation` | Command parsed identically under 1/2/3-byte and larger fragmented reads; capability suffix bounded; pack bytes ignored; read-only flush produces no update; oversized packet fails. Other control regressions are real wire cases above. |
+| Frozen noRemote/id collisions/endpoint switching | retained `tests/ssh_transport/synchronization.rs` cases | Accepted Tasks 1–4 unchanged: authoritative/existing-ID remote removal, changed target, atomic tagged binder, same-ID restart generation, BeforePush/AfterPushReturn endpoint changes, immediate-deletion/ambiguity rulings. Full gate runs all 30 original synchronization cases; new receiver counters do not rewrite their assertions. |
+
+### Privacy inventory and counter limits
+
+Actual original plaintext/encrypted private-key buffers and long encoded key
+fragments, actual provider passphrase, raw Fetch/Push/secret-bearing URLs, hostile
+server text, canonical ticket body AND full canonical Markdown bytes are nonempty
+probes. Target worktree paths are additionally scanned in all remote/local
+operation and observation rows and in synchronization result/error Debug/Display.
+Every `World::sync` inventories nonempty durable rows and recursively inventories
+all generated application-data stores, including filenames. All stronger path
+checks also run after context preflight/error operations. Probe inventories are
+retained for the outer custom-host raw-output scanner across failures/restarts.
+
+Original private-key files, Git config/object/worktree/canonical sources are
+intentional sources and excluded from generated-store scans. Root identity,
+shared-key source paths and public discovery/registry worktree path columns are
+legitimate metadata; full generated-store byte scans omit ONLY the worktree-path
+probe, not any secret/URL/server-text/Markdown probes. Strong target-path scanning
+is applied to EVERY text/blob cell in `remote_operation_records`,
+`operation_records`, and `remote_ref_observations`, where such paths are forbidden.
+Those records are not exempted as discovery metadata. No empty/tautological scan
+or secret-rendering failure diagnostic is used.
+
+Both post-accept cases retain a live connection and exercise actual synchronization
+writes with WAL enabled ONLY on their owned test database. A real VACUUM diagnostic
+backup and active rollback journal on that diagnostic copy are generated and
+scanned; explicit assertions require nonempty WAL and journal inventory. Other
+cases use the service's existing database mode. No application schema/journal or
+production persistence change. After replay, raw formatted results plus rows and
+all generated files are re-scanned. Discovery callbacks count public scanner entry,
+not every internal file read; receive counters prove only tested candidate updates
+in this owned sequential fixture, not a general transaction audit under unrelated
+concurrent writers. Object inventory verifies no duplicate commit objects on
+accepted-effect restart; Git content-addressing and unchanged local images/ref
+OIDs also prevent a manufactured checkpoint/commit claim.
+
+### Tests-first and honest intermediate failures
+
+Logs outside repository: `/tmp/manyhands-cycle05-task5/`.
+Initial `red.log` exit101 includes missing fixture `receiver_command_fragmentation`
+control plus two test-authoring errors (hook enum spelling, non-Send counter).
+This is **missing-control compilation evidence**, NOT a productionbehavior red.
+No production defect/fix was claimed or performed. Wire authoring failures retained:
+missing local author identity, genuine initial ancestor seeding across distinct
+fixtures, per-endpoint approval handling, incorrectly expecting identical resolved
+pushurl to change generation, and a WAL assertion before choosing an actual WAL
+fixture mode. These were corrected only in owned setup/tests without weakening
+behavioral assertions. A zero-match preliminary race-filter run in
+`receiver-race.log` is **invalid coverage evidence**; `receiver-race2.log` runs 1
+real case and passes. All intermediate logs remain available, not relabeled green.
+
+### Final unchanged Rust tree verification
+
+| Exact command | Result / log |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | **20 passed**, no ignored cases; `focused-final.log` |
+| `devenv shell -- cargo check --all-features --locked` | exit0; `check.log` |
+| `devenv shell -- cargo fmt --check` | exit0; `fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | exit0; `clippy.log` |
+| `devenv shell -- cargo test --all-features --locked` | **FIRST NORMAL Task5 gate exit0**, `test.log`; 600 standard +169 SSH = **769 passed** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | exit0, no window; `cli.log` |
+| `git diff --check` | exit0 before implementation commit and evidence checkpoint |
+
+Full test interval: `2026-10-06T19:23:45Z`–`2026-10-06T19:33:20Z` (`test.meta`).
+Normal default harness concurrency; no test-thread serialization, diagnostic
+instrumentation, timeout/assertion changes, ignored cases or broad retry. Includes
+168 library,59 discovery,600 total standard,15 remote_observation,20 new sync,
+31 ssh_fixture,103 ssh_transport cases. All existing hosts and source regressions
+passed. No redundant unchanged broad run. Static gates preceded this full run;
+only documentation/comments change afterward.
+
+This successful Task5 run DOES NOT erase Task4's first normal-gate Busy failure.
+That earlier failure remains timing-sensitive, NOT proven unrelated/preexisting,
+and its expressly authorized second-run qualification remains required for
+whole-Cycle review. All five actual native targets remain **pending authorized
+publication**, not passing from YAML/Linux. Task6 desktop/whole-branch acceptance
+was not attempted. Ticket stays open; no push/PR/dispatch/merge/closure/cleanup.
+Next: fresh independent read-only Task5 review of exact base-to-final HEAD and
+parent acceptance; then stop for the parent-owned next gate.
