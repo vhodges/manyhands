@@ -1,10 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # Automatic CI builds are disabled; builds can still be run manually.
   workflow_dispatch:
 
 permissions:
