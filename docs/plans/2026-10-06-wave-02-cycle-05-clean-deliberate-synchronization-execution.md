@@ -1658,3 +1658,44 @@ survival only, NOT manual feature behavior; unchanged front end not rerun. Five
 actual native jobs remain pending; CI YAML/Linux is not native execution. No
 publication/dispatch/merge/closure/cleanup authority. Stop for retained fresh
 whole-Cycle re-review.
+
+## Task 6 parent local acceptance — native publication gate pending — 2026-10-06T21:32:05Z
+
+Accepted local implementation and full original Cycle code-review range
+`29f3f5a25957836a8513cba8a318306e1b928063..4cf15030d667471e10275edaa67d25cfb1d5d2d4`.
+Retained independent whole-Cycle reviewer verdict **OK with notes**: both final P1s
+closed with actual behavioral red/green tests, no remaining qualified code defect.
+Review artifact:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/bb551116-ef66-4e37-bf23-0b9291b9bc89/task6-safety/review.md`.
+Explicit SAFE plus ignored-overwrite=false protects tested file/directory/symlink
+collisions while noncolliding ignored artifacts still permit synchronization.
+Tagged local binding now validates exact root/ID/action/full matcher/OID in its
+insertion transaction; incompatible completed/pending rows cannot fabricate
+IndexPending or adopt a different first outcome. Ordinary refresh compatibility
+and prior remote-ID/endpoint/authority/replay/privacy guarantees remain intact.
+
+Parent independently verified exact HEAD/clean status, all src/tests/manifests/
+locks/toolchain/CI equality to tested implementation
+`d84ad8d63e1f14182e6e734239b6d5a41d89d9a2`, and recomputed original-base src/tests
+SHA256 `e857fdad6f0b35f7f656dfe7fb9c84ee927dfbdb427360a71cf4dd55608255f3`.
+Read actual command metadata: final check/fmt/clippy/full test/CLI all exit0 on
+that implementation. Parent-derived final log totals **605 standard +184 SSH =789**,
+including focused dedicated35/retained transport30 and library173. First NORMAL
+Task6 corrected gate passes with no retry/serialization/assertion weakening.
+Only evidence commits follow; do not duplicate broad checks on unchanged Rust.
+Desktop actual startup/protocol12-second smoke remains qualified, front-end/
+startup/features untouched by final corrections. No manual interaction claim.
+
+Retained notes remain part of acceptance: Task4 initial NORMAL Busy failure not
+proven unrelated/preexisting; authorized second749 success remains second-attempt.
+Original Task5 raw-output completeness claim withdrawn; old769 did not prove it.
+No erased failures or invalid baseline attribution. Linux symlink collision cases
+actually executed; Windows capability and all five native jobs remain unverified.
+Safe checkout is not universal atomic filesystem-I/O or rollback authority.
+
+Local source/review stage is ready for publication authorization, NOT full native
+Cycle acceptance or delivery closure. Existing CI configuration includes the
+focused target, but actual native runs/links are still pending. No push/PR/dispatch,
+merge, ticket closure or worktree cleanup is authorized. Ask owner whether to
+publish normally/create PR and validate native CI, or retain this local checkpoint.
+Ticket remains open; all other worktrees and unrelated main files preserved.
