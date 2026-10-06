@@ -302,3 +302,29 @@ policy-resolved Push endpoint, retains all credential/trust/configuration checks
 and writes no refs or FETCH_HEAD. Separate receive-pack observations must match
 that object-transfer advertisement. Repeated owned request checks honor
 cancellation between calls without advancing durable action checkpoints.
+
+### Task 4 completion: endpoint-qualified no-republish evidence
+
+A new service test exposed that a verified first context publication followed
+immediately by deletion could be recreated: its pre-push Fetch batch was absent,
+so it had no Fetch-present publication row. The supervisor explicitly rejected
+masking this defect by inserting another observation. Push proof must not mutate
+Fetch history or infer equivalence with a distinct pushurl.
+
+The approved integration-only bridge reads validated existing synchronization
+records for the same root and typed context under the owned cache transaction.
+Immutable configuration generation plus monotonic endpoint-digest fencing bind
+compatible records to the current direction-specific configuration. Exact durable
+PushVerified or Published/AlreadyCurrent evidence survives terminal/index writes.
+Before local integration/reconciliation and again before push, a fresh absent
+Push target with compatible proof returns RemoteContextDeleted. Evidence only
+from incompatible generations yields HistoryUnknown, never guessed equivalence.
+Inherited or older PushPrepared/PushReturned intent without exact proof remains
+ambiguous: absence yields RecoveryRequired. This does not assert server acceptance
+and may conservatively block a retry cancelled before sending. The current first
+call's own unsent intent is not historical ambiguity. Present targets still need
+actual downloaded commit ancestry or exact equality; recorded OIDs are not graph
+proof. Current process configuration is rechecked before applying that evidence.
+No schema, second journal, public confirmation, Fetch evidence or recovery/repair
+policy was added. Test counters describe client typed calls and real fresh Push
+advertisements, not receive-side transaction counts.

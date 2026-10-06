@@ -36,6 +36,10 @@ pub(crate) enum Checkpoint {
     TrackingDownloaded,
     BeforeTrackingWrite,
     TrackingWritten,
+    /// Client attempt boundary, not receive-side transaction evidence.
+    ExactPushStarted,
+    /// Successful fresh receive-pack list on the independently resolved Push endpoint.
+    PushAdvertisementObserved,
 }
 type Hook = Box<dyn FnMut(Checkpoint)>;
 thread_local! { static HOOK: RefCell<Option<Hook>> = RefCell::new(None); }

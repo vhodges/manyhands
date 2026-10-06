@@ -70,7 +70,14 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     pub(crate) fn fresh_advertisement(
         &mut self,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
-        self.transfer(&[], TransferAction::Observe, None)
+        let advertised = self.transfer(&[], TransferAction::Observe, None)?;
+        #[cfg(test)]
+        if self.context.direction == SshDirection::Push {
+            super::operation_tests::checkpoint(
+                super::operation_tests::Checkpoint::PushAdvertisementObserved,
+            );
+        }
+        Ok(advertised)
     }
 
     pub(crate) fn fetch_exact(
@@ -114,6 +121,8 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         target: &SynchronizationTarget,
     ) -> Result<(), SshTransportError> {
         self.validate_plan(plan, SshDirection::Push)?;
+        #[cfg(test)]
+        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::ExactPushStarted);
         let mappings = exact_mappings(plan, target, SshDirection::Push);
         self.transfer(
             &[mappings[0].as_str()],

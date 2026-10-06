@@ -90,6 +90,21 @@ impl From<SshTransportError> for SynchronizationError {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum PushAbsenceBoundary {
+    Deleted,
+    Unknown,
+    Ambiguous,
+}
+impl PushAbsenceBoundary {
+    fn error(self) -> SynchronizationError {
+        match self {
+            Self::Deleted => SynchronizationError::RemoteContextDeleted,
+            Self::Unknown => SynchronizationError::HistoryUnknown,
+            Self::Ambiguous => SynchronizationError::RecoveryRequired,
+        }
+    }
+}
 fn decision(value: RemoteSafePointOutcome) -> Result<(), SynchronizationError> {
     match value {
         RemoteSafePointOutcome::Continue => Ok(()),
@@ -484,6 +499,26 @@ impl RepositoryService {
                 .remote_snapshot(&root)?
                 .publication_evidence_for(*kind, item_id),
         };
+        // Fetch and Push history are direction-specific. A verified publication
+        // at this endpoint must not be recreated after deletion, even when its
+        // Fetch advertisement has always been absent (distinct pushurl).
+        if primary.is_none() {
+            return Err(SynchronizationError::PrimaryMissing);
+        }
+        let push_absence_boundary =
+            self.synchronization_push_absence_boundary(&root, &owner, prior.is_some())?;
+        if let Some(boundary) = push_absence_boundary {
+            let actual =
+                self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
+            let observed =
+                self.synchronization_push_observation(&request, session, &owner, &plan, actual)?;
+            if self.observation_configuration(&root, &plan)? != configuration {
+                return Err(SynchronizationError::ExternalChange);
+            }
+            if observed.is_none() {
+                return Err(boundary.error());
+            }
+        }
         let mut resumed = None;
         if prior.is_some() {
             let actual =
@@ -610,6 +645,11 @@ impl RepositoryService {
         if self.observation_configuration(&root, &plan)? != configuration {
             return Err(SynchronizationError::ExternalChange);
         }
+        if push.is_none()
+            && let Some(boundary) = push_absence_boundary
+        {
+            return Err(boundary.error());
+        }
         evidence.push_oid = Some(candidate);
         evidence.push_advertised_oid = push;
         let authority = if push == Some(candidate) {
@@ -698,6 +738,43 @@ impl RepositoryService {
             authority_outcome(&request.target, authority),
         ))
     }
+    /// Endpoint-qualified proof stays in the existing envelope, never in Fetch
+    /// history. Endpoint/plan edits monotonically fence configuration generations.
+    fn synchronization_push_absence_boundary(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        inherited: bool,
+    ) -> Result<Option<PushAbsenceBoundary>, SynchronizationError> {
+        state::with_transaction(self, root, |tx, id| {
+            let current = reservation::owned(self, tx, id, owner)?;
+            let Some((kind, item_id)) = current.target.item() else { return Ok(None); };
+            let mut query = tx.prepare("SELECT operation_ulid FROM remote_operation_records WHERE repository_id=?1 AND action='synchronize_context' AND kind=?2 AND item_id=?3").map_err(|_|state::recovery_required())?;
+            let ids = query.query_map(rusqlite::params![id,authoring_kind_segment(&kind),item_id.to_string()],|row|row.get::<_,String>(0)).map_err(|_|state::recovery_required())?.collect::<Result<Vec<_>,_>>().map_err(|_|state::recovery_required())?;
+            let mut verified = false;
+            let mut ambiguous = false;
+            let mut incompatible = false;
+            for operation in ids {
+                let operation = OperationId::parse(&operation).map_err(|_|state::recovery_required())?;
+                if operation == owner.operation_id() && !inherited { continue; }
+                let record = state::read_operation(tx,id,operation)?.ok_or_else(state::recovery_required)?;
+                if record.generation > current.generation || record.target.local_branch() != current.target.local_branch() || record.target.context_ref().map(RemoteRefTarget::remote_ref) != current.target.context_ref().map(RemoteRefTarget::remote_ref) { return Err(state::recovery_required()); }
+                let evidence = &record.sync_evidence;
+                let proven = record.authority.is_some() || record.sync_checkpoint == Some(Checkpoint::PushVerified) && evidence.push_oid.is_some() && evidence.push_advertised_oid == evidence.push_oid;
+                let intent = evidence.push_oid.is_some() && matches!(record.sync_checkpoint,Some(Checkpoint::PushPrepared | Checkpoint::PushReturned));
+                if proven || intent {
+                    if record.generation != current.generation || record.target != current.target { incompatible = true; }
+                    else if proven { verified = true; }
+                    else { ambiguous = true; }
+                }
+            }
+            Ok(if verified { Some(PushAbsenceBoundary::Deleted) }
+                else if ambiguous { Some(PushAbsenceBoundary::Ambiguous) }
+                else if incompatible { Some(PushAbsenceBoundary::Unknown) }
+                else { None })
+        }).map_err(SynchronizationError::Repository)
+    }
+
     fn synchronization_push_observation<P: SessionCredentialProvider>(
         &self,
         request: &SynchronizeRemoteRequest,

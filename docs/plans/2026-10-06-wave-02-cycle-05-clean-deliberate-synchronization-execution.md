@@ -49,7 +49,7 @@ existing-worktree requirement.
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
 - Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
 - Task 3: complete; independent review accepted at `f4ecbd50504a77a70c0528a892b135e46db155ce`; required normal local gates pass.
-- Task 4: pending.
+- Task 4: implementation and assigned integration evidence complete; independent review pending.
 - Task 5: pending.
 - Task 6: pending.
 
@@ -820,3 +820,106 @@ candidate checkpoint rather than silent expansion into Task 5 or lost edits.
 Exact base..HEAD diff and full HEAD/status are saved for read-only review at
 `/tmp/manyhands-cycle05-task4-review.diff` and
 `/tmp/manyhands-cycle05-task4-review-head.txt`. Ticket remains open.
+
+## Task 4 completion follow-up — 2026-10-06T17:30:54Z
+
+Resumed clean candidate `13d717dade60331671a9c1f5eeb80c8c4051d090` after parent
+**rejected acceptance for incomplete assigned Task 4 evidence**, not a Rust gate
+failure. Prior rejection/history and721-case command evidence are retained above.
+Parent required completing these proofs before independent review; none was
+silently reassigned to Task 5. Original task base remains
+`5ee6bd8e3b0b5c8b2812f177560cd7002fb52454`. No new worktree/branch/rebase/stash/
+reset/clean or publication/CI/merge/closure/cleanup. Ticket stays open.
+
+### Missing requirement -> actual public-service proof
+
+All named cases are registered in the EXISTING authenticated SSH transport host;
+source is `tests/ssh_transport/synchronization.rs`. Requests use the public
+synchronization service and real fixture advertisements/owned git2 commit graphs.
+TargetState compares actual local branch refs, HEAD, index, tracked worktree bytes
+and status via digests, never formatted canonical Markdown or worktree paths.
+
+| Assigned proof | Named service case / observation |
+| --- | --- |
+| Wrong branch and registered/deterministic context-worktree identity | `synchronization_context_identity_preservation`: existing authored context on wrong symbolic branch, then real deterministic worktree with its registered stable name pointing elsewhere; typed rejection, zero SSH, exact refs/index/bytes/status preservation. |
+| Absent context with stale tracking / first publication | `synchronization_context_absence_boundaries`: complete actual absence ignores surviving stale tracking; first ordinary publication succeeds with actual remote candidate OID. |
+| Observed Fetch context deleted | `synchronization_fetch_observed_context_deleted`: real service complete Fetch-present observation then actual ref deletion and complete absence; RemoteContextDeleted, no recreation or local changes. |
+| Missing primary through service | `synchronization_missing_remote_primary`: actual remote primary deletion for both primary/context requests; complete fetch then PrimaryMissing; refs/index/bytes unchanged. Existing private service case also covers missing local primary. |
+| Unknown context history | `synchronization_context_absence_boundaries`: explicit cache-history-loss flag, real complete absence, HistoryUnknown with actual remote absence/local preservation. |
+| Context divergence and virtual-primary divergence | `synchronization_service_divergence_preservation`: actual Git siblings for context divergence; context could FF to real remote descendant but remote primary diverges; both MergeRequired before ANY local change. Also covers divergent primary synchronization. |
+| Cancellation after completed fetch before local effect | `synchronization_cancel_after_fetch`: actual advertised/downloaded new primary equals tracking and durable complete snapshot; AfterFetch cancellation leaves local refs/index/bytes untouched; cancelled restart terminal and network-free. |
+| LocalPrepared physical mismatch on explicit restart | `synchronization_local_prepared_mismatch_restart`: actual safe checkout reaches candidate index/bytes, injected symbolic change aborts locked ref commit; fixture restores symbolic identity ONLY, old ref/candidate index/worktree mismatch persists. LocalPrepared old/candidate OIDs inspected; repeated explicit restart returns RecoveryRequired without SSH/reset/ref/index/content repair. |
+| Discovery completed, index-flag write fails | `synchronization_completed_refresh_index_flag_replay`: real FF/discovery completes, SQL trigger rejects only index_pending clear; authoritative IndexPending frozen. Replay with trigger retained and then removed performs no discovery scan (panic hook), SSH or local change; eventually Complete exact outcome. |
+| Cancelled-old ambiguous push / NEW ID real proof | `synchronization_cancelled_push_new_id_proof`: actual server accepts candidate before AfterPushReturn cancellation. Same-ID restart terminal; NEW ID independently lists Push, returns AlreadyCurrent; typed push-call counter zero and actual remote candidate/local state unchanged. Context equivalent: `synchronization_cancelled_context_equal_candidate`. |
+
+### Demonstrated defect, approved ruling and additional proof
+
+Initial expanded tests compiled red for two absent test-only counter boundaries
+(`counter-red.log`; earlier `red.log` also records a private-module test reference
+error corrected without production change). After hooks, immediate-delete service
+case failed at its typed RemoteContextDeleted assertion (`green-attempt.log`).
+Diagnosis: successful first Push publication had an absent pre-push Fetch batch;
+blind new-ID first-publication policy could recreate the now-deleted Push branch.
+Supervisor forbade masking the failure with an added Fetch observation or marking
+Fetch published from Push proof. Approved smallest bridge consumes existing
+validated root/context remote-operation rows and monotonic generation/digest
+fencing. It performs fresh independent Push proof before local FF/reconciliation
+and before push: compatible exact old proof + absent => RemoteContextDeleted;
+incompatible-generation proof => HistoryUnknown; older/inherited unverified
+PushPrepared/PushReturned intent + absent => RecoveryRequired. Current first-call
+unsent intent is excluded, so legitimate first publication remains possible.
+No schema/public API/second journal/Fetch-history mutation or repair was added.
+
+Additional cases retain the original red behavior and prove the bridge:
+- `synchronization_context_absence_boundaries`: verified first publication ->
+  immediate deletion with a newly advertised primary descendant that COULD FF
+  context; deletion boundary BEFORE local effects; Fetch history remains never.
+- `synchronization_distinct_push_context_deleted`: Fetch always absent, actual
+  verified publication at distinct Push endpoint -> immediate deletion; recreated
+  service/new ID returns deletion, no phantom Fetch history/local changes.
+- `synchronization_push_history_generation_fencing`: real Push endpoint change
+  increments generation; old proof cannot assert endpoint equivalence; absent
+  new endpoint produces HistoryUnknown without recreation.
+- `synchronization_ambiguous_cancelled_context_absent`: actual accepted push then
+  cancellation/deletion/recreated-service/new-ID => RecoveryRequired; fresh Push
+  advertisement occurs but zero typed push calls; old cancelled ID stays terminal.
+- `synchronization_context_inherited_absent_push`: actual accepted context push,
+  verification persistence fault, deletion, explicit same-ID restart => recovery.
+- `synchronization_context_deleted_before_push`: disappearance between initial
+  guard advertisement and final pre-push advertisement is not recreated.
+
+Test-only `ExactPushStarted` counts client typed push attempts;
+`PushAdvertisementObserved` follows successful fresh receive-pack listing on the
+resolved Push endpoint. These are NOT server transaction/disconnect counters.
+Actual remote refs and branch/index/worktree observations underpin preservation
+and acceptance assertions, not inferences from stored operation rows. Two
+independently pinned endpoints use approval=None during synchronization; an early
+fixture failure passing the Fetch approval to distinct Push was corrected without
+weakening trust policy (`green3.log`). No Task 5 target/CI/server fixture expansion.
+
+### Final validation and review-ready checkpoint
+
+Logs outside repository: `/tmp/manyhands-cycle05-task4-completion/`.
+- `devenv shell -- cargo test --locked --test ssh_transport synchronization_`:
+  final **19 real SSH cases passed** (`focused-final.log`);15 newly added cases
+  plus the4 retained successful candidate cases, not replayed/reimplemented tasks.
+- `devenv shell -- cargo test --locked --lib`:166 passed (`lib.log`).
+- `devenv shell -- cargo check --all-features --locked`:exit0 (`check.log`).
+- `devenv shell -- cargo fmt --check`:exit0 (`fmt.log`).
+- `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`:
+  exit0 (`clippy.log`).
+- `devenv shell -- cargo test --all-features --locked`:NORMAL final gate exit0
+  **598 standard +138 SSH =736 passed**, library166/discovery59/transport92
+  (`test.log`); once after final meaningful tree changes, no serialization/retry.
+- `devenv shell -- cargo run --locked --bin manyhands-cli`:exit0/no window
+  (`cli.log`). Final normal gate ended2026-10-06T17:30:54Z.
+- `git diff --check`:exit0; checkpoint leaves clean worktree/index.
+
+Task 4 assigned integration evidence is now complete and **review ready**, not
+independently accepted. Original-base..final-HEAD review diff/head/status artifacts
+regenerated at the same `/tmp/manyhands-cycle05-task4-review{.diff,-head.txt}`
+paths. Remaining Task 5 obligations ONLY: full two-clone publication matrix,
+receive-side effect/disconnect controls, full hostile durable-store/privacy
+matrix, focused new acceptance target and actual five-native-target CI after
+publication permission. Native CI/whole-Cycle review remain pending, never claimed
+from local Linux evidence. Stop after Task 4; independent reviewer is next gate.
