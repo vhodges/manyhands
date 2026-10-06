@@ -9,6 +9,38 @@ use std::{cell::Cell, path::Path};
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("synchronization_primary_service", primary_service),
     (
+        "synchronization_scope_prepare_endpoint_race",
+        scope_prepare_endpoint_race,
+    ),
+    (
+        "synchronization_initial_snapshot_not_rebased",
+        initial_snapshot_not_rebased,
+    ),
+    (
+        "synchronization_authenticated_action_snapshot",
+        authenticated_action_snapshot,
+    ),
+    (
+        "synchronization_prompt_action_snapshot_and_cancel",
+        prompt_action_snapshot_and_cancel,
+    ),
+    (
+        "synchronization_same_id_restart_endpoint_changed",
+        same_id_restart_endpoint_changed,
+    ),
+    (
+        "synchronization_before_push_endpoint_changed",
+        before_push_endpoint_changed,
+    ),
+    (
+        "synchronization_after_push_return_endpoint_changed",
+        after_push_return_endpoint_changed,
+    ),
+    (
+        "synchronization_cancelled_replay_before_config",
+        cancelled_replay_before_config,
+    ),
+    (
         "synchronization_cancel_before_transfer",
         cancel_before_transfer,
     ),
@@ -1167,5 +1199,421 @@ fn context_deleted_before_push() -> Result<(), FixtureError> {
     drop(hook);
     assert_eq!(target_state(&case.root, &context.worktree)?, before);
     assert!(server.find_reference(CONTEXT_REF).is_err());
+    Ok(())
+}
+
+// Both endpoints are independently preapproved. Tests compare owned refs/bytes
+// without persisting or formatting raw endpoints or server text.
+fn alternate_push(case: &Case) -> Result<SshRemoteFixture, FixtureError> {
+    let destination = SshRemoteFixture::start()?;
+    let (mut session, _) = session(vec![]);
+    trust_push_destination(case, &destination, &mut session)?;
+    let server = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+    fixed(fixed(server.find_reference("refs/heads/main"))?.delete())?;
+    fixed(fixed(git2::Repository::open(&case.root))?.remote_set_pushurl("origin", None))?;
+    Ok(destination)
+}
+fn same_id_restart_endpoint_changed() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let req = request(&case);
+    let db = database(&case)?;
+    fixed(db.execute_batch("CREATE TRIGGER fail_fetch_batch BEFORE INSERT ON remote_observation_batches BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
+    let before = target_state(&case.root, &case.root)?;
+    let (mut session, _) = session(vec![]);
+    assert!(
+        case.service
+            .synchronize_remote(req.clone(), &mut session)
+            .is_err()
+    );
+    let old: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    let record = fixed(case.service.active_remote_operation(&case.root))?.ok_or(FixtureError)?;
+    assert_eq!(record.phase(), RemoteOperationPhase::FetchPrepared);
+    fixed(db.execute_batch("DROP TRIGGER fail_fetch_batch"))?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let effects = case.fixture.accepted_keys().len();
+    let other_effects = destination.accepted_keys().len();
+    let mut restart = req.clone();
+    restart.restart = true;
+    restart.approval = None;
+    assert!(
+        case.service
+            .synchronize_remote(restart, &mut session)
+            .is_err()
+    );
+    let current: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_polling_state",
+        [],
+        |r| r.get(0),
+    ))?;
+    let retained: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    assert!(current > old);
+    assert_eq!(retained, old);
+    assert_eq!(case.fixture.accepted_keys().len(), effects);
+    assert_eq!(destination.accepted_keys().len(), other_effects);
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    assert!(
+        fixed(git2::Repository::open_bare(destination.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    Ok(())
+}
+fn before_push_endpoint_changed() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let root = case.root.clone();
+    let endpoint = destination.url();
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforePush {
+            git2::Repository::open(&root)
+                .unwrap()
+                .remote_set_pushurl("origin", Some(&endpoint))
+                .unwrap();
+        }
+    });
+    let before = target_state(&case.root, &case.root)?;
+    let (mut session, _) = session(vec![]);
+    let mut req = request(&case);
+    req.approval = None;
+    assert!(
+        case.service
+            .synchronize_remote(req.clone(), &mut session)
+            .is_err()
+    );
+    drop(hook);
+    let server = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+    assert!(server.find_reference("refs/heads/main").is_err());
+    assert_eq!(
+        fixed(
+            fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
+                .refname_to_id("refs/heads/main")
+        )?,
+        case.fixture.commit_id()
+    );
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    let db = database(&case)?;
+    let (checkpoint,authority):(String,Option<String>)=fixed(db.query_row("SELECT sync_checkpoint,authoritative_kind FROM remote_operation_records WHERE operation_ulid=?1",[req.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+    assert_eq!(checkpoint, "push_prepared");
+    assert!(authority.is_none());
+    Ok(())
+}
+fn after_push_return_endpoint_changed() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    let candidate = fixed(repo.refname_to_id("refs/heads/main"))?;
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let plan = fixed(RemoteRefPlan::from_configuration("origin", "main"))?;
+    let (mut session, _) = session(vec![]);
+    let mut transport = case.request();
+    transport.direction = SshDirection::Push;
+    transport.approval = None;
+    fixed(
+        case.service
+            .with_authenticated_remote(transport, &mut session, |r| {
+                r.push_exact(&plan, &SynchronizationTarget::Primary)
+            }),
+    )?;
+    fixed(repo.remote_set_pushurl("origin", None))?;
+    let root = case.root.clone();
+    let source = case.fixture.repository_path().to_owned();
+    let endpoint = destination.url();
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::AfterPushReturn {
+            let server = git2::Repository::open_bare(&source).unwrap();
+            assert_eq!(server.refname_to_id("refs/heads/main").unwrap(), candidate);
+            server
+                .find_reference("refs/heads/main")
+                .unwrap()
+                .delete()
+                .unwrap();
+            git2::Repository::open(&root)
+                .unwrap()
+                .remote_set_pushurl("origin", Some(&endpoint))
+                .unwrap();
+        }
+    });
+    let before = target_state(&case.root, &case.root)?;
+    let mut req = request(&case);
+    req.approval = None;
+    assert!(matches!(
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(hook);
+    assert!(
+        fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    assert_eq!(
+        fixed(
+            fixed(git2::Repository::open_bare(destination.repository_path()))?
+                .refname_to_id("refs/heads/main")
+        )?,
+        candidate
+    );
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    let (checkpoint,authority,oid):(String,Option<String>,Option<String>)=fixed(database(&case)?.query_row("SELECT sync_checkpoint,authoritative_kind,push_oid FROM remote_operation_records WHERE operation_ulid=?1",[req.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+    assert_eq!(checkpoint, "push_returned");
+    assert!(authority.is_none());
+    assert_eq!(oid, Some(candidate.to_string()));
+    Ok(())
+}
+fn cancelled_replay_before_config() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let req = request(&case);
+    let id = req.operation_id;
+    let root = case.root.clone();
+    let other = fixed(RepositoryService::open_at(
+        &case.directory.path().join("data"),
+    ))?;
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforeFetch {
+            other.cancel_remote_operation(&root, id).unwrap();
+        }
+    });
+    let (mut session, _) = session(vec![]);
+    assert!(matches!(
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::Interrupted)
+    ));
+    drop(hook);
+    fixed(std::fs::write(
+        case.root.join(".manyhands/config.toml"),
+        b"invalid configuration",
+    ))?;
+    let effects = case.fixture.accepted_keys().len();
+    let mut restart = req;
+    restart.restart = true;
+    assert!(matches!(
+        case.service.synchronize_remote(restart, &mut session),
+        Err(SynchronizationError::Interrupted)
+    ));
+    assert_eq!(case.fixture.accepted_keys().len(), effects);
+    Ok(())
+}
+fn initial_snapshot_not_rebased() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let root = case.root.clone();
+    let endpoint = destination.url();
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforeFetch {
+            git2::Repository::open(&root)
+                .unwrap()
+                .remote_set_pushurl("origin", Some(&endpoint))
+                .unwrap();
+        }
+    });
+    let req = request(&case);
+    let before = target_state(&case.root, &case.root)?;
+    let effects = case.fixture.accepted_keys().len();
+    let other_effects = destination.accepted_keys().len();
+    let (mut session, _) = session(vec![]);
+    assert!(matches!(
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    drop(hook);
+    assert_eq!(case.fixture.accepted_keys().len(), effects);
+    assert_eq!(destination.accepted_keys().len(), other_effects);
+    let db = database(&case)?;
+    let old: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    let mut restart = req;
+    restart.restart = true;
+    restart.approval = None;
+    assert!(matches!(
+        case.service.synchronize_remote(restart, &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    let new: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_polling_state",
+        [],
+        |r| r.get(0),
+    ))?;
+    assert!(new > old);
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    assert!(
+        fixed(git2::Repository::open_bare(destination.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    Ok(())
+}
+fn authenticated_action_snapshot() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    // Keep Push explicitly pinned to A; alter only Fetch during Push auth. The
+    // per-call Push endpoint remains valid, but the whole action snapshot does not.
+    fixed(repo.remote_set_pushurl("origin", Some(&case.fixture.url())))?;
+    let pushing = std::rc::Rc::new(Cell::new(false));
+    let stage = pushing.clone();
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforePush {
+            stage.set(true);
+        }
+    });
+    let root = case.root.clone();
+    let endpoint = destination.url();
+    let changed = Cell::new(false);
+    let transport_hook =
+        crate::repository::transport::operation_tests::install_hook(move |point| {
+            if point == crate::repository::transport::operation_tests::Checkpoint::Authenticated
+                && pushing.get()
+                && !changed.replace(true)
+            {
+                git2::Repository::open(&root)
+                    .unwrap()
+                    .remote_set_url("origin", &endpoint)
+                    .unwrap();
+            }
+        });
+    let before = target_state(&case.root, &case.root)?;
+    let (mut session, _) = session(vec![]);
+    let mut req = request(&case);
+    req.approval = None;
+    assert!(matches!(
+        case.service.synchronize_remote(req, &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(transport_hook);
+    drop(hook);
+    assert_eq!(
+        fixed(
+            fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
+                .refname_to_id("refs/heads/main")
+        )?,
+        case.fixture.commit_id()
+    );
+    assert!(
+        fixed(git2::Repository::open_bare(destination.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    Ok(())
+}
+fn prompt_action_snapshot_and_cancel() -> Result<(), FixtureError> {
+    for cancel in [false, true] {
+        let case = prepare()?;
+        let destination = alternate_push(&case)?;
+        let key = fixed(ssh_key::PrivateKey::read_openssh_file(
+            case.fixture.client_key_path(),
+        ))?;
+        let encrypted = fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?;
+        fixed(std::fs::write(
+            case.fixture.client_key_path(),
+            fixed(encrypted.to_openssh(ssh_key::LineEnding::LF))?.as_bytes(),
+        ))?;
+        let req = request(&case);
+        let id = req.operation_id;
+        let root = case.root.clone();
+        let endpoint = destination.url();
+        let other = fixed(RepositoryService::open_at(
+            &case.directory.path().join("data"),
+        ))?;
+        let hook = crate::repository::transport::operation_tests::install_hook(move |point| {
+            if point == crate::repository::transport::operation_tests::Checkpoint::ProviderReturned
+            {
+                if cancel {
+                    other.cancel_remote_operation(&root, id).unwrap();
+                } else {
+                    git2::Repository::open(&root)
+                        .unwrap()
+                        .remote_set_pushurl("origin", Some(&endpoint))
+                        .unwrap();
+                }
+            }
+        });
+        let before = target_state(&case.root, &case.root)?;
+        let (mut session, prompts) = session(vec![secret(PASSWORD)]);
+        let result = case.service.synchronize_remote(req, &mut session);
+        if cancel {
+            assert!(matches!(result, Err(SynchronizationError::Interrupted)));
+        } else {
+            assert!(matches!(result, Err(SynchronizationError::ExternalChange)));
+        }
+        drop(hook);
+        assert_eq!(prompts.borrow().len(), 1);
+        assert_eq!(target_state(&case.root, &case.root)?, before);
+        assert!(
+            fixed(git2::Repository::open_bare(destination.repository_path()))?
+                .find_reference("refs/heads/main")
+                .is_err()
+        );
+    }
+    Ok(())
+}
+fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let pushing = std::rc::Rc::new(Cell::new(false));
+    let stage = pushing.clone();
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforePush {
+            stage.set(true);
+        }
+    });
+    let root = case.root.clone();
+    let endpoint = destination.url();
+    let changed = Cell::new(false);
+    let attempts = std::rc::Rc::new(Cell::new(0));
+    let pushes = attempts.clone();
+    let transport_hook =
+        crate::repository::transport::operation_tests::install_hook(move |point| {
+            use crate::repository::transport::operation_tests::Checkpoint as C;
+            if point == C::ActionSnapshotChecked && pushing.get() && !changed.replace(true) {
+                git2::Repository::open(&root)
+                    .unwrap()
+                    .remote_set_pushurl("origin", Some(&endpoint))
+                    .unwrap();
+            }
+            if point == C::ExactPushStarted {
+                pushes.set(pushes.get() + 1);
+            }
+        });
+    let before = target_state(&case.root, &case.root)?;
+    let effects = destination.accepted_keys().len();
+    let (mut session, prompts) = session(vec![]);
+    let mut req = request(&case);
+    req.approval = None;
+    assert!(matches!(
+        case.service.synchronize_remote(req, &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(transport_hook);
+    drop(hook);
+    assert_eq!(attempts.get(), 0);
+    assert_eq!(prompts.borrow().len(), 0);
+    assert_eq!(destination.accepted_keys().len(), effects);
+    assert_eq!(
+        fixed(
+            fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
+                .refname_to_id("refs/heads/main")
+        )?,
+        case.fixture.commit_id()
+    );
+    assert!(
+        fixed(git2::Repository::open_bare(destination.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    assert_eq!(target_state(&case.root, &case.root)?, before);
     Ok(())
 }

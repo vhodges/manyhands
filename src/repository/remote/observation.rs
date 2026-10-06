@@ -14,6 +14,24 @@ pub(super) struct ObservationConfiguration {
 }
 
 impl ObservationConfiguration {
+    pub(super) fn transport_expectation(
+        &self,
+        direction: SshDirection,
+    ) -> Option<crate::repository::transport::SshScopeExpectation> {
+        Some(crate::repository::transport::SshScopeExpectation::new(
+            self.endpoint(direction)?.clone(),
+            self.selected.clone(),
+        ))
+    }
+    fn endpoint(
+        &self,
+        direction: SshDirection,
+    ) -> Option<&crate::repository::transport::endpoint::SshEndpoint> {
+        match direction {
+            SshDirection::Fetch => self.fetch.as_ref().ok(),
+            SshDirection::Push => self.push.as_ref().ok(),
+        }
+    }
     // Only validated public SSH locator metadata enters this digest. Endpoint
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.

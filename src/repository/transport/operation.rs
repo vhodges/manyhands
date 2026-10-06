@@ -31,11 +31,42 @@ impl RepositoryService {
         self.with_authenticated_remote_policy(request, session, false, use_remote)
     }
 
+    /// Synchronization supplies its frozen action endpoint. Reject a newly
+    /// resolved destination before authentication/prompts, not only before effects.
+    pub(in super::super) fn with_authenticated_remote_expected<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        expectation: &SshScopeExpectation,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_policy_expected(
+            request,
+            session,
+            false,
+            Some(expectation),
+            use_remote,
+        )
+    }
+
     pub(crate) fn with_authenticated_remote_policy<P: SessionCredentialProvider, T>(
         &self,
         request: VerifySshTransportRequest,
         session: &mut SessionCredentials<P>,
         automatic: bool,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_policy_expected(
+            request, session, automatic, None, use_remote,
+        )
+    }
+
+    fn with_authenticated_remote_policy_expected<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        automatic: bool,
+        expectation: Option<&SshScopeExpectation>,
         use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
     ) -> Result<T, SshTransportError> {
         let mut context = SshTransportError {
@@ -56,6 +87,12 @@ impl RepositoryService {
                 return Err(context.with_kind(kind));
             }
         };
+        if let Some(expectation) = expectation
+            && let Err(kind) = expectation.check(&prepared)
+        {
+            invalidate_preflight_session(session, &kind);
+            return Err(context.with_kind(kind));
+        }
         let unlock = UnlockRequest {
             key_id: prepared.registration.id,
             label: prepared.registration.label.clone(),

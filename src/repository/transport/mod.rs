@@ -9,6 +9,7 @@ mod operation;
 #[cfg(test)]
 pub(crate) mod operation_tests;
 mod remote;
+pub(super) use remote::AuthenticatedSshRemote;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(super) mod trust;
@@ -18,6 +19,37 @@ use std::path::PathBuf;
 pub use error::{SshTransportError, SshTransportErrorKind};
 
 use super::SharedKeyId;
+
+/// Process-only action expectation. No Debug/serialization or secret material.
+pub(super) struct SshScopeExpectation {
+    pub(super) endpoint: endpoint::SshEndpoint,
+    selected: Option<(SharedKeyId, PathBuf, Option<super::keys::KeySourceToken>)>,
+}
+impl SshScopeExpectation {
+    pub(super) fn new(
+        endpoint: endpoint::SshEndpoint,
+        selected: Option<(SharedKeyId, PathBuf, Option<super::keys::KeySourceToken>)>,
+    ) -> Self {
+        Self { endpoint, selected }
+    }
+    pub(super) fn check(&self, prepared: &PreparedSshAttempt) -> Result<(), SshTransportErrorKind> {
+        if self.endpoint != prepared.endpoint {
+            return Err(SshTransportErrorKind::EndpointChanged);
+        }
+        let Some((id, path, source)) = &self.selected else {
+            return Err(SshTransportErrorKind::SelectionChanged);
+        };
+        if *id != prepared.registration.id {
+            return Err(SshTransportErrorKind::SelectionChanged);
+        }
+        if path != &prepared.registration.private_key_path
+            || source.as_ref() != Some(&prepared.source)
+        {
+            return Err(SshTransportErrorKind::KeySourceChanged);
+        }
+        Ok(())
+    }
+}
 
 // Constructed by the scoped operation driver; no Git handles or secret storage.
 pub(super) struct PreparedSshAttempt {

@@ -923,3 +923,79 @@ receive-side effect/disconnect controls, full hostile durable-store/privacy
 matrix, focused new acceptance target and actual five-native-target CI after
 publication permission. Native CI/whole-Cycle review remain pending, never claimed
 from local Linux evidence. Stop after Task 4; independent reviewer is next gate.
+
+## Task 4 independent review BLOCK and endpoint correction — 2026-10-06T18:09:22Z
+
+Independent reviewer blocked clean completion HEAD
+`46e5ad835aca3b9a624a87852bcfe35d03206f6d`, exact original-base range
+`5ee6bd8e3b0b5c8b2812f177560cd7002fb52454..46e5ad835aca3b9a624a87852bcfe35d03206f6d`.
+Report: task4-completion/review.md in the retained review artifact directory.
+Prior acceptance rejection, review BLOCK and successful721/736-case evidence
+remain retained, not relabelled as review acceptance. Parent authorized ONLY
+both P1 corrections and demonstrated same-invariant proofs; Task 5 not started.
+No worktree/branch/rebase/stash/reset/clean/publication/merge/closure/cleanup.
+
+### Findings disposition and exact public-service red/green proofs
+
+| Review finding / invariant | Correction and actual named proof |
+| --- | --- |
+| P1.1 same-ID restart can adopt changed pushurl under old generation | `synchronization_same_id_restart_endpoint_changed`: inject complete-Fetch batch persistence failure to leave FetchPrepared; change ONLY pushurl to a separately pretrusted independent destination with absent primary; explicit same-ID restart fails, current generation increases, immutable old row generation remains, neither endpoint receives new auth, actual local refs/index/bytes unchanged and new destination absent. |
+| P1.2 BeforePush can redirect effect to endpoint lacking prior proof | `synchronization_before_push_endpoint_changed`: actual hook redirects A->B at BeforePush; service rejects, B primary remains absent, A retains original OID, bytes/refs/index preserved, durable PushPrepared/candidate retained and no authority. |
+| P1.2 AfterPushReturn can fabricate publication from B equality | `synchronization_after_push_return_endpoint_changed`: real A acceptance asserted inside hook, delete A primary and redirect to independently trusted B already holding candidate; service returns RecoveryRequired, retains PushReturned/candidate with NULL authority, preserves A absence/B equality/local bytes and performs no discovery. |
+| Frozen generation-establishing snapshot, not recaptured baseline | `synchronization_initial_snapshot_not_rebased`: BeforeFetch changes endpoint after snapshot/generation establishment; first call rejects without SSH; same-ID restart fences by advancing current generation rather than adopting new baseline. |
+| Outer check is insufficient; actual scope preparation must be pinned | `synchronization_scope_prepare_endpoint_race`: deterministic test-only ActionSnapshotChecked hook redirects between outer comparison and driver preparation; expected endpoint rejects BEFORE new authentication/prompts, zero typed push calls, both refs/local state preserved. |
+| Full snapshot check INSIDE authenticated scope | `synchronization_authenticated_action_snapshot`: Push remains explicitly pinned A but Fetch configuration changes during Push Authenticated hook; per-call Push endpoint still valid; full action expectation rejects before effect, no false authority or local change. |
+| Credential prompt and cancellation boundary | `synchronization_prompt_action_snapshot_and_cancel`: selected encrypted key prompts once; provider-return hook changes Push endpoint or cancels owned action; scope rejects/cancels before transfer effects, preserving physical state and remote absence. |
+| Cancelled replay must precede live config inspection | `synchronization_cancelled_replay_before_config`: cancelled exact ID then invalid live config; explicit replay stays Interrupted and SSH-free. |
+
+All four initial service regressions failed red on their intended assertions
+before implementation (`red-{same_id_restart_endpoint_changed,before_push_endpoint_changed,
+after_push_return_endpoint_changed,cancelled_replay_before_config}.log`). Tests
+were not weakened. Additional scope/prompt proofs cover the same invariant. The
+only intermediate warnings were private-interface visibility for the narrow
+expectation bridge; visibility was reduced to repository scope, not suppressed.
+
+### Narrow implementation
+
+- Same-ID terminal/authoritative/incomplete inspection stays ahead of configuration
+  reads. For a nonauthoritative explicit restart, configure_endpoints reconciles
+  actual digest/generation BEFORE restart ownership. Old action generation is
+  immutable. The exact snapshot establishing generation is retained in process.
+- One synchronization scope helper wraps ALL action network calls. It checks owned
+  cancellation/generation and original full configuration before/after calls and
+  inside the authenticated closure after prompts. A process-only SshScopeExpectation
+  binds endpoint plus selected ID/path/source to actual preparation before auth;
+  the adapter validates the actual anonymous remote handle against that expectation.
+  No raw endpoint/path/key/passphrase appears in records/errors or Debug.
+- Before/after Push effects and fresh verification cannot re-resolve a new action
+  baseline. Endpoint change after possible acceptance retains intent and returns
+  recovery. Original snapshot checks precede durable verification/classification.
+  No rollback/reset/clear/false publication/index handoff. Existing generation-
+  qualified Push-history guard and frozen local-only matcher remain intact.
+- Existing ordinary transport entry points delegate with no expectation; their
+  selected-key/reconnect/host-trust policy is unchanged. No schema/journal/public
+  API/dependency/frontend/Task5 target/receive fixture/nativeCI expansion.
+
+### Validation / review-ready correction
+
+Logs outside repository: `/tmp/manyhands-cycle05-task4-endpoint-fixes/`.
+- Focused service: `devenv shell -- cargo test --locked --test ssh_transport
+  synchronization_`:27 passed (`focused-final.log`),8 added +19 retained cases.
+- Relevant library:166 passed (`lib.log`, before final expectation refinement;
+  final normal gate independently passes166 on final tree).
+- Final `devenv shell -- cargo check --all-features --locked`:exit0,
+  `cargo fmt --check`:exit0, `cargo clippy --all-targets --all-features --locked
+  -- -D warnings`:exit0 (`{check,fmt,clippy}-final.log`).
+- Final NORMAL `devenv shell -- cargo test --all-features --locked`:exit0,
+  **598 standard +146 SSH =744 passed**, library166/discovery59/transport100
+  (`test.log`); once after final meaningful changes, no serialized/ignored retry.
+- CLI `devenv shell -- cargo run --locked --bin manyhands-cli`:exit0/no window
+  (`cli.log`). Final gate ended2026-10-06T18:09:22Z.
+- `git diff --check`:exit0; coherent correction commit leaves clean index/worktree.
+
+Both P1s have source corrections and actual red/green proofs; disposition is
+**corrected, pending independent re-review**, NOT self-accepted. Original-base
+review diff/head artifacts regenerated at the same task4-review paths, plus
+focused46e5..correction diff. Client counters/real ref observations do not claim
+receive-side transaction/disconnect proof. Task5 full fixture/privacy/nativeCI
+and whole-Cycle review remain pending; ticket stays open. Stop after Task4.

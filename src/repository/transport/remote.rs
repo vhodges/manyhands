@@ -51,6 +51,35 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             trust,
         }
     }
+    /// Pin the actual authenticated handle to the action's original endpoint;
+    /// subsequent typed reconnects continue using this handle and prepared policy.
+    pub(in super::super) fn require_action_expectation(
+        &self,
+        expected: &SshScopeExpectation,
+    ) -> Result<(), SshTransportError> {
+        self.service
+            .recheck_ssh(self.prepared, self.context)
+            .map_err(|kind| self.context.with_kind(kind))?;
+        self.recheck_trust()?;
+        let effective = match self.context.direction {
+            SshDirection::Fetch => self.remote.url(),
+            SshDirection::Push => self.remote.pushurl().or_else(|| self.remote.url()),
+        };
+        expected
+            .check(self.prepared)
+            .map_err(|kind| self.context.with_kind(kind))?;
+        if effective
+            .and_then(|url| super::endpoint::parse_ssh_endpoint(url).ok())
+            .as_ref()
+            != Some(&expected.endpoint)
+        {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::EndpointChanged));
+        }
+        Ok(())
+    }
+
     pub(crate) fn advertisement(&self) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         self.remote
             .list()

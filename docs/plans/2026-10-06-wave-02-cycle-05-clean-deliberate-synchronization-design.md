@@ -328,3 +328,28 @@ proof. Current process configuration is rechecked before applying that evidence.
 No schema, second journal, public confirmation, Fetch evidence or recovery/repair
 policy was added. Test counters describe client typed calls and real fresh Push
 advertisements, not receive-side transaction counts.
+
+### Task 4 review correction: immutable action configuration across scopes
+
+Independent review blocked the completion candidate for two endpoint-identity
+violations: same-ID restart could adopt current endpoints under an old generation,
+and BeforePush/AfterPushReturn hooks could redirect a later scoped call. The
+correction reconciles the actual endpoint digest before nonauthoritative restart
+ownership; changed generations fence the immutable old action. Authoritative,
+index-only, cancelled and ordinary incomplete replay remain ahead of mutable
+configuration inspection and perform no remote work.
+
+The snapshot that establishes generation is retained, never recaptured as a new
+baseline. Every synchronization Fetch/Push/object/verification scope receives a
+process-only expectation of its original direction endpoint and selected key
+source. Preparation rejects a different resolved endpoint/key/source BEFORE
+credentials/authentication. Inside the authenticated scope, owned requests and
+full action configuration are rechecked and the actual prepared remote handle
+is matched to that expectation before and after the typed operation. Existing
+per-call reconnect/trust/source checks remain mandatory. Original configuration
+is also rechecked before PushVerified and classification. An endpoint change
+after a possible accepted push retains PushPrepared/PushReturned/PushVerified
+intent as applicable and returns recovery, never equality-based authority from
+another endpoint, rollback or index handoff. Ordinary Cycle 03 scoped operations
+use no action expectation and retain their existing policy. No schema, journal,
+public API, dependency or raw endpoint/credential persistence was introduced.
