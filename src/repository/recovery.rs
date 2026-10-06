@@ -103,6 +103,8 @@ pub(super) fn migrate_operation_records(
             redacted_error TEXT
         );
         CREATE INDEX IF NOT EXISTS operation_records_root_path_idx ON operation_records(root_path, observed_at);
+        CREATE INDEX IF NOT EXISTS operation_records_pending_root ON operation_records(root_path) WHERE state != 'completed';
+        CREATE INDEX IF NOT EXISTS operation_records_id_lookup ON operation_records(operation_ulid) WHERE operation_ulid IS NOT NULL;
          CREATE UNIQUE INDEX IF NOT EXISTS operation_records_root_operation_ulid_idx
              ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
          CREATE TABLE IF NOT EXISTS operation_record_contexts (
@@ -212,6 +214,19 @@ pub(super) fn migrate_operation_records(
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
+/// Remote reservations cannot consume, replace or reinterpret local recovery.
+pub(super) fn require_no_pending_local(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')",
+        [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+    if pending {
+        return Err(super::remote::state::recovery_required());
+    }
+    Ok(())
+}
+
 pub(super) fn begin_or_reconcile_operation(
     connection: &mut Connection,
     root: &Path,
@@ -227,6 +242,12 @@ pub(super) fn begin_or_reconcile_operation(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    let remote_active: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting'))",
+        [root_path], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+    if remote_active {
+        return Err(super::remote::state::recovery_required());
+    }
     let existing = transaction
         .query_row(
             "SELECT id, root_path, action, target, state, completed_step FROM operation_records WHERE operation_ulid = ?1",

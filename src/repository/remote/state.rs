@@ -123,6 +123,49 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
             )
             .map_err(|_| recovery_required())?;
     }
+    // Additive upgrade from the immutable Task 2 audit envelope.
+    let columns = transaction
+        .prepare("PRAGMA table_info(remote_operation_records)")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    let reservation_columns = ["yield_requested", "cancel_requested", "owner_epoch"];
+    let existing_reservation_columns = reservation_columns
+        .iter()
+        .filter(|name| columns.iter().any(|column| column == **name))
+        .count();
+    if existing_reservation_columns != 0
+        && existing_reservation_columns != reservation_columns.len()
+    {
+        return Err(recovery_required());
+    }
+    for (name, definition) in [
+        (
+            "yield_requested",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(yield_requested IN (0,1))",
+        ),
+        (
+            "cancel_requested",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1))",
+        ),
+        (
+            "owner_epoch",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(owner_epoch >= 0)",
+        ),
+    ] {
+        if !columns.iter().any(|column| column == name) {
+            transaction
+                .execute_batch(&format!(
+                    "ALTER TABLE remote_operation_records ADD COLUMN {name} {definition}"
+                ))
+                .map_err(|_| recovery_required())?;
+        }
+    }
+    transaction.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting')")
+        .map_err(|_| recovery_required())?;
     Ok(())
 }
 
@@ -664,7 +707,7 @@ fn outcome(value: &str) -> Result<RemoteOutcomeCategory, RepositoryError> {
     })
 }
 
-fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
+pub(super) fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
     match value {
         RemoteOutcomeCategory::Completed => "completed",
         RemoteOutcomeCategory::ConfigurationRequired => "configuration_required",
@@ -827,6 +870,9 @@ pub(in super::super) struct StoredRemoteOperation {
     pub created_at: i64,
     pub updated_at: i64,
     pub outcome: Option<RemoteOutcomeCategory>,
+    pub yield_requested: bool,
+    pub cancel_requested: bool,
+    pub owner_epoch: i64,
 }
 
 fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, RepositoryError> {
@@ -905,9 +951,13 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
     let updated_at = number("updated_at")?;
     let generation = number("configuration_generation")?;
     let local_oid = oid(optional("local_oid")?)?;
+    let owner_epoch = number("owner_epoch")?;
     if created_at < 0
         || updated_at < created_at
         || generation < 0
+        || owner_epoch < 0
+        || (priority == RemoteOperationPriority::Poll
+            && target.action() != RemoteOperationAction::Poll)
         || (target.action() == RemoteOperationAction::Poll && local_oid.is_some())
     {
         return Err(recovery_required());
@@ -927,6 +977,9 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         created_at,
         updated_at,
         outcome: optional("outcome")?.as_deref().map(outcome).transpose()?,
+        yield_requested: flag(number("yield_requested")?)?,
+        cancel_requested: flag(number("cancel_requested")?)?,
+        owner_epoch,
     })
 }
 
@@ -937,7 +990,7 @@ pub(in super::super) fn read_operations(
     read_operation_rows(connection, repository_id, false)
 }
 
-fn read_operation_rows(
+pub(super) fn read_operation_rows(
     connection: &Connection,
     repository_id: i64,
     active_only: bool,
@@ -957,6 +1010,29 @@ fn read_operation_rows(
         .map_err(|_| recovery_required())?
         .into_iter()
         .collect()
+}
+
+pub(super) fn read_operation(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<StoredRemoteOperation>, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT * FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2",
+            params![repository_id, operation_id.to_string()],
+            |row| Ok(operation_from_row(row)),
+        )
+        .optional()
+        .map_err(|_| recovery_required())?
+        .transpose()
+}
+
+pub(super) fn generation(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<i64, RepositoryError> {
+    Ok(read_policy(connection, repository_id)?.generation)
 }
 
 /// Inserts a validated immutable audit envelope. Arbitration and transitions

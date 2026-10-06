@@ -1,5 +1,10 @@
 mod refs;
+pub(super) mod reservation;
 pub(super) mod state;
+
+pub use reservation::{
+    RemoteOperationInspection, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
+};
 
 pub use refs::{RemoteRefClassification, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget};
 pub use state::{

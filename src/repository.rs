@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -53,11 +53,13 @@ use recovery::{
 };
 pub use remote::{
     AutomaticBackoff, PollingInterval, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationOutcome, RemoteOperationAction, RemoteOperationPhase, RemoteOperationPriority,
-    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
-    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
-    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
-    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteSnapshot,
+    RemoteObservationOutcome, RemoteOperationAction, RemoteOperationInspection,
+    RemoteOperationPhase, RemoteOperationPriority, RemoteOperationSafePoint, RemoteOperationTarget,
+    RemoteOperationTargetError, RemoteOutcomeCategory, RemotePollInvocation,
+    RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
+    RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
+    RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
+    RemoteSnapshot,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -199,6 +201,7 @@ impl<T> IndexPending<T> {
 
 pub struct RepositoryService {
     registry_path: PathBuf,
+    remote_reservation_scope: Arc<()>,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
@@ -2946,6 +2949,7 @@ impl RepositoryService {
 
         Ok(Self {
             registry_path,
+            remote_reservation_scope: Arc::new(()),
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
             lifecycle_lease_hook: Mutex::new(None),
