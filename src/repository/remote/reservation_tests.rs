@@ -437,3 +437,154 @@ fn local_recovery_guard_work_is_bounded_with_retained_history() {
         work.get()
     );
 }
+
+// Catches treating an acknowledged yield as a fresh request forever.
+#[test]
+fn acknowledged_yield_restarts_unfinished_poll_with_a_new_fenced_owner() {
+    let (data, root, service) = fixture();
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    let background = reserve(&service, root.path());
+    let target = RemoteOperationTarget::for_poll(&plan());
+    let manual_id = OperationId::new();
+    assert!(matches!(
+        other
+            .reserve_remote_operation_with_priority(
+                root.path(),
+                manual_id,
+                &target,
+                RemoteOperationPriority::Manual
+            )
+            .unwrap(),
+        RemoteReservationOutcome::PollYielding
+    ));
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &background,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+    let manual = match other
+        .reserve_remote_operation_with_priority(
+            root.path(),
+            manual_id,
+            &target,
+            RemoteOperationPriority::Manual,
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(token) => token,
+        result => panic!("{result:?}"),
+    };
+    publish(&other, root.path(), &manual);
+    other
+        .finish_remote_operation(root.path(), &manual, RemoteOutcomeCategory::Completed)
+        .unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    let restarted = match service
+        .restart_remote_observation(root.path(), background.operation_id(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(token) => token,
+        result => panic!("acknowledged yield must restart unfinished polling: {result:?}"),
+    };
+    let active = service
+        .active_remote_operation(root.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.operation_id(), background.operation_id());
+    assert_eq!(active.phase(), RemoteOperationPhase::Reserved);
+    assert!(!active.yield_requested());
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &background,
+                RemoteOperationSafePoint::BeforeTransport
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &restarted,
+                RemoteOperationSafePoint::BeforeTransport
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid=?1",
+                [background.operation_id().to_string()],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    service
+        .cancel_remote_operation(root.path(), restarted.operation_id())
+        .unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &restarted,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert!(
+        matches!(service.restart_remote_observation(root.path(),restarted.operation_id(),&target).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Cancelled)
+    );
+}
+
+// Catches retrying a previously committed advertisement after an acknowledged yield.
+#[test]
+fn acknowledged_yield_after_batch_commit_replays_completed_evidence() {
+    let (_data, root, service) = fixture();
+    let background = reserve(&service, root.path());
+    publish(&service, root.path(), &background);
+    let before = service.remote_snapshot(root.path()).unwrap();
+    assert!(matches!(
+        service
+            .reserve_remote_operation_with_priority(
+                root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan()),
+                RemoteOperationPriority::Manual
+            )
+            .unwrap(),
+        RemoteReservationOutcome::PollYielding
+    ));
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &background,
+                RemoteOperationSafePoint::AfterBatchCommit
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+    assert!(
+        matches!(service.restart_remote_observation(root.path(),background.operation_id(),&RemoteOperationTarget::for_poll(&plan())).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Completed)
+    );
+    assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+}

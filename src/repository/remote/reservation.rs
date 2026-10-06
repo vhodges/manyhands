@@ -405,9 +405,10 @@ impl RepositoryService {
             {
                 return Ok(RemoteReservationOutcome::Busy);
             }
-            // A restart itself is before any new transport. Pending requests are
-            // acknowledged here, never cleared to make a restarted poll proceed.
-            if record.cancel_requested || record.yield_requested {
+            // A restart itself is before any new transport. A yield on an
+            // active row is pending; Interrupted already durably acknowledged
+            // it. Cancellation remains terminal and is never cleared here.
+            if record.cancel_requested || record.yield_requested && active(record.phase) {
                 acknowledge(
                     tx,
                     &record,
@@ -422,7 +423,7 @@ impl RepositoryService {
                     .owner_epoch
                     .checked_add(1)
                     .ok_or_else(state::recovery_required)?;
-                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
+                tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
                     params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
                 let restarted = state::read_operation(tx, id, operation_id)?
                     .ok_or_else(state::recovery_required)?;
