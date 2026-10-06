@@ -51,6 +51,10 @@ Follow adjacent document frontmatter, naming, and cross-link conventions:
   ordered tasks with exact files, contracts, meaningful tests, verification
   commands, dependency order, and ticket checkpoints.
 
+After project grounding and drafting the artifacts, use
+[review-cycle-docs](../review-cycle-docs/SKILL.md) to audit their decisions before
+requesting approval. Follow its review and approval-output requirements.
+
 Review consistency across the three documents, existing APIs, and test/CI
 capabilities. Flag platform checks that require native runners. Do not describe
 future verification as completed evidence.
