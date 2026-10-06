@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
 title: "Wave 02 Cycle 03: Authenticated SSH Transport"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -33,7 +33,8 @@ The user approved scope, design, and plan on 2026-10-05, including Q1–Q3 and
 10,000/30,000 ms timeout defaults and the documented per-address/per-blocking-call
 backend limits. The pre-thread bootstrap and test-host design were implemented
 before the connection-driver task. Task/review state is recorded in
-the plan-specific execution ledger and ticket comments; the ticket remains open.
+the plan-specific execution ledger and ticket comments; the ticket is closed
+after the merged-PR reconciliation below.
 
 Latest Rust revision `bbeef25` passes all four required Devenv gates: 585 tests,
 including 31 Unix SSH fixture and 45 transport cases, with no failures or ignored
@@ -61,8 +62,12 @@ The plan additionally proves real push, host-pin precedence, imported backend
 validation, rejection-driven session eviction, and native encrypted Ed25519 use.
 Post-transfer failure recovery belongs to subsequent lifecycle Cycles.
 
-Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) is open. All five
-native targets passed on `e75e768` in [run 37390262561](https://github.com/vhodges/manyhands/actions/runs/37390262561).
-The macOS signal-isolation correction passed 90 probe cases and three permanent
-regressions. Cleanup `bbeef25` passed independent review and all required local gates. The
-final published revision receives normal PR checks; the ticket stays open.
+Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) merged into
+`main` as `5f5bac0` on 2026-10-06. All five native targets passed on the final
+published head `dbda637` in [run 37391879620](https://github.com/vhodges/manyhands/actions/runs/37391879620).
+The macOS signal-isolation correction passed 90 investigative probe cases and
+three permanent regressions before temporary diagnostic cleanup. Cleanup
+`bbeef25` passed independent review and all required local gates; the final
+native log confirms the permanent regressions remain and temporary diagnostics
+are absent. The ticket is closed in the post-merge reconciliation requested by
+the user.
