@@ -63,8 +63,8 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 | Task | State | Implementation range / evidence | Independent review | Next action |
 | --- | --- | --- | --- | --- |
 | 1 preflight/baseline | complete | Six commands passed at `a416d83`, unchanged source/lockfile; evidence below | READY (`c0df9b7e`) | No repeat broad checks until Rust/dependencies change. |
-| 2 API inventory | corrected; review output retry pending | Inventory `83572f7`; fixes `6d4e631..0906c3e`, sole-file correction | Reviewer content says ready, but run `44c2bbf7` failed required-output delivery | Retry fresh read-only review with ordinary Markdown report; Task 3 remains gated. |
-| 3 candidate/graph | pending | none | pending | Resolve exact 0.10.0 without changing locked GPUI identity. |
+| 2 API inventory | complete for provisional baseline | Inventory `83572f7`; fixes `6d4e631..0906c3e`, sole-file correction | READY / OK (`b91fbf14`), exact committed-range diff inspected | Final-main re-audit remains before W3 Cycle 01; Task 3 may start. |
+| 3 candidate/graph | dispatching | exact-pin/metadata/source/license gate only | pending | Resolve exact 0.10.0 without changing locked GPUI identity; no host implementation yet. |
 | 4 fixture/session | pending; Task 3-dependent executable target | none | pending | Build independent goldens and reject false/missing evidence. |
 | 5 native host | pending | none | pending | Embed editor using Kit and thin adapters only. |
 | 6 native evidence | pending | none | pending | Record actual input/readback and honest platform/performance gaps. |
@@ -155,8 +155,17 @@ an attempt to redo completed implementation. Do not repeat baseline/fixes.
 
 Artifacts for the failed pass are retained under workflow
 `e6282a86-cd83-4c72-bcbd-93249f9d7fce`: correction handoff and terminal workflow
-receipt, plus child `44c2bbf7`'s preserved reviewer output. Await successful
-review handoff before starting candidate dependencies.
+receipt, plus child `44c2bbf7`'s preserved reviewer output.
+
+Retry workflow `3755eb5f-7b1f-47b1-8a7e-f233e5198a83`, reviewer
+`b91fbf14-0281-4c89-abac-ff4be4952930`, successfully delivered ordinary Markdown
+and returned API correction gate READY / Merge verdict OK with no issues.
+The parent supplied the exact `6d4e631..0906c3e` correction diff when requested;
+SHA-256 `3b88ca71b492e595bd70c252bf62395b1e9c2afb8e98111d2de5320fc34389ef`.
+Reviewer inspected that committed blast radius and current source, not merely
+worker scope assertions or a clean working-tree diff. Parent accepts Task 2
+for the provisional baseline; final-main audit and missing APIs remain future
+obligations. Candidate dependency gate can now proceed.
 
 ## Verification policy
 
