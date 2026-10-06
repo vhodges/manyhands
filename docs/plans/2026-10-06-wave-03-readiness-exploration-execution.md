@@ -76,9 +76,9 @@ worktrees left untouched. Initial task/review commit IDs did not change.
 | Stage | Exact seam / owner | State / evidence | Next gate |
 | --- | --- | --- | --- |
 | S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | complete, `d22d6f4..3f3bc11`; 9 pure tests/fmt/headless check passed | READY / OK with notes (`91d02bab`); no native claims. |
-| S2 actual editor host | New serialized worker: example/host/adapter/catalog, example wiring, running report appendix | dispatching from accepted S1 | Compile exact entity/Kit seam, mandatory final Rust/CLI gates, fresh review. |
-| S3 user-visible desktop | Controller-owned actual launch and scratch observations | pending reviewed S2 | Keep demo open if available; actual readback/trace, not model-string evidence. |
-| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | pending | Named adoption work/transformations/limits; no editor or product-policy selection. |
+| S2 actual editor host | Separate serialized worker: example/host/adapter/catalog, example wiring, running report appendix | `41267b9..2c53127`, full Rust/CLI gates and 3 example tests pass; READY / OK with notes (`80df0c32`) | Two valid P2 wording/count corrections; functionality accepted for S3 launch, not adoption. |
+| S3 user-visible desktop | Controller-owned actual launch and scratch observations | running, owned PID/process group `3247260`; 5 initial ActualEditorReadback captures | Four repo docs equal originals on load, mixed math differs; user interaction/production smoke still pending. |
+| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | pending P2 corrections and final review | Named adoption work/transformations/limits; no editor or product-policy selection. |
 
 Small host adapters only; no GPUI upgrade, fork, vendoring, core rewrite or
 executable Velotype extraction. No original repo-doc writes, production/draft
@@ -120,6 +120,50 @@ logs/meta. Workflow `9fac10dd-eb5e-46ff-869b-dbdb34353747`, outputs
 `running-spike-s1/{handoff,review}.md`. Parent will dispatch the separate S2
 host owner now. Earlier workflow launch rejection (missing script block) created
 no child or code changes; clean `d22d6f4` verified before same-protocol retry.
+
+### S2 accepted code and S3 first actual launch
+
+S2 implementer `a3e098b3-2366-415c-938d-aa99b53ada40` committed only six owned
+example/Cargo-registration/report files in `2c53127f656cad2db75714fc0b5d727934ab0a11`.
+Exact compiled/tested tree `5cd2599d3faab428a018303a7f7529217e98beb0`, same S1
+lock hash; no helper/production/domain/CLI/Devenv/CI changes or core adaptations.
+Actual entity/context/render/style/action/table interfaces compile through Kit.
+S2 is 638 Rust LOC including controls/tests; actual adapter 126 and catalog 66.
+S1's 406 session/evidence bookkeeping LOC are separate from adoption adapters.
+
+All final committed check/fmt/clippy/test gates, focused example check/build,
+3 pure example tests, 9 probe tests, headless CLI check and CLI smoke passed.
+Parent independently summed standard-harness summaries: **568** passes including
+9 doctests/9 probe tests; custom SSH 15/31/66 remain separate. No native action,
+IME/clipboard/rendered-p95 result follows from those commands. Two long bash
+attention alerts were ordinary progressing all-feature test suites (311s then
+286s), not hangs; no interruption. Command controls were unavailable, so parent
+inspected retained logs/status without changing execution mode.
+
+Fresh reviewer `80df0c32-e07e-4373-9e02-9bef1eb79d94` inspected exact committed
+diff/source/logs: S2 READY / Merge verdict OK with notes. Two **valid P2** fixes
+accepted: report/handoff incorrectly said 668 instead of 568; report and host
+comment incorrectly implied formatting lacks Changed (Bold/Italic/Code do emit
+Changed; undo/redo do not). They do not change behavior or block the already
+reviewed native launch. Parent sends narrow corrections to the retained owner,
+then targeted retained-reviewer follow-up; no new adapter work authorized.
+
+Controller launched at reviewed Rust HEAD `2c53127` using Devenv with explicit
+`--capture-initial`, isolated owned PID/process group **3247260**. Evidence:
+`target/readiness-evidence/running-spike/s3/launch-1791317716369/`, including
+launch command/head/binary/display/original-source hashes and full startup logs.
+GUI remains running for user inspection; parent has not seen screen pixels or
+performed keyboard/table/IME/clipboard/resource-negative/performance journeys.
+
+Real captures: `target/editor-feasibility/native-3247260-1791317722697818257/`.
+All five manifests state ActualEditorReadback; parent compared actual captured
+original/candidate bytes independently. README (1790B), CLI RFC (22992B), Wave03
+(38177B) and implementation plan (22438B) match on initial load. Mixed math
+changes bytes despite unchanged 29B length, correctly marked normalization and
+dirty, not preservation success. Original repo files still match launch hashes.
+Full snapshots combine protected host header with real editor body; they do not
+prove metadata traveled through the editor. Initial-readback-summary.json names
+that limitation. Scope remains temporary byte tolerance, no product ruling.
 
 ## Task state
 
