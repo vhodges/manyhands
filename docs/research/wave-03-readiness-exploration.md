@@ -31,6 +31,17 @@ cleanup and excluded adaptations remain unauthorized.
 - Branch: `manyhands/ticket/01M48S808PF2D8ZWVYM918RK2M`.
 - Worktree: `.manyhands/worktrees/01M48S808PF2D8ZWVYM918RK2M`.
 
+## Running-spike amendment (2026-10-06)
+
+After the reviewed stop findings, the user explicitly authorized assuming byte
+changes acceptable **for this spike only**, to learn integration/adoption cost
+and see actual repo documents running. This is not a product ruling or an RFC
+change. The [running-spike amendment](../plans/2026-10-06-wave-03-readiness-running-editor-spike.md)
+governs resumed executable work where it differs from the original preservation
+stop: use the same pinned Zorite, record actual transformations, and edit scratch
+copies only. All core/GPUI/resource/production/lifecycle exclusions remain.
+Original exact-preservation failures remain evidence, not passing acceptance.
+
 ## Governing requirements
 
 [Wave 03](../Waves/wave-03-dogfooding.md#entry-gate-and-readiness-work) requires

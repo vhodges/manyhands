@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "review-ready"
+status: "in-progress"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -22,6 +22,19 @@ development on the same date. Execute the approved bounded exploration in this
 ticket worktree; production integration, publishing, merge, closure, worktree
 cleanup, forks, GPUI upgrades and executable Velotype extraction remain
 unauthorized.
+
+### Authorized running-spike continuation
+
+The user subsequently asks to assume byte changes acceptable **for this spike
+only**, explicitly not a product ruling, to learn integration/adoption cost and
+see representative repo documents running. The
+[running-spike amendment](../../../docs/plans/2026-10-06-wave-03-readiness-running-editor-spike.md)
+authorizes resuming the same pinned Zorite native probe, real repo-doc scratch
+sessions, actual snapshots/transformation reports and renewed Rust/review gates.
+Original files and canonical metadata remain protected; no editor selected and
+no RFC preservation/native/Wave requirement weakened. Core/fork/GPUI/Velotype
+and publication/lifecycle exclusions remain unchanged. Existing subagent-driven
+method continues with serialized owners and independent reviews.
 
 ## Approved Exploration
 
@@ -76,13 +89,15 @@ retained changes are documentation only. Tasks 4–6 were not executed under the
 approved stop boundary; no actual editor/native/performance proof is claimed.
 Documentation/evidence checks passed; fresh whole-branch review of exact
 `29f3f5a..44a469a` returned READY / report Merge verdict OK, no issues.
-The bounded exploration is complete at its approved negative-result boundary;
-this delivery-only checkpoint records approval without changing findings/scope.
+The initial bounded exploration completed at its approved negative-result
+boundary. The user subsequently authorized the running-spike continuation above;
+those original reviewed findings remain valid, not product-policy approval.
 
-After reviewing the findings, the user must approve any next bounded candidate
-revision/API assessment or extraction/port design. No candidate is selected,
-no product fallback is adopted, and no further executable adaptation is
-implicitly authorized. The ticket remains lifecycle-open.
+The same pinned candidate may now run under the explicit spike-only assumption.
+New revisions, extraction/port/core adaptation or product adoption still require
+separate approval. No candidate or product fallback is selected; original-byte
+preservation remains a production obligation until a real product ruling.
+The ticket remains lifecycle-open while the resumed experiment executes.
 
 ## Approved Planning Artifacts
 

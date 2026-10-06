@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 Readiness Exploration Execution Ledger"
 date: 2026-10-06
-status: review-ready
+status: in-progress
 author: "Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -58,7 +58,40 @@ covering checks, output/report and stop rules. Outputs/logs use managed runtime
 artifacts, not scratch files in repository root. Native subagent notifications
 reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 
+## Resumed running-spike authorization and lane board
+
+User now requests integration/adoption cost and a running example with actual
+repo documents, explicitly assuming byte changes acceptable **for this spike
+only**, not making a product ruling. The
+[running-spike amendment](2026-10-06-wave-03-readiness-running-editor-spike.md)
+records authority, design, task ownership and acceptance. Original strict source
+comparison evidence remains valid; source transformation no longer vetoes this
+experiment but must never be relabeled production preservation success.
+
+Fresh implementation-phase fetch/rebase: base `29f3f5a25957836a8513cba8a318306e1b928063`,
+before/after `af380b01291d847c9661ecc1b6f958b3d0f504ec`; no-op, ancestry and clean
+state verified. Main agrees, AGENTS unchanged; unrelated main edits and other
+worktrees left untouched. Initial task/review commit IDs did not change.
+
+| Stage | Exact seam / owner | State / evidence | Next gate |
+| --- | --- | --- | --- |
+| S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | dispatching; reviewed source provenance reusable | Focused real tests and fresh independent seam review; no native claims. |
+| S2 actual editor host | New serialized worker: example/host/adapter/catalog, example wiring, running report appendix | waiting for S1 acceptance | Compile exact entity/Kit seam, mandatory final Rust/CLI gates, fresh review. |
+| S3 user-visible desktop | Controller-owned actual launch and scratch observations | pending reviewed S2 | Keep demo open if available; actual readback/trace, not model-string evidence. |
+| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | pending | Named adoption work/transformations/limits; no editor or product-policy selection. |
+
+Small host adapters only; no GPUI upgrade, fork, vendoring, core rewrite or
+executable Velotype extraction. No original repo-doc writes, production/draft
+store, live domain/API/SSH, publication, merge, closure or cleanup. Scratch-only
+native demo uses README, CLI RFC, Wave03 document and implementation plan;
+canonical metadata remains outside the editable buffer. Preserve each draft
+across selection/mode changes and record changed-on-load separately from edits.
+
 ## Task state
+
+The following table records the **initial, independently reviewed stop-path
+phase**. Current resumed execution is tracked in S1–S4 above, not silently
+reinterpreted as passing initial native/preservation acceptance.
 
 | Task | State | Implementation range / evidence | Independent review | Next action |
 | --- | --- | --- | --- | --- |
@@ -249,6 +282,10 @@ revision/API fix is promised and no executable adaptation follows automatically.
 
 ## Final requirements-to-evidence handoff
 
+This matrix records the initial reviewed stop-path handoff. The resumed spike
+must add its own measured results without changing these historical source
+findings or interpreting byte tolerance as production acceptance.
+
 | Requirement | Actual evidence/status | Remaining gate |
 | --- | --- | --- |
 | R1 pin/core graph | Zorite exact published graph fit source/metadata-inspected; Velotype source core identity differs | No compiled Kit/editor entity proof; changed candidate/port needs new approval. |
@@ -298,9 +335,11 @@ The subsequent delivery-only amendment records this accepted review and ticket
 checkpoint; it does not change the research findings, recommendation or scope.
 Final review does not authorize publishing,
 merging, ticket closure, cleanup, candidate selection or excluded adaptations.
-Ticket is review-ready and lifecycle-open. The next material decision is the
-new bounded investigation direction, not a claim that Wave 03 is implementable
-or complete. The already-approved RFC/Wave gates remain unchanged.
+At that initial handoff the ticket was review-ready and lifecycle-open; its
+next material decision was a new bounded investigation direction, not a claim
+that Wave 03 was implementable or complete. The user has now authorized the
+running-spike continuation recorded above. The ticket is in-progress again;
+the already-approved RFC/Wave gates remain unchanged.
 
 ## Verification policy
 

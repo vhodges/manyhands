@@ -30,6 +30,18 @@ in the canonical ticket worktree; do not run competing Cargo writers or mutate
 other Wave 02 worktrees. The controller owns integration, decisions and ticket
 checkpoints. See the [execution ledger](2026-10-06-wave-03-readiness-exploration-execution.md).
 
+## Running-spike amendment (2026-10-06)
+
+After the initial reviewed negative-result handoff, the user explicitly asks to
+assume byte changes acceptable **only for this spike**, learn adoption/integration
+cost and see representative repo docs running. This is execution authorization,
+not a product ruling. The [running-spike amendment](2026-10-06-wave-03-readiness-running-editor-spike.md)
+governs resumed S1–S4, including the temporary preservation-stop exception,
+scratch-only repo documents, actual pinned editor host and renewed Rust/native
+verification. Do not rewrite original goldens or claim R3/R4 production fidelity
+passes. Original approval/task records below remain historical; all other
+adaptation, resource, production and lifecycle boundaries remain in force.
+
 ## Authorization and baseline ledger
 
 | Item | Recorded state |

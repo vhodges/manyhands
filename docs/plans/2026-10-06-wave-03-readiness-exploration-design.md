@@ -20,6 +20,16 @@ same date. The user selected editor plus provisional API audit,
 small host adapters only, and source assessment followed by a checkpoint
 before executable Velotype extraction.
 
+## Running-spike amendment (2026-10-06)
+
+The user now authorizes byte-change tolerance solely as an experimental
+assumption, not a production fidelity ruling. Resume the exact Zorite pin in
+an isolated native example with real repo-doc scratch sessions to learn cost.
+The [running-spike amendment](2026-10-06-wave-03-readiness-running-editor-spike.md)
+governs the resumed task scope/stop rule; retain original source comparisons,
+protect metadata/original files, and keep core/resource/lifecycle exclusions.
+No RFC, editor selection or production acceptance is changed by this experiment.
+
 ## Architecture and containment
 
 Keep the single root Cargo package. After execution authorization, add an optional exact
