@@ -48,7 +48,7 @@ existing-worktree requirement.
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
 - Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
-- Task 3: implemented and locally verified at `6aa81fc99fa4bb6c6f7e31df997962ec2aacc516`; independent review pending.
+- Task 3: complete; independent review accepted at `f4ecbd50504a77a70c0528a892b135e46db155ce`; required normal local gates pass.
 - Task 4: pending.
 - Task 5: pending.
 - Task 6: pending.
@@ -593,6 +593,27 @@ Normal verification blocker is now resolved locally **by the approved test
 contract correction**, not by declaring old failures harmless. Task 2 still
 requires fresh targeted independent review and parent acceptance. Ticket open;
 publication/native CI/merge/closure/cleanup remain unauthorized.
+
+## Task 3 review acceptance — 2026-10-06T16:27:13Z
+
+Parent accepts scoped transport at `f4ecbd50504a77a70c0528a892b135e46db155ce`.
+Independent fresh reviewer `6aeef3d8-1d92-42a6-9553-a0a030474724` inspected
+`1903f3aaaa6f334c2ea9b54b4433223021bc9d75..f4ecbd50504a77a70c0528a892b135e46db155ce`:
+**OK with notes**, no findings. Review confirmed typed exact/direction/config
+validation, reconnect key/source/endpoint/trust checks, ordinary push rejection,
+leased expected-old/create-only tracking writes and wire-test scope/privacy.
+It independently confirmed the locked libgit2 FETCH_HEAD truncation motivating
+the approved workaround. Parent confirmed clean full HEAD and normal test counts:
+585 standard + 119 SSH = **704 passed**; check/fmt/clippy/CLI logs pass.
+Review artifact: `/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/0f0c5c17-2a95-4a11-83db-392a6f99fb2c/task3/review.md`.
+
+Task 4 may consume the accepted contracts. It must compose safe points outside
+libgit2, compare complete Fetch pre/post advertisements and tracking OIDs, check
+actual clean symbolic branch/worktree identity under the short lease, and verify
+the independent Push endpoint candidate after push. Partial tracking updates and
+push return are never authoritative completion. Remove temporary consumption-only
+dead-code allowances when wired. Actual durable effect/replay/privacy proof and
+native CI/whole-Cycle review remain downstream. No publication authority implied.
 
 ## Task 3 — scoped exact authenticated transport — 2026-10-06T16:20:00Z
 
