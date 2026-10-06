@@ -1699,3 +1699,31 @@ focused target, but actual native runs/links are still pending. No push/PR/dispa
 merge, ticket closure or worktree cleanup is authorized. Ask owner whether to
 publish normally/create PR and validate native CI, or retain this local checkpoint.
 Ticket remains open; all other worktrees and unrelated main files preserved.
+
+## Owner publication and native-CI deferral — 2026-10-06T23:56:38Z
+
+Owner explicitly approved push and opening a PR. Owner states CI is disabled for
+now and does not want time spent investigating intermittent non-Linux platform
+failures; native execution is deferred until closer to release. Do NOT enable,
+dispatch, monitor or repair native CI for this delivery. Existing future-focused
+CI target configuration remains, without claiming native passes. This supersedes
+the earlier pending-publication gate, not the honest native-evidence limits.
+Authorization does NOT include PR merge, ticket closure or worktree cleanup.
+
+Publication preflight freshly fetched origin/main at29f3f5a25957836a8513cba8a318306e1b928063;
+clean ticket6807e385726fe06d8dd4554fa077656fcfe4ce20 rebase was a no-op. Main's
+.superpowers/ and devenv.nix~ and all seven other worktrees remain untouched.
+Remote ticket81fecfe7127b664c5b3521fd8938908d12e801d8 was the ONLY remote-only commit,
+an original ticket checkpoint. git cherry marks it patch-equivalent; its exact
+ticket blob8de3e5f8559a835df9bada347bd57a7648975bd7 is identical to rebased local
+original checkpoint68284da5fd3648d4d91caaad865d4a4f7ee2a306. Current reviewed ticket
+has later edits; initial current-file-equality guard stopped BEFORE any merge.
+After proving original historical equivalence, preserve remote ancestry through
+history-only ours reconciliation6556112b925d851047cdb45973ffed15755bf2f9 (not PR merge).
+Expected reviewed6807 tree and resulting tree BOTH
+040f7689f020c1122c56323a94f317c246210ee2; no file/source change, no ignored remote
+new work and no force push. Remote ancestry now permits normal publication.
+All src/tests/manifests/locks/toolchain/CI still equal testedd84ad implementation;
+local789/static/CLI and qualified desktop evidence remain current. Documentation
+of this owner exception is the only new file-content change. No existing open PR
+was found for this exact branch. Ticket stays open; PR creation/verification next.

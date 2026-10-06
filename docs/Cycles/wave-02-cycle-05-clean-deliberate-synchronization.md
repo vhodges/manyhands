@@ -216,3 +216,15 @@ Record planning, per-task progress, decisions, baseline/final verification,
 review, and review-ready status as ticket comments. Keep the ticket open until
 the reviewed implementation receives code-review or PR approval; publishing,
 merging, closing, and worktree cleanup need their own authorization.
+
+## Owner-approved native verification deferral
+
+For this delivery, the owner approved pushing and opening a PR with native CI
+explicitly deferred: CI is disabled for now, and intermittent non-Linux failures
+will be investigated closer to release. Do not enable/dispatch/investigate CI as
+part of this PR. Native acceptance criteria above are deferred, NOT reported as
+passed; local implementation, 789-case final checks, front-end startup smoke and
+independent whole-Cycle code review are complete. Platform guarantees remain
+unverified until later native execution. See the execution ledger's owner decision
+and publication checkpoint. Merge, ticket closure and cleanup require separate
+authorization.
