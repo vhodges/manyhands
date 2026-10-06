@@ -473,3 +473,89 @@ these three tests. Committed-tree gate logs are retained separately from initial
 working-tree logs. No GUI process was started by S2; no native keyboard, IME,
 clipboard, rendering, platform or production-desktop smoke pass is claimed.
 Controller owns reviewed S3 persistent launch and production smoke separately.
+
+## S3 native observations and adoption-cost handoff
+
+### What actually ran
+
+Controller launched the reviewed `2c53127` example through Devenv with
+`--capture-initial`, owned process group **3247260**, and left it open for the
+user. Five real EditorState entities were constructed; startup body text was
+read from those entities, not a substituted string model. Evidence is in
+ignored `target/readiness-evidence/running-spike/s3/launch-1791317716369/` and
+`target/editor-feasibility/native-3247260-1791317722697818257/`.
+
+The user explicitly confirmed **Visible and working** in response to the
+controller's question about seeing/exploring the documents. This is reported
+basic visibility/usability, not a measured or per-requirement native suite.
+The session advertises DISPLAY=:1 and WAYLAND_DISPLAY=wayland-1; backend choice
+was not instrumented. No other desktop pixels or clipboard contents were read.
+
+Parent independently compared initial original/candidate-full capture bytes:
+
+| Scratch source | Original/candidate bytes | Initial comparison |
+| --- | --- | --- |
+| README | 1790 / 1790 | exact |
+| CLI-contract RFC | 22992 / 22992 | exact |
+| Wave03 dogfooding | 38177 / 38177 | exact |
+| implementation plan | 22438 / 22438 | exact |
+| labeled mixed-math counterexample | 29 / 29 | **different**, changed-on-load/dirty |
+
+All five manifests declare ActualEditorReadback. Full candidates combine the
+protected original header with actual body readback: metadata never traveled
+through the editor. Source repo hashes still match launch originals. Equal
+length is not preservation: mixed math retains the known normalization failure
+and is not relabeled a pass under temporary tolerance. Four initial no-op loads
+do not establish untouched-block edits, full-fixture fidelity or semantic safety.
+
+Separately, the unchanged production desktop scaffold was built/launched through
+Devenv at `7ab466f` using `cargo run --locked --features desktop --bin manyhands`.
+Its binary was observed alive without startup diagnostics and only owned smoke
+group **3310636** was stopped with controlled SIGTERM. Logs/observation/exit:
+`target/readiness-evidence/running-spike/s3/desktop-smoke-1791321361661/`.
+This is a startup smoke, not graceful-close or visual/input acceptance; the
+user's editor process was not stopped.
+
+### Concrete integration cost, not an adoption estimate
+
+The experiment required **no fork, vendoring, GPUI upgrade, core rewrite or
+production changes**. Pin/feature/test/example registration adds three reviewed
+optional packages; Kit/pre type identity works in real entity construction.
+S2 totals **638 Rust LOC**, including UI/capture controls/tests: actual adapter
+126 (35 test LOC), catalog 66 (19 test LOC), host 383, entry 63. S1's **406 LOC**
+of pure session/evidence bookkeeping is experiment infrastructure, not editor
+porting. Prototype LOC is evidence of integration surface, not days of product
+work or a performance guarantee.
+
+| Adoption area | Learned now | Remaining work / decision |
+| --- | --- | --- |
+| embedding/theme | Kit-native entity/render/focus/style seam compiles and runs with a small adapter | integrate production layout/focus/theme refresh and platform checks; no core port demonstrated necessary |
+| presentation/history | same per-doc entity/draft/mode/scroll owned by host; mode changes use style, not text reload | captured cross-mode edit/undo/redo/untouched-block journeys and caret/selection acceptance; snapshot history does not recover load loss |
+| metadata/drafts/save | body-only boundary, normalized-on-load distinction, generations and readback comparisons are practicable | shared headless crash-safe draft store, stale/no-op save, reload/discard/conflict lifecycle and canonical service wiring; this demo saves nothing |
+| resources/rich coverage | provider setters allow deny-by-default prototype; source fallback when rich services absent | explicit trusted resource ownership and negative traces; highlighting/math/HTML/image/suggestion/wiki/property services, licensing/packaging as needed; SDK/native hook gaps may need design/upstream work |
+| bytes/meaning | four representative initial loads exact; math counterexample actually changes | product fidelity ruling or approved upstream/preservation repair if exact source stays mandatory; semantic/metadata safety and lossless undo still required, no tolerance waiver here |
+| responsiveness | largest running repo sample is 38 KiB; basic user exploration reported working | actual 100 KiB/larger rendered p95/input/IME/clipboard/table matrix; whole-body notification readback and 256 full-text undo snapshots are costs to measure, not benchmark results |
+| API/version integration | fixed 0.10 public seam is usable despite unversioned documentation drift | version/theme/provider maintenance and provisional API re-audit on completed Wave02 main before Wave03 Cycle01 |
+
+**Conclusion:** the off-the-shelf embedding cost is bounded and much smaller than
+an editor extraction/GPUI port. This pin is useful for continuing the experiment,
+not selected or shipping-ready. The major adoption obligations are production
+state/services, resource/rich contracts, native/performance proof and unresolved
+fidelity policy—not getting a component to appear. No time estimate is justified
+until those decisions/tests are bounded. Original strict RFC/Cycle requirements,
+Wave02 completion/ordered entry gates and Velotype's source-only limitations
+remain unchanged.
+
+### Final corrected source verification
+
+Two accepted S2 reporting errors were fixed narrowly in `3ba5ff2..7ab466f`:
+568 standard passes, and formatting emits Changed while undo/redo only notify.
+Only three report lines and two host comment lines changed; no behavior changed.
+Fresh amended-tree Devenv fmt/check/clippy/test and focused example check passed
+at tree `400e8dfa80f87db9784c50ce9629ff747c38d373`, mapped exactly to commit
+`7ab466ff048f60af9413a058bb2033024934e6e1`; 568 standard passes and SSH 15/31/66,
+no failures/ignored. Retained reviewer `d7536642` confirmed both findings resolved,
+no issues, correction READY / OK. Old erroneous evidence remains immutable and
+superseded, not rewritten. Current code differs from the live reviewed binary
+only in that accurate comment; its recorded launch/provenance remains `2c53127`.
+Further report/ledger bookkeeping does not invalidate final Rust source gates.

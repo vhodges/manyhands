@@ -76,9 +76,9 @@ worktrees left untouched. Initial task/review commit IDs did not change.
 | Stage | Exact seam / owner | State / evidence | Next gate |
 | --- | --- | --- | --- |
 | S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | complete, `d22d6f4..3f3bc11`; 9 pure tests/fmt/headless check passed | READY / OK with notes (`91d02bab`); no native claims. |
-| S2 actual editor host | Separate serialized worker: example/host/adapter/catalog, example wiring, running report appendix | `41267b9..2c53127`, full Rust/CLI gates and 3 example tests pass; READY / OK with notes (`80df0c32`) | Two valid P2 wording/count corrections; functionality accepted for S3 launch, not adoption. |
-| S3 user-visible desktop | Controller-owned actual launch and scratch observations | running, owned PID/process group `3247260`; 5 initial ActualEditorReadback captures | Four repo docs equal originals on load, mixed math differs; user interaction/production smoke still pending. |
-| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | pending P2 corrections and final review | Named adoption work/transformations/limits; no editor or product-policy selection. |
+| S2 actual editor host | Separate serialized worker: example/host/adapter/catalog, example wiring, running report appendix | `41267b9..2c53127`; narrow P2 fixes `3ba5ff2..7ab466f`, final amended Rust gates pass; correction READY / OK (`d7536642`) | Both wording/count findings resolved without behavior changes; not adoption approval. |
+| S3 user-visible desktop | Controller-owned actual launch and scratch observations | running, owned PID/process group `3247260`; 5 initial ActualEditorReadback captures; user confirmed Visible and working | Four repo docs equal originals on load, mixed math differs; separate unchanged desktop startup smoke done, group `3310636` stopped only. |
+| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | observations/cost/remaining obligations recorded; whole-branch review pending | Named adoption work/transformations/limits; no editor or product-policy selection. |
 
 Small host adapters only; no GPUI upgrade, fork, vendoring, core rewrite or
 executable Velotype extraction. No original repo-doc writes, production/draft
@@ -164,6 +164,48 @@ dirty, not preservation success. Original repo files still match launch hashes.
 Full snapshots combine protected host header with real editor body; they do not
 prove metadata traveled through the editor. Initial-readback-summary.json names
 that limitation. Scope remains temporary byte tolerance, no product ruling.
+
+### Corrected final source and user/native follow-up
+
+Retained owner continuation `8dbc0896-eecd-415f-98dd-59551bb63bed` fixed only three
+report lines/two host comment lines at `3ba5ff2..7ab466f`. Preserved all 385 prior
+S2 evidence/handoff artifacts byte-for-byte. Final staged tree
+`400e8dfa80f87db9784c50ce9629ff747c38d373` was tested then committed unchanged
+as `7ab466ff048f60af9413a058bb2033024934e6e1`. Devenv fmt, focused example check,
+all-feature check/clippy/test all exit0; fresh 568 standard and SSH 15/31/66,
+no failures/ignored. Separate example/probe/headless/CLI proofs reused honestly
+from identical source closure, not claimed rerun. Evidence:
+`target/readiness-evidence/running-spike/s2-fixes/` and workflow
+`cec192b0-9232-49d7-bda4-b197f9ae2190` bound handoff/review artifacts.
+
+Retained reviewer `d7536642-4b50-4c46-8f28-62089ba2ccb3`: both P2 findings
+resolved, no issues, S2 correction READY / OK. Latest worker attention was a
+queued 240s warning for the normal 290s suite; status/transcript inspection
+showed complete, no current in-flight command. No cancellation or fallback.
+
+User answered **Visible and working** to controller's visibility/exploration
+question. Record as reported basic usability, not a formal native journey or
+performance test. Parent did not inspect desktop pixels/clipboard. Cross-mode
+history/selection, native typing/IME/clipboard/tables, negative resources,
+platform/high-DPI/accessibility and 100KiB/rendered-p95 remain unverified.
+
+Unchanged desktop scaffold launched at `7ab466f` with Devenv desktop-only
+`cargo run`, after cold feature build (78s). Actual manyhands binary observed
+alive without app startup diagnostics; parent terminated **only** isolated smoke
+group `3310636` using SIGTERM, not user editor `3247260`. Startup/observation/exit
+proofs under `target/readiness-evidence/running-spike/s3/desktop-smoke-1791321361661/`.
+Controlled termination is not normal/graceful close acceptance.
+
+[Editor report S3/cost handoff](../research/wave-03-editor-feasibility.md#s3-native-observations-and-adoption-cost-handoff)
+now records actual per-file loads, unchanged-length counterexample, host-only
+metadata reconstruction, bounded adapter/prototype LOC and seven named adoption
+areas. Embedding works without a port; production state/services/resource/rich
+contracts/fidelity/native/performance/finished-Wave02 API evidence still cost
+work. No justified time estimate or product editor ruling follows.
+
+Further changes are report/ledger/canonical-comment bookkeeping only; final
+Rust source remains exactly `7ab466f`. Fresh whole-branch review is next. Ticket
+stays lifecycle-open/in-progress until review checkpoint; no publication or close.
 
 ## Task state
 

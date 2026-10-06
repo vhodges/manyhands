@@ -84,10 +84,11 @@ The controller records canonical ticket comments at task checkpoints.
   pinned source also loses original bytes; preservation/GPUI-port/I/O extraction
   work exceeds thin host adapters. Independently reviewed source-only findings.
 
-The six-command baseline passed. Cargo/source/lockfile trial edits are restored;
-retained changes are documentation only. Tasks 4–6 were not executed under the
-approved stop boundary; no actual editor/native/performance proof is claimed.
-Documentation/evidence checks passed; fresh whole-branch review of exact
+For the **initial report-only outcome**, the six-command baseline passed;
+Cargo/source/lockfile trial edits were restored and initial retained changes
+were documentation only. Original Tasks 4–6 were not executed under that stop
+boundary; that outcome claimed no actual editor/native/performance proof.
+Initial documentation/evidence checks passed; fresh whole-branch review of exact
 `29f3f5a..44a469a` returned READY / report Merge verdict OK, no issues.
 The initial bounded exploration completed at its approved negative-result
 boundary. The user subsequently authorized the running-spike continuation above;
@@ -98,6 +99,30 @@ New revisions, extraction/port/core adaptation or product adoption still require
 separate approval. No candidate or product fallback is selected; original-byte
 preservation remains a production obligation until a real product ruling.
 The ticket remains lifecycle-open while the resumed experiment executes.
+
+### Running-spike outcome, pending final review
+
+The actual opt-in example is now retained and running with the approved exact
+pin, thin Kit-only host/adapter, scratch originals and protected headers. S1/S2
+and two narrow P2 corrections are independently reviewed; final Rust tree
+`7ab466f` passes required Devenv gates (568 standard plus separate SSH15/31/66,
+three example tests separate). No production/domain/CLI/Devenv/CI source changed.
+
+Controller opened the example; the user confirmed **Visible and working**.
+Real initial body readbacks match all four representative repo documents. The
+labeled math counterexample changes bytes at unchanged length, remains marked
+dirty/normalization and **not** a preservation pass. Original repo sources are
+unchanged; metadata is protected host reconstruction, not an editor roundtrip.
+The separate unchanged desktop scaffold startup smoke ran and only its owned
+process was stopped. User demo process group3247260 remains available.
+
+[Native observations and concrete adoption costs](../../../docs/research/wave-03-editor-feasibility.md#s3-native-observations-and-adoption-cost-handoff)
+record 638 prototype Rust LOC (126 adapter including35 test, 66 catalog
+including19 test; 406 separate S1 bookkeeping). No core port/fork/upgrade was
+needed to embed. Production drafts/services/resource/rich contracts, fidelity
+ruling/repair, native journeys and rendered-p95 still require work; no time
+estimate or editor selection follows. API re-audit on finished Wave02 main and
+ordered entry gates remain required. Final whole-branch review is pending.
 
 ## Approved Planning Artifacts
 
