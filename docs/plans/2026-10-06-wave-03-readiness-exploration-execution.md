@@ -75,8 +75,8 @@ worktrees left untouched. Initial task/review commit IDs did not change.
 
 | Stage | Exact seam / owner | State / evidence | Next gate |
 | --- | --- | --- | --- |
-| S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | dispatching; reviewed source provenance reusable | Focused real tests and fresh independent seam review; no native claims. |
-| S2 actual editor host | New serialized worker: example/host/adapter/catalog, example wiring, running report appendix | waiting for S1 acceptance | Compile exact entity/Kit seam, mandatory final Rust/CLI gates, fresh review. |
+| S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | complete, `d22d6f4..3f3bc11`; 9 pure tests/fmt/headless check passed | READY / OK with notes (`91d02bab`); no native claims. |
+| S2 actual editor host | New serialized worker: example/host/adapter/catalog, example wiring, running report appendix | dispatching from accepted S1 | Compile exact entity/Kit seam, mandatory final Rust/CLI gates, fresh review. |
 | S3 user-visible desktop | Controller-owned actual launch and scratch observations | pending reviewed S2 | Keep demo open if available; actual readback/trace, not model-string evidence. |
 | S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | pending | Named adoption work/transformations/limits; no editor or product-policy selection. |
 
@@ -86,6 +86,40 @@ store, live domain/API/SSH, publication, merge, closure or cleanup. Scratch-only
 native demo uses README, CLI RFC, Wave03 document and implementation plan;
 canonical metadata remains outside the editable buffer. Preserve each draft
 across selection/mode changes and record changed-on-load separately from edits.
+
+### S1 accepted seam handoff
+
+Implementer `0d8127a2-291c-4c5a-8e44-9bd4c22ce144` committed
+`3f3bc1140636d627149eca9195bd3e838e4f24b7`, 16 exclusive Cargo/helper/fixture/test
+files, clean and unstaged. Same reviewed three-package lock addition, identical
+to prior Task3 trial; Kit 0.6.6/pre 0.3.6, syntax-only Markdown and no baseline
+version/source/checksum/features/edges drift. Lock SHA-256
+`51c46d1c4abb87e2ab011d8e1f4f6a58d709f8c099ab412dee8afa1201a8b5fb`.
+All 83 original Task3 artifact hashes reverified read-only.
+
+Nine focused pure-helper tests, fmt and headless CLI check passed on committed
+S1. Candidate libraries compile, but no Editor entity was constructed. Initial
+wrong fixture offset / absent initial observation test setup failures and CRLF
+whitespace diagnostics are retained, fixed without rewriting originals/goldens
+or bypassing hooks. Local fixture attributes preserve intentional CRLF and
+retain other whitespace checks. Full final Rust/native gates remain S2/S3.
+
+Fresh reviewer `91d02bab-066e-4ffd-8d5a-b841e1c5ae48` inspected exact committed
+diff/source/logs: no issues, S1 READY / Merge verdict OK with notes. Parent
+accepts the seam, not native evidence. Reviewer did not execute commands.
+Notes carried to S2: actual readback provenance/per-doc callback routing must
+be truthful; capture guards are local single-writer checks, not an OS sandbox;
+initial normalization makes conservative dirty state block clean replacement.
+S2 must show normalization separately from later user edits, preserve entities/
+history, retain immutable metadata and never claim host-recombined metadata
+round-tripped through the editor.
+
+S1 evidence: `target/readiness-evidence/running-spike/s1/` exact task.diff,
+review index/proof, graph audit, numbered/raw snapshots and numbered command
+logs/meta. Workflow `9fac10dd-eb5e-46ff-869b-dbdb34353747`, outputs
+`running-spike-s1/{handoff,review}.md`. Parent will dispatch the separate S2
+host owner now. Earlier workflow launch rejection (missing script block) created
+no child or code changes; clean `d22d6f4` verified before same-protocol retry.
 
 ## Task state
 
