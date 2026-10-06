@@ -8,6 +8,8 @@ mod endpoints;
 mod failures;
 #[path = "ssh_transport/formats.rs"]
 mod formats;
+#[path = "ssh_transport/observation.rs"]
+mod observation;
 #[path = "ssh_transport/privacy.rs"]
 mod privacy;
 #[path = "ssh_transport/session.rs"]
@@ -51,6 +53,7 @@ fn main() {
     .chain(privacy::CASES)
     .chain(state::CASES)
     .chain(formats::CASES)
+    .chain(observation::CASES)
     .copied()
     .collect();
     ssh_harness::run(&cases);

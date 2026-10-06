@@ -81,6 +81,11 @@ pub fn repository_and_worktree_snapshot(fixture: &TestRepository) -> RepositoryA
     repository_and_worktree_snapshot_at(&fixture.root)
 }
 
+/// Includes objects, FETCH_HEAD, reflogs, and linked-worktree administrative files.
+pub fn repository_git_file_bytes(fixture: &TestRepository) -> BTreeMap<PathBuf, FilesystemEntry> {
+    canonical_file_bytes(fixture.repository.path(), fixture.repository.path())
+}
+
 pub fn repository_and_worktree_snapshot_at(root: &Path) -> RepositoryAndWorktreeSnapshot {
     let repository = Repository::open(root).unwrap();
     let linked_worktrees = repository

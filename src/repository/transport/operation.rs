@@ -28,6 +28,16 @@ impl RepositoryService {
         session: &mut SessionCredentials<P>,
         use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
     ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_policy(request, session, false, use_remote)
+    }
+
+    pub(crate) fn with_authenticated_remote_policy<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        automatic: bool,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
         let mut context = SshTransportError {
             root: request.root.clone(),
             remote_name: String::new(),
@@ -42,7 +52,7 @@ impl RepositoryService {
         let prepared = match self.prepare_ssh(request, &mut context) {
             Ok(prepared) => prepared,
             Err(kind) => {
-                session.clear();
+                invalidate_preflight_session(session, &kind);
                 return Err(context.with_kind(kind));
             }
         };
@@ -55,9 +65,7 @@ impl RepositoryService {
         #[cfg(test)]
         super::operation_tests::checkpoint(super::operation_tests::Checkpoint::Prepared);
         let cached = session.has_cached_passphrase(&unlock);
-        if !cached {
-            session.clear();
-        }
+        session.reconcile_source(&unlock);
         let mut use_remote = Some(use_remote);
         let mut may_prompt = false;
         if !cached {
@@ -69,6 +77,14 @@ impl RepositoryService {
         }
         // The first connection and all callback/Git/registry handles have dropped.
         // An Err here prevents newly supplied material from entering the cache.
+        if automatic && let Some(failure) = session.blocked_unlock(&unlock) {
+            return Err(context.with_kind(match failure {
+                SessionUnlockFailure::ProviderUnavailable => {
+                    SshTransportErrorKind::ProviderUnavailable
+                }
+                _ => SshTransportErrorKind::UnlockCancelled,
+            }));
+        }
         let mut connection_error = None;
         let result = session.with_passphrase(unlock, |passphrase| {
             #[cfg(test)]
@@ -91,7 +107,7 @@ impl RepositoryService {
         });
         // Cancellation/unavailability can also race state changes in the provider.
         if let Err(kind) = self.recheck_ssh(&prepared, &context) {
-            session.clear();
+            invalidate_preflight_session(session, &kind);
             return Err(context.with_kind(kind));
         }
         if let Some(error) = connection_error {
@@ -284,6 +300,24 @@ fn source_failure(error: KeyMaterialError) -> SshTransportErrorKind {
     match error.kind {
         KeyMaterialErrorKind::SourceMissing => SshTransportErrorKind::KeyMissing,
         _ => SshTransportErrorKind::KeyUnreadable,
+    }
+}
+
+fn invalidate_preflight_session<P: SessionCredentialProvider>(
+    session: &mut SessionCredentials<P>,
+    kind: &SshTransportErrorKind,
+) {
+    if matches!(
+        kind,
+        SshTransportErrorKind::NoSelectedKey
+            | SshTransportErrorKind::SelectionChanged
+            | SshTransportErrorKind::KeyMissing
+            | SshTransportErrorKind::KeyUnreadable
+            | SshTransportErrorKind::KeySourceChanged
+    ) {
+        session.clear();
+    } else {
+        session.clear_cached_passphrase();
     }
 }
 pub(super) fn authentication_failure(kind: &SshTransportErrorKind) -> bool {

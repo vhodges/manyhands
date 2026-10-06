@@ -51,3 +51,7 @@ harness = false
 [[test]]
 name = "ssh_transport"
 harness = false
+
+[[test]]
+name = "remote_observation"
+harness = false

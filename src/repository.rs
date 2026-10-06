@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -29,6 +29,7 @@ mod coordination;
 mod discovery;
 pub mod keys;
 mod recovery;
+mod remote;
 pub mod transport;
 
 use coordination::{
@@ -50,8 +51,21 @@ use recovery::{
     claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
+pub use remote::{
+    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, RemoteContextSnapshot,
+    RemoteContextState, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
+    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
+    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
+    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
+    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteReservation,
+    RemoteReservationOutcome, RemoteSafePointOutcome, RemoteSnapshot,
+};
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
+#[cfg(test)]
+#[allow(unused_imports)] // Used by the source-included isolated SSH test runner.
+pub(crate) use remote::observation_tests;
 const INDEX_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const INDEX_OWNER_STALE_AFTER: i64 = 3;
 const REGISTRY_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -190,6 +204,7 @@ impl<T> IndexPending<T> {
 
 pub struct RepositoryService {
     registry_path: PathBuf,
+    remote_reservation_scope: Arc<()>,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
@@ -531,6 +546,7 @@ pub struct RepositorySnapshot {
     pub contexts: Vec<DiscoveredContext>,
     pub items: Vec<DiscoveredItem>,
     pub problems: Vec<DiscoveryProblem>,
+    pub remote: RemoteSnapshot,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2441,7 +2457,22 @@ impl RepositoryService {
         {
             hook();
         }
-        reconcile_registration(&self.registry_path, repository, root)
+        reconcile_registration(&self.registry_path, repository, root)?;
+        if operation == RepositoryOperation::SetPublicationRemote {
+            let plan = match read_configuration(root)? {
+                ConfigurationInspection::Valid(config) => config
+                    .publication_remote
+                    .as_deref()
+                    .map(|name| RemoteRefPlan::from_configuration(name, &config.primary_branch))
+                    .transpose()
+                    .map_err(|_| remote::state::recovery_required())?,
+                _ => None,
+            };
+            remote::state::with_transaction(self, root, |tx, id| {
+                remote::state::configure(tx, id, plan.as_ref(), false)
+            })?;
+        }
+        Ok(())
     }
 
     fn begin_lifecycle(
@@ -2861,6 +2892,12 @@ impl RepositoryService {
                         .expect("registry data directory"),
                 )
                 .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+                recovery::publish_remote_history_marker(
+                    self.registry_path
+                        .parent()
+                        .expect("registry data directory"),
+                )
+                .map_err(|_| remote::state::recovery_required())?;
                 replace_corrupt_registry(&self.registry_path, root)?;
                 let mut connection = open_registry(&self.registry_path, &mut |_| {})
                     .map_err(|error| error.for_operation(operation, root))?;
@@ -2916,16 +2953,21 @@ impl RepositoryService {
             data_directory,
             RepositoryOperation::OpenRegistry,
         )?;
-        let availability = match open_registry(&registry_path, &mut observer)
-            .and_then(|mut connection| migrate_registry(&mut connection))
-        {
-            Ok(()) => IndexAvailability::Ready,
-            Err(error) if is_structural_sqlite_corruption(&error) => IndexAvailability::Degraded,
-            Err(error) => return Err(error),
-        };
+        let availability =
+            match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
+                migrate_registry(&mut connection)?;
+                remote::state::audit_registry(&mut connection)
+            }) {
+                Ok(()) => IndexAvailability::Ready,
+                Err(error) if is_structural_sqlite_corruption(&error) => {
+                    IndexAvailability::Degraded
+                }
+                Err(error) => return Err(error),
+            };
 
         Ok(Self {
             registry_path,
+            remote_reservation_scope: Arc::new(()),
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
             lifecycle_lease_hook: Mutex::new(None),
@@ -5332,6 +5374,7 @@ fn read_repository_snapshot(
         contexts: contexts.into_iter().map(|(_, context)| context).collect(),
         items,
         problems,
+        remote: remote::state::read_snapshot(connection, *repository_id)?,
     })
 }
 

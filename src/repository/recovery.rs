@@ -103,6 +103,8 @@ pub(super) fn migrate_operation_records(
             redacted_error TEXT
         );
         CREATE INDEX IF NOT EXISTS operation_records_root_path_idx ON operation_records(root_path, observed_at);
+        CREATE INDEX IF NOT EXISTS operation_records_pending_root ON operation_records(root_path) WHERE state != 'completed';
+        CREATE INDEX IF NOT EXISTS operation_records_id_lookup ON operation_records(operation_ulid) WHERE operation_ulid IS NOT NULL;
          CREATE UNIQUE INDEX IF NOT EXISTS operation_records_root_operation_ulid_idx
              ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
          CREATE TABLE IF NOT EXISTS operation_record_contexts (
@@ -212,6 +214,19 @@ pub(super) fn migrate_operation_records(
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
+/// Remote reservations cannot consume, replace or reinterpret local recovery.
+pub(super) fn require_no_pending_local(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')",
+        [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+    if pending {
+        return Err(super::remote::state::recovery_required());
+    }
+    Ok(())
+}
+
 pub(super) fn begin_or_reconcile_operation(
     connection: &mut Connection,
     root: &Path,
@@ -227,6 +242,12 @@ pub(super) fn begin_or_reconcile_operation(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    let remote_active: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting'))",
+        [root_path], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+    if remote_active {
+        return Err(super::remote::state::recovery_required());
+    }
     let existing = transaction
         .query_row(
             "SELECT id, root_path, action, target, state, completed_step FROM operation_records WHERE operation_ulid = ?1",
@@ -615,4 +636,103 @@ fn recovery_required(operation: RepositoryOperation, root: &Path) -> RepositoryE
         RepositoryErrorKind::RecoveryRequired,
         "an unresolved operation for this root must be resumed first",
     )
+}
+const REMOTE_HISTORY_MARKER: &str = "remote-history-recovery-required";
+const REMOTE_HISTORY_BYTES: &[u8] = b"manyhands remote history recovery required v1\n";
+
+pub(super) fn remote_history_lost(data: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let invalid = || std::io::Error::other("remote history recovery marker is unavailable");
+    let path = data.join(REMOTE_HISTORY_MARKER);
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(invalid()),
+        Ok(metadata)
+            if !metadata.is_file() || metadata.len() != REMOTE_HISTORY_BYTES.len() as u64 =>
+        {
+            return Err(invalid());
+        }
+        Ok(_) => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|_| invalid())?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::new();
+    file.take(REMOTE_HISTORY_BYTES.len() as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes != REMOTE_HISTORY_BYTES {
+        return Err(invalid());
+    }
+    Ok(true)
+}
+
+/// The caller holds the exclusive cache recovery guard. Publication and sync
+/// must succeed before any registry or sidecar is renamed.
+pub(super) fn publish_remote_history_marker(data: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    if !remote_history_lost(data)? {
+        let mut temporary = tempfile::NamedTempFile::new_in(data)?;
+        temporary.write_all(REMOTE_HISTORY_BYTES)?;
+        temporary.as_file().sync_all()?;
+        #[cfg(unix)]
+        temporary
+            .persist_noclobber(data.join(REMOTE_HISTORY_MARKER))
+            .map_err(|error| error.error)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+            let source: Vec<u16> = temporary
+                .path()
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let destination: Vec<u16> = data
+                .join(REMOTE_HISTORY_MARKER)
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            // Both NUL-terminated paths remain alive; existing destinations are never replaced.
+            if unsafe {
+                MoveFileExW(
+                    source.as_ptr(),
+                    destination.as_ptr(),
+                    MOVEFILE_WRITE_THROUGH,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::other(
+                    "remote history recovery marker is unavailable",
+                ));
+            }
+        }
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(data.join(REMOTE_HISTORY_MARKER))?
+        .sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(data)?.sync_all()?;
+    if !remote_history_lost(data)? {
+        return Err(std::io::Error::other(
+            "remote history recovery marker is unavailable",
+        ));
+    }
+    Ok(())
 }
