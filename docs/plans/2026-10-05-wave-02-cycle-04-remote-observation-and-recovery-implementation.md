@@ -206,20 +206,20 @@ acknowledgement, completion/interruption transitions, and restart inspection.
 Remote actions retain their stable `OperationId`; the existing local recovery
 journal still blocks incompatible operations.
 
-- [ ] Add failing two-service tests: a poll reserves; a manual action records
+- [x] Add failing two-service tests: a poll reserves; a manual action records
   yield and receives `PollYielding`; poll acknowledgement releases only after
   the safe transition; manual retry reserves; competing manual actions and
   mismatched duplicate IDs fail deterministically.
-- [ ] Add named hooks/failure cases before transport, after transport, before
+- [x] Add named hooks/failure cases before transport, after transport, before
   batch commit, after batch commit, and during per-ref persistence. Assert
   prior batch/local Git state preservation and retry of only unfinished
   read-only work.
-- [ ] Represent those hooks as durable named safe points. Cycle 04 invokes no
+- [x] Represent those hooks as durable named safe points. Cycle 04 invokes no
   transfer-progress callback because it does not transfer; retain the same
   mechanism for Cycle 08 to call from its later fetch-progress path.
-- [ ] Test cancellation at the same safe points, restart/reconciliation,
+- [x] Test cancellation at the same safe points, restart/reconciliation,
   legacy-local-record coexistence, and no repository lease across waits.
-- [ ] Implement SQL atomics and fixed recovery guidance; record/commit
+- [x] Implement SQL atomics and fixed recovery guidance; record/commit
   `feat: coordinate remote observation reservations`.
 
 ## Task 4: Persist An Authenticated Complete Advertisement
