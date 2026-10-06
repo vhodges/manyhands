@@ -47,6 +47,15 @@ pub unsafe fn initialize() -> Result<(), FixtureError> {
 pub type Case = (&'static str, fn() -> Result<(), FixtureError>);
 
 pub fn run(cases: &[Case]) {
+    run_mode(cases, &[], false);
+}
+
+/// Controls are child-only negative probes, never ordinary passing cases.
+pub fn run_with_output_privacy(cases: &[Case], controls: &[Case]) {
+    run_mode(cases, controls, true);
+}
+
+fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
     std::panic::set_hook(Box::new(|info| {
         eprintln!("SSH fixture assertion failed");
         if let Some(location) = info.location() {
@@ -57,6 +66,7 @@ pub fn run(cases: &[Case]) {
     if args.first().is_some_and(|arg| arg == "--ssh-case") {
         let Some((_, case)) = cases
             .iter()
+            .chain(controls)
             .find(|(name, _)| Some(*name) == args.get(1).map(String::as_str))
         else {
             std::process::exit(2)
@@ -92,7 +102,12 @@ pub fn run(cases: &[Case]) {
             println!("{name}: test");
             continue;
         }
-        if run_isolated(name).is_err() {
+        let result = if output_privacy {
+            run_isolated_with_output_privacy(name).map_err(|_| FixtureError)
+        } else {
+            run_isolated(name)
+        };
+        if result.is_err() {
             eprintln!("test {name} ... FAILED (isolated child or watchdog failure)");
             std::process::exit(1);
         }
@@ -102,7 +117,25 @@ pub fn run(cases: &[Case]) {
     println!("{count} SSH cases passed");
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IsolationFailure {
+    Fixture,
+    Child,
+    ProbeInventory,
+    OutputPrivacy,
+}
+impl From<FixtureError> for IsolationFailure {
+    fn from(_: FixtureError) -> Self {
+        Self::Fixture
+    }
+}
 pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
+    capture_isolated(case, false).map_err(|_| FixtureError)
+}
+pub fn run_isolated_with_output_privacy(case: &str) -> Result<(), IsolationFailure> {
+    capture_isolated(case, true)
+}
+fn capture_isolated(case: &str, output_privacy: bool) -> Result<(), IsolationFailure> {
     let isolation = fixed(
         tempfile::Builder::new()
             .prefix("manyhands isolated SSH ")
@@ -198,10 +231,13 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
     let errors = err.join();
     let output = fixed(output)??;
     let errors = fixed(errors)??;
-    if case == "transport_privacy" {
-        let probes = super::ssh_privacy::load(&probes)?;
-        super::ssh_privacy::clean(&output, &probes)?;
-        super::ssh_privacy::clean(&errors, &probes)?;
+    if output_privacy || case == "transport_privacy" {
+        let probes =
+            super::ssh_privacy::load(&probes).map_err(|_| IsolationFailure::ProbeInventory)?;
+        let output_scan = super::ssh_privacy::clean(&output, &probes);
+        let error_scan = super::ssh_privacy::clean(&errors, &probes);
+        output_scan.map_err(|_| IsolationFailure::OutputPrivacy)?;
+        error_scan.map_err(|_| IsolationFailure::OutputPrivacy)?;
     }
     {
         for line in String::from_utf8_lossy(&output).lines() {
@@ -214,7 +250,7 @@ pub fn run_isolated(case: &str) -> Result<(), FixtureError> {
             }
         }
     }
-    result
+    result.map_err(|_| IsolationFailure::Child)
 }
 pub fn observation(values: &[u128]) {
     println!(

@@ -28,9 +28,21 @@ fn main() {
         eprintln!("SSH synchronization initialization failed");
         std::process::exit(1);
     }
-    ssh_harness::run(CASES);
+    ssh_harness::run_with_output_privacy(CASES, OUTPUT_CONTROLS);
 }
 const CASES: &[ssh_harness::Case] = &[
+    (
+        "synchronization_raw_capture_privacy",
+        synchronization_raw_capture_privacy,
+    ),
+    (
+        "synchronization_probe_union_privacy",
+        synchronization_probe_union_privacy,
+    ),
+    (
+        "synchronization_probe_inventory_fail_closed",
+        synchronization_probe_inventory_fail_closed,
+    ),
     ("hostile_endpoint_redaction", hostile_endpoint_redaction),
     (
         "receiver_expected_old_divergent_race",
@@ -506,6 +518,7 @@ fn physical(root: &Path, worktree: &Path) -> Result<[u8; 32], FixtureError> {
     Ok(*hash.finalize().as_bytes())
 }
 fn receiver_command_fragmentation() -> Result<(), FixtureError> {
+    save_control_probes()?;
     ssh_remote::receiver_command_fragmentation()
 }
 fn primary_current_fast_forward_local_ahead() -> Result<(), FixtureError> {
@@ -576,12 +589,14 @@ fn context_first_current_fast_forward_local_ahead() -> Result<(), FixtureError> 
         first,
     );
     one_update(&w.server, n, CONTEXT, git2::Oid::zero(), first);
+    let current_updates = w.server.receive_updates();
     outcome(
         fixed(w.sync(w.context_request()))?,
         false,
         w.context_request().target,
         first,
     );
+    assert_eq!(w.server.receive_updates(), current_updates);
     let mut remote = fixed(w.peer.find_remote("origin"))?;
     let mut fetch = git2::FetchOptions::new();
     fetch.remote_callbacks(callbacks(&w.server));
@@ -610,6 +625,11 @@ fn context_first_current_fast_forward_local_ahead() -> Result<(), FixtureError> 
         fixed(std::fs::read(context.worktree.join("context-remote")))?,
         b"context-remote"
     );
+    assert_eq!(
+        fixed(fixed(repo.index())?.write_tree())?,
+        fixed(repo.find_commit(next))?.tree_id()
+    );
+    assert_eq!(w.server.receive_updates().len(), n);
     let local = advance(&repo, CONTEXT, "context-local")?;
     outcome(
         fixed(w.sync(w.context_request()))?,
@@ -965,6 +985,10 @@ fn incompatible_generation_history_unknown() -> Result<(), FixtureError> {
     ))?;
     let before = physical(&w.root, &context.worktree)?;
     let n = w.server.receive_updates().len();
+    let push_updates = destination.receive_updates();
+    let push_accepted = accepted(&destination);
+    let push_repo = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+    assert!(push_repo.find_reference(CONTEXT).is_err());
     let mut request = w.context_request();
     request.approval = None;
     assert!(matches!(
@@ -973,6 +997,9 @@ fn incompatible_generation_history_unknown() -> Result<(), FixtureError> {
     ));
     assert_eq!(physical(&w.root, &context.worktree)?, before);
     assert_eq!(w.server.receive_updates().len(), n);
+    assert_eq!(destination.receive_updates(), push_updates);
+    assert_eq!(accepted(&destination), push_accepted);
+    assert!(push_repo.find_reference(CONTEXT).is_err());
     Ok(())
 }
 fn post_accept_disconnect_exact_restart() -> Result<(), FixtureError> {
@@ -1238,5 +1265,153 @@ fn hostile_endpoint_redaction() -> Result<(), FixtureError> {
     assert!(w.sync(w.primary()).is_err());
     assert_eq!(w.server.accepted_keys().len(), auth);
     assert_eq!(physical(&w.root, &w.root)?, before);
+    Ok(())
+}
+
+// Only nested runner captures execute these controlled leaks. Their raw buffers
+// must never reach the outer runner or tool output, including on child failure.
+const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[
+    ("probe_stdout_success", probe_stdout_success),
+    ("probe_stderr_success", probe_stderr_success),
+    ("probe_stdout_failure", probe_stdout_failure),
+    ("probe_stderr_failure", probe_stderr_failure),
+    ("probe_clean_failure", probe_clean_failure),
+    ("probe_inventory_missing", probe_inventory_missing),
+    ("probe_inventory_empty", probe_inventory_empty),
+    ("probe_inventory_non_file", probe_inventory_non_file),
+    ("probe_inventory_corrupt", probe_inventory_corrupt),
+    ("probe_first_world_url", probe_first_world_url),
+    ("probe_first_world_key", probe_first_world_key),
+];
+fn save_control_probes() -> Result<(), FixtureError> {
+    ssh_privacy::save(&[b"runner-private-capture-control".to_vec()])
+}
+fn emit_control(stderr: bool, fail: bool) -> Result<(), FixtureError> {
+    use std::io::Write;
+    save_control_probes()?;
+    let mut bytes = vec![b'x'; 20_478];
+    bytes.extend_from_slice(b"runner-private-capture-control");
+    if stderr {
+        fixed(std::io::stderr().write_all(&bytes))?;
+    } else {
+        fixed(std::io::stdout().write_all(&bytes))?;
+    }
+    if fail { Err(FixtureError) } else { Ok(()) }
+}
+fn probe_stdout_success() -> Result<(), FixtureError> {
+    emit_control(false, false)
+}
+fn probe_stderr_success() -> Result<(), FixtureError> {
+    emit_control(true, false)
+}
+fn probe_stdout_failure() -> Result<(), FixtureError> {
+    emit_control(false, true)
+}
+fn probe_stderr_failure() -> Result<(), FixtureError> {
+    emit_control(true, true)
+}
+fn probe_clean_failure() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    Err(FixtureError)
+}
+fn probe_inventory_missing() -> Result<(), FixtureError> {
+    Ok(())
+}
+fn probe_inventory_empty() -> Result<(), FixtureError> {
+    let root = PathBuf::from(std::env::var_os(ssh_privacy::PROBES).ok_or(FixtureError)?);
+    fixed(std::fs::write(
+        root.join(blake3::hash(b"").to_hex().as_str()),
+        b"",
+    ))
+}
+fn probe_inventory_non_file() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    let root = PathBuf::from(std::env::var_os(ssh_privacy::PROBES).ok_or(FixtureError)?);
+    fixed(std::fs::create_dir(root.join("not-a-probe-file")))
+}
+fn probe_inventory_corrupt() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    let root = PathBuf::from(std::env::var_os(ssh_privacy::PROBES).ok_or(FixtureError)?);
+    let bytes = b"runner-private-capture-control";
+    fixed(std::fs::write(
+        root.join(blake3::hash(bytes).to_hex().as_str()),
+        b"corrupt probe",
+    ))?;
+    assert!(save_control_probes().is_err());
+    Ok(())
+}
+fn synchronization_raw_capture_privacy() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    for case in [
+        "probe_stdout_success",
+        "probe_stderr_success",
+        "probe_stdout_failure",
+        "probe_stderr_failure",
+    ] {
+        assert_eq!(
+            ssh_harness::run_isolated_with_output_privacy(case),
+            Err(ssh_harness::IsolationFailure::OutputPrivacy)
+        );
+    }
+    assert_eq!(
+        ssh_harness::run_isolated_with_output_privacy("probe_clean_failure"),
+        Err(ssh_harness::IsolationFailure::Child)
+    );
+    Ok(())
+}
+fn synchronization_probe_inventory_fail_closed() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    for case in [
+        "probe_inventory_missing",
+        "probe_inventory_empty",
+        "probe_inventory_non_file",
+        "probe_inventory_corrupt",
+    ] {
+        assert_eq!(
+            ssh_harness::run_isolated_with_output_privacy(case),
+            Err(ssh_harness::IsolationFailure::ProbeInventory)
+        );
+    }
+    assert!(ssh_privacy::save(&[]).is_err());
+    assert!(ssh_privacy::save(&[Vec::new()]).is_err());
+    Ok(())
+}
+fn first_world_output(key: bool) -> Result<(), FixtureError> {
+    use std::io::Write;
+    let first = World::new()?;
+    let private_key = first.probes[0].clone();
+    let url = first.server.url();
+    let second = World::new()?;
+    let third = World::new()?;
+    assert!(url != second.server.url() && url != third.server.url());
+    assert!(private_key != second.probes[0] && private_key != third.probes[0]);
+    // Repeat saves too: the union must survive Worlds AND individual snapshots.
+    second.privacy()?;
+    third.privacy()?;
+    let root = PathBuf::from(std::env::var_os(ssh_privacy::PROBES).ok_or(FixtureError)?);
+    let inventory = ssh_privacy::load(&root)?;
+    assert!(inventory.iter().any(|probe| probe == &private_key));
+    assert!(inventory.iter().any(|probe| probe == url.as_bytes()));
+    if key {
+        fixed(std::io::stderr().write_all(&private_key))?;
+    } else {
+        fixed(std::io::stdout().write_all(url.as_bytes()))?;
+    }
+    Ok(())
+}
+fn probe_first_world_url() -> Result<(), FixtureError> {
+    first_world_output(false)
+}
+fn probe_first_world_key() -> Result<(), FixtureError> {
+    first_world_output(true)
+}
+fn synchronization_probe_union_privacy() -> Result<(), FixtureError> {
+    save_control_probes()?;
+    for case in ["probe_first_world_url", "probe_first_world_key"] {
+        assert_eq!(
+            ssh_harness::run_isolated_with_output_privacy(case),
+            Err(ssh_harness::IsolationFailure::OutputPrivacy)
+        );
+    }
     Ok(())
 }
