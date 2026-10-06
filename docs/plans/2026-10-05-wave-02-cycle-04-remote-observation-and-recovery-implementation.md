@@ -262,22 +262,22 @@ handle or endpoint input.
 as needed; create/extend `tests/remote_observation.rs`; update
 `.github/workflows/build.yml`.
 
-- [ ] Add shell-free fixture controls for owned remote ref creation/deletion
+- [x] Add shell-free fixture controls for owned remote ref creation/deletion
   and complete advertisement capture. Keep arbitrary path/command handling and
   sensitive output forbidden.
-- [ ] Prove a recognized remote-only context is `unmaterialized`; a malformed
+- [x] Prove a recognized remote-only context is `unmaterialized`; a malformed
   family ref is visible but cannot create a local branch/worktree; a ref present
   in one complete batch and absent in the next is `remotely_deleted` while its
   locally observed-published context remains untouched. Prove a never-published
   local context remains first-publication eligible, while a cache-loss marker
   makes an absent local context `history_unknown` and blocks that inference.
-- [ ] Prove a failed advertisement after a prior good batch does not mark any
+- [x] Prove a failed advertisement after a prior good batch does not mark any
   state deleted. Exercise poll/manual yield and cancellation around real
   authenticated advertisements, not only a mock recorder.
-- [ ] Extend each native CI target's headless test command with
+- [x] Extend each native CI target's headless test command with
   `--test remote_observation`. Do not describe workflow editing as native
   evidence; actual all-target runs remain a final acceptance gate.
-- [ ] Run focused tests red then green, execute an intentional temporary
+- [x] Run focused tests red then green, execute an intentional temporary
   redaction/atomicity probe where safe, remove it, and record/commit
   `test: prove remote observation recovery states`.
 
