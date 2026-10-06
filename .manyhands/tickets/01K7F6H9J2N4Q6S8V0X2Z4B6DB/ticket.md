@@ -24,17 +24,19 @@ remote callbacks and prove authenticated transport against a real fixture.
   and selected subagent-driven development.
 - [x] Implement and record each task's verification and decisions as comments.
 - [x] Complete local final gates and independent whole-branch review/fix review.
-- [ ] Obtain native CI evidence after authorized publication.
+- [x] Obtain native CI evidence after authorized publication: all five targets
+  passed on `e75e768` in run 37390262561.
 
-Implementation status: locally verified and independently reviewed; native CI pending.
+Implementation status: locally verified, independently reviewed, and native CI
+verified on all five targets. Temporary investigation diagnostics are removed; permanent regressions remain.
 The user approved scope, design, and plan on 2026-10-05, including Q1–Q3 and
 10,000/30,000 ms timeout defaults and the documented per-address/per-blocking-call
 backend limits. The pre-thread bootstrap and test-host design were implemented
 before the connection-driver task. Task/review state is recorded in
 the plan-specific execution ledger and ticket comments; the ticket remains open.
 
-Latest Rust revision `ee8153e` passes all four required Devenv gates: 582 tests,
-including 28 SSH fixture and 45 transport cases, with no failures or ignored
+Latest Rust revision `bbeef25` passes all four required Devenv gates: 585 tests,
+including 31 Unix SSH fixture and 45 transport cases, with no failures or ignored
 tests. CLI smoke exits zero; desktop launched on an active display and was
 deliberately stopped after successful startup. All task and final review findings
 are resolved. See the Cycle's final verification table for contract evidence.
@@ -59,7 +61,8 @@ The plan additionally proves real push, host-pin precedence, imported backend
 validation, rejection-driven session eviction, and native encrypted Ed25519 use.
 Post-transfer failure recovery belongs to subsequent lifecycle Cycles.
 
-Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) is open. Native
-CI follow-up corrections passed both Linux and both Windows targets on `696a036`
-in run 37383857982. Intermittent macOS transfer/rejection assertions remain
-unresolved and are tracked in the Cycle and comments. The ticket remains open.
+Publication: [PR #9](https://github.com/vhodges/manyhands/pull/9) is open. All five
+native targets passed on `e75e768` in [run 37390262561](https://github.com/vhodges/manyhands/actions/runs/37390262561).
+The macOS signal-isolation correction passed 90 probe cases and three permanent
+regressions. Cleanup `bbeef25` passed independent review and all required local gates. The
+final published revision receives normal PR checks; the ticket stays open.

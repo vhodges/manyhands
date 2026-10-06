@@ -155,9 +155,24 @@ Each includes the potential rework or user cost if the decision proves wrong.
    cross-form rewrites conservatively. Cost: a benign rewrite may require an
    explicit URL, or safe equivalence handling may need refinement.
 
+10. Prefer resolved standalone Git helpers, with fixed builtin fallback, exact
+    owned repository arguments, and no shell. Cost: revise fixture discovery or
+    invocation boundaries.
+11. Collect numeric-only diagnostic evidence while preserving captured failure
+    conditions and strict assertions. Cost: revise test instrumentation.
+12. Preserve compiled dependency caches after failed native jobs. Cost: clear or
+    revise cache policy; cached dependencies never constitute acceptance results.
+13. Use a bounded, fail-first macOS probe during investigation, moving it before
+    the full suite for faster evidence. Remove it after native confirmation as
+    requested by the user. Cost: extra CI time during investigation.
+14. Isolate fixture Git-child SIGCHLD from the isolated client test thread while
+    server runtime workers receive it and reap helpers; restore the exact caller
+    mask after cleanup and unwind. Cost: Unix test signal-routing complexity;
+    a separate server process is a larger fallback.
+
 ## Final Local Verification
 
-Latest fully verified local Rust revision: `8e5ef0e`. All four required Devenv commands passed:
+Latest fully verified local Rust revision: `bbeef25`. All four required Devenv commands passed:
 `cargo check --all-features --locked`, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features --locked -- -D warnings`, and
 `cargo test --all-features --locked`. The full suite passed 585 tests, including
@@ -173,11 +188,11 @@ documentation tests, with no failures or ignored tests. Full local log:
 | State preservation | Populated refs, objects, index, dirty worktree, FETCH_HEAD, canonical content, registrations, and private-key bytes compared across before-transfer failures and retries. Lost push response test observes the changed remote without promising rollback. |
 | Privacy | Raw stdout/stderr scanned before filtering; populated DB/WAL/backups/journal/Git state scanned. Temporary stdout, stderr, and retained-WAL-backup secret injections each failed safely; mutations removed and clean cases passed. |
 | Stalled transport | Exact 10,000/30,000 ms settings verified. Handshake/authentication/advertisement/transfer stalls returned at about 30 seconds; delayed command acknowledgment plus cleanup took about 45 seconds. A progressing transfer succeeded after 42.093 seconds. DNS, multiple address attempts, and cleanup remain outside a total deadline guarantee. |
-| Regression and frontends | All required gates passed. CLI smoke exited zero on the final Rust revision. Desktop launched on an active display without startup errors and remained running until deliberate Ctrl-C (intentional exit 1); endpoint fixes did not change startup wiring. |
-| Native platforms | Both Linux and both Windows targets passed on `696a036` in run 37383857982. macOS ARM64 remains unresolved; see the native CI evidence below. |
+| Regression and frontends | All required gates passed. CLI smoke exited zero before the test-only CI amendments. Desktop launched on an active display without startup errors and remained running until deliberate Ctrl-C (intentional exit 1); subsequent amendments did not change startup wiring. |
+| Native platforms | All five native build/test/artifact jobs passed on `e75e768` in run 37390262561: Linux x86-64/ARM64, Windows x86-64/ARM64, and macOS ARM64. macOS also passed all 90 investigative probe cases and the three permanent signal regressions. |
 
-PR #9 is open. Native macOS CI remains an explicit exit gate; the ticket stays
-open. No merge, ticket closure, or worktree cleanup has been performed. The
+PR #9 is open and all native targets have passed. The ticket stays
+open pending the later merge/closure lifecycle. No merge, ticket closure, or worktree cleanup has been performed. The
 execution ledger and review reports remain in the ticket worktree.
 
 ## Publication And Native CI Follow-up
@@ -186,101 +201,46 @@ The user authorized push/PR on 2026-10-05. [PR #9](https://github.com/vhodges/ma
 preserves the original remote checkpoint with merge `5519991`; its file tree
 was verified identical to reviewed `d5deb20`. No force push was used.
 
-Reviewed native compatibility corrections:
+Independently reviewed compatibility corrections support Git builtin helpers on
+Windows (`c9c3dc3`), preserve native Perl/OpenSSL (`fee629d`), and compare
+platform-dependent credential enum types with lossless widening (`ee8153e`).
+Both Linux and both Windows targets passed repeatedly, most recently on
+`e53f293` in [run 37387522542](https://github.com/vhodges/manyhands/actions/runs/37387522542).
 
-- `c9c3dc3`: resolve Git once and support fixed upload-pack/receive-pack builtins
-  when standalone aliases are absent. A real SSH regression covers advertisement,
-  push OID, command restrictions, cleanup, and repository removal.
-- `fee629d`: preserve native Windows Perl/OpenSSL instead of prepending Git's
-  MSYS tool directory; probe native Perl and IPC::Cmd before building.
-- `ee8153e`: compare platform-dependent credential enums with lossless i64
-  widening and scope the Unix-only Read import correctly. Preserve dependency
-  caches after failed jobs without changing locked keys or skipping checks.
+The intermittent macOS assertions were narrowed through numeric-only diagnostics
+and a bounded, fail-first probe. That run confirmed EINTR during the TCP connect
+wait before SSH host/key callbacks (observation `512 1 1`). A controlled real
+libgit2/Manyhands reproduction showed the same failure when SIGCHLD interrupted
+the wait. The in-process fixture's local Git helpers can signal the client when
+they exit, unlike helpers on a real remote server. Native logs confirm EINTR but
+do not themselves record the signal number.
 
-Each correction received independent scoped review without outstanding findings.
-Both Linux and both Windows targets passed build, tests, and artifact upload in
-[run 37380377825](https://github.com/vhodges/manyhands/actions/runs/37380377825),
-and passed again on `696a036` in
-[run 37383857982](https://github.com/vhodges/manyhands/actions/runs/37383857982).
-Windows helper packaging, native toolchain selection, and ABI corrections have
-native runtime evidence.
+Reviewed fixture-only correction `8e5ef0e` isolates this signal coupling. One
+thread-bound guard wraps each isolated Unix case inside catch_unwind and restores
+the complete caller mask after fixture cleanup. Server async and blocking workers
+explicitly receive SIGCHLD and continue reaping children. Windows, production
+transport behavior, overlapping reconnect/cleanup, and strict assertions remain
+intact. There are no retry-to-green changes or settling sleeps.
 
-macOS has intermittently failed three strict assertions: the withheld receive
-status in disconnect_after_receive, KeyRejected in reconnect_key_policy, and
-UnlockFailed in renewed_rejection_evicts_secret. In the latest run, the first
-reconnect-policy checks passed before renewed rejection failed. Earlier native
-macOS runs and local repetitions passed, but no root cause is established.
-Passing reruns alone are not accepted as an explanation or fix.
+Three regressions demonstrate actual poll-interruption protection, exact mask
+restoration on success/error/unwind, and worker delivery/helper reaping with two
+live fixtures. The old harness failed interruption protection; a client-only
+guard failed worker delivery; the complete correction passes. All required local
+gates passed with 585 tests (31 Unix fixture and 45 transport cases). Windows
+retains 28 fixture cases because the signal tests are Unix-specific. Independent
+scoped review approved the correction without findings.
 
-Reviewed diagnostic commits `5ca6680`, `be1bd82`, and `2061b0c` preserve every assertion
-and report fixed numeric outcome, operation-phase, server-authentication, helper,
-and linked-backend observations. Controlled injected failures exercised the
-diagnostic branches and retained the expected assertion failures; mutations were
-removed. The macOS-only probe added in `0d4eed0` runs exact cases in fresh
-invocations after the unchanged full suite and stops on the first failure.
-Shared cfg(test) transfer/backend instrumentation in `2061b0c` records numeric
-return categories and backend code/class/authentication flags before caller
-assertions. Independent review found no issues; all four local gates passed with
-582 tests. The probe now covers all three observed cases, at most 30 triples,
-stopping immediately on a failure. This gathers evidence without claiming a
-behavioral fix.
+On `e75e768`, [run 37390262561](https://github.com/vhodges/manyhands/actions/runs/37390262561)
+passed every native build, full-suite, and artifact job on all five targets.
+macOS also passed all 30 probe rounds (90 fresh case invocations) and all three
+permanent signal regressions. The correction now has complete native evidence.
+Cleanup `bbeef25` removes the temporary probe, observations 506–512, and their
+unused diagnostic helpers/counters. The permanent signal fix, three regressions,
+strict assertions, baseline timeout/privacy observations, and every required
+native matrix/full-suite step remain. Independent review approved the cleanup
+without findings. All four required local gates passed again with 585 tests.
+The final published revision receives the normal PR matrix checks.
 
-Additional implementation rulings and potential costs:
-
-10. Prefer resolved standalone Git helpers, with fixed builtin fallback, exact
-    owned repository arguments, and no shell. Cost: revise the fixture discovery
-    or invocation boundary.
-11. Collect numeric-only phase evidence and preserve immediately captured failed
-    conditions. Cost: revise test instrumentation; diagnostics do not prove a fix.
-12. Preserve compiled dependency caches after failed native jobs. Cost: clear or
-    revise cache policy; cached dependencies never constitute acceptance results.
-13. Repeat affected macOS cases in a bounded probe before the full suite, failing
-    immediately on an error. Cost: extra CI time or revision/removal of the
-    investigative step once sufficient evidence is available.
-14. Isolate fixture Git-child SIGCHLD from the isolated client test thread while
-    allowing server runtime workers to receive it and reap helpers. Restore the
-    exact client mask after cleanup, including unwinding. Cost: Unix test signal
-    routing and guard complexity; a separate server process is a larger fallback.
-    Production signal handling, errors, retries, and backend policy remain intact.
-
-Detailed checkpoints, individual run outcomes, and review evidence are retained
-in the ticket comments and execution ledger. Native macOS acceptance remains
-unresolved; merge, closure, and cleanup are not authorized by PR publication.
-
-Latest investigation: [run 37385680755](https://github.com/vhodges/manyhands/actions/runs/37385680755)
-passed both Linux and both Windows targets. macOS passed its full suite, then
-failed the bounded probe at repetition 13. Shared observations identify an
-OS-class error before host verification/key submission, despite the fixture
-accepting the new TCP connection. A real local reproduction showed that SIGCHLD
-can interrupt the pinned libgit2 TCP wait and produce this error shape; native
-confirmation of the exact OS reason is still pending.
-
-Reviewed diagnostic amendment `6c3b2bd` emits only fixed numeric OS-reason codes
-and moves the unchanged probe before the full suite for earlier failure evidence.
-Both steps remain required for green CI. All four local gates passed again with
-582 tests; independent review found no issues. No production behavior or fixture
-signal routing has changed. The exact native cause and correction remain open.
-
-[Run 37387522542](https://github.com/vhodges/manyhands/actions/runs/37387522542)
-on `e53f293` again passed both Linux and both Windows targets. macOS failed
-disconnect_after_receive at probe 6 with observation `512 1 1`: its TCP
-connection wait was interrupted by a signal before SSH host/key callbacks. This
-confirms EINTR as the native OS reason. The controlled SIGCHLD reproduction and
-in-process fixture helper lifecycle identify test-server child signals as the
-concrete isolation target. A fixture-only correction is being implemented under
-ruling 14; native confirmation of that correction remains required.
-
-Fixture correction `8e5ef0e` implements ruling 14. A thread-bound guard covers
-each isolated Unix case inside catch_unwind, restoring the full caller mask after
-fixture cleanup; server async and blocking workers explicitly receive SIGCHLD.
-Windows and production transport behavior are unchanged. Three regressions prove
-normal/error/unwind restoration, real helper reaping with overlapping fixtures,
-and protection of an actual poll wait from targeted SIGCHLD. The old harness
-failed the interruption check; a client-only guard failed worker-routing coverage;
-the complete correction passes both.
-
-Independent scoped review approved the correction without findings. All four
-required local gates pass: 585 tests, including 31 Unix fixture and 45 transport
-cases, no failures or ignored tests. Windows fixture count remains 28 because
-the three signal cases are Unix-specific. The 30-triple macOS probe and unchanged
-full matrix remain required before native acceptance.
+Detailed checkpoints and earlier run/review evidence remain in the ticket
+comments and execution ledger. The ticket stays open. Merge, closure, and
+worktree cleanup remain separate lifecycle steps.

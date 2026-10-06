@@ -186,10 +186,10 @@ environment set before any Git initialization and bounded process lifetime.
   per-call timeout after the applicable threshold with bounded scheduling tolerance,
   and a progressing multi-call transfer lasting longer than 30 seconds. Record phases
   the backend cannot bound; a test watchdog must not turn that gap into a pass.
-- [ ] Native execution pending authorized CI. Before depending on the fixture for all later tasks, obtain native evidence
-  for helper invocation and encrypted Ed25519 on both Windows architectures when
-  authorized CI is available. Otherwise label that feasibility gate pending and
-  do not claim cross-platform fixture support.
+- [x] Native evidence obtained after authorized publication: helper invocation and
+  encrypted Ed25519 pass on both Windows architectures and all other targets in
+  run 37390262561 on `e75e768`. The feasibility gate stayed explicitly pending
+  until actual native execution; workflow configuration alone was not acceptance.
 - [x] Inspect `devenv shell -- cargo tree --locked -e features --target x86_64-pc-windows-msvc -i libssh2-sys`
   and the ARM64 equivalent; verify both required OpenSSL features. Record resolved
   versions and commit `test: add disposable authenticated SSH Git fixture`.
@@ -337,13 +337,15 @@ after receive-pack. No raw server detail is a public recovery value.
 
 ## Final Verification And Handoff
 
-Latest full local verification on Rust revision `8e5ef0e`: all four required gates
+Latest full local verification on Rust revision `bbeef25`: all four required gates
 passed, 585 tests including 31 fixture and 45 transport cases, no failures or
 ignored tests. CLI smoke passed; desktop startup succeeded on an active display
 before deliberate Ctrl-C. Whole-branch and scoped fix reviews are complete; all
-findings are resolved. Authorized PR #9 is open. Both Linux and both Windows
-targets passed on `696a036` in native run 37383857982; intermittent macOS assertions
-remain under investigation. The Cycle records current evidence and pending gates.
+findings are resolved. Authorized PR #9 is open. All five native targets passed on `e75e768` in run 37390262561. The macOS
+correction also passed all 90 investigative probe cases and three permanent
+signal regressions. Temporary probe/logging cleanup `bbeef25` is independently reviewed and locally
+verified; permanent regressions and the full native matrix remain. The Cycle
+records the evidence, and the published head receives normal PR checks.
 
 Run from the ticket worktree:
 
