@@ -1,9 +1,130 @@
 use std::{fmt, time::Duration};
 
 use git2::Oid;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use std::path::Path;
 
 use super::{RemoteRefClassification, RemoteRefPlan, RemoteRefTarget};
+use crate::repository::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
 use crate::{canonical::ItemId, repository::AuthoringKind};
+
+pub(in super::super) fn recovery_required() -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::RepositorySnapshot,
+        None,
+        RepositoryErrorKind::RecoveryRequired,
+        "remote state requires recovery",
+    )
+}
+
+pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let table_count: i64 = transaction.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('remote_polling_state','remote_observation_batches','remote_ref_observations','remote_context_states','remote_operation_records')",[],|row|row.get(0)).map_err(|_| recovery_required())?;
+    if table_count != 0 && table_count != 5 {
+        return Err(recovery_required());
+    }
+    if table_count == 5 {
+        let missing_policy: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM repositories LEFT JOIN remote_polling_state ON repositories.id=remote_polling_state.repository_id WHERE remote_polling_state.repository_id IS NULL)",[],|row|row.get(0)).map_err(|_| recovery_required())?;
+        if missing_policy {
+            return Err(recovery_required());
+        }
+    }
+    let history_unknown = transaction
+        .path()
+        .filter(|path| !path.is_empty())
+        .and_then(|path| Path::new(path).parent())
+        .map(crate::repository::recovery::remote_history_lost)
+        .transpose()
+        .map_err(|_| recovery_required())?
+        .unwrap_or(false);
+    transaction.execute_batch(&format!("
+        CREATE TABLE IF NOT EXISTS remote_polling_state (
+            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+            paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+            interval_seconds INTEGER NOT NULL DEFAULT 300 CHECK(interval_seconds BETWEEN 60 AND 3600),
+            automatic_backoff_seconds INTEGER CHECK(automatic_backoff_seconds BETWEEN 60 AND 900),
+            recovery_suspended INTEGER NOT NULL DEFAULT {history} CHECK(recovery_suspended IN (0,1)),
+            history_unknown INTEGER NOT NULL DEFAULT {history} CHECK(history_unknown IN (0,1)),
+            configuration_generation INTEGER NOT NULL DEFAULT 0 CHECK(configuration_generation >= 0),
+            remote_name TEXT, primary_branch TEXT,
+            latest_outcome TEXT CHECK(latest_outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
+            CHECK ((remote_name IS NULL) = (primary_branch IS NULL))
+        );
+        CREATE TRIGGER IF NOT EXISTS remote_policy_on_registration AFTER INSERT ON repositories BEGIN
+            INSERT INTO remote_polling_state(repository_id) VALUES (NEW.id);
+        END;
+        CREATE TABLE IF NOT EXISTS remote_observation_batches (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            remote_name TEXT NOT NULL, primary_branch TEXT NOT NULL,
+            configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            observed_at INTEGER NOT NULL CHECK(observed_at >= 0),
+            is_current INTEGER NOT NULL CHECK(is_current IN (0,1)),
+            UNIQUE(repository_id,id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS remote_current_batch ON remote_observation_batches(repository_id) WHERE is_current=1;
+        CREATE INDEX IF NOT EXISTS remote_batches_repository ON remote_observation_batches(repository_id,observed_at);
+        CREATE TABLE IF NOT EXISTS remote_ref_observations (
+            batch_id INTEGER NOT NULL REFERENCES remote_observation_batches(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            remote_ref TEXT, tracking_ref TEXT,
+            classification TEXT NOT NULL CHECK(classification IN ('primary','context','malformed')),
+            advertised_oid TEXT NOT NULL CHECK(length(advertised_oid)=40 AND advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(batch_id,ordinal), UNIQUE(batch_id,remote_ref),
+            CHECK ((remote_ref IS NULL) = (tracking_ref IS NULL)),
+            CHECK (classification='malformed' OR remote_ref IS NOT NULL)
+        );
+        CREATE TABLE IF NOT EXISTS remote_context_states (
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            remote_ref TEXT NOT NULL, tracking_ref TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('document','ticket')), item_id TEXT NOT NULL,
+            last_advertised_oid TEXT CHECK(length(last_advertised_oid)=40 AND last_advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            publication_evidence TEXT NOT NULL CHECK(publication_evidence IN ('never_published','observed_published','history_unknown')),
+            state TEXT NOT NULL CHECK(state IN ('observed','unmaterialized','malformed','remotely_deleted','history_unknown')),
+            observed_at INTEGER NOT NULL CHECK(observed_at >= 0),
+            PRIMARY KEY(repository_id,remote_ref)
+        );
+        CREATE INDEX IF NOT EXISTS remote_context_item ON remote_context_states(repository_id,kind,item_id);
+        CREATE TABLE IF NOT EXISTS remote_operation_records (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            operation_ulid TEXT NOT NULL, configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            remote_name TEXT NOT NULL, primary_branch TEXT NOT NULL,
+            primary_ref TEXT NOT NULL, primary_tracking_ref TEXT NOT NULL,
+            context_ref TEXT, context_tracking_ref TEXT, kind TEXT CHECK(kind IN ('document','ticket')),
+            item_id TEXT, local_branch TEXT,
+            action TEXT NOT NULL CHECK(action IN ('poll','synchronize_context','synchronize_primary','promote','close')),
+            priority TEXT NOT NULL CHECK(priority IN ('poll','manual')),
+            phase TEXT NOT NULL CHECK(phase IN ('reserved','advertising','persisting','completed','interrupted','cancelled','failed')),
+            completed_step TEXT CHECK(completed_step IN ('before_transport','after_advertisement','between_observations','before_batch_commit','after_batch_commit','before_local_mutation')),
+            local_oid TEXT CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
+            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            advertised_oid TEXT CHECK(length(advertised_oid)=40 AND advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            created_at INTEGER NOT NULL CHECK(created_at >= 0), updated_at INTEGER NOT NULL CHECK(updated_at >= created_at),
+            outcome TEXT CHECK(outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
+            UNIQUE(repository_id,operation_ulid),
+            CHECK((context_ref IS NULL)=(context_tracking_ref IS NULL)),
+            CHECK((context_ref IS NULL)=(kind IS NULL)), CHECK((kind IS NULL)=(item_id IS NULL)),
+            CHECK((action IN ('poll','synchronize_primary'))=(context_ref IS NULL)),
+            CHECK((action='poll')=(local_branch IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS remote_operations_repository ON remote_operation_records(repository_id,phase,created_at);
+        CREATE TRIGGER IF NOT EXISTS remote_operation_target_immutable BEFORE UPDATE OF
+            repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,created_at
+            ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable remote operation target'); END;
+    ", history=i32::from(history_unknown))).map_err(|_| recovery_required())?;
+    if table_count == 0 {
+        transaction
+            .execute(
+                "INSERT INTO remote_polling_state(repository_id) SELECT id FROM repositories",
+                [],
+            )
+            .map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
 
 const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 300;
 const MINIMUM_POLL_INTERVAL_SECONDS: u64 = 60;
@@ -61,6 +182,10 @@ impl fmt::Display for RemotePollingValueError {
 }
 
 impl std::error::Error for RemotePollingValueError {}
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod persistence_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemotePollingConfiguration {
@@ -455,12 +580,13 @@ impl RemoteContextSnapshot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteSnapshot {
     polling: RemotePollingConfiguration,
     latest_outcome: Option<RemoteOutcomeCategory>,
     observations: Vec<RemoteRefObservation>,
     contexts: Vec<RemoteContextSnapshot>,
+    history_unknown: bool,
 }
 
 impl RemoteSnapshot {
@@ -476,6 +602,7 @@ impl RemoteSnapshot {
             latest_outcome,
             observations,
             contexts,
+            history_unknown: false,
         }
     }
 
@@ -494,6 +621,671 @@ impl RemoteSnapshot {
     pub fn contexts(&self) -> &[RemoteContextSnapshot] {
         &self.contexts
     }
+
+    /// Missing rows never prove a deletion. After cache loss, they cannot prove
+    /// first-publication eligibility either, even after recovery is resumed.
+    pub fn publication_evidence_for(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> RemotePublicationEvidence {
+        self.contexts
+            .iter()
+            .find(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(id))
+            .map(|context| context.publication_evidence)
+            .unwrap_or(if self.history_unknown {
+                RemotePublicationEvidence::HistoryUnknown
+            } else {
+                RemotePublicationEvidence::NeverPublished
+            })
+    }
+}
+
+fn flag(value: i64) -> Result<bool, RepositoryError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(recovery_required()),
+    }
+}
+
+fn outcome(value: &str) -> Result<RemoteOutcomeCategory, RepositoryError> {
+    Ok(match value {
+        "completed" => RemoteOutcomeCategory::Completed,
+        "configuration_required" => RemoteOutcomeCategory::ConfigurationRequired,
+        "selected_key_unavailable" => RemoteOutcomeCategory::SelectedKeyUnavailable,
+        "unlock_required" => RemoteOutcomeCategory::UnlockRequired,
+        "host_approval_required" => RemoteOutcomeCategory::HostApprovalRequired,
+        "transport_unavailable" => RemoteOutcomeCategory::TransportUnavailable,
+        "protocol_rejected" => RemoteOutcomeCategory::ProtocolRejected,
+        "cancelled" => RemoteOutcomeCategory::Cancelled,
+        "repository_unavailable" => RemoteOutcomeCategory::RepositoryUnavailable,
+        _ => return Err(recovery_required()),
+    })
+}
+
+fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
+    match value {
+        RemoteOutcomeCategory::Completed => "completed",
+        RemoteOutcomeCategory::ConfigurationRequired => "configuration_required",
+        RemoteOutcomeCategory::SelectedKeyUnavailable => "selected_key_unavailable",
+        RemoteOutcomeCategory::UnlockRequired => "unlock_required",
+        RemoteOutcomeCategory::HostApprovalRequired => "host_approval_required",
+        RemoteOutcomeCategory::TransportUnavailable => "transport_unavailable",
+        RemoteOutcomeCategory::ProtocolRejected => "protocol_rejected",
+        RemoteOutcomeCategory::Cancelled => "cancelled",
+        RemoteOutcomeCategory::RepositoryUnavailable => "repository_unavailable",
+    }
+}
+
+/// Configuration preflight supplies only a validated plan and whether any
+/// endpoint/key selection changed. No endpoint, key ID, path, or secret-derived
+/// fingerprint is stored. Task 3 owns when to invoke this transition.
+#[allow(dead_code)]
+pub(in super::super) fn configure(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: Option<&RemoteRefPlan>,
+    configuration_changed: bool,
+) -> Result<i64, RepositoryError> {
+    read_snapshot(transaction, repository_id)?;
+    let policy = read_policy(transaction, repository_id)?;
+    if !configuration_changed && policy.plan.as_ref() == plan {
+        return Ok(policy.generation);
+    }
+    let generation = policy
+        .generation
+        .checked_add(1)
+        .ok_or_else(recovery_required)?;
+    transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting')",[repository_id]).map_err(|_| recovery_required())?;
+    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT id FROM remote_observation_batches WHERE repository_id=?1)",[repository_id]).map_err(|_| recovery_required())?;
+    transaction
+        .execute(
+            "DELETE FROM remote_observation_batches WHERE repository_id=?1",
+            [repository_id],
+        )
+        .map_err(|_| recovery_required())?;
+    transaction
+        .execute(
+            "DELETE FROM remote_context_states WHERE repository_id=?1",
+            [repository_id],
+        )
+        .map_err(|_| recovery_required())?;
+    transaction.execute("UPDATE remote_polling_state SET history_unknown=CASE WHEN remote_name IS NOT NULL THEN 1 ELSE history_unknown END,configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
+        params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
+    Ok(generation)
+}
+
+#[allow(dead_code)]
+pub(in super::super) fn record_outcome(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    category: RemoteOutcomeCategory,
+    backoff: Option<AutomaticBackoff>,
+) -> Result<(), RepositoryError> {
+    read_snapshot(transaction, repository_id)?;
+    transaction.execute("UPDATE remote_polling_state SET latest_outcome=?2,automatic_backoff_seconds=?3 WHERE repository_id=?1",
+        params![repository_id,outcome_name(category),backoff.map(|value| value.duration().as_secs())]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+/// Invoke only with the complete result of a successful advertisement. Failed,
+/// partial, or cancelled calls use record_outcome and leave the current batch.
+/// The caller wraps this in with_transaction; a stale configuration is rejected
+/// before writes. No guard or transaction spans transport work.
+#[allow(dead_code)]
+pub(in super::super) fn complete_batch(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+    generation: i64,
+    observations: &[RemoteRefObservation],
+    observed_at: i64,
+) -> Result<i64, RepositoryError> {
+    read_snapshot(transaction, repository_id)?;
+    let policy = read_policy(transaction, repository_id)?;
+    if observed_at < 0 || policy.generation != generation || policy.plan.as_ref() != Some(plan) {
+        return Err(recovery_required());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for observation in observations {
+        if observation.classification == RemoteRefClassification::MalformedContext {
+            continue;
+        }
+        let target = observation.target.as_ref().ok_or_else(recovery_required)?;
+        if plan.target_for_advertised_ref(target.remote_ref()).as_ref() != Some(target)
+            || plan.classify_advertised_ref(target.remote_ref()).as_ref()
+                != Some(&observation.classification)
+            || !seen.insert(target.remote_ref())
+        {
+            return Err(recovery_required());
+        }
+    }
+    transaction.execute("UPDATE remote_observation_batches SET is_current=0 WHERE repository_id=?1 AND is_current=1",[repository_id]).map_err(|_| recovery_required())?;
+    transaction.execute("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) VALUES(?1,?2,?3,?4,?5,1)",
+        params![repository_id,plan.remote_name(),plan.primary_branch(),generation,observed_at]).map_err(|_| recovery_required())?;
+    let batch = transaction.last_insert_rowid();
+    // Last successful OIDs survive an absent advertisement. Unknown history
+    // cannot turn into a deletion merely because an empty batch completed.
+    transaction.execute("UPDATE remote_context_states SET state='remotely_deleted',observed_at=?2 WHERE repository_id=?1 AND publication_evidence='observed_published'",params![repository_id,observed_at]).map_err(|_| recovery_required())?;
+    for (ordinal, observation) in observations.iter().enumerate() {
+        let (target, classification) = match observation.classification {
+            RemoteRefClassification::Primary => (observation.target.as_ref(), "primary"),
+            RemoteRefClassification::RecognizedContext { .. } => {
+                (observation.target.as_ref(), "context")
+            }
+            RemoteRefClassification::MalformedContext => (None, "malformed"),
+        };
+        transaction.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![batch,ordinal as i64,target.map(RemoteRefTarget::remote_ref),target.map(RemoteRefTarget::tracking_ref),classification,observation.advertised_oid.to_string(),observation.tracking_oid.map(|value|value.to_string())]).map_err(|_| recovery_required())?;
+        if let RemoteRefClassification::RecognizedContext { kind, ref item_id } =
+            observation.classification
+        {
+            let target = plan.context(kind, item_id);
+            let kind = match kind {
+                AuthoringKind::Document => "document",
+                AuthoringKind::Ticket => "ticket",
+            };
+            transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,tracking_oid,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'observed_published','unmaterialized',?8) ON CONFLICT(repository_id,remote_ref) DO UPDATE SET last_advertised_oid=excluded.last_advertised_oid,tracking_oid=excluded.tracking_oid,publication_evidence='observed_published',state='unmaterialized',observed_at=excluded.observed_at",
+                params![repository_id,target.remote_ref(),target.tracking_ref(),kind,item_id.to_string(),observation.advertised_oid.to_string(),observation.tracking_oid.map(|value|value.to_string()),observed_at]).map_err(|_| recovery_required())?;
+        }
+    }
+    record_outcome(
+        transaction,
+        repository_id,
+        RemoteOutcomeCategory::Completed,
+        None,
+    )?;
+    Ok(batch)
+}
+
+fn oid(value: Option<String>) -> Result<Option<Oid>, RepositoryError> {
+    value
+        .map(|value| {
+            let parsed = Oid::from_str(&value).map_err(|_| recovery_required())?;
+            if parsed.to_string() != value {
+                return Err(recovery_required());
+            }
+            Ok(parsed)
+        })
+        .transpose()
+}
+
+#[allow(dead_code)] // Consumed by the reservation controller in Task 3.
+#[derive(Clone, Debug)]
+pub(in super::super) struct StoredRemoteOperation {
+    pub id: i64,
+    pub operation_id: crate::repository::OperationId,
+    pub generation: i64,
+    pub target: RemoteOperationTarget,
+    pub priority: RemoteOperationPriority,
+    pub phase: RemoteOperationPhase,
+    pub completed_step: Option<RemoteOperationSafePoint>,
+    pub local_oid: Option<Oid>,
+    pub tracking_oid: Option<Oid>,
+    pub advertised_oid: Option<Oid>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub outcome: Option<RemoteOutcomeCategory>,
+}
+
+fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, RepositoryError> {
+    let text = |name| row.get::<_, String>(name).map_err(|_| recovery_required());
+    let optional = |name| {
+        row.get::<_, Option<String>>(name)
+            .map_err(|_| recovery_required())
+    };
+    let number = |name| row.get::<_, i64>(name).map_err(|_| recovery_required());
+    let plan = RemoteRefPlan::from_configuration(&text("remote_name")?, &text("primary_branch")?)
+        .map_err(|_| recovery_required())?;
+    let target = match text("action")?.as_str() {
+        "poll" => RemoteOperationTarget::for_poll(&plan),
+        "synchronize_primary" => RemoteOperationTarget::for_primary_synchronization(&plan),
+        action @ ("synchronize_context" | "promote" | "close") => {
+            let action = match action {
+                "synchronize_context" => RemoteOperationAction::SynchronizeContext,
+                "promote" => RemoteOperationAction::Promote,
+                _ => RemoteOperationAction::Close,
+            };
+            let kind = match optional("kind")?.as_deref() {
+                Some("document") => AuthoringKind::Document,
+                Some("ticket") => AuthoringKind::Ticket,
+                _ => return Err(recovery_required()),
+            };
+            let id = optional("item_id")?
+                .ok_or_else(recovery_required)?
+                .parse()
+                .map_err(|_| recovery_required())?;
+            RemoteOperationTarget::for_context(&plan, action, kind, id)
+                .map_err(|_| recovery_required())?
+        }
+        _ => return Err(recovery_required()),
+    };
+    if target.primary_ref.remote_ref() != text("primary_ref")?
+        || target.primary_ref.tracking_ref() != text("primary_tracking_ref")?
+        || target.context_ref().map(RemoteRefTarget::remote_ref)
+            != optional("context_ref")?.as_deref()
+        || target.context_ref().map(RemoteRefTarget::tracking_ref)
+            != optional("context_tracking_ref")?.as_deref()
+        || target.local_branch() != optional("local_branch")?.as_deref()
+        || (target.item().is_none()
+            && (optional("kind")?.is_some() || optional("item_id")?.is_some()))
+    {
+        return Err(recovery_required());
+    }
+    let phase = match text("phase")?.as_str() {
+        "reserved" => RemoteOperationPhase::Reserved,
+        "advertising" => RemoteOperationPhase::Advertising,
+        "persisting" => RemoteOperationPhase::Persisting,
+        "completed" => RemoteOperationPhase::Completed,
+        "interrupted" => RemoteOperationPhase::Interrupted,
+        "cancelled" => RemoteOperationPhase::Cancelled,
+        "failed" => RemoteOperationPhase::Failed,
+        _ => return Err(recovery_required()),
+    };
+    let priority = match text("priority")?.as_str() {
+        "poll" => RemoteOperationPriority::Poll,
+        "manual" => RemoteOperationPriority::Manual,
+        _ => return Err(recovery_required()),
+    };
+    let completed_step = optional("completed_step")?
+        .map(|step| {
+            Ok(match step.as_str() {
+                "before_transport" => RemoteOperationSafePoint::BeforeTransport,
+                "after_advertisement" => RemoteOperationSafePoint::AfterAdvertisement,
+                "between_observations" => RemoteOperationSafePoint::BetweenObservations,
+                "before_batch_commit" => RemoteOperationSafePoint::BeforeBatchCommit,
+                "after_batch_commit" => RemoteOperationSafePoint::AfterBatchCommit,
+                "before_local_mutation" => RemoteOperationSafePoint::BeforeLocalMutation,
+                _ => return Err(recovery_required()),
+            })
+        })
+        .transpose()?;
+    let created_at = number("created_at")?;
+    let updated_at = number("updated_at")?;
+    let generation = number("configuration_generation")?;
+    let local_oid = oid(optional("local_oid")?)?;
+    if created_at < 0
+        || updated_at < created_at
+        || generation < 0
+        || (target.action() == RemoteOperationAction::Poll && local_oid.is_some())
+    {
+        return Err(recovery_required());
+    }
+    Ok(StoredRemoteOperation {
+        id: number("id")?,
+        operation_id: crate::repository::OperationId::parse(&text("operation_ulid")?)
+            .map_err(|_| recovery_required())?,
+        generation,
+        target,
+        priority,
+        phase,
+        completed_step,
+        local_oid,
+        tracking_oid: oid(optional("tracking_oid")?)?,
+        advertised_oid: oid(optional("advertised_oid")?)?,
+        created_at,
+        updated_at,
+        outcome: optional("outcome")?.as_deref().map(outcome).transpose()?,
+    })
+}
+
+pub(in super::super) fn read_operations(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<Vec<StoredRemoteOperation>, RepositoryError> {
+    connection
+        .prepare("SELECT * FROM remote_operation_records WHERE repository_id=?1 ORDER BY id")
+        .and_then(|mut statement| {
+            statement
+                .query_map([repository_id], |row| Ok(operation_from_row(row)))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .into_iter()
+        .collect()
+}
+
+/// Inserts a validated immutable audit envelope. Arbitration and transitions
+/// belong to the controller; this helper does not acquire a Git mutation lock.
+#[allow(dead_code)]
+pub(in super::super) fn insert_operation(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+    created_at: i64,
+) -> Result<i64, RepositoryError> {
+    read_snapshot(transaction, repository_id)?;
+    let policy = read_policy(transaction, repository_id)?;
+    let plan = policy.plan.as_ref().ok_or_else(recovery_required)?;
+    if created_at < 0
+        || target.remote_name() != plan.remote_name()
+        || target.primary_ref() != plan.primary()
+    {
+        return Err(recovery_required());
+    }
+    let action = match target.action() {
+        RemoteOperationAction::Poll => "poll",
+        RemoteOperationAction::SynchronizeContext => "synchronize_context",
+        RemoteOperationAction::SynchronizePrimary => "synchronize_primary",
+        RemoteOperationAction::Promote => "promote",
+        RemoteOperationAction::Close => "close",
+    };
+    let priority = match priority {
+        RemoteOperationPriority::Poll => "poll",
+        RemoteOperationPriority::Manual => "manual",
+    };
+    transaction.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,phase,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'reserved',?15,?15)",params![repository_id,operation_id.to_string(),policy.generation,target.remote_name(),plan.primary_branch(),target.primary_ref().remote_ref(),target.primary_ref().tracking_ref(),target.context_ref().map(RemoteRefTarget::remote_ref),target.context_ref().map(RemoteRefTarget::tracking_ref),target.item().map(|(kind,_)|match kind {AuthoringKind::Document=>"document",AuthoringKind::Ticket=>"ticket"}),target.item().map(|(_,id)|id.to_string()),target.local_branch(),action,priority,created_at]).map_err(|_| recovery_required())?;
+    Ok(transaction.last_insert_rowid())
+}
+
+struct StoredPolicy {
+    polling: RemotePollingConfiguration,
+    history_unknown: bool,
+    generation: i64,
+    plan: Option<RemoteRefPlan>,
+    latest_outcome: Option<RemoteOutcomeCategory>,
+}
+
+fn read_policy(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<StoredPolicy, RepositoryError> {
+    let values = connection.query_row("SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,recovery_suspended,history_unknown,configuration_generation,remote_name,primary_branch,latest_outcome FROM remote_polling_state WHERE repository_id=?1", [repository_id], |row| {
+        Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<i64>>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?))
+    }).map_err(|_| recovery_required())?;
+    let (
+        enabled,
+        paused,
+        interval,
+        backoff,
+        suspended,
+        unknown,
+        generation,
+        remote,
+        primary,
+        latest,
+    ) = values;
+    if generation < 0 {
+        return Err(recovery_required());
+    }
+    let plan = match (remote, primary) {
+        (None, None) => None,
+        (Some(remote), Some(primary)) => Some(
+            RemoteRefPlan::from_configuration(&remote, &primary)
+                .map_err(|_| recovery_required())?,
+        ),
+        _ => return Err(recovery_required()),
+    };
+    Ok(StoredPolicy {
+        polling: RemotePollingConfiguration::new(
+            flag(enabled)?,
+            flag(paused)?,
+            PollingInterval::from_seconds(interval.try_into().map_err(|_| recovery_required())?)
+                .map_err(|_| recovery_required())?,
+            backoff
+                .map(|seconds| {
+                    AutomaticBackoff::from_seconds(
+                        seconds.try_into().map_err(|_| recovery_required())?,
+                    )
+                    .map_err(|_| recovery_required())
+                })
+                .transpose()?,
+            flag(suspended)?,
+        ),
+        history_unknown: flag(unknown)?,
+        generation,
+        plan,
+        latest_outcome: latest.as_deref().map(outcome).transpose()?,
+    })
+}
+
+pub(in super::super) fn read_snapshot(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<RemoteSnapshot, RepositoryError> {
+    for table in [
+        "remote_polling_state",
+        "remote_observation_batches",
+        "remote_ref_observations",
+        "remote_context_states",
+        "remote_operation_records",
+    ] {
+        if connection
+            .prepare(&format!("PRAGMA foreign_key_check({table})"))
+            .and_then(|mut statement| statement.exists([]))
+            .map_err(|_| recovery_required())?
+        {
+            return Err(recovery_required());
+        }
+    }
+    let policy = read_policy(connection, repository_id)?;
+    read_operations(connection, repository_id)?;
+    let mut snapshot = RemoteSnapshot::new(
+        policy.polling,
+        policy.latest_outcome,
+        Vec::new(),
+        Vec::new(),
+    );
+    snapshot.history_unknown = policy.history_unknown;
+    let batches = connection.prepare("SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 ORDER BY id")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    let mut current_count = 0;
+    for (batch_id, remote, primary, generation, observed_at, current) in batches {
+        let plan = RemoteRefPlan::from_configuration(&remote, &primary)
+            .map_err(|_| recovery_required())?;
+        if observed_at < 0 || generation != policy.generation || policy.plan.as_ref() != Some(&plan)
+        {
+            return Err(recovery_required());
+        }
+        let current = flag(current)?;
+        current_count += usize::from(current);
+        if current_count > 1 {
+            return Err(recovery_required());
+        }
+        let rows = connection.prepare("SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1 ORDER BY ordinal")
+            .and_then(|mut statement| statement.query_map([batch_id],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,Option<String>>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+        for (ordinal, remote_ref, tracking_ref, classification, advertised, tracking) in rows {
+            if ordinal < 0 {
+                return Err(recovery_required());
+            }
+            let advertised_oid = oid(Some(advertised))?.ok_or_else(recovery_required)?;
+            let tracking_oid = oid(tracking)?;
+            let observation = match (remote_ref, tracking_ref, classification.as_str()) {
+                (None, None, "malformed") => RemoteRefObservation {
+                    target: None,
+                    advertised_oid,
+                    tracking_oid,
+                    classification: RemoteRefClassification::MalformedContext,
+                },
+                (Some(remote_ref), Some(tracking_ref), classification) => {
+                    let observation = RemoteRefObservation::from_advertisement(
+                        &plan,
+                        &remote_ref,
+                        advertised_oid,
+                        tracking_oid,
+                    )
+                    .ok_or_else(recovery_required)?;
+                    let expected_class = match observation.classification {
+                        RemoteRefClassification::Primary => "primary",
+                        RemoteRefClassification::RecognizedContext { .. } => "context",
+                        // Malformed names are never persisted: only their fixed classification and OIDs.
+                        RemoteRefClassification::MalformedContext => {
+                            return Err(recovery_required());
+                        }
+                    };
+                    if expected_class != classification
+                        || observation.tracking_ref() != Some(tracking_ref.as_str())
+                    {
+                        return Err(recovery_required());
+                    }
+                    observation
+                }
+                _ => return Err(recovery_required()),
+            };
+            if current {
+                if observation.classification == RemoteRefClassification::MalformedContext {
+                    snapshot.contexts.push(RemoteContextSnapshot::new(
+                        None,
+                        None,
+                        None,
+                        Some(advertised_oid),
+                        tracking_oid,
+                        RemotePublicationEvidence::HistoryUnknown,
+                        RemoteContextState::Malformed,
+                    ));
+                }
+                snapshot.observations.push(observation);
+            }
+        }
+    }
+    let contexts = connection.prepare("SELECT remote_ref,tracking_ref,kind,item_id,last_advertised_oid,tracking_oid,publication_evidence,state,observed_at FROM remote_context_states WHERE repository_id=?1 ORDER BY remote_ref")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?,row.get::<_,i64>(8)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    for (remote_ref, tracking_ref, kind, id, advertised, tracking, evidence, state, observed_at) in
+        contexts
+    {
+        let kind = match kind.as_str() {
+            "document" => AuthoringKind::Document,
+            "ticket" => AuthoringKind::Ticket,
+            _ => return Err(recovery_required()),
+        };
+        let id: ItemId = id.parse().map_err(|_| recovery_required())?;
+        let target = policy
+            .plan
+            .as_ref()
+            .ok_or_else(recovery_required)?
+            .context(kind, &id);
+        if target.remote_ref() != remote_ref
+            || target.tracking_ref() != tracking_ref
+            || observed_at < 0
+        {
+            return Err(recovery_required());
+        }
+        let evidence = match evidence.as_str() {
+            "never_published" => RemotePublicationEvidence::NeverPublished,
+            "observed_published" => RemotePublicationEvidence::ObservedPublished,
+            "history_unknown" => RemotePublicationEvidence::HistoryUnknown,
+            _ => return Err(recovery_required()),
+        };
+        let state = match state.as_str() {
+            "observed" => RemoteContextState::Observed,
+            "unmaterialized" => RemoteContextState::Unmaterialized,
+            "malformed" => RemoteContextState::Malformed,
+            "remotely_deleted" => RemoteContextState::RemotelyDeleted,
+            "history_unknown" => RemoteContextState::HistoryUnknown,
+            _ => return Err(recovery_required()),
+        };
+        let advertised = oid(advertised)?;
+        if (state != RemoteContextState::HistoryUnknown)
+            != (evidence == RemotePublicationEvidence::ObservedPublished)
+            || (evidence == RemotePublicationEvidence::ObservedPublished) != advertised.is_some()
+            || (snapshot.history_unknown && evidence == RemotePublicationEvidence::NeverPublished)
+        {
+            return Err(recovery_required());
+        }
+        snapshot.contexts.push(RemoteContextSnapshot::new(
+            Some(target),
+            Some(kind),
+            Some(id),
+            advertised,
+            oid(tracking)?,
+            evidence,
+            state,
+        ));
+    }
+    let local_contexts = connection.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
+        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    for (branch, id) in local_contexts {
+        let (kind, item_id) =
+            crate::repository::stored_authoring_branch(&branch).ok_or_else(recovery_required)?;
+        if item_id.to_string() != id {
+            return Err(recovery_required());
+        }
+        if snapshot
+            .contexts
+            .iter()
+            .any(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(&item_id))
+        {
+            continue;
+        }
+        let target = policy
+            .plan
+            .as_ref()
+            .map(|plan| plan.context(kind, &item_id));
+        let evidence = snapshot.publication_evidence_for(kind, &item_id);
+        snapshot.contexts.push(RemoteContextSnapshot::new(
+            target,
+            Some(kind),
+            Some(item_id),
+            None,
+            None,
+            evidence,
+            RemoteContextState::HistoryUnknown,
+        ));
+    }
+    Ok(snapshot)
+}
+
+impl crate::repository::RepositoryService {
+    pub fn remote_snapshot(&self, root: &Path) -> Result<RemoteSnapshot, RepositoryError> {
+        self.repository_snapshot(root)
+            .map(|snapshot| snapshot.remote)
+    }
+
+    pub fn set_remote_polling(
+        &self,
+        root: &Path,
+        enabled: bool,
+        paused: bool,
+        interval: PollingInterval,
+    ) -> Result<(), RepositoryError> {
+        with_transaction(self, root, |transaction, id| {
+            read_snapshot(transaction, id)?;
+            transaction.execute("UPDATE remote_polling_state SET enabled=?2,paused=?3,interval_seconds=?4 WHERE repository_id=?1",
+                params![id,enabled,paused,interval.duration().as_secs()]).map_err(|_| recovery_required())?;
+            Ok(())
+        })
+    }
+}
+
+/// A short cache-recovery-guarded transaction, never held across Git or network
+/// work. The registry is an observation cache, not a repository mutation lock.
+pub(in super::super) fn with_transaction<T>(
+    service: &crate::repository::RepositoryService,
+    root: &Path,
+    update: impl FnOnce(&Transaction<'_>, i64) -> Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
+    use crate::repository::{cache_read_guard, open_registry, registry_root_key};
+    let operation = RepositoryOperation::RepositorySnapshot;
+    service.require_index_available(operation, Some(root))?;
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let _guard = cache_read_guard(&service.registry_path, &root, operation)?;
+    let mut connection =
+        open_registry(&service.registry_path, &mut |_| {}).map_err(|_| recovery_required())?;
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|_| recovery_required())?;
+    let id = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [registry_root_key(&root, operation)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| recovery_required())?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                operation,
+                None,
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })?;
+    let result = update(&transaction, id)?;
+    transaction.commit().map_err(|_| recovery_required())?;
+    Ok(result)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

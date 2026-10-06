@@ -1,5 +1,5 @@
 mod refs;
-mod state;
+pub(super) mod state;
 
 pub use refs::{RemoteRefClassification, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget};
 pub use state::{

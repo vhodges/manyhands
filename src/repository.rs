@@ -540,6 +540,7 @@ pub struct RepositorySnapshot {
     pub contexts: Vec<DiscoveredContext>,
     pub items: Vec<DiscoveredItem>,
     pub problems: Vec<DiscoveryProblem>,
+    pub remote: RemoteSnapshot,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2870,6 +2871,12 @@ impl RepositoryService {
                         .expect("registry data directory"),
                 )
                 .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
+                recovery::publish_remote_history_marker(
+                    self.registry_path
+                        .parent()
+                        .expect("registry data directory"),
+                )
+                .map_err(|_| remote::state::recovery_required())?;
                 replace_corrupt_registry(&self.registry_path, root)?;
                 let mut connection = open_registry(&self.registry_path, &mut |_| {})
                     .map_err(|error| error.for_operation(operation, root))?;
@@ -5341,6 +5348,7 @@ fn read_repository_snapshot(
         contexts: contexts.into_iter().map(|(_, context)| context).collect(),
         items,
         problems,
+        remote: remote::state::read_snapshot(connection, *repository_id)?,
     })
 }
 

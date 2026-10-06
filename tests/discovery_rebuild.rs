@@ -439,6 +439,7 @@ fn discovery_public_types_hold_metadata_only() {
     let reply_id = support::reply_id();
     let observed_at = OffsetDateTime::UNIX_EPOCH;
     let snapshot = RepositorySnapshot {
+        remote: Default::default(),
         root: root.clone(),
         configuration: SnapshotConfiguration::Valid {
             primary_branch: "main".to_owned(),
