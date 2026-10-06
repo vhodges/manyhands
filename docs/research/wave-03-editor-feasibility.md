@@ -363,8 +363,8 @@ No dependency, graph, feature-closure, core or production-source change.
 
 Initial `EditorState::text` readback establishes S1's load observation;
 entity notifications (not just Changed events), explicit mode/actions and
-capture read actual text again. Notifications cover private undo/redo and
-formatting handlers that do not emit Changed. Visible status separates
+capture read actual text again. Undo/redo notify without Changed;
+Bold/Italic/Code edits emit Changed and notify. Visible status separates
 changed-on-load, later byte edits versus first readback, and conservative
 byte-dirty. Undo to normalized initial bytes still cannot make a normalized
 draft clean relative to the immutable original. No reload/replacement surface
@@ -466,7 +466,7 @@ within S2, with diagnostics retained; no core/dependency workaround.
 Focused example check/build and its three pure tests passed; nine S1 probe
 tests passed. Required all-feature check/fmt/clippy(-D warnings)/tests,
 headless CLI check and CLI smoke passed on the S2 Rust tree. Full tests report
-**668** standard-harness passes (including 9 doctests and 9 S1 tests), zero
+**568** standard-harness passes (including 9 doctests and 9 S1 tests), zero
 failures/ignored, plus existing isolated SSH harnesses 15/31/66. Example tests
 are separately run: Cargo's normal all-feature test command does not execute
 these three tests. Committed-tree gate logs are retained separately from initial

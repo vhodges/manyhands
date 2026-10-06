@@ -293,8 +293,8 @@ impl Host {
             "{}: {category}; capture/notifications read actual text",
             doc.id
         );
-        // dispatch_action is deferred. Notifications catch undo/format even
-        // though Changed is not emitted. Deferred sample also handles no-ops.
+        // dispatch_action is deferred. Undo/redo notify without Changed;
+        // formatting emits Changed and notifies. Deferred sample handles no-ops.
         let id = doc.id;
         let generation = doc.draft.generation();
         let editor = doc.editor.clone();
