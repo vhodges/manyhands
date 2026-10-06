@@ -69,7 +69,7 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 | 5 native host | not executed: preservation stop | none | not applicable | No workaround, core patch or alternative version authorized. |
 | 6 native evidence | not executed: preservation stop | no editor-native evidence | not applicable | Native/fidelity/performance obligations remain unverified. |
 | 7 recommendation/fallback | complete; unchanged fallback blocked | `94672ab..f040268`, pinned source-only report | READY / report OK (`283fbe40`) | User chooses any new bounded investigation; no executable extraction. |
-| 8 verification/handoff | documentation/evidence checks passed; final review pending | `target/readiness-evidence/final/`; retained Rust/Cargo/Devenv/CI files unchanged | whole-branch review pending | Inspect complete committed range; keep ticket open for new direction approval. |
+| 8 verification/handoff | complete at approved negative-result boundary | Docs/evidence checks passed; exact `29f3f5a..44a469a` full-branch review | READY / report OK (`4b944110`) | User reviews findings and approves any new bounded direction; ticket remains open. |
 
 ## Decisions, blockers and review dispositions
 
@@ -282,8 +282,20 @@ not general YAML parsing through the domain parser or actual editor testing.
 A final rerun accompanies the complete committed handoff. No effective Git hook
 was configured; only conventional sample hook files existed at validation time.
 
-Whole-branch fresh review is pending at this checkpoint. Supply exact full-branch
-diff and known artifacts, not only clean working-tree status.
+Fresh final reviewer `4b944110-052a-4b97-a994-dede2f66c605` inspected the complete
+2,920-line exact `29f3f5a25957836a8513cba8a318306e1b928063..44a469a38da57fc97ff27679b164cf83c64daa63`
+committed diff and consequential API/pinned-source claims: **no issues, Task8
+READY / Merge verdict OK** (report/branch content only). Parent accepts the
+gate. Workflow `5d8ca8e9-a770-49c7-be09-90db8e39182d`, output
+`readiness-final/review.md`; a preserved local copy is
+`target/readiness-evidence/final/whole-branch-review.md`. Reviewer inspected
+validation scripts/logs but did not execute commands or independently rerun
+hashes, domain parsing, Rust or native editor tests. Exact submitted diff,
+indexed line intervals, hashes, head/tree/branch and clean state are in
+`final/{whole-branch.diff,review-index.json,review-proof.json}`.
+
+The subsequent delivery-only amendment records this accepted review and ticket
+checkpoint; it does not change the research findings, recommendation or scope.
 Final review does not authorize publishing,
 merging, ticket closure, cleanup, candidate selection or excluded adaptations.
 Ticket is review-ready and lifecycle-open. The next material decision is the
