@@ -1,6 +1,6 @@
 ---
 title: "MVP/Dogfood PRD"
-date: 2026-10-04
+date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
@@ -10,11 +10,22 @@ manyhands_managed: true
 
 **Status:** Approved MVP/Dogfooding release
 
-**Version:** 0.4
+**Version:** 0.5
 
 **Owner:** The product owner maintains this document. Requirement IDs are stable once published; changes to intent or acceptance criteria require an updated version and changelog entry.
 
 ## Changelog
+
+### 0.5 - 2026-10-05
+
+- Product-owner scope clarification: background polling and its index refresh run
+  in a worker inside the desktop process. No separate executable or shared
+  singleton service is required.
+- Removed CLI daemon/background polling and indexing from the MVP. The CLI
+  retains explicit one-shot polling, index refresh/rebuild, and polling policy
+  inspection/configuration. Resident server-side CLI operation is deferred.
+- Removed the need to coordinate multiple resident pollers; existing repository
+  operation safety and manual-operation priority remain required.
 
 ### 0.4 - 2026-10-04
 
@@ -334,7 +345,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - Submitting a new comment or reply is a synchronization-triggering action: after its local checkpoint succeeds, Manyhands immediately attempts synchronization when a publication remote is configured and reports the combined outcome. When no publication remote is configured, or when synchronization cannot complete, it reports the saved local comment or reply as publication pending with actionable recovery.
 - Manyhands reports whether synchronization published local work, found it already current, saved local work with publication pending, or requires recovery.
 - Authentication, remote availability, and conflict errors identify the affected item, repository, and context, provide actionable remediation, and do not discard local work.
-- For a repository with an SSH publication remote, Manyhands enables background remote polling by default at desktop application launch and CLI daemon startup. A user can pause polling or configure its interval for that repository.
+- For a repository with an SSH publication remote, Manyhands enables background remote polling by default at desktop application launch. Polling and its index refresh run in an application-owned worker inside the desktop process and stop when the application exits; no separate executable or shared service is required. A user can pause polling or configure its interval for that repository.
 - Background polling fetches remote state, including new remote branches, refreshes discovery, and fast-forwards the configured primary branch or an existing item context only when the worktree is clean and its local branch is strictly behind the corresponding remote-tracking branch.
 - When background polling discovers a new recognized and conforming Manyhands item-context branch, Manyhands automatically creates its local tracking branch and worktree, then indexes the managed item folder and comments it contains.
 - Background polling preserves dirty, divergent, conflicted, deleted, renamed, malformed, inaccessible, or unrecognized contexts; it identifies the state and provides recovery guidance without removing a local worktree.
@@ -409,7 +420,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 - The index updates after repository lifecycle events that add, enable, remove, or change remotes for a repository.
 - The index updates after managed-document, ticket, and comment changes that affect discovery metadata or editing context.
 - A user can manually request a refresh and the resulting discovery data reflects the currently accessible canonical content.
-- For a repository with an SSH publication remote, background polling is enabled by default at desktop application launch and CLI daemon startup; a user can pause polling or configure its interval for that repository.
+- For a repository with an SSH publication remote, background polling is enabled by default at desktop application launch; a user can pause polling or configure its interval for that repository.
 - A configured poll fetches remote state, updates permitted local Git state,
   fast-forwards only clean primary and item contexts, and materializes a newly
   discovered recognized item context as a worktree before it invokes an
@@ -453,7 +464,7 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
 **Acceptance Criteria:**
 
 - The CLI supports the safe repository inspection and management, SSH key management, discovery and index refresh, content and comment lifecycle, and applicable save, synchronization, managed-document promotion, and ticket-close operations covered by the PRD.
-- The CLI documents a daemon mode that performs configured background remote polling. One-shot CLI operations do not create an implicit resident poller, and the CLI supports explicit one-shot polling plus polling configuration and status operations.
+- The CLI supports explicit one-shot polling, index refresh/rebuild, and polling configuration and status operations. It does not provide a daemon mode or resident background polling/indexing in the MVP. Each invocation completes its requested operation and exits.
 - Each CLI operation produces a human-readable result that identifies success, no-op, failure, or required recovery.
 - The CLI documents a machine-readable output mode and produces its documented format when that mode is requested.
 - An unsuccessful operation exits with a meaningful nonzero status, and a successful or documented no-op operation exits with status zero.
@@ -575,7 +586,7 @@ This journey demonstrates `MH-COLLAB-004`, `MH-COLLAB-006`, `MH-NFR-006`, and `M
 ### Background Remote Update and Discovery
 
 1. A trusted collaborator publishes a primary-branch update and a new recognized, conforming item context to the configured SSH publication remote.
-2. A desktop application or CLI daemon polls the remote and, without user intervention, fast-forwards clean local primary and item contexts, creates exactly one worktree for the newly discovered item context, and indexes its managed item folder and comments.
+2. The desktop application's background worker polls the remote and, without user intervention, fast-forwards clean local primary and item contexts, creates exactly one worktree for the newly discovered item context, and indexes its managed item folder and comments.
 3. In a separate acceptance run, a dirty, divergent, malformed, or remotely deleted context remains locally preserved, is marked with recovery guidance, and no background push, checkpoint, merge, rebase, or cleanup occurs.
 
 This journey demonstrates `MH-COLLAB-004`, `MH-COLLAB-006`, `MH-INDEX-002`, `MH-INDEX-003`, `MH-NFR-006`, and `MH-NFR-008`.
@@ -630,7 +641,7 @@ The following RFCs must resolve product-level dependencies before their correspo
 - **Repository/index persistence and refresh RFC:** Defines application-local state, rebuild and refresh mechanisms, external-change detection, polling schedule and backoff, idempotent worktree materialization, and scale behavior.
 - **Authentication and credential-handling RFC:** Defines Git identity; shared SSH key generation, import, protected storage, selection, removal, and deletion; passphrase prompting and session-only retention; startup polling unlock; remote authentication interaction; credential delegation; and secret redaction. Automated SSH key upload to Git forges is explicitly deferred.
 - **Desktop information architecture and editor RFC:** Defines navigation, multi-item interaction, polling feedback and controls, accessibility implementation, and Markdown editing fidelity.
-- **CLI contract RFC:** Defines commands, safe operation boundaries, daemon-mode polling, machine-readable output format, exit-status taxonomy, and automation behavior.
+- **CLI contract RFC:** Defines commands, safe operation boundaries, explicit one-shot polling and indexing, machine-readable output format, exit-status taxonomy, and automation behavior.
 - **Test and compatibility strategy RFC:** Defines journey testing, polling and lifecycle failure injection, supported platform coverage, Git/environment matrix, and compatibility expectations.
 
 ## Roadmap
@@ -646,6 +657,14 @@ Follow-on work adds planning and board views, scorecards, team rollups, and proj
 ### Templates and Scaffolding
 
 Follow-on work adds templates and scaffolding for repository content and workflows.
+
+### Server-Side Change Watching and Automation
+
+A possible future PRD/enhancement may add CLI daemon mode for server or CI
+environments: watch for repository changes and trigger automations. This is
+an automation use case, not a background service for ordinary user machines
+or a companion required by the desktop application. It is outside the MVP;
+event/trigger semantics and automation execution belong to that future design.
 
 ### Git Forge Key Provisioning
 

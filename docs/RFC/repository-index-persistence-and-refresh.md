@@ -31,7 +31,7 @@ Manyhands stores one SQLite database named `manyhands.sqlite3` in the
 operating-system-appropriate application-data directory resolved through
 `directories::ProjectDirs` for application `Manyhands`. The implementation
 MUST enable foreign-key enforcement, use WAL journal mode, and set a bounded
-busy timeout so desktop, CLI, and a CLI daemon can coordinate safely.
+busy timeout so desktop and one-shot CLI operations can coordinate safely.
 
 The database contains application-local state only. It MUST NOT store private
 key data, passphrases, credentials, credential callback values, unredacted
@@ -143,8 +143,8 @@ reconciliation compares a record with actual Git refs, worktrees, commits, and
 canonical files; Git and Markdown state win. A completed commit with a pending
 index refresh is retried as indexing only and never creates a duplicate commit.
 
-Cycle 05 makes cross-process repository coordination mandatory across desktop,
-CLI, and future daemon processes. Each repository-mutating or
+Cycle 05 makes cross-process repository coordination mandatory across desktop
+and CLI processes. Each repository-mutating or
 index-only-refreshing Wave 1 action MUST acquire a repository-scoped exclusive
 advisory lease at the resolved common Git directory. The lease has a fixed
 bounded wait and recoverable busy outcome. Draft preparation and full read-only
@@ -183,7 +183,10 @@ automatic poll time. Polling is enabled by default, uses a five-minute interval,
 accepts an interval from one to sixty minutes, and backs off failed automatic
 polls from one minute exponentially to a fifteen-minute maximum. Manual
 one-shot polls are never delayed by automatic backoff. Wave 2 persists and
-executes one-shot poll behavior; Wave 3 owns launch and daemon scheduling.
+executes one-shot poll behavior; Wave 3 owns scheduling inside the desktop
+process. Per PRD 0.5, the CLI invokes polling/indexing explicitly and has no
+resident mode. No cross-process scheduler election or due-slot protocol is
+required; existing repository-operation leases and reservations remain.
 
 A poll first fetches and records the Git RFC's remote ref set. It may then
 fast-forward only clean, non-conflicted local primary or shared-context branches
@@ -193,6 +196,35 @@ invokes the index-only refresh. Remote-deleted, divergent, malformed,
 inaccessible, renamed, unrecognized, and unmaterialized contexts remain locally
 preserved and appear as recovery problems. A poll never pushes, checkpoints,
 merges, rebases, stashes, overwrites, discards, or cleans up state.
+
+## Approved Wave 03 Persistence Extensions
+
+The product owner approved these extensions on 2026-10-05 through the
+[desktop](desktop-information-architecture-and-editor.md),
+[CLI](cli-contract.md) and [runtime](application-runtime-and-polling.md) RFCs.
+They are Wave 03 obligations, not claims about the existing schema or APIs.
+
+Explicit user pause remains durable repository policy. Desktop unlock
+suspension is session state and MUST NOT overwrite that policy. The desktop
+owns its background worker; no process-heartbeat registry, poller election or
+cross-process due-slot schema is required. Existing leases and reservations
+continue to protect repository operations.
+
+Recoverable editor drafts live in versioned, owner-protected application-local
+files outside SQLite and operation journals. They retain the source/base text
+needed for recovery, never credentials, and follow the desktop RFC's atomic
+write, flush, restore and explicit-discard rules. They are not canonical item
+state. Index rebuild and registration removal MUST NOT delete them; successful
+save retires only the draft revision proved checkpointed.
+
+CLI mutations persist non-secret request identity, semantic-input digest where
+appropriate, target observations, operation linkage and completed effects.
+Confirmation records bind the exact previewed action and observed effects and
+expire as specified by the CLI RFC. Neither record stores Markdown bodies,
+private-key material, passphrases or passphrase-derived digests. Request replay
+must reconcile Git/canonical state; cache loss that prevents safe replay returns
+recovery-required rather than silently repeating an effect. These records do
+not replace the repository lease or make SQLite authoritative.
 
 ## Wave 1 Acceptance
 

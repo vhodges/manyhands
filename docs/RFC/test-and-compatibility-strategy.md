@@ -163,8 +163,11 @@ without weakening prior evidence:
   disposable bare repositories. It MAY use a test-only local SSH server that
   invokes `git-upload-pack` and `git-receive-pack`; production code remains
   `git2`/libgit2-only and never invokes a system Git executable.
-- Wave 3 adds desktop keyboard journeys, CLI JSON and daemon behavior, native
-  platform journey runs, and trusted-collaborator dogfooding evidence.
+- Wave 3 adds desktop keyboard journeys and application-owned background polling,
+  CLI JSON and explicit one-shot polling/indexing, native platform journey runs,
+  and trusted-collaborator dogfooding evidence. PRD 0.5 removes CLI daemon and
+  concurrent-resident-poller coverage. Existing repository-operation safety
+  tests remain, including explicit CLI operations overlapping desktop polling.
 
 Platform-specific deviations in filesystem case behavior, path normalization,
 Git installations, locking, or credential facilities MUST become documented
@@ -200,3 +203,28 @@ following, in addition to retaining the Wave 1 gate:
 - Remote operation interruption or cancellation at every named boundary,
   reconciliation from actual refs and canonical Markdown, and no secret data in
   SQLite, diagnostics, logs, or assertion output.
+
+## Wave 03 Evidence Gate
+
+The product owner approved the Wave 03 evidence contract on 2026-10-05. This
+RFC adopts the [approval register's evidence matrix](wave-03-rfc-review.md#approved-wave-03-evidence-gate)
+and the acceptance sections of the [desktop/editor](desktop-information-architecture-and-editor.md),
+[CLI](cli-contract.md) and [runtime](application-runtime-and-polling.md) RFCs.
+All Wave 1 and Wave 2 evidence remains required.
+
+The six PRD journeys require real-repository/SSH desktop runs, with explicit CLI
+counterparts. Automatic background discovery is proved by the desktop worker;
+the CLI counterpart uses one-shot polling and leaves no resident worker.
+Required evidence includes rich-text/source fidelity, protected draft recovery,
+stale edits, exact confirmation, request replay, CLI schemas/exits, safe worker
+shutdown, keyboard/IME behavior and the register's native-platform matrix.
+
+Record measurements for the approved responsiveness targets and native
+trusted-collaborator journeys as specified in the register. RFC approval does
+not count as feasibility, performance, compatibility or release evidence.
+Editor integration and responsive safe-point shutdown retain their explicit
+feasibility gates before their dependent implementation. Exercise operations
+that exceed the ten-second feedback threshold: the UI reports still stopping,
+retains live ownership/recovery state and waits safely; no total process-exit
+deadline is asserted. There is no CLI daemon or concurrent
+resident-poller orchestration gate in this release.

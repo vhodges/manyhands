@@ -40,6 +40,18 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A
 conforming implementation MUST preserve unknown front-matter keys and
 user-authored Markdown body content during a read-modify-write operation.
 
+The [desktop/editor RFC](desktop-information-architecture-and-editor.md),
+approved on 2026-10-05, applies that preservation contract to rich-text and
+source modes. Viewing, switching modes and no-change saves preserve original
+source. Rich-text editing retains unsupported constructs and untouched source;
+it does not silently reserialize or simplify an entire document. Actual metadata
+edits preserve unknown values even when YAML formatting changes.
+
+Browsing and repair MUST NOT silently change identity. Adoption of marker-only
+content explicitly previews any generated ID; existing valid IDs remain stable.
+Repair cannot bypass uniqueness, closure fields or the no-reopening boundary.
+These interface rules introduce no canonical schema or ID migration.
+
 ## Repository Configuration
 
 An enabled repository MUST contain this tracked file:

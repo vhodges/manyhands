@@ -99,7 +99,7 @@ item write is still missing.
 Cycle 03 callers MUST serialize authoring operations for the same repository.
 Cycle 04 adds durable operation records after observed external steps. Cycle 05
 adds the repository-scoped cross-process lease and reconciliation evidence that
-make serialization mandatory across desktop, CLI, and daemon processes. A manual
+make serialization mandatory across desktop and CLI processes. A manual
 lifecycle action takes precedence over polling once polling is introduced.
 
 When a user creates an item or starts editing an item:
@@ -309,7 +309,7 @@ step and before changing local state.
 When a merge conflicts, Manyhands MUST retain the affected context or primary
 state and record the unresolved operation. It MUST never select one side,
 discard local changes, or conceal conflict markers. The desktop and CLI RFCs
-will define the interaction that edits a resolution and creates its recovery
+define the interaction that edits a resolution and creates its recovery
 checkpoint before retrying the pending operation.
 
 The operation record has enough state to identify the repository, item when
@@ -328,6 +328,30 @@ only the conflicted owned paths, creates the deterministic resolution checkpoint
 and resumes only the recorded incomplete synchronization step. A changed
 observation returns external-change or recovery-required without overwriting
 the worktree.
+
+## Approved Wave 03 Request And Consent Boundaries
+
+The [CLI](cli-contract.md), [desktop](desktop-information-architecture-and-editor.md)
+and [runtime](application-runtime-and-polling.md) RFCs, approved on 2026-10-05,
+bind front-end requests and confirmation to the domain operations above.
+Request identity binds command, repository, target and semantic input. Replaying
+an ID with changed input is rejected; completed effects are observed before
+resuming only unfinished work. Records contain no draft bodies or credentials.
+Insufficient evidence after cache loss requires recovery instead of blind replay.
+
+Confirmation binds the previewed action, refs/OIDs, affected paths, primary,
+remote and cleanup effects. External changes invalidate the preview and require
+new confirmation. The operation's own recorded transitions do not invalidate
+consent for unchanged remaining effects. A ticket's effect summary covers the
+whole context branch, including code outside canonical item paths. No adapter
+may expand save/refresh/startup into publication or cleanup authorization.
+
+In-application resolution writes only owned canonical Markdown paths.
+Noncanonical code, binary and unsupported structural conflicts remain visible
+with external-tool guidance. After external repair, re-observe actual Git state
+and require deliberate resume of eligible remaining work; do not stage arbitrary
+code or treat removal of text markers as proof of resolved Git conflict state.
+This does not expand the existing owned-path write boundary.
 
 ## Wave 1 Acceptance
 

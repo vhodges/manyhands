@@ -41,7 +41,7 @@ This RFC defines:
   Git fixture required for Wave 2 evidence.
 
 It does not define remote refs, fetch/push ordering, polling, merge recovery,
-desktop prompts, CLI grammar, daemon scheduling, OAuth, Git-forge APIs,
+desktop prompts, CLI grammar, desktop-worker scheduling, OAuth, Git-forge APIs,
 repository cloning, or application authorization. The Git workflow RFC owns the
 remote lifecycle; the repository/index RFC owns physical persistence; and the
 desktop and CLI RFCs own interaction details.
@@ -148,6 +148,21 @@ that clears it when the session ends or replaces it. The provider may return
 cancelled, unavailable, or a passphrase. Cancellation leaves the repository and
 key state unchanged and pauses polling until a later explicit unlock or sync
 attempt.
+
+The approved [runtime RFC](application-runtime-and-polling.md) refines Wave 03
+session boundaries: the desktop UI and its background worker share one
+process-local credential session; each one-shot CLI invocation has its own
+short session. No passphrase transfers between processes. Key selection/file
+replacement, clearing and exit invalidate retained material as defined there.
+
+Polling suspended for unlock is distinct from an explicit persisted user pause.
+Successful explicit unlock clears the session block without clearing user
+pause. A failed CLI unlock MUST NOT change desktop polling policy. The
+[CLI RFC](cli-contract.md) permits masked controlling-terminal input for an
+interactive invocation only; JSON/noninteractive operation reports
+unlock-required and never reads a passphrase from arguments, environment,
+files or redirected stdin. CLI resident sessions are outside the MVP. These
+interaction refinements were approved by the product owner on 2026-10-05.
 
 Every Git-over-SSH operation builds fresh `git2::RemoteCallbacks` inside the
 operation that uses them. The credentials callback:
