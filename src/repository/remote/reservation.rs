@@ -206,7 +206,6 @@ fn acknowledge(
 
 /// The only observation publication path for a reservation. Ownership, requests,
 /// complete-batch writes and the durable post-commit checkpoint commit together.
-#[allow(dead_code)] // Task 4 supplies the successful advertisement result.
 pub(in super::super) fn commit_observation_batch(
     service: &RepositoryService,
     root: &Path,
@@ -242,7 +241,23 @@ fn finish(
         RemoteOutcomeCategory::Cancelled => "cancelled",
         _ => "failed",
     };
-    state::record_outcome(tx, id, category, None)?;
+    // Persist future automatic retry policy, without scheduling or delaying this
+    // call. Attention states and explicit failures retain the existing policy.
+    let previous = state::read_snapshot(tx, id)?.polling().automatic_backoff();
+    let delay = match category {
+        RemoteOutcomeCategory::Completed => None,
+        RemoteOutcomeCategory::TransportUnavailable | RemoteOutcomeCategory::ProtocolRejected
+            if record.priority == RemoteOperationPriority::Poll =>
+        {
+            Some(previous.map_or(60, |delay| delay.as_secs().saturating_mul(2).min(900)))
+        }
+        _ => previous.map(|delay| delay.as_secs()),
+    };
+    let backoff = delay
+        .map(super::AutomaticBackoff::from_seconds)
+        .transpose()
+        .map_err(|_| state::recovery_required())?;
+    state::record_outcome(tx, id, category, backoff)?;
     tx.execute("UPDATE remote_operation_records SET phase=?2,outcome=?3,updated_at=max(updated_at,?4) WHERE id=?1",
         params![record.id,phase,state::outcome_name(category),now()]).map_err(|_| state::recovery_required())?;
     Ok(())

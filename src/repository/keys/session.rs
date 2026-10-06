@@ -260,6 +260,7 @@ struct CachedPassphrase {
 pub struct SessionCredentials<P> {
     provider: P,
     cached: Option<CachedPassphrase>,
+    blocked: Option<(UnlockRequest, SessionUnlockFailure)>,
 }
 
 impl<P> fmt::Debug for SessionCredentials<P> {
@@ -277,17 +278,40 @@ impl<P: SessionCredentialProvider> SessionCredentials<P> {
         Self {
             provider,
             cached: None,
+            blocked: None,
         }
     }
 
     pub fn clear(&mut self) {
         self.cached = None;
+        self.blocked = None;
     }
 
     pub fn invalidate(&mut self, key_id: SharedKeyId) {
-        if self.cached.as_ref().map(|cached| cached.key_id) == Some(key_id) {
+        if self.cached.as_ref().map(|cached| cached.key_id) == Some(key_id)
+            || self.blocked.as_ref().map(|(request, _)| request.key_id) == Some(key_id)
+        {
             self.clear();
         }
+    }
+
+    pub(crate) fn reconcile_source(&mut self, request: &UnlockRequest) {
+        if self.cached.as_ref().is_some_and(|cached| {
+            cached.key_id != request.key_id || cached.source != request.source
+        }) || self.blocked.as_ref().is_some_and(|(blocked, _)| {
+            blocked.key_id != request.key_id || blocked.source != request.source
+        }) {
+            self.clear();
+        }
+    }
+
+    pub(crate) fn blocked_unlock(&self, request: &UnlockRequest) -> Option<SessionUnlockFailure> {
+        self.blocked
+            .as_ref()
+            .filter(|(blocked, _)| {
+                blocked.key_id == request.key_id && blocked.source == request.source
+            })
+            .map(|(_, failure)| *failure)
     }
 
     /// Reports only whether the selected key and observed source match.
@@ -334,8 +358,14 @@ impl<P: SessionCredentialProvider> SessionCredentials<P> {
                     Err(failure) => Err(failure.into()),
                 }
             }
-            PassphraseResponse::Cancelled => Err(SessionUnlockFailure::Cancelled),
-            PassphraseResponse::Unavailable => Err(SessionUnlockFailure::ProviderUnavailable),
+            PassphraseResponse::Cancelled => {
+                self.blocked = Some((request, SessionUnlockFailure::Cancelled));
+                Err(SessionUnlockFailure::Cancelled)
+            }
+            PassphraseResponse::Unavailable => {
+                self.blocked = Some((request, SessionUnlockFailure::ProviderUnavailable));
+                Err(SessionUnlockFailure::ProviderUnavailable)
+            }
         }
     }
 }

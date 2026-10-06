@@ -52,17 +52,20 @@ use recovery::{
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, PollingInterval, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationOutcome, RemoteOperationAction, RemoteOperationInspection,
-    RemoteOperationPhase, RemoteOperationPriority, RemoteOperationSafePoint, RemoteOperationTarget,
-    RemoteOperationTargetError, RemoteOutcomeCategory, RemotePollInvocation,
-    RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
-    RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
-    RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
-    RemoteSnapshot,
+    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, RemoteContextSnapshot,
+    RemoteContextState, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
+    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
+    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
+    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
+    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteReservation,
+    RemoteReservationOutcome, RemoteSafePointOutcome, RemoteSnapshot,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
+#[cfg(test)]
+#[allow(unused_imports)] // Used by the source-included isolated SSH test runner.
+pub(crate) use remote::observation_tests;
 const INDEX_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const INDEX_OWNER_STALE_AFTER: i64 = 3;
 const REGISTRY_BUSY_TIMEOUT: Duration = Duration::from_secs(5);

@@ -1,4 +1,8 @@
+mod observation;
 mod refs;
+pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+#[cfg(test)]
+pub(crate) mod observation_tests;
 pub(super) mod reservation;
 pub(super) mod state;
 
