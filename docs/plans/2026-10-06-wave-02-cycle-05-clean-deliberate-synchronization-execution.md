@@ -48,7 +48,7 @@ existing-worktree requirement.
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
 - Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
-- Task 3: pending.
+- Task 3: implemented and locally verified at `6aa81fc99fa4bb6c6f7e31df997962ec2aacc516`; independent review pending.
 - Task 4: pending.
 - Task 5: pending.
 - Task 6: pending.
@@ -593,3 +593,132 @@ Normal verification blocker is now resolved locally **by the approved test
 contract correction**, not by declaring old failures harmless. Task 2 still
 requires fresh targeted independent review and parent acceptance. Ticket open;
 publication/native CI/merge/closure/cleanup remain unauthorized.
+
+## Task 3 — scoped exact authenticated transport — 2026-10-06T16:20:00Z
+
+Task base: `1903f3aaaa6f334c2ea9b54b4433223021bc9d75`.
+Implementation head: `6aa81fc99fa4bb6c6f7e31df997962ec2aacc516`
+(`feat: support exact synchronization transfers`). This evidence-only checkpoint
+follows it; full final base/head/status and exact committed-range diff are in
+`/tmp/manyhands-cycle05-task3-review-head.txt` and
+`/tmp/manyhands-cycle05-task3-review.diff`. **Independent review pending**;
+Task 4 must wait for parent acceptance. Ticket remains open.
+
+Read AGENTS, approved Cycle/design/implementation/execution, canonical ticket
+and comments, accepted Tasks 1–2 and existing transport/fixture seams. Parent
+preflight/main ancestry remains reused; branch/worktree were clean at task base.
+No new worktree/rebase/stash/reset/clean, dependency/lockfile, public export,
+frontend, sync orchestrator, state/recovery, scheduler, poll-policy or CI edit.
+No publication/PR/merge/closure/cleanup. Only production `transport/remote.rs`
+changed; `operation_tests.rs` adds private test checkpoints, not runtime policy.
+
+### API / supervisor ruling / Task 4 handoff
+
+Three crate-private `AuthenticatedSshRemote` methods, each confined to the
+existing `with_authenticated_remote[_policy]` secret borrow:
+
+- `fresh_advertisement(&mut self) -> Result<Vec<(String, Oid)>, SshTransportError>`
+  genuinely disconnects/reconnects and lists the request's direction. Existing
+  `advertisement` remains unchanged for poll/Cycle 03 policy.
+- `fetch_exact(&mut self, &RemoteRefPlan, &SynchronizationTarget) -> Result<(), …>`
+  derives only exact primary or primary+one context mappings, lists successfully
+  to select present sources, then downloads via a newly authenticated connection.
+  Its own download connection's advertisement supplies OIDs; absence on that
+  connection fails closed rather than using stale earlier OIDs. Empty selected
+  scope skips download (an empty libgit2 refspec list would select defaults).
+  `update_fetchhead(false)`, tags `None` and prune `Off` are explicit.
+- `push_exact(&mut self, &RemoteRefPlan, &SynchronizationTarget) -> Result<(), …>`
+  derives one ordinary mapping. It cannot accept force/wildcard/deletion/raw
+  caller mappings or another target. Both local non-fast-forward and per-ref
+  server status rejection map fixed `PushRejected`, never backend text.
+
+All typed transfers bind the plan to current publication remote and primary,
+reject mismatched direction/scope, and recheck configuration/key selection/source,
+endpoint and host trust before/after reconnect/transfer. Every connection must
+submit exactly the selected key once; unexpected extra reconnects fail closed.
+The existing legacy object-only download/raw fixture push remain unchanged in
+policy and are NOT synchronization APIs. New methods have narrow reasoned
+`dead_code` allowances until Task 4 consumes them; remove when wired.
+
+Supervisor approved **typed primitives, not another composed wrapper**. Task 4
+owns complete list / durable safe point / exact transfer / safe point / fresh list
+composition in the existing scoped closure. Checks must run OUTSIDE libgit2
+calls and with no Git lease held over network/prompt/discovery. Task 4 must
+compare its complete pre/post Fetch advertisements and exact tracking OIDs before
+local integration; internal listing is not a substitute. Failed/partial transfers
+are not complete observation or remote deletion evidence. Push-direction OIDs
+are operation proof only; distinct `pushurl` never changes Fetch tracking evidence.
+A successful push return is NOT Published; Task 4 must independently list again
+and observe the exact candidate OID, recording the Task 2 durable boundaries.
+
+### Locked libgit2 preservation defect and approved workaround
+
+First wire run failed the existing-FETCH_HEAD byte assertion. Inspection of
+locked **libgit2-sys 0.18.8+1.9.7** `remote.c` found
+`git_remote_update_tips` unconditionally calling `truncate_fetch_head` at line2139,
+before testing update flags. `RemoteUpdateFlags::empty()` therefore still truncates
+the file. Parent independently verified the source and approved the following
+narrow workaround; no dependency change or save/restore of FETCH_HEAD:
+
+Download objects only, then validate ALL exact tracking destinations, downloaded
+commit objects, and expected old direct-reference OIDs before the first write.
+Acquire the existing short common-Git lease only AFTER download returns;
+revalidate plan/key/endpoint/trust under it. Use Git expected-old ref writes
+(`reference_matching`) for existing tracking refs, create-only writes for absent
+ones. Only plan-derived `refs/remotes/…` can change; tracking rewind is allowed,
+local branches never are. Release the lease before a later advertisement.
+An external tracking change/write lock maps fixed redacted `ProtocolFailure`;
+a partial write remains inspectable tracking metadata, not completed observation
+or branch integration. No absent tracking ref is pruned, no tags/local branch or
+FETCH_HEAD is modified. Task 4 must preserve partial state/reconcile normally.
+
+### Tests-first / preservation / privacy evidence
+
+Five real SSH contract cases were written before production: initial command
+failed compilation with missing exact methods (15 missing-method errors plus
+one fixture key-version mismatch, corrected via existing byte API). Added later
+coverage plus one private mapping unit test yields **7 new wire cases +1 unit**.
+The pre-thread custom host now runs **73** SSH transport cases (previous66).
+No mock substitutes for transfer/tracking/push claims; no support-fixture change.
+
+Coverage: primary/context exact scope, hostile default prune/tag settings,
+existing FETCH_HEAD bytes and absent FETCH_HEAD, unrelated tracking refs/tags/
+local branches, genuine tracking rewind, context/primary absence without prune,
+plan/remote/primary/direction mismatch, force/wildcard/delete/cross-target mapping
+rejection, encrypted selected-key/session reuse and exact per-connection key
+counts, endpoint/selection/source/pin/host changes on reconnect, distinct Fetch
+and Push destinations with distinct primary OIDs and post-push exact context OID,
+changed/missing transfer advertisement, external tracking changes before/after
+validation, second-ref lock failure leaving only inspectable partial tracking,
+ordinary non-fast-forward and actual reference-status rejection. Hostile endpoint
+and server-message sentinels remain absent from formatted diagnostics. Existing
+transport/privacy/poll/state regression cases pass; this is not Task 5's full
+synchronization durable-store privacy or accepted-before-disconnect proof.
+
+### Commands and honest failure record
+
+All Rust commands used Devenv; logs outside repository:
+`/tmp/manyhands-cycle05-task3/`.
+
+| Command | Result / retained log |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_` (before production) | Expected exit101 absent API, `red.log` |
+| Same focused target, initial production | Failed existing FETCH_HEAD preservation at assertion63, `green-attempt.log`; led to approved libgit2 workaround, not weakened assertion |
+| Intermediate focused/rejection targets | Failures from 17-byte hostile marker against required16-byte packet (`green2.log`, `rejection-attempt.log`), then local NFF category (`rejection2.log`); fixed fixture marker and scoped fixed rejection mapping |
+| `devenv shell -- cargo test --locked --lib repository::transport::remote::tests` | 1 passed, `unit-green.log`; also passes in final full gate |
+| `devenv shell -- cargo test --locked --test ssh_transport` initial regression | Stopped at distinct-endpoint setup: root commit onto existing ref without parent rejected; corrected setup to create owned ref then set destination main, `transport.log` |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_` | Final7 passed, `green-final.log` |
+| `devenv shell -- cargo test --locked --test ssh_transport` | Final73 passed, `transport-final.log` |
+| `devenv shell -- cargo fmt` | Exit0; formatting logs retained |
+| `devenv shell -- cargo check --all-features --locked` | Final exit0, `check-final2.log` |
+| `devenv shell -- cargo fmt --check` | Final exit0, `fmt-final2.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Initial3 collapsible-if warnings, then12 large typed error closure warnings; fixed let-chains and narrow test-module allowance consistent with transport contract; final exit0 `clippy-final2.log` |
+| `devenv shell -- cargo test --all-features --locked` | Normal default gate exit0, **585 standard+119 custom SSH =704 passed**, `test.log`; library153/discovery59/transport73 |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit0, no window, `cli.log` |
+| `git diff --check` | Exit0 before source checkpoint; final evidence checkpoint checked too |
+
+No infrastructure failure, full-test retry, serialization, discovery correction
+change or failed-gate relabelling. Intermediate failures retained and diagnosed
+before rerun; final broad test gate run only once. Native CI remains pending
+publication authority; whole-Cycle acceptance/service-effect proof remains
+Tasks 4–6. Next gate: independent Task 3 review and parent acceptance.
