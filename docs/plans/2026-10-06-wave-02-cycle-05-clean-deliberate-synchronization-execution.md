@@ -46,7 +46,7 @@ existing-worktree requirement.
 ## Task state
 
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
-- Task 1: pending.
+- Task 1: implemented and locally verified; independent review pending.
 - Task 2: pending.
 - Task 3: pending.
 - Task 4: pending.
@@ -55,9 +55,9 @@ existing-worktree requirement.
 
 ## Verification and review
 
-No new Rust validation or implementation evidence yet. Native five-target CI
-requires later authorized publication. Prior Cycle 04 results are not substituted
-for fresh baseline or final Cycle 05 checks.
+Baseline and per-task Rust validation evidence is recorded below. Native
+five-target CI requires later authorized publication. Prior Cycle 04 results are
+not substituted for fresh baseline or final Cycle 05 checks.
 
 ## Baseline and dependency checkpoint — 2026-10-06T14:29:13Z
 
@@ -154,3 +154,84 @@ remote_observation. Task 5 must add remote_synchronization. Workflow feasibility
 is confirmed only by source inspection; **no actual native CI was run or claimed**.
 Native evidence remains pending authorized publication. Baseline is ready for
 Task 1; ticket stays open and publication/closure/cleanup remain unauthorized.
+
+## Task 1 — exact refs, typed targets, pure graph planning — 2026-10-06T14:41:28Z
+
+Task base: `03d7d1fd42eb51584bf8aa3180f885660ced43d0` (committed baseline
+evidence read before implementation). Reused the existing ticket worktree/branch
+and parent preflight; no fetch/rebase/worktree/stash/reset/clean was performed.
+Checkpoint message: `feat: define clean synchronization contracts`.
+**Implementation and local checks complete; independent review is pending.**
+Task 2 must wait for that review gate; no review approval is implied here.
+
+### Interface and scope
+
+- `RemoteRefPlan::{primary_fetch_refspec,context_fetch_refspec}` derive only
+  `+P:T(P)` and `[+P:T(P), +C:T(C)]`. The leading `+` updates tracking refs only.
+  `{primary_push_refspec,context_push_refspec}` derive exact ordinary `P:P` or
+  `C:C`; no force, wildcard, empty source, or arbitrary ref input. Existing poll
+  wildcard policy and configuration validation are unchanged.
+- Added approved `SynchronizationTarget::{Primary,Context { kind,item_id }}`
+  and `SynchronizeRemoteRequest { root,operation_id,target,approval,restart }`
+  in `state.rs`, with minimal module/repository exports. Target construction
+  uses canonical `ItemId` and `AuthoringKind`; `operation_target(&RemoteRefPlan)`
+  reuses the existing validated `RemoteOperationTarget` constructors. There are
+  no URL/refspec/OID/key/worktree/credential/force request fields.
+- `remote::refs::plan_clean_integration` is visible only inside `remote` and
+  consumes OIDs and an ancestry closure `FnMut(ancestor,descendant) ->
+  Result<bool,E>`, never repository/network handles. It returns internal
+  `CleanIntegrationPlan { final_oid,local_update,push_needed }` or
+  `CleanIntegrationError::{PrimaryMissing,RemoteContextDeleted,HistoryUnknown,
+  MergeRequired,Ancestry(E)}`. An ancestry query failure is not divergence.
+  Equal OIDs bypass ancestry queries. There is no public graph API.
+- Context planning evaluates the remote relation and then primary relation
+  virtually before returning one plan. Missing context permits first publication
+  only with `NeverPublished`; observed deletion and unknown history are typed
+  boundaries. Primary presence is required before any successful plan. Current
+  advertised context presence uses the actual graph despite unknown old history.
+- `push_needed` describes Fetch-side graph planning, **not** publication proof
+  or authority to skip independent Push-direction checks (Task 4). Callers must
+  supply tracking OIDs matching the complete current Fetch advertisement; an
+  absent context must be `None` even if a stale tracking ref survives.
+- Narrow dead-code allowances on the internal graph seam keep this intermediate
+  checkpoint warning-free until Task 4 consumes it; remove them when wired.
+  No persistence schema, reservation, transport, orchestration, integration
+  fixture, CI, dependency, lockfile, desktop, or CLI grammar change was made.
+
+### Tests-first and local verification
+
+Added nine private source-named tests in `remote/refs_tests.rs` before production
+implementation and attached them to `refs.rs`. Tests cover exact strings for
+both context kinds and slash-containing valid names; invalid/reserved names and
+canonical-ID injection; target derivation for primary/document/ticket; equal,
+behind, ahead and divergent graph pairs; missing primary; first publication,
+deleted and history-unknown absence; primary divergence after an otherwise valid
+context fast-forward; equal-OID query bypass and ancestry-error propagation.
+These are pure planning tests, not real worktree/ref preservation evidence.
+
+Raw logs: `/tmp/manyhands-cycle05-task1/` (outside repository).
+
+| Exact command | Exit | Evidence |
+| --- | ---: | --- |
+| `devenv shell -- cargo test --locked --lib repository::remote::refs::tests` (red, before production) | 101 (expected) | `red.log`: missing target/request imports, four exact ref methods, graph types/function; 32 compile errors demonstrate absent contract |
+| `devenv shell -- cargo fmt` | 0 | `format.log`: formatted only owned Rust files |
+| `devenv shell -- cargo test --locked --lib repository::remote::refs::tests` (green) | 0 | `green.log`: 9 passed, 0 failed, 127 filtered |
+| `devenv shell -- cargo test --locked --lib` | 0 | `lib.log`: 136 passed, 0 failed/ignored/filtered |
+| `devenv shell -- cargo check --all-features --locked` | 0 | `check.log`: successful dev check |
+| `devenv shell -- cargo fmt --check` | 0 | `fmt.log`: no formatting differences |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | `clippy.log`: no warning failures |
+| `devenv shell -- cargo test --all-features --locked` | 0 | `test.log`: 568 standard tests and 112 SSH cases passed (680 total) |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | 0 | `cli.log`: CLI skeleton exited without a window |
+| `git diff --check` | 0 | no whitespace errors |
+
+All Cargo commands ran through Devenv. An optional `python3` text-edit helper
+was unavailable (exit 127, no edits by that helper); native editing tools and
+`sed` completed the same mechanical changes. No Rust/Devenv infrastructure or
+validation failure occurred. No secrets/endpoints or backend text were introduced
+into durable records/errors. Full privacy/real transfer/replay acceptance remains
+Tasks 2–5; all five native CI targets remain pending authorized publication.
+
+Changed source files: `src/repository/remote/{refs.rs,refs_tests.rs,state.rs,mod.rs}`
+and `src/repository.rs`. Durable evidence: this ledger and canonical ticket
+comment `01M5100000J5K6M7N8P9Q0R1S2`. Ticket remains open; no push/PR/merge/closure/
+cleanup occurred. Next gate: independent Task 1 review, then Task 2 durable state.

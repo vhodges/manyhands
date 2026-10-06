@@ -360,6 +360,41 @@ pub enum RemoteOperationSafePoint {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SynchronizationTarget {
+    Primary,
+    Context {
+        kind: AuthoringKind,
+        item_id: ItemId,
+    },
+}
+
+impl SynchronizationTarget {
+    pub fn operation_target(&self, plan: &RemoteRefPlan) -> RemoteOperationTarget {
+        match self {
+            Self::Primary => RemoteOperationTarget::for_primary_synchronization(plan),
+            Self::Context { kind, item_id } => RemoteOperationTarget::for_context(
+                plan,
+                RemoteOperationAction::SynchronizeContext,
+                *kind,
+                item_id.clone(),
+            )
+            .expect("synchronization contexts always have a context action"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SynchronizeRemoteRequest {
+    pub root: std::path::PathBuf,
+    pub operation_id: crate::repository::OperationId,
+    pub target: SynchronizationTarget,
+    pub approval: Option<crate::repository::transport::HostApproval>,
+    /// Explicitly resume the same interrupted or publication-ambiguous action;
+    /// ordinary duplicate calls never steal ownership.
+    pub restart: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteOperationTarget {
     action: RemoteOperationAction,
     remote_name: String,

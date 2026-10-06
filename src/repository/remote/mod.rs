@@ -17,6 +17,7 @@ pub use state::{
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
     RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
     RemotePollingValueError, RemotePublicationEvidence, RemoteRefObservation, RemoteSnapshot,
+    SynchronizationTarget, SynchronizeRemoteRequest,
 };
 
 #[cfg(test)]
