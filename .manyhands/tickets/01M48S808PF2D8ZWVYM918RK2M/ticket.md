@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "plan-approved"
+status: "in-progress"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -17,9 +17,11 @@ relax the approved Wave entry gate or reorder its implementation Cycles.
 ## Authorized Now
 
 The user approved all three planning documents on 2026-10-06 at reviewed
-revision `aa51f96` and authorized updating/committing their status with a ticket
-approval comment in the same commit. No executable feasibility probes,
-production implementation, publishing, merge, closure or cleanup are authorized.
+revision `aa51f96`, then explicitly authorized execution using subagent-driven
+development on the same date. Execute the approved bounded exploration in this
+ticket worktree; production integration, publishing, merge, closure, worktree
+cleanup, forks, GPUI upgrades and executable Velotype extraction remain
+unauthorized.
 
 ## Approved Exploration
 
@@ -51,7 +53,13 @@ production implementation, publishing, merge, closure or cleanup are authorized.
 - [x] Audit plan decisions, evidence claims, risks and cross-document consistency.
 - [x] Prepare artifacts for user review and explicit execution authorization.
 - [x] Receive user approval of the contract, design and implementation plan.
-- [ ] Receive explicit execution authorization.
+- [x] Receive explicit execution authorization (subagent-driven development).
+
+## Execution
+
+Progress, task ranges, review findings and verification are tracked in the
+[execution ledger](../../../docs/plans/2026-10-06-wave-03-readiness-exploration-execution.md).
+The controller records canonical ticket comments at task checkpoints.
 
 ## Approved Planning Artifacts
 
@@ -61,8 +69,8 @@ production implementation, publishing, merge, closure or cleanup are authorized.
 
 The user selected editor plus provisional API audit, small host adapters only,
 and source assessment/checkpoint before executable Velotype extraction. These
-answers bound the plan, not its execution. All three documents are approved;
-execution authorization remains pending.
+answers bound the approved exploration. All three documents are approved;
+execution using subagent-driven development is now authorized.
 
 ## Governing Sources
 

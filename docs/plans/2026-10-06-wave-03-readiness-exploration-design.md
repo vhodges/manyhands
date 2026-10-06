@@ -14,8 +14,9 @@ id: "01M48S808QBNHZGCW88DVDE28F"
 **Plan:** [Implementation](2026-10-06-wave-03-readiness-exploration-implementation.md).
 **Ticket:** [01M48S808PF2D8ZWVYM918RK2M](../../.manyhands/tickets/01M48S808PF2D8ZWVYM918RK2M/ticket.md).
 
-Approved by the user on 2026-10-06 at reviewed revision `aa51f96`; execution
-remains unauthorized. The user selected editor plus provisional API audit,
+Approved by the user on 2026-10-06 at reviewed revision `aa51f96`. The user
+subsequently authorized execution using subagent-driven development on the
+same date. The user selected editor plus provisional API audit,
 small host adapters only, and source assessment followed by a checkpoint
 before executable Velotype extraction.
 

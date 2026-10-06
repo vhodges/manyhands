@@ -11,9 +11,9 @@ id: "01M48S808QSMSGWP5B2NQ65AQC"
 # Wave 03 Readiness Exploration Implementation Plan
 
 > The user approved the exploration contract, design and plan on 2026-10-06
-> at reviewed revision `aa51f96`. Do not execute this plan until the user
-> explicitly authorizes executable investigation. Document approval alone is
-> not execution, publication, merge or closure authorization.
+> at reviewed revision `aa51f96`, then explicitly authorized execution using
+> subagent-driven development. Execute only within the approved boundaries;
+> publication, merge, closure and worktree cleanup remain unauthorized.
 
 **Goal:** Obtain reproducible editor feasibility evidence and a complete
 provisional CLI/desktop API inventory without starting Wave 03 implementation.
@@ -22,17 +22,19 @@ provisional CLI/desktop API inventory without starting Wave 03 implementation.
 **Design:** [Architecture and decision audit](2026-10-06-wave-03-readiness-exploration-design.md).
 **Ticket:** [01M48S808PF2D8ZWVYM918RK2M](../../.manyhands/tickets/01M48S808PF2D8ZWVYM918RK2M/ticket.md).
 
-**Execution method:** Direct execution in the ticket worktree by default; no
-subagent delegation has been authorized. API inventory and fixture preparation
-are independent of the candidate build and can advance while build/native access
-is blocked. This concurrency is logical; do not run competing Cargo writers or
-mutate other Wave 02 worktrees. A later delegation choice requires authorization.
+**Execution method:** User-authorized subagent-driven development, with bounded
+fresh implementers and independent fresh read-only review after each task.
+API inventory and fixture preparation are independent of the candidate build
+and can advance while build/native access is blocked. Keep one writer at a time
+in the canonical ticket worktree; do not run competing Cargo writers or mutate
+other Wave 02 worktrees. The controller owns integration, decisions and ticket
+checkpoints. See the [execution ledger](2026-10-06-wave-03-readiness-exploration-execution.md).
 
 ## Authorization and baseline ledger
 
 | Item | Recorded state |
 | --- | --- |
-| Current user authorization | All three documents approved on 2026-10-06 at reviewed revision `aa51f96`; update approval status and commit it with the ticket approval comment. No executable probe authorized. |
+| Current user authorization | All three documents approved on 2026-10-06 at reviewed revision `aa51f96`; user subsequently authorized execution using subagent-driven development. Publication, merge, closure, worktree cleanup and excluded adaptations remain unauthorized. |
 | User scope decision | Editor plus provisional API audit. |
 | Adaptation boundary | Small host adapters only; stop before GPUI upgrades, vendoring, forks or editor-core rewrites. |
 | Fallback boundary | Source-assess Velotype after Zorite blockage; approval before extraction/executable evaluation. |
@@ -354,5 +356,6 @@ answered. Material unknowns are named execution gates, not hidden assumptions:
 compiled GPUI compatibility, pinned editor fidelity/undo/input, safe resource
 hooks, test-context availability and actual rendered-response measurements.
 No Rust probe, native journey, editor selection or final API readiness is
-claimed complete. All three documents are approved; request explicit execution
-authorization before Task 1.
+claimed complete by planning. All three documents are approved and the user has
+explicitly authorized subagent-driven execution; record actual task evidence
+in the execution ledger.
