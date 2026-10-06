@@ -2457,7 +2457,22 @@ impl RepositoryService {
         {
             hook();
         }
-        reconcile_registration(&self.registry_path, repository, root)
+        reconcile_registration(&self.registry_path, repository, root)?;
+        if operation == RepositoryOperation::SetPublicationRemote {
+            let plan = match read_configuration(root)? {
+                ConfigurationInspection::Valid(config) => config
+                    .publication_remote
+                    .as_deref()
+                    .map(|name| RemoteRefPlan::from_configuration(name, &config.primary_branch))
+                    .transpose()
+                    .map_err(|_| remote::state::recovery_required())?,
+                _ => None,
+            };
+            remote::state::with_transaction(self, root, |tx, id| {
+                remote::state::configure(tx, id, plan.as_ref(), false)
+            })?;
+        }
+        Ok(())
     }
 
     fn begin_lifecycle(

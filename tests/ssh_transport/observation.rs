@@ -18,6 +18,10 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
     ("observe_automatic_backoff", automatic_backoff),
     ("observe_block_reset", block_reset),
     ("observe_configuration_race", configuration_race),
+    ("observe_endpoint_race", endpoint_race),
+    ("observe_selection_race", selection_race),
+    ("observe_selection_lifecycle", selection_lifecycle),
+    ("observe_selection_replacement", selection_replacement),
     (
         "observe_shared_block_config_failure",
         shared_block_config_failure,
@@ -537,7 +541,7 @@ fn automatic_backoff() -> Result<(), FixtureError> {
         fixed(case.service.remote_snapshot(&case.root))?
             .polling()
             .automatic_backoff(),
-        Some(std::time::Duration::from_secs(900))
+        None
     );
     Ok(())
 }
@@ -600,6 +604,128 @@ fn configuration_race() -> Result<(), FixtureError> {
             .observations()
             .is_empty()
     );
+    Ok(())
+}
+
+fn endpoint_race() -> Result<(), FixtureError> {
+    configuration_identity_race(false)
+}
+
+fn selection_race() -> Result<(), FixtureError> {
+    configuration_identity_race(true)
+}
+
+// Catches a late same-name endpoint or selected-key edit publishing obsolete evidence.
+fn configuration_identity_race(selection: bool) -> Result<(), FixtureError> {
+    use crate::repository::observation_tests::install_hook;
+    let case = setup(false)?;
+    let (mut session, _) = session(vec![]);
+    fixed(
+        case.service
+            .observe_publication_remote(request(&case), &mut session),
+    )?;
+    let root = case.root.clone();
+    let data = case.directory.path().join("data");
+    let guard = install_hook(move |point| {
+        if point == RemoteOperationSafePoint::BeforeBatchCommit {
+            if selection {
+                RepositoryService::open_at(&data)
+                    .unwrap()
+                    .clear_shared_key_selection()
+                    .unwrap();
+            } else {
+                git2::Repository::open(&root)
+                    .unwrap()
+                    .remote_set_url("origin", "ssh://git@127.0.0.1:1/changed")
+                    .unwrap();
+            }
+        }
+    });
+    assert!(
+        case.service
+            .observe_publication_remote(request(&case), &mut session)
+            .is_err()
+    );
+    drop(guard);
+    assert!(
+        fixed(case.service.remote_snapshot(&case.root))?
+            .observations()
+            .is_empty()
+    );
+    assert!(fixed(case.service.active_remote_operation(&case.root))?.is_none());
+    Ok(())
+}
+
+// Catches selection edits leaving old observations and live ownership behind.
+fn selection_lifecycle() -> Result<(), FixtureError> {
+    selection_transition(false)
+}
+
+fn selection_replacement() -> Result<(), FixtureError> {
+    selection_transition(true)
+}
+
+fn selection_transition(replacement: bool) -> Result<(), FixtureError> {
+    let case = setup(false)?;
+    let (mut session, _) = session(vec![]);
+    fixed(
+        case.service
+            .observe_publication_remote(request(&case), &mut session),
+    )?;
+    let before = fixed(case.service.remote_snapshot(&case.root))?;
+    fixed(case.service.select_shared_key(case.registration.id))?;
+    assert_eq!(fixed(case.service.remote_snapshot(&case.root))?, before);
+    fixed(case.service.set_remote_polling(
+        &case.root,
+        true,
+        true,
+        PollingInterval::from_seconds(120).unwrap(),
+    ))?;
+    let target = RemoteOperationTarget::for_poll(
+        &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
+    );
+    let RemoteReservationOutcome::Reserved(owner) = fixed(case.service.reserve_remote_operation(
+        &case.root,
+        OperationId::new(),
+        &target,
+    ))?
+    else {
+        panic!("reservation missing")
+    };
+    let other = fixed(RepositoryService::open_at(
+        &case.directory.path().join("data"),
+    ))?;
+    if replacement {
+        let path = case.directory.path().join("replacement key");
+        fixed(std::fs::copy(&case.registration.private_key_path, &path))?;
+        let keys::RegisterSharedKeyOutcome::Registered(key) =
+            fixed(other.register_shared_key(keys::RegisterSharedKeyRequest {
+                label: "replacement".into(),
+                ownership: keys::SharedKeyOwnership::Imported,
+                private_key_path: path,
+                public_key_path: None,
+            }))?
+        else {
+            panic!("replacement registration missing")
+        };
+        fixed(other.select_shared_key(key.id))?;
+    } else {
+        fixed(other.clear_shared_key_selection())?;
+    }
+    let snapshot = fixed(other.remote_snapshot(&case.root))?;
+    assert!(snapshot.observations().is_empty());
+    assert!(snapshot.polling().paused());
+    assert_eq!(snapshot.polling().interval().as_secs(), 120);
+    assert!(
+        case.service
+            .remote_safe_point(
+                &case.root,
+                &owner,
+                RemoteOperationSafePoint::BeforeTransport
+            )
+            .is_err()
+    );
+    assert!(fixed(other.active_remote_operation(&case.root))?.is_none());
     Ok(())
 }
 

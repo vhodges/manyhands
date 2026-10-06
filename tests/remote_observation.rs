@@ -39,8 +39,11 @@ fn main() {
         polling_policy_survives_reopen_and_local_snapshot_stays_intact,
         corrupt_remote_policy_requires_recovery_without_repair_or_raw_error,
         absent_context_remains_history_unknown_after_cache_loss_and_restart,
+        explicit_recovery_resume_preserves_pause_and_unknown_history,
         reopening_does_not_repair_deleted_policy_or_partial_remote_schema,
         authenticated_exceptional_states_preserve_local_contexts,
+        publication_remote_lifecycle_invalidates_observations,
+        same_name_endpoint_replacement_after_reopen_is_not_remote_deletion,
         authenticated_absence_after_cache_loss_stays_history_unknown,
         authenticated_poll_yields_and_cancels_before_publishing,
         abandoned_advertisement_hold_aborts_without_publishing,
@@ -239,6 +242,49 @@ fn absent_context_remains_history_unknown_after_cache_loss_and_restart() {
     );
 }
 
+fn explicit_recovery_resume_preserves_pause_and_unknown_history() {
+    for paused in [false, true] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        fs::write(data.path().join(REGISTRY_FILE), b"corrupt registry").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        service
+            .set_remote_polling(
+                &fixture.root,
+                false,
+                paused,
+                PollingInterval::from_seconds(120).unwrap(),
+            )
+            .unwrap();
+        service
+            .resume_remote_polling_after_recovery(&fixture.root)
+            .unwrap();
+        let reopened = RepositoryService::open_at(data.path()).unwrap();
+        let snapshot = reopened.remote_snapshot(&fixture.root).unwrap();
+        assert!(!snapshot.polling().recovery_suspended());
+        assert_eq!(snapshot.polling().paused(), paused);
+        assert!(!snapshot.polling().enabled());
+        assert_eq!(snapshot.polling().interval().as_secs(), 120);
+        assert_eq!(
+            snapshot.publication_evidence_for(
+                AuthoringKind::Ticket,
+                &"01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap()
+            ),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+        reopened
+            .resume_remote_polling_after_recovery(&fixture.root)
+            .unwrap();
+        assert_eq!(reopened.remote_snapshot(&fixture.root).unwrap(), snapshot);
+    }
+}
+
 fn reopening_does_not_repair_deleted_policy_or_partial_remote_schema() {
     for corruption in [
         "DELETE FROM remote_polling_state",
@@ -394,6 +440,54 @@ impl ObservationCase {
     }
 }
 
+fn publication_remote_lifecycle_invalidates_observations() {
+    let case = ObservationCase::new();
+    case.observe();
+    case.enabled
+        .service
+        .set_publication_remote(repository::SetPublicationRemoteRequest {
+            root: case.local.root.clone(),
+            name: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let snapshot = case
+        .enabled
+        .service
+        .remote_snapshot(&case.local.root)
+        .unwrap();
+    assert!(snapshot.observations().is_empty());
+}
+
+fn same_name_endpoint_replacement_after_reopen_is_not_remote_deletion() {
+    let mut case = ObservationCase::new();
+    case.remote
+        .set_observation_ref(ObservationRef::LocalTicket, true)
+        .unwrap();
+    case.observe();
+    // An independent endpoint advertises no context from the former repository.
+    let replacement = SshRemoteFixture::start().unwrap();
+    replacement.allow_client_public_key(
+        russh::keys::PublicKey::from_bytes(&case.remote.allowed_client_public_key()).unwrap(),
+    );
+    case.local
+        .repository
+        .remote_set_url("origin", &replacement.url())
+        .unwrap();
+    let _original = std::mem::replace(&mut case.remote, replacement);
+    case.enabled.service = RepositoryService::open_at(case.enabled.data_directory.path()).unwrap();
+    // Keep the same registered key to isolate endpoint identity.
+    let after = case.observe();
+    assert!(after.snapshot().contexts().is_empty());
+    assert_eq!(
+        after.snapshot().publication_evidence_for(
+            AuthoringKind::Ticket,
+            &"01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap()
+        ),
+        RemotePublicationEvidence::HistoryUnknown
+    );
+}
+
 // Catches incomplete advertisement capture, inferred deletion on transport failure,
 // accidental materialization, and first-publication inference after observed publication.
 fn authenticated_exceptional_states_preserve_local_contexts() {
@@ -420,6 +514,16 @@ fn authenticated_exceptional_states_preserve_local_contexts() {
         "real canonical local contexts required"
     );
     let first = case.observe();
+    assert_eq!(
+        first
+            .snapshot()
+            .contexts()
+            .iter()
+            .find(|c| c.remote_ref() == Some(ObservationRef::LocalTicket.name()))
+            .unwrap()
+            .state(),
+        RemoteContextState::Observed,
+    );
     assert_eq!(
         first.snapshot().observations().len(),
         5,

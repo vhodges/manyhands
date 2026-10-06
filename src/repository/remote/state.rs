@@ -46,6 +46,7 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
             recovery_suspended INTEGER NOT NULL DEFAULT {history} CHECK(recovery_suspended IN (0,1)),
             history_unknown INTEGER NOT NULL DEFAULT {history} CHECK(history_unknown IN (0,1)),
             configuration_generation INTEGER NOT NULL DEFAULT 0 CHECK(configuration_generation >= 0),
+            endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
             remote_name TEXT, primary_branch TEXT,
             latest_outcome TEXT CHECK(latest_outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
             CHECK ((remote_name IS NULL) = (primary_branch IS NULL))
@@ -166,6 +167,21 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     }
     transaction.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting')")
         .map_err(|_| recovery_required())?;
+    let has_digest = table_count == 0
+        || transaction
+            .prepare("PRAGMA table_info(remote_polling_state)")
+            .and_then(|mut query| {
+                query
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|_| recovery_required())?
+            .iter()
+            .any(|name| name == "endpoint_digest");
+    if !has_digest {
+        transaction.execute_batch("ALTER TABLE remote_polling_state ADD COLUMN endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32))")
+            .map_err(|_| recovery_required())?;
+    }
     Ok(())
 }
 
@@ -724,7 +740,6 @@ pub(super) fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
 /// Configuration preflight supplies only a validated plan and whether any
 /// endpoint/key selection changed. No endpoint, key ID, path, or secret-derived
 /// fingerprint is stored. Task 3 owns when to invoke this transition.
-#[allow(dead_code)]
 pub(in super::super) fn configure(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -757,6 +772,65 @@ pub(in super::super) fn configure(
     transaction.execute("UPDATE remote_polling_state SET history_unknown=CASE WHEN remote_name IS NOT NULL THEN 1 ELSE history_unknown END,configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
     Ok(generation)
+}
+
+/// Selection is global to this registry. Fence every configured repository in
+/// the same transaction as the selection edit; a failed fence rolls back both.
+pub(in super::super) fn invalidate_key_selection(
+    transaction: &Transaction<'_>,
+) -> Result<(), RepositoryError> {
+    let ids = transaction
+        .prepare("SELECT repository_id FROM remote_polling_state WHERE remote_name IS NOT NULL")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for id in ids {
+        let policy = read_policy(transaction, id)?;
+        configure(transaction, id, policy.plan.as_ref(), true)?;
+    }
+    Ok(())
+}
+
+/// Bind the generation to both validated SSH directions across service/process
+/// restarts without persisting locator text or any key/credential identity.
+pub(in super::super) fn configure_endpoints(
+    tx: &Transaction<'_>,
+    id: i64,
+    plan: &RemoteRefPlan,
+    digest: &[u8; 32],
+) -> Result<i64, RepositoryError> {
+    let previous = read_endpoint_digest(tx, id)?;
+    let has_history: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_observation_batches WHERE repository_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting'))", [id], |row| row.get(0))
+        .map_err(|_| recovery_required())?;
+    let changed = previous
+        .as_ref()
+        .map_or(has_history, |previous| previous != digest);
+    let generation = configure(tx, id, Some(plan), changed)?;
+    tx.execute(
+        "UPDATE remote_polling_state SET endpoint_digest=?2 WHERE repository_id=?1",
+        params![id, digest.as_slice()],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(generation)
+}
+
+fn read_endpoint_digest(
+    connection: &Connection,
+    id: i64,
+) -> Result<Option<[u8; 32]>, RepositoryError> {
+    let value: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT endpoint_digest FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    value
+        .map(|value| value.try_into().map_err(|_| recovery_required()))
+        .transpose()
 }
 
 #[allow(dead_code)]
@@ -1082,8 +1156,8 @@ fn read_policy(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<StoredPolicy, RepositoryError> {
-    let values = connection.query_row("SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,recovery_suspended,history_unknown,configuration_generation,remote_name,primary_branch,latest_outcome FROM remote_polling_state WHERE repository_id=?1", [repository_id], |row| {
-        Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<i64>>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?))
+    let values = connection.query_row("SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,recovery_suspended,history_unknown,configuration_generation,remote_name,primary_branch,latest_outcome,endpoint_digest FROM remote_polling_state WHERE repository_id=?1", [repository_id], |row| {
+        Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<i64>>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?))
     }).map_err(|_| recovery_required())?;
     let (
         enabled,
@@ -1096,8 +1170,13 @@ fn read_policy(
         remote,
         primary,
         latest,
+        endpoint_digest,
     ) = values;
-    if generation < 0 {
+    if generation < 0
+        || endpoint_digest
+            .as_ref()
+            .is_some_and(|digest| digest.len() != 32)
+    {
         return Err(recovery_required());
     }
     let plan = match (remote, primary) {
@@ -1388,11 +1467,12 @@ fn read_snapshot_rows(
         if item_id.to_string() != id {
             return Err(recovery_required());
         }
-        if snapshot
-            .contexts
-            .iter()
-            .any(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(&item_id))
-        {
+        if let Some(context) = snapshot.contexts.iter_mut().find(|context| {
+            context.kind == Some(kind) && context.item_id.as_ref() == Some(&item_id)
+        }) {
+            if context.state == RemoteContextState::Unmaterialized {
+                context.state = RemoteContextState::Observed;
+            }
             continue;
         }
         let target = policy
@@ -1414,6 +1494,21 @@ fn read_snapshot_rows(
 }
 
 impl crate::repository::RepositoryService {
+    /// Explicitly release cache-recovery suspension. Durable pause, polling
+    /// policy and unknown publication history remain independent.
+    pub fn resume_remote_polling_after_recovery(&self, root: &Path) -> Result<(), RepositoryError> {
+        with_transaction(self, root, |transaction, id| {
+            read_snapshot(transaction, id)?;
+            transaction
+                .execute(
+                    "UPDATE remote_polling_state SET recovery_suspended=0 WHERE repository_id=?1",
+                    [id],
+                )
+                .map_err(|_| recovery_required())?;
+            Ok(())
+        })
+    }
+
     pub fn remote_snapshot(&self, root: &Path) -> Result<RemoteSnapshot, RepositoryError> {
         self.repository_snapshot(root)
             .map(|snapshot| snapshot.remote)

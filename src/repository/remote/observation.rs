@@ -4,6 +4,69 @@ use super::*;
 use crate::repository::{OperationId, RepositoryError, RepositoryService, keys::*, transport::*};
 use std::{fmt, path::PathBuf};
 
+/// Process-only equality evidence. Never serialized or included in Debug/errors.
+#[derive(Clone, PartialEq, Eq)]
+struct ObservationConfiguration {
+    plan: RemoteRefPlan,
+    fetch: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
+    push: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
+    selected: Option<(SharedKeyId, PathBuf, Option<KeySourceToken>)>,
+}
+
+impl ObservationConfiguration {
+    // Only validated public SSH locator metadata enters this digest. Endpoint
+    // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
+    // Key registration/source identity stays process-only.
+    fn endpoint_digest(&self) -> [u8; 32] {
+        let mut digest = blake3::Hasher::new();
+        for endpoint in [&self.fetch, &self.push] {
+            match endpoint {
+                Ok(endpoint) => {
+                    digest.update(&[1]);
+                    digest.update(&(endpoint.connection_url.len() as u64).to_le_bytes());
+                    digest.update(endpoint.connection_url.as_bytes());
+                }
+                Err(_) => {
+                    digest.update(&[0]);
+                }
+            }
+        }
+        *digest.finalize().as_bytes()
+    }
+}
+
+impl RepositoryService {
+    fn observation_configuration(
+        &self,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<ObservationConfiguration, RepositoryError> {
+        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+        let selected = self
+            .list_shared_keys()?
+            .into_iter()
+            .find(|key| key.selected)
+            .map(|key| {
+                let source = KeySourceToken::observe(&key.private_key_path).ok();
+                (key.id, key.private_key_path, source)
+            });
+        Ok(ObservationConfiguration {
+            plan: plan.clone(),
+            fetch: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Fetch,
+            ),
+            push: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Push,
+            ),
+            selected,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ObservePublicationRemoteRequest {
     pub root: PathBuf,
@@ -70,8 +133,9 @@ impl RepositoryService {
                 return Err(RemoteObservationError::Transport(error));
             }
         };
+        let configuration = self.observation_configuration(root, &plan)?;
         state::with_transaction(self, root, |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })?;
         let target = RemoteOperationTarget::for_poll(&plan);
         let reservation = self.reserve_remote_operation_with_priority(
@@ -172,15 +236,15 @@ impl RepositoryService {
         }
         // Recheck after all prompt/network and local observation work. The
         // transaction below independently fences registered configuration edits.
-        if observation_plan(root).as_ref() != Ok(&plan) {
-            let decision = self.finish_remote_operation(
-                root,
-                &owner,
-                RemoteOutcomeCategory::ConfigurationRequired,
-            )?;
-            if let Some(result) = self.observation_decision(root, decision)? {
-                return Ok(result);
-            }
+        let current_plan = observation_plan(root).ok();
+        if current_plan.as_ref() != Some(&plan)
+            || self.observation_configuration(root, &plan)? != configuration
+        {
+            state::with_transaction(self, root, |tx, id| {
+                reservation::owned(self, tx, id, &owner)?;
+                state::configure(tx, id, current_plan.as_ref(), true)?;
+                state::record_outcome(tx, id, RemoteOutcomeCategory::ConfigurationRequired, None)
+            })?;
             return Err(RemoteObservationError::Interrupted);
         }
         let decision = reservation::commit_observation_batch(

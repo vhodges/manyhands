@@ -164,6 +164,13 @@ impl RepositoryService {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         require_no_pending_material(&transaction, id, operation, data_directory)?;
+        let already_selected: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM shared_ssh_keys WHERE id=?1 AND selected=1)",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         transaction
             .execute(
                 "UPDATE shared_ssh_keys SET selected = 0 WHERE selected = 1",
@@ -187,6 +194,9 @@ impl RepositoryService {
             .into_iter()
             .find(|registration| registration.id == id)
             .ok_or_else(|| invalid_shared_key_metadata(operation, data_directory))?;
+        if !already_selected {
+            super::super::remote::state::invalidate_key_selection(&transaction)?;
+        }
         transaction
             .commit()
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
@@ -211,6 +221,9 @@ impl RepositoryService {
                 [],
             )
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        if cleared != 0 {
+            super::super::remote::state::invalidate_key_selection(&transaction)?;
+        }
         transaction
             .commit()
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
