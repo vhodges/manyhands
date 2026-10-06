@@ -480,7 +480,9 @@ Controller owns reviewed S3 persistent launch and production smoke separately.
 
 Controller launched the reviewed `2c53127` example through Devenv with
 `--capture-initial`, owned process group **3247260**, and left it open for the
-user. Five real EditorState entities were constructed; startup body text was
+user. It subsequently exited with code0/no signal at2026-10-06T21:13:37Z;
+no exit cause is inferred and no relaunch was performed. Five real EditorState
+entities were constructed; startup body text was
 read from those entities, not a substituted string model. Evidence is in
 ignored `target/readiness-evidence/running-spike/s3/launch-1791317716369/` and
 `target/editor-feasibility/native-3247260-1791317722697818257/`.
@@ -556,6 +558,6 @@ at tree `400e8dfa80f87db9784c50ce9629ff747c38d373`, mapped exactly to commit
 `7ab466ff048f60af9413a058bb2033024934e6e1`; 568 standard passes and SSH 15/31/66,
 no failures/ignored. Retained reviewer `d7536642` confirmed both findings resolved,
 no issues, correction READY / OK. Old erroneous evidence remains immutable and
-superseded, not rewritten. Current code differs from the live reviewed binary
+superseded, not rewritten. Current code differs from the originally launched reviewed binary
 only in that accurate comment; its recorded launch/provenance remains `2c53127`.
 Further report/ledger bookkeeping does not invalidate final Rust source gates.

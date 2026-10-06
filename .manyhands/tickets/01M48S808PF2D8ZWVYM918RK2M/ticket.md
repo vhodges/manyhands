@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "in-progress"
+status: "review-ready"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -98,11 +98,11 @@ The same pinned candidate may now run under the explicit spike-only assumption.
 New revisions, extraction/port/core adaptation or product adoption still require
 separate approval. No candidate or product fallback is selected; original-byte
 preservation remains a production obligation until a real product ruling.
-The ticket remains lifecycle-open while the resumed experiment executes.
+The ticket remains lifecycle-open; the resumed experiment is independently reviewed.
 
-### Running-spike outcome, pending final review
+### Running-spike outcome, independently reviewed
 
-The actual opt-in example is now retained and running with the approved exact
+The actual opt-in example is retained and was launched with the approved exact
 pin, thin Kit-only host/adapter, scratch originals and protected headers. S1/S2
 and two narrow P2 corrections are independently reviewed; final Rust tree
 `7ab466f` passes required Devenv gates (568 standard plus separate SSH15/31/66,
@@ -114,7 +114,8 @@ labeled math counterexample changes bytes at unchanged length, remains marked
 dirty/normalization and **not** a preservation pass. Original repo sources are
 unchanged; metadata is protected host reconstruction, not an editor roundtrip.
 The separate unchanged desktop scaffold startup smoke ran and only its owned
-process was stopped. User demo process group3247260 remains available.
+process was stopped. Demo group3247260 subsequently exited with code0/no signal
+at 2026-10-06T21:13:37Z; no relaunch was performed or exit cause inferred.
 
 [Native observations and concrete adoption costs](../../../docs/research/wave-03-editor-feasibility.md#s3-native-observations-and-adoption-cost-handoff)
 record 638 prototype Rust LOC (126 adapter including35 test, 66 catalog
@@ -122,7 +123,13 @@ including19 test; 406 separate S1 bookkeeping). No core port/fork/upgrade was
 needed to embed. Production drafts/services/resource/rich contracts, fidelity
 ruling/repair, native journeys and rendered-p95 still require work; no time
 estimate or editor selection follows. API re-audit on finished Wave02 main and
-ordered entry gates remain required. Final whole-branch review is pending.
+ordered entry gates remain required. Fresh whole-branch reviewer93599d5b reviewed
+exact `29f3f5a..14ebcb4`, all44 changed paths: no issues, running-spike READY,
+report/prototype Merge verdict OK with notes. Production acceptance remains
+blocked/unverified; notes are remaining obligations, not unresolved spike defects.
+Review output is bound under workflowba4b88db, `running-spike-final/review.md`.
+This final checkpoint changes only documentation; Rust gates remain valid at
+7ab466f. No push/PR/merge/adoption/closure/cleanup is authorized.
 
 ## Approved Planning Artifacts
 

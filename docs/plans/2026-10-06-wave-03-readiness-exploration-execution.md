@@ -77,8 +77,8 @@ worktrees left untouched. Initial task/review commit IDs did not change.
 | --- | --- | --- | --- |
 | S1 pin + fixture/evidence | Serialized worker: Cargo feature/dependency/test registration, session/evidence, minimal synthetic fixtures/tests | complete, `d22d6f4..3f3bc11`; 9 pure tests/fmt/headless check passed | READY / OK with notes (`91d02bab`); no native claims. |
 | S2 actual editor host | Separate serialized worker: example/host/adapter/catalog, example wiring, running report appendix | `41267b9..2c53127`; narrow P2 fixes `3ba5ff2..7ab466f`, final amended Rust gates pass; correction READY / OK (`d7536642`) | Both wording/count findings resolved without behavior changes; not adoption approval. |
-| S3 user-visible desktop | Controller-owned actual launch and scratch observations | running, owned PID/process group `3247260`; 5 initial ActualEditorReadback captures; user confirmed Visible and working | Four repo docs equal originals on load, mixed math differs; separate unchanged desktop startup smoke done, group `3310636` stopped only. |
-| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | observations/cost/remaining obligations recorded; whole-branch review pending | Named adoption work/transformations/limits; no editor or product-policy selection. |
+| S3 user-visible desktop | Controller-owned actual launch and scratch observations | launched owned group `3247260`; 5 initial ActualEditorReadback captures; user confirmed Visible and working; later exit0/no signal recorded | Four repo docs equal originals on load, mixed math differs; separate unchanged desktop startup smoke done, group `3310636` stopped only. |
+| S4 cost/review handoff | Controller integrates component/native evidence and fresh whole-branch review | complete; `29f3f5a..14ebcb4`, reviewer `93599d5b`: no issues, READY / OK with notes | Named adoption work/transformations/limits; no editor or product-policy selection. |
 
 Small host adapters only; no GPUI upgrade, fork, vendoring, core rewrite or
 executable Velotype extraction. No original repo-doc writes, production/draft
@@ -204,8 +204,38 @@ contracts/fidelity/native/performance/finished-Wave02 API evidence still cost
 work. No justified time estimate or product editor ruling follows.
 
 Further changes are report/ledger/canonical-comment bookkeeping only; final
-Rust source remains exactly `7ab466f`. Fresh whole-branch review is next. Ticket
-stays lifecycle-open/in-progress until review checkpoint; no publication or close.
+Rust source remains exactly `7ab466f`. Fresh whole-branch review completed;
+ticket is review-ready and lifecycle-open, not closed or published.
+
+### Final whole-branch approval and delivery checkpoint
+
+Fresh reviewer `93599d5b-0d44-44a3-a887-89c0a1d6d8a4`, workflow
+`ba4b88db-f883-4325-804c-a529edf4e7fa`, inspected full exact range
+`29f3f5a25957836a8513cba8a318306e1b928063..14ebcb410811716a1956af024a0802f272dc7d02`,
+all44 changed paths, source/snapshots and retained evidence. **No issues found**;
+running-spike final gate **READY**, report/prototype Merge verdict **OK with
+notes**. Authoritative bound output:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/ba4b88db-f883-4325-804c-a529edf4e7fa/running-spike-final/review.md`.
+
+Notes are material production obligations, not spike defects: R3 remains
+blocked; R4/native input/tables/IME/clipboard/selection/resources/platform/
+accessibility/high-DPI, native100KiB/p95 and production drafts/save/lifecycle
+remain unverified. Final-main API re-audit remains required. Reviewer read
+artifacts without executing tests/hash recomputation, inspecting pixels or
+manipulating the app; parent validator and recorded user feedback are explicitly
+bounded. No product, publishing, merge or lifecycle authority follows.
+
+At delivery, recorded demo exit is code0/no signal at2026-10-06T21:13:37Z;
+current process is gone. Earlier left-open/alive statements describe launch-time
+intent/observations, not current window availability or an inferred exit cause.
+No relaunch was performed. Original repo hashes remain unchanged. Prototype may
+be relaunched manually using the report command; source/native provenance still
+names original2c53127, not a pretend run on latest docs-only HEAD.
+
+Final checkpoint touches only ledger/ticket/comment and exit-status report prose;
+no Rust/Cargo/fixture changes or redundant Rust suite. Ticket remains lifecycle-
+open/review-ready; no push/PR/merge/closure/cleanup. Final delivery validation is
+saved separately from the immutable reviewer input under running-spike/final.
 
 ## Task state
 
