@@ -62,8 +62,8 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 
 | Task | State | Implementation range / evidence | Independent review | Next action |
 | --- | --- | --- | --- | --- |
-| 1 preflight/baseline | preflight complete; command gate pending | Base and HEAD above; Rust commands not yet run | pending | Run six planned Devenv commands sequentially and record results. |
-| 2 API inventory | pending | none | pending | Inventory every CLI verb and desktop/runtime capability from actual source. |
+| 1 preflight/baseline | complete | Six commands passed at `a416d83`, unchanged source/lockfile; evidence below | READY (`c0df9b7e`) | No repeat broad checks until Rust/dependencies change. |
+| 2 API inventory | written; corrections required | `a416d83..83572f7`; one new inventory document, 106 rows | BLOCK (`33978e7d`): one P1, two P2 findings accepted | Same implementer corrects source-observation, read-side-effect and outcome-name claims; fresh review follows. |
 | 3 candidate/graph | pending | none | pending | Resolve exact 0.10.0 without changing locked GPUI identity. |
 | 4 fixture/session | pending; Task 3-dependent executable target | none | pending | Build independent goldens and reject false/missing evidence. |
 | 5 native host | pending | none | pending | Embed editor using Kit and thin adapters only. |
@@ -85,10 +85,59 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 - Known qualification: native CI is manual-only; previous native failures were
   deferred. Local passing commands will not be labeled native-matrix success.
 
-## Verification
+## Task 1 baseline evidence
 
-No execution commands have completed yet. Task reports must record command,
-exit, head/tree/lockfile, full log reference, expected/observed result and limits.
-Do not duplicate full broad checks on an unchanged verified tree. Source-only
-API inventory does not call services or create registry state. Tests before
-behavior changes; data loss is evidence to stop, not normalize away.
+Run `6fb049df-bd71-4275-97da-f8d82ebfc980`; independent review
+`c0df9b7e-11bd-4ae1-a2fa-fbbb7ba077fa` returned READY. Tested HEAD
+`a416d836a10702afeba8f25000b3aa58fbed13a2`, unchanged before/after.
+Cargo.lock SHA-256 `ac2e1977c8311a607b15a4329008ffd1fba9245ac56d37f1c0b4d3c2cef7f26c`;
+devenv.lock SHA-256 `770a1b63f55bed5ad23a3e1d922a7c95c473084ffa483be71ebf03f777dc64a7`.
+Full logs and exact-command/exit `.meta` siblings are retained under this
+worktree's ignored `target/readiness-evidence/baseline/`.
+
+| Command (all through `devenv shell --`) | Exit | Seconds | Log |
+| --- | --- | --- | --- |
+| `cargo check --all-features --locked` | 0 | 105 | `01-check.log` |
+| `cargo fmt --check` | 0 | 1 | `02-fmt.log` |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | 54 | `03-clippy.log` |
+| `cargo test --all-features --locked` | 0 | 520 | `04-test.log` |
+| `cargo check --no-default-features --bin manyhands-cli --locked` | 0 | 12 | `05-headless-check.log` |
+| `cargo run --locked --bin manyhands-cli` | 0 | 24 | `06-cli-run.log` |
+
+Tests: 559 standard-harness passes (including 9 doctests), zero failed/ignored,
+plus separately reported custom SSH harness counts 15/31/66. CLI exited zero
+without a window. NixOS 26.11, Linux 6.18.54, x86_64; advertised Wayland/X11
+sockets exist and permit filesystem access. No actual GUI/IME/renderer or
+Windows/macOS/native CI acceptance was established. Source/index remained clean.
+Reports are in the session's managed artifact directory under
+`outputs/a6903b69-0690-4963-be85-c86aa81cc5da/baseline/{results,review}.md`.
+
+## Task 2 first implementation and review
+
+Worker `4216daf2-dfc7-4b78-85c0-dc0479f9d434` committed sole-file inventory
+`83572f7400981e83a381f6716f828376a42c7dff`: 56 CLI verbs + 3 invocation
+capabilities, 31 desktop and 16 runtime rows; 106 total. Named source/tests are
+inspected, not executed by the inventory task. Final-main re-audit remains
+required after Wave 02 completion.
+
+Reviewer `33978e7d-7ebf-4fe2-84aa-2e891d128c3d` returned BLOCK. Parent verified
+all three findings against actual baseline source and accepted them:
+
+- P1: `SaveDocumentRequest.expected_source` is optional; save/move enforcement
+  must not be claimed mandatory. Assign missing-observation rejection and
+  covering evidence to W3-02/04 rather than modify domain code in exploration.
+- P2: `list_key_material_recovery` takes an exclusive cache guard and opens
+  writable SQLite; document its read-side effects with operation-list evidence.
+- P2: key-clear outcome is `AlreadyCleared`, not `NoSelection`.
+
+Fixes return to the existing implementer, followed by independent fresh review.
+Reports live under the same workflow artifact directory's
+`api-audit/{handoff,review}.md`. No project source/Cargo/lockfile changes occurred.
+
+## Verification policy
+
+Task reports record command, exit, head/tree/lockfile, full log reference,
+expected/observed result and limits. Do not duplicate broad checks on an
+unchanged verified Rust tree. Source-only API inventory does not call services
+or create registry state. Tests before behavior changes; data loss is evidence
+to stop, not normalize away.
