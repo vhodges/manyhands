@@ -235,24 +235,24 @@ checks, atomically persists one complete batch, and returns a typed snapshot.
 It accepts existing host approval/session-provider values but no raw transport
 handle or endpoint input.
 
-- [ ] Add failing tests for selected-key success, absent selection/remote,
+- [x] Add failing tests for selected-key success, absent selection/remote,
   host approval/rejection, cancellation/yield before and after advertisement,
   protocol failure, and database failure. Assert typed Cycle 03 errors and
   only redacted persisted result categories.
-- [ ] Add shared-session tests: a protected key prompts once for initial
+- [x] Add shared-session tests: a protected key prompts once for initial
   startup/first observation and later observations reuse the cache; selection,
   source, clear, and process-session replacement invalidate it; cancellation or
   provider failure leaves an unlock-required result and does not call the
   provider again from automatic retry. Keep host approval as a separate exact
   interaction and assert neither block overwrites durable `paused`.
-- [ ] Capture refs, `FETCH_HEAD`, index, worktree status/canonical bytes, and
+- [x] Capture refs, `FETCH_HEAD`, index, worktree status/canonical bytes, and
   tracking refs before successful and failed calls. Assert all stay byte-for-
   byte or OID-for-OID unchanged, apart from approved host-pin and SQLite
   observation changes.
-- [ ] Ensure completion after a durable batch is idempotent; an interrupted
+- [x] Ensure completion after a durable batch is idempotent; an interrupted
   pre-commit call re-advertises, while retry after commit reads/reconciles
   rather than inferring a new deletion.
-- [ ] Implement without `download`, `push`, direct raw `Remote` exposure, or
+- [x] Implement without `download`, `push`, direct raw `Remote` exposure, or
   a Git lease around prompt/network work. Record/commit
   `feat: observe authenticated remote refs`.
 
