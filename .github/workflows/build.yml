@@ -118,7 +118,7 @@ jobs:
           }
 
       - name: Test headless credential and platform contracts
-        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport --test remote_observation
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4

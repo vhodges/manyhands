@@ -20,6 +20,25 @@ use tokio::{runtime::Runtime, sync::watch};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FixtureError;
+
+/// A closed set of refs in the fixture-owned bare repository, never a path or command.
+#[derive(Clone, Copy)]
+pub enum ObservationRef {
+    RemoteTicket,
+    LocalTicket,
+    RemoteDocument,
+    MalformedTicket,
+}
+impl ObservationRef {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RemoteTicket => "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            Self::LocalTicket => "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+            Self::RemoteDocument => "refs/heads/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAX",
+            Self::MalformedTicket => "refs/heads/manyhands/ticket/private-response-marker",
+        }
+    }
+}
 impl fmt::Display for FixtureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SSH fixture failed")
@@ -94,6 +113,25 @@ pub struct SshRemoteFixture {
 }
 
 impl SshRemoteFixture {
+    pub fn set_observation_ref(
+        &self,
+        reference: ObservationRef,
+        present: bool,
+    ) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        if present {
+            fixed(repo.reference(
+                reference.name(),
+                self.commit,
+                true,
+                "owned observation fixture",
+            ))?;
+        } else {
+            fixed(fixed(repo.find_reference(reference.name()))?.delete())?;
+        }
+        Ok(())
+    }
+
     pub fn start() -> Result<Self, FixtureError> {
         Self::start_with_helpers(server::discover_helpers(None)?)
     }
