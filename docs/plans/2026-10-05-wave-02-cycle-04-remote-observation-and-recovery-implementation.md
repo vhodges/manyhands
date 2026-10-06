@@ -283,7 +283,7 @@ as needed; create/extend `tests/remote_observation.rs`; update
 
 ## Task 6: Verify, Review, And Handoff
 
-- [ ] Run the final local gate from the ticket worktree:
+- [x] Run the final local gate from the ticket worktree:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -294,10 +294,10 @@ as needed; create/extend `tests/remote_observation.rs`; update
   git diff --check
   ```
 
-- [ ] Record focused test counts and results, fixture preservation evidence,
+- [x] Record focused test counts and results, fixture preservation evidence,
   privacy scan result, exact source/lockfile changes, and native CI run links.
   Label unavailable native evidence as pending rather than passing.
-- [ ] Request independent implementation/whole-branch review; resolve findings,
+- [x] Request independent implementation/whole-branch review; resolve findings,
   rerun affected and final checks, and add a review-ready ticket comment.
 - [ ] Keep the ticket open until code review or PR approval. Push/PR, merge,
   close, and worktree cleanup each require their own later authorization and
