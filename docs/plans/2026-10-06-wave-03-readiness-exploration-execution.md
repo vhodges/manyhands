@@ -64,11 +64,11 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 | --- | --- | --- | --- | --- |
 | 1 preflight/baseline | complete | Six commands passed at `a416d83`, unchanged source/lockfile; evidence below | READY (`c0df9b7e`) | No repeat broad checks until Rust/dependencies change. |
 | 2 API inventory | complete for provisional baseline | Inventory `83572f7`; fixes `6d4e631..0906c3e`, sole-file correction | READY / OK (`b91fbf14`), exact committed-range diff inspected | Final-main re-audit remains before W3 Cycle 01; Task 3 may start. |
-| 3 candidate/graph | dispatching | exact-pin/metadata/source/license gate only | pending | Resolve exact 0.10.0 without changing locked GPUI identity; no host implementation yet. |
-| 4 fixture/session | pending; Task 3-dependent executable target | none | pending | Build independent goldens and reject false/missing evidence. |
-| 5 native host | pending | none | pending | Embed editor using Kit and thin adapters only. |
-| 6 native evidence | pending | none | pending | Record actual input/readback and honest platform/performance gaps. |
-| 7 recommendation/fallback | pending | none | pending | Source-only Velotype assessment on blockage; seek approval before execution. |
+| 3 candidate/graph | complete; pinned candidate stopped | `9060ac1..44d2990`, report-only; graph/source evidence below | BLOCKED-CANDIDATE / report OK (`fe6ed76c`) | Approved source-only fallback assessment. |
+| 4 fixture/session | not executed: preservation stop | none; no probe/test dependency retained | not applicable | Requires a separately accepted candidate/path before executable continuation. |
+| 5 native host | not executed: preservation stop | none | not applicable | No workaround, core patch or alternative version authorized. |
+| 6 native evidence | not executed: preservation stop | no editor-native evidence | not applicable | Native/fidelity/performance obligations remain unverified. |
+| 7 recommendation/fallback | dispatching source-only assessment | pinned Velotype source/report only | pending | Identify exact extraction/compatibility/preservation costs; checkpoint before execution. |
 | 8 verification/handoff | pending | none | pending | Final checks, whole-branch review; keep ticket open. |
 
 ## Decisions, blockers and review dispositions
@@ -166,6 +166,50 @@ Reviewer inspected that committed blast radius and current source, not merely
 worker scope assertions or a clean working-tree diff. Parent accepts Task 2
 for the provisional baseline; final-main audit and missing APIs remain future
 obligations. Candidate dependency gate can now proceed.
+
+## Task 3 graph/source gate and preservation stop
+
+Implementer `0508c7d7-9836-4e67-a215-b24355bd58d7` committed
+`44d2990a36382b5d6ff4cd9b178d874ed2e92b1c` from base `9060ac1`, containing only
+[editor feasibility report](../research/wave-03-editor-feasibility.md).
+Trial exact optional editor 0.10.0 resolved with Kit 0.6.6 and the identical
+GPUI-pre 0.3.6 package ID. Only gpui-bidi 0.1.1, zorite-editor 0.10.0 and
+zorite-markdown 0.9.0 were added; no existing package/feature drift, all three
+MIT and no new build scripts. This is graph/source proof, not compiled editor
+interoperability. The three published archives/checksums and copied sources
+are retained under ignored `target/readiness-evidence/editor-dependency/`.
+
+Source blocker: published editor `src/lib.rs:324–331,1103–1107,1151–1167`
+unconditionally routes `with_text` and `set_text` through `normalize_loaded`.
+Published markdown `src/syntax.rs:1040–1043` specifies that
+`What if words $$E=mc^2$$ more` becomes `What if words\n$$E=mc^2$$\nmore`.
+Presentation toggles do not disable loading normalization. This conflicts with
+exact no-op/unsupported-source preservation. Parent confirmed the stop, then
+independently inspected these source excerpts; no executed editor/native result
+is claimed. R3 is blocked by source inspection; R1 compile and R2/R4–R8
+executable/native evidence remain not-tested.
+
+Four Devenv graph commands passed: intentional unlocked probe metadata, locked
+inverse core tree, locked duplicate tree, and locked desktop metadata comparator.
+Exact logs/exits/hash manifests and failed/corrected evidence-helper attempts
+are retained; helper failures were not hidden as successful commands.
+
+The implementer restored only trial Cargo edits to exact task-base contents.
+Parent confirms no Cargo.toml/Cargo.lock diff remains. Cargo.lock SHA-256 stays
+`ac2e1977c8311a607b15a4329008ffd1fba9245ac56d37f1c0b4d3c2cef7f26c`.
+No Rust probe, example, test target or production change remains.
+
+Fresh reviewer `fe6ed76c-f83b-4214-856c-31969b5ded6f` inspected exact
+`9060ac1..44d2990` report diff and pinned sources; no issues, Task3 gate
+BLOCKED-CANDIDATE / Merge verdict OK (report only). Parent accepts the negative
+feasibility result and stop/rollback, not candidate adoption. Review artifacts:
+workflow `7d0447ab-7950-4bc4-8ea6-af3f132b5b46`,
+`editor-dependency/{handoff,review}.md`.
+
+Task 7's already-approved source-only Velotype assessment is next. Tasks 4–6
+are not executed, not called passing or unnecessary native acceptance. A
+candidate-version change, fork/core adaptation, extraction or product-scope
+change requires the prescribed new user decision.
 
 ## Verification policy
 
