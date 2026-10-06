@@ -50,7 +50,7 @@ existing-worktree requirement.
 - Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
 - Task 3: complete; independent review accepted at `f4ecbd50504a77a70c0528a892b135e46db155ce`; required normal local gates pass.
 - Task 4: complete; parent accepts full range through `ca88e002537e919899a13d61ab784d459206c953` with retained normal-gate timing qualification (below).
-- Task 5: implementation, assigned real-fixture/privacy/CI configuration and local gates complete at `9dcd410f87ff3414e99d9d0d26ee611bc484ad59`; independent review and parent acceptance pending.
+- Task 5: initial candidate through `907dd4204984ccb52125a6f44b990dd27ac08b7f` independently BLOCKED for two P1/three P2 proof gaps. Correction implemented at `575f657c21c16323fc64a367acef93608e528ec2`, focused23/normal772 and static/CLI gates pass; fresh independent re-review and parent acceptance pending.
 - Task 6: pending.
 
 ## Verification and review
@@ -1234,6 +1234,10 @@ Every `World::sync` inventories nonempty durable rows and recursively inventorie
 all generated application-data stores, including filenames. All stronger path
 checks also run after context preflight/error operations. Probe inventories are
 retained for the outer custom-host raw-output scanner across failures/restarts.
+**Historical claim corrected:** at the reviewed `907dd420` candidate, this did NOT
+activate output scanning for new case names and later Worlds overwrote inventories.
+The prior raw-output-completeness claim is invalid; see the BLOCK/correction below.
+Generated-store/row scopes and the original769 normal-green results remain valid.
 
 Original private-key files, Git config/object/worktree/canonical sources are
 intentional sources and excluded from generated-store scans. Root identity,
@@ -1301,3 +1305,138 @@ publication**, not passing from YAML/Linux. Task6 desktop/whole-branch acceptanc
 was not attempted. Ticket stays open; no push/PR/dispatch/merge/closure/cleanup.
 Next: fresh independent read-only Task5 review of exact base-to-final HEAD and
 parent acceptance; then stop for the parent-owned next gate.
+
+## Task 5 review BLOCK and privacy-proof correction — 2026-10-06T20:10:52Z
+
+Original task base remains `0601c6bf76485fa98e9935e36266631a32efa793`.
+Correction base/reviewed candidate: `907dd4204984ccb52125a6f44b990dd27ac08b7f`.
+Correction implementation: `575f657c21c16323fc64a367acef93608e528ec2`
+(`test: enforce synchronization raw-output privacy`). Final evidence HEAD and
+clean status are bound in `/tmp/manyhands-cycle05-task5-review-head.txt`; the
+original-base-to-final-HEAD diff is regenerated at
+`/tmp/manyhands-cycle05-task5-review.diff`. Correction-only diff is additionally
+`/tmp/manyhands-cycle05-task5-privacy-fixes-review.diff`.
+
+Independent review BLOCKED Task5 acceptance: two P1 privacy-proof mechanisms and
+three P2 assertion gaps, **not a demonstrated production defect**. Exact review:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/54172663-df53-43c1-928c-820aba6a6c5f/task5/review.md`.
+Parent authorized narrow additional `tests/support/ssh_harness.rs` and
+`ssh_privacy.rs` seams; correction touches those, `remote_synchronization.rs`,
+ledger and valid canonical comments only. Existing fixture/receiver source,
+Tasks1–4 production/regressions, dependency/lockfiles/workflow and public/schema
+policy remain unchanged. Existing branch/worktree and preflight retained.
+No production spill was uncovered with the corrected raw scanner; no product fix
+or suppression/filtering was introduced. Parent has NOT accepted Task5.
+
+### Corrected claims and finding-to-test inventory
+
+The earlier assertion that saving probes provided full new-target raw output
+privacy was **invalid**: the runner scanned ONLY case `transport_privacy`; none
+of the 20 new names matched. Numbered/truncating saves also lost earlier Worlds'
+probes. These are actual fixture-proof defects. Preserve the original907dd/769
+logs/evidence and review rather than labeling them full privacy acceptance.
+Original generated-store/row/Debug/Display/WAL/journal/backup scopes remain sound.
+
+| Finding | Correction / actual named test | Capture/assertion evidence |
+| --- | --- | --- |
+| P1 raw stdout/stderr never scanned | `run_with_output_privacy(CASES, OUTPUT_CONTROLS)` explicitly enables required raw scanning for EVERY dedicated-host case. `synchronization_raw_capture_privacy` | Real nested isolated children emit controlled bytes beyond20KB into stdout OR stderr, return success OR failure. Four captures must return safe typed OutputPrivacy, not Child/Fixture. A clean failing child separately returns Child. Both full captured buffers are scanned before numeric filtering/rendering and before propagating child failure. |
+| P1 earlier Worlds overwritten | Content-addressed `create_new` saves preserve the case-wide union; duplicates are byte-verified without truncation. `synchronization_probe_union_privacy` | Separate nested URL/key children each create THREE real Worlds (six authenticated clones), assert actual first URL/key differ from later ones, repeat later saves, assert full first URL and first private-key buffer still exist in loaded union, then emit only that first secret into raw stdout/stderr. Actual runner capture must reject as OutputPrivacy. No raw bytes rendered. |
+| P1 fail-closed inventory integrity | `synchronization_probe_inventory_fail_closed` | Actual nested missing inventory, correctly digest-named empty probe, non-file entry, and corrupt digest/content entry all return ProbeInventory before any rendering. Empty saver input/probe rejected; saver refuses existing corrupt content, rather than overwriting/guessing. Loader rejects symlinks/nonregular files and digest mismatch instead of silently ignoring malformed entries. |
+| P2 context AlreadyCurrent command proof | `context_first_current_fast_forward_local_ahead` | Full receiver-update vector captured immediately before AlreadyCurrent, equality asserted immediately after it and BEFORE peer publication resets baseline. |
+| P2 context FF actual index proof | `context_first_current_fast_forward_local_ahead` | Actual linked index `write_tree()` equals fetched commit tree immediately after FF and BEFORE `advance` can perform another checkout; update-count equality also asserted there. Existing ref/byte/primary image proofs retained. |
+| P2 incompatible-generation NEW Push no effect | `incompatible_generation_history_unknown` | NEW destination update-command vector and accepted count captured before call, verified unchanged immediately after HistoryUnknown; actual NEW bare context-ref absence checked before AND after, alongside existing Fetch count and physical image. |
+
+The three new top-level selftests execute **11 child-only controls** (four raw
+leaks, one clean failure, four malformed/missing inventories, two first-World
+leaks). Those controls are deliberately not ordinary passing cases; all are
+executed inside bounded isolated runner captures on every native target running
+the new target. No ignored/platform-skipped negative cases. Child-only registry
+is the narrow bridge needed to test the real runner capture path, not an unrelated
+`clean()` helper call. Parser-only case saves a nonempty fixed control inventory;
+real synchronization cases retain their actual secret inventories.
+
+### Raw capture order / storage boundaries
+
+Existing `run(cases)` keeps prior default policy and `transport_privacy` scanning.
+New opt-in mode calls the SAME actual process/capture/watchdog runner with required
+privacy, so a missing inventory fails closed. Child status is recorded, BOTH raw
+stdout/stderr are fully drained into existing bounded buffers and joined, then
+inventory loaded and BOTH buffers scanned, then numeric-only diagnostics may be
+rendered, then prior child status returned. Rejection/loader/capture errors return
+closed safe enums/fixed messages with no raw output/probe printing. Existing
+capture limit/watchdog/signal/bootstrap behavior is unchanged. Capture overflow or
+I/O failure still fails closed without rendering, not falsely relabeled scan success.
+
+Probe files are intentional fixture-only private input sources outside generated
+app stores. Filenames are BLAKE3 digests using the existing dependency, never secret
+bytes. Only create-new opens are used; already-existing regular contents must match.
+Load requires a nonempty inventory, regular non-symlink root/files, matching digest
+and nonempty bytes. Saving later snapshots/Worlds cannot truncate previous entries.
+No app journal or production persistence behavior is added. Protected generated
+store scopes and legitimate repository/key-source/discovery metadata exceptions
+remain exactly as recorded for the original candidate. Receiver CAS remains
+expected-old race rejection, never a fabricated nonFF-policy response; actual
+accepted updates remain child-completion/ref proof, not advertisements/invocations.
+
+### Meaningful controlled RED then GREEN
+
+Logs: `/tmp/manyhands-cycle05-task5-privacy-fixes/`.
+
+1. Added real runner bridge/control selftest against the unchanged old case-name
+   predicate. `red-raw-capture.log`: compilation succeeds, command exit1,
+   `synchronization_raw_capture_privacy` assertion1336 fails because actual nested
+   successful stdout leak is accepted, not OutputPrivacy. Raw bytes remain in the
+   nested captured buffer and are never tool output. This is a behavioral mechanism
+   red, NOT a compile/authoring error.
+2. Enable explicit scanner condition. `green-raw-capture.log`: same named test
+   passes all success/failure stdout/stderr controls and clean-failure discriminator.
+3. With raw scanner active but original truncating saver retained,
+   `red-probe-union.log`: compilation succeeds, exit1, union assertion1391 fails
+   because first real URL survives in captured stdout but was lost from inventory.
+   Later World's saved URL is genuinely different. This is a distinct behavioral
+   inventory red, not a side effect of the old scanner predicate.
+4. Content-addressed create-new union makes `green-probe-controls.log` pass2
+   (separate first-URL/key captures plus fail-closed inventories). Final strengthening
+   includes explicit first-buffer membership and corrupt-content checks.
+5. Final source `focused-final.log` passes **23** actual host cases with required
+   raw-output scanning. Original20 wire scenarios/preservation/recovery/store
+   privacy tests retain their assertions plus all three P2 additions.
+
+### Source binding and final NORMAL gates
+
+`source-identity.txt` associates implementation HEAD with the Rust content used
+by focused/static gates and the subsequent full/CLI run. Stable original-base
+Rust diff stored in `rust-identity.diff`; SHA256:
+`7f0daff64f39ec0b1a94b496620f3d20608921cd15e45b08fd1b1fe9d2bd0abe`.
+Recomputed after full/CLI, identical. Required command logs and `test.meta` are
+retained; full metadata embeds actual575f full SHA and content hash, not merely
+an informal clean-state assertion. No meaningful Rust change after these gates;
+only ledger/comments added afterward.
+
+| Exact command | Result / log |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_synchronization synchronization_raw_capture_privacy` | behavioral red exit1, then green1; `red-raw-capture.log`, `green-raw-capture.log` |
+| `devenv shell -- cargo test --locked --test remote_synchronization synchronization_probe_union_privacy` | behavioral red exit1; `red-probe-union.log` |
+| `devenv shell -- cargo test --locked --test remote_synchronization synchronization_probe_` | green2; `green-probe-controls.log` |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | final green23, `focused-final.log`; earlier complete23 log retained too |
+| `devenv shell -- cargo check --all-features --locked` | exit0; `check.log` |
+| `devenv shell -- cargo fmt --check` | exit0; `fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | exit0; `clippy.log` |
+| `devenv shell -- cargo test --all-features --locked` | **FIRST NORMAL correction gate exit0**,600 standard +172 SSH = **772 passed**, `test.log` |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | exit0/no window; `cli.log` |
+| `git diff --check` and exact committed-range diff check | exit0; final clean index/worktree bound by review-head artifact |
+
+Full interval: `2026-10-06T20:00:39Z`–`2026-10-06T20:10:24Z`.
+Default normal standard-harness concurrency, unchanged existing custom host policy;
+no broad retry, serialization, timing/assertion weakening or ignored tests.
+Includes existing library168/discovery59 and SSH remote_observation15/fixture31/
+transport103 plus corrected sync23. Shared default runner/transport_privacy and
+all other hosts pass unchanged. No redundant unchanged broad rerun.
+
+Original Task5 normal769 success remains recorded, but did NOT prove these old
+P1 claims. Task4's earlier first-normal Busy failure and expressly authorized
+second-normal success also remain qualified: NOT proven unrelated/preexisting.
+All five actual native executions remain pending authorized publication; Linux/
+YAML do not prove them. No Task6, publication/dispatch, merge, closure or cleanup.
+Ticket stays open. All five reported proof gaps corrected locally, **fresh independent
+re-review and parent acceptance still required**. Stop for that gate.
