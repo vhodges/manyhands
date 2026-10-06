@@ -934,8 +934,21 @@ pub(in super::super) fn read_operations(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<Vec<StoredRemoteOperation>, RepositoryError> {
+    read_operation_rows(connection, repository_id, false)
+}
+
+fn read_operation_rows(
+    connection: &Connection,
+    repository_id: i64,
+    active_only: bool,
+) -> Result<Vec<StoredRemoteOperation>, RepositoryError> {
+    let query = if active_only {
+        "SELECT * FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting') ORDER BY id"
+    } else {
+        "SELECT * FROM remote_operation_records WHERE repository_id=?1 ORDER BY id"
+    };
     connection
-        .prepare("SELECT * FROM remote_operation_records WHERE repository_id=?1 ORDER BY id")
+        .prepare(query)
         .and_then(|mut statement| {
             statement
                 .query_map([repository_id], |row| Ok(operation_from_row(row)))?
@@ -1042,10 +1055,13 @@ fn read_policy(
     })
 }
 
-pub(in super::super) fn read_snapshot(
-    connection: &Connection,
-    repository_id: i64,
-) -> Result<RemoteSnapshot, RepositoryError> {
+/// Exhaustive integrity audit at service initialization, after migration has
+/// committed. Retained history is checked in a read transaction, never in an
+/// ordinary state transition's immediate write transaction.
+pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<(), RepositoryError> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+        .map_err(|_| recovery_required())?;
     for table in [
         "remote_polling_state",
         "remote_observation_batches",
@@ -1053,7 +1069,7 @@ pub(in super::super) fn read_snapshot(
         "remote_context_states",
         "remote_operation_records",
     ] {
-        if connection
+        if transaction
             .prepare(&format!("PRAGMA foreign_key_check({table})"))
             .and_then(|mut statement| statement.exists([]))
             .map_err(|_| recovery_required())?
@@ -1061,8 +1077,40 @@ pub(in super::super) fn read_snapshot(
             return Err(recovery_required());
         }
     }
+    let repository_ids = transaction
+        .prepare("SELECT id FROM repositories ORDER BY id")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for repository_id in repository_ids {
+        read_snapshot_rows(&transaction, repository_id, true)?;
+    }
+    transaction.rollback().map_err(|_| recovery_required())
+}
+
+/// Routine reconstruction is bounded by current refs, context evidence and
+/// active operations, independent of the number of completed poll attempts.
+pub(in super::super) fn read_snapshot(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<RemoteSnapshot, RepositoryError> {
+    read_snapshot_rows(connection, repository_id, false)
+}
+
+fn read_snapshot_rows(
+    connection: &Connection,
+    repository_id: i64,
+    audit_history: bool,
+) -> Result<RemoteSnapshot, RepositoryError> {
     let policy = read_policy(connection, repository_id)?;
-    read_operations(connection, repository_id)?;
+    if audit_history {
+        read_operations(connection, repository_id)?;
+    } else {
+        read_operation_rows(connection, repository_id, true)?;
+    }
     let mut snapshot = RemoteSnapshot::new(
         policy.polling,
         policy.latest_outcome,
@@ -1070,8 +1118,28 @@ pub(in super::super) fn read_snapshot(
         Vec::new(),
     );
     snapshot.history_unknown = policy.history_unknown;
-    let batches = connection.prepare("SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 ORDER BY id")
-        .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    let query = if audit_history {
+        "SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 ORDER BY id"
+    } else {
+        "SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1 ORDER BY id"
+    };
+    let batches = connection
+        .prepare(query)
+        .and_then(|mut statement| {
+            statement
+                .query_map([repository_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
     let mut current_count = 0;
     for (batch_id, remote, primary, generation, observed_at, current) in batches {
         let plan = RemoteRefPlan::from_configuration(&remote, &primary)
@@ -1141,6 +1209,22 @@ pub(in super::super) fn read_snapshot(
             }
         }
     }
+    let mut current_contexts: std::collections::HashMap<_, _> = snapshot
+        .observations
+        .iter()
+        .filter(|observation| {
+            matches!(
+                observation.classification,
+                RemoteRefClassification::RecognizedContext { .. }
+            )
+        })
+        .map(|observation| {
+            (
+                observation.remote_ref().expect("validated context target"),
+                observation,
+            )
+        })
+        .collect();
     let contexts = connection.prepare("SELECT remote_ref,tracking_ref,kind,item_id,last_advertised_oid,tracking_oid,publication_evidence,state,observed_at FROM remote_context_states WHERE repository_id=?1 ORDER BY remote_ref")
         .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,Option<String>>(4)?,row.get::<_,Option<String>>(5)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?,row.get::<_,i64>(8)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
     for (remote_ref, tracking_ref, kind, id, advertised, tracking, evidence, state, observed_at) in
@@ -1185,15 +1269,40 @@ pub(in super::super) fn read_snapshot(
         {
             return Err(recovery_required());
         }
+        let tracking = oid(tracking)?;
+        match current_contexts.remove(remote_ref.as_str()) {
+            Some(observation)
+                if matches!(
+                    state,
+                    RemoteContextState::Observed
+                        | RemoteContextState::Unmaterialized
+                        | RemoteContextState::Malformed
+                ) && evidence == RemotePublicationEvidence::ObservedPublished
+                    && advertised == Some(observation.advertised_oid)
+                    && tracking == observation.tracking_oid => {}
+            None if matches!(
+                state,
+                RemoteContextState::RemotelyDeleted | RemoteContextState::HistoryUnknown
+            ) => {}
+            _ => return Err(recovery_required()),
+        }
         snapshot.contexts.push(RemoteContextSnapshot::new(
             Some(target),
             Some(kind),
             Some(id),
             advertised,
-            oid(tracking)?,
+            tracking,
             evidence,
             state,
         ));
+    }
+    if !current_contexts.is_empty() {
+        return Err(recovery_required());
+    }
+    // Local discovery has its own validation and recovery contract. Startup's
+    // remote audit must not reinterpret unrelated local-cache corruption.
+    if audit_history {
+        return Ok(snapshot);
     }
     let local_contexts = connection.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
         .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;

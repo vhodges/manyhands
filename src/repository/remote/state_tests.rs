@@ -48,14 +48,15 @@ fn invalid_stored_ref_is_rejected_without_leaking_response() {
 }
 
 #[test]
-fn orphan_remote_rows_require_recovery_instead_of_disappearing_from_queries() {
-    let (data, root, service) = fixture();
+fn orphan_remote_rows_require_recovery_during_automatic_startup_audit() {
+    let (data, _root, _service) = fixture();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_ref_observations VALUES(999,0,NULL,NULL,'malformed','1111111111111111111111111111111111111111',NULL)").unwrap();
-    assert_eq!(
-        service.remote_snapshot(root.path()).unwrap_err().kind,
-        RepositoryErrorKind::RecoveryRequired
-    );
+    let error = match RepositoryService::open_at(data.path()) {
+        Ok(_) => panic!("orphan remote row accepted at startup"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
 }
 
 fn plan() -> RemoteRefPlan {
@@ -70,6 +71,206 @@ fn advertised() -> RemoteRefObservation {
         None,
     )
     .unwrap()
+}
+
+#[test]
+fn current_advertisement_requires_matching_publication_evidence() {
+    for corruption in [
+        "DELETE FROM remote_context_states",
+        "UPDATE remote_context_states SET state='remotely_deleted'",
+        "UPDATE remote_context_states SET state='history_unknown',publication_evidence='never_published',last_advertised_oid=NULL",
+        "UPDATE remote_context_states SET last_advertised_oid='2222222222222222222222222222222222222222'",
+    ] {
+        let (data, root, service) = fixture();
+        let generation = with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)
+        })
+        .unwrap();
+        with_transaction(&service, root.path(), |tx, id| {
+            complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+        })
+        .unwrap();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection.execute_batch(corruption).unwrap();
+        assert_eq!(
+            service.remote_snapshot(root.path()).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "{corruption}"
+        );
+        assert!(
+            with_transaction(&service, root.path(), |tx, id| complete_batch(
+                tx,
+                id,
+                &plan(),
+                generation,
+                &[],
+                124
+            ))
+            .is_err(),
+            "corrupt current evidence must not be silently replaced"
+        );
+    }
+}
+
+#[test]
+fn live_context_state_requires_a_matching_current_advertisement() {
+    let (data, root, service) = fixture();
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute("DELETE FROM remote_ref_observations", [])
+        .unwrap();
+    assert_eq!(
+        service.remote_snapshot(root.path()).unwrap_err().kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+}
+
+fn vm_work<T>(connection: &Connection, operation: impl FnOnce() -> T) -> (T, usize) {
+    use std::cell::Cell;
+    unsafe extern "C" fn count(context: *mut std::ffi::c_void) -> std::ffi::c_int {
+        // SQLite invokes this synchronously while the stack-owned counter lives.
+        let counter = unsafe { &*context.cast::<Cell<usize>>() };
+        counter.set(counter.get() + 1);
+        0
+    }
+    struct Reset<'a>(&'a Connection);
+    impl Drop for Reset<'_> {
+        fn drop(&mut self) {
+            // Remove the callback before its stack-owned counter is dropped.
+            unsafe {
+                rusqlite::ffi::sqlite3_progress_handler(
+                    self.0.handle(),
+                    0,
+                    None,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+    let counter = Cell::new(0usize);
+    // Connection remains borrowed and counter alive through the entire call.
+    unsafe {
+        rusqlite::ffi::sqlite3_progress_handler(
+            connection.handle(),
+            1,
+            Some(count),
+            std::ptr::from_ref(&counter).cast_mut().cast(),
+        );
+    }
+    let reset = Reset(connection);
+    let result = operation();
+    drop(reset);
+    (result, counter.get())
+}
+
+#[test]
+fn routine_reads_and_batch_writes_do_not_scale_with_retained_history() {
+    let (data, root, service) = fixture();
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let (snapshot, base_read) = vm_work(&connection, || read_snapshot(&connection, 1));
+    snapshot.unwrap();
+    let base_write = with_transaction(&service, root.path(), |tx, id| {
+        let (result, work) = vm_work(tx, || {
+            complete_batch(tx, id, &plan(), generation, &[advertised()], 124)
+        });
+        result.map(|_| work)
+    })
+    .unwrap();
+    connection.execute_batch("WITH RECURSIVE numbers(n) AS (VALUES(1000) UNION ALL SELECT n+1 FROM numbers WHERE n<4999)
+      INSERT INTO remote_observation_batches SELECT n,1,'origin','main',1,123,0 FROM numbers;
+      INSERT INTO remote_ref_observations SELECT id,0,'refs/heads/main','refs/remotes/origin/main','primary','1111111111111111111111111111111111111111',NULL FROM remote_observation_batches WHERE id>=1000;
+      INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at) SELECT 1,printf('%026d',id),1,'origin','main','refs/heads/main','refs/remotes/origin/main','poll','poll','completed',123,123 FROM remote_observation_batches WHERE id>=1000;").unwrap();
+    let (snapshot, history_read) = vm_work(&connection, || read_snapshot(&connection, 1));
+    assert_eq!(snapshot.unwrap().observations().len(), 1);
+    let history_write = with_transaction(&service, root.path(), |tx, id| {
+        let (result, work) = vm_work(tx, || {
+            complete_batch(tx, id, &plan(), generation, &[advertised()], 125)
+        });
+        result.map(|_| work)
+    })
+    .unwrap();
+    eprintln!(
+        "SQLite VM work: snapshot {base_read} -> {history_read}; batch {base_write} -> {history_write}; 4000 retained batches and operations"
+    );
+    assert!(
+        history_read <= base_read + 5_000,
+        "snapshot VM work grew from {base_read} to {history_read}"
+    );
+    assert!(
+        history_write <= base_write + 5_000,
+        "batch VM work grew from {base_write} to {history_write}"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_observation_batches WHERE id BETWEEN 1000 AND 4999",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        4000,
+        "historical evidence must be retained"
+    );
+}
+
+#[test]
+fn startup_automatically_audits_historical_refs_and_foreign_keys() {
+    for corruption in [
+        "UPDATE remote_ref_observations SET tracking_ref='refs/remotes/origin/wrong' WHERE batch_id=1",
+        "PRAGMA foreign_keys=OFF; INSERT INTO remote_ref_observations VALUES(999,0,NULL,NULL,'malformed','1111111111111111111111111111111111111111',NULL)",
+        "DROP TRIGGER remote_operation_target_immutable; UPDATE remote_operation_records SET primary_ref='refs/heads/wrong'",
+    ] {
+        let (data, root, service) = fixture();
+        let generation = with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)
+        })
+        .unwrap();
+        with_transaction(&service, root.path(), |tx, id| {
+            complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+        })
+        .unwrap();
+        with_transaction(&service, root.path(), |tx, id| {
+            complete_batch(tx, id, &plan(), generation, &[], 124)
+        })
+        .unwrap();
+        with_transaction(&service, root.path(), |tx, id| {
+            insert_operation(
+                tx,
+                id,
+                crate::repository::OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan()),
+                RemoteOperationPriority::Poll,
+                123,
+            )
+        })
+        .unwrap();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection
+            .execute("UPDATE remote_operation_records SET phase='completed'", [])
+            .unwrap();
+        connection.execute_batch(corruption).unwrap();
+        let error = match RepositoryService::open_at(data.path()) {
+            Ok(_) => panic!("startup skipped historical audit: {corruption}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    }
 }
 
 #[test]

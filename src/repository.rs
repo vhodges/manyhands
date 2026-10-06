@@ -2932,13 +2932,17 @@ impl RepositoryService {
             data_directory,
             RepositoryOperation::OpenRegistry,
         )?;
-        let availability = match open_registry(&registry_path, &mut observer)
-            .and_then(|mut connection| migrate_registry(&mut connection))
-        {
-            Ok(()) => IndexAvailability::Ready,
-            Err(error) if is_structural_sqlite_corruption(&error) => IndexAvailability::Degraded,
-            Err(error) => return Err(error),
-        };
+        let availability =
+            match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
+                migrate_registry(&mut connection)?;
+                remote::state::audit_registry(&mut connection)
+            }) {
+                Ok(()) => IndexAvailability::Ready,
+                Err(error) if is_structural_sqlite_corruption(&error) => {
+                    IndexAvailability::Degraded
+                }
+                Err(error) => return Err(error),
+            };
 
         Ok(Self {
             registry_path,
