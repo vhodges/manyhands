@@ -999,3 +999,103 @@ review diff/head artifacts regenerated at the same task4-review paths, plus
 focused46e5..correction diff. Client counters/real ref observations do not claim
 receive-side transaction/disconnect proof. Task5 full fixture/privacy/nativeCI
 and whole-Cycle review remain pending; ticket stays open. Stop after Task4.
+
+## Task 4 re-review BLOCK / no-remote ID correction — 2026-10-06T18:39:34Z
+
+Independent re-review of clean HEAD
+`6166c66fefce681478eeca18fcffc5ad605fe802` explicitly confirms BOTH previous P1
+endpoint defects fixed. Those dispositions and prior721/736/744-case evidence
+remain intact. Fresh BLOCK (task4-endpoint-fixes/review.md): live noRemote path
+could adopt an existing nonauthoritative remote ID as tagged local PublishPending,
+bypass typed-target validation and poison subsequent replay by forbidden ID
+coexistence. Parent authorized only this boundary and atomic binding correction;
+Task4 remains unaccepted, ticket open, no Task5/publication/lifecycle work.
+
+### Finding-to-proof disposition
+
+| Invariant | Actual proof / disposition |
+| --- | --- |
+| Existing same-ID remote action cannot become local-only after removal | `synchronization_existing_id_remote_removed`: actual complete-Fetch persistence fault leaves primary FetchPrepared; change only pretrusted pushurl; same-ID restart increments generation, retains old Interrupted row; remove publication_remote and COMMIT configuration; baseline AFTER fixture changes; explicit same-ID restart and ordinary replay return RecoveryRequired. No local refresh row, zero discovery observation-hook calls/authentication changes, both actual remote refs/absence and physical local HEAD/refs/index/files/status preserved. Failed red on intended RecoveryRequired assertion before implementation. |
+| Different existing materialized typed target cannot reuse that ID | `synchronization_existing_id_remote_removed_changed_target`: same sequence plus actual authoring/materialization of another context; target switch to that context returns OperationMismatch on restart AND ordinary replay before fallback. Same no-row/observation/auth/ref/byte proofs cover primary AND context. Failed red on intended mismatch assertion before implementation. |
+| Inspection-none does not authorize later binding; ALL remote phases reject | `local_synchronization_binding_rejects_remote_collision_after_none_inspection_in_every_phase`: fresh database per phase; observe None, insert colliding remote envelope BEFORE direct binder; reject and retain no refresh row/physical state for all15 schema-supported phases, including Completed/Interrupted/Cancelled/Failed. Structural phase fixtures prove insertion policy, NOT remote effects/authority. Failed red at Completed against delegation to old ordinary policy before specialized transactional guard. |
+| Stable root identity before invalid current configuration | `existing_remote_id_rejects_other_root_before_invalid_live_configuration`: same cache contains two registered roots; wrong-root ID with invalid live configuration returns OperationMismatch, not live-config fallback. |
+| Authoritative exact-ID/index-only refresh must remain compatible after config removal | `synchronization_authoritative_replay_remote_removed`: actual publication followed by injected refresh-completion failure leaves authoritative IndexPending; remove remote/commit clean configuration; replay completes ORIGINAL authority/OID via ordinary empty-target refresh, then completed replay skips observation/SSH. Physical state preserved, matcher remains empty rather than tagged. |
+| Legitimate new-ID local and frozen original-OID replay | Retained unit `no_remote_refreshes_same_id_without_remote_envelope_or_git_mutation`, `no_remote_index_pending_retains_exact_outcome_and_replays_refresh_only`, `local_only_replay_freezes_oid_and_rejects_target_or_plain_refresh_reuse` all green. |
+| Prior endpoint/history/snapshot/preparation/prompt/cancellation corrections | All27 existing service cases retained/green; now30 total focused SSH service cases. |
+
+Correction: validate remote ID/root and frozen typed target BEFORE all replay,
+restart and live selection; authoritative/cancelled branches remain before live
+config. Existing nonauthoritative remote + noRemote returns recovery, never
+binding/discovery. Specialized begin/reconcile checks ANY same-ID remote row
+inside its IMMEDIATE transaction under binder's existing cache-write guard;
+ordinary entry point passes the unchanged policy. No schema/second journal/public
+API/dependency/frontend/Task5 fixture/nativeCI expansion. No raw endpoint/source,
+credential or canonical/worktree contents persisted/output by the correction.
+
+### Actual red / focused green evidence
+
+Logs: `/tmp/manyhands-cycle05-task4-id-boundary/`.
+- Both public-service BEFORE-implementation reds exit1:
+  `red-synchronization_existing_id_remote_removed.log` and
+  `red-synchronization_existing_id_remote_removed_changed_target.log`. Existing
+  harness emits fixed case/assertion-line diagnostics, no raw server text.
+- Atomic binder intended assertion red: `red-atomic-binder.log`, Completed accepted
+  by old ordinary policy. Earlier test-authoring compile attempt used incorrect
+  internal helper names/arguments; retained separately as
+  `atomic-binder-compile-attempt.log`, NOT counted as red evidence. Corrected to
+  existing helpers without weakening assertions.
+- `devenv shell -- cargo test --locked --lib repository::remote::sync::tests`:
+  15 passed (`lib-focused.log`),2 added +13 retained.
+- `devenv shell -- cargo test --locked --test ssh_transport synchronization_`:
+  30 passed (`focused.log`),3 added +27 retained.
+
+### Final validation: first gate failure RETAINED, authorized second gate
+
+Final check/fmt/clippy pass after final meaningful Rust changes:
+`devenv shell -- cargo check --all-features --locked`, `cargo fmt --check`,
+`cargo clippy --all-targets --all-features --locked -- -D warnings` all exit0
+(`check.log`, `fmt.log`, `clippy.log`).
+
+First NORMAL `devenv shell -- cargo test --all-features --locked` FAILED:
+library168 passed; discovery_rebuild58/59 passed then
+`services_sharing_a_corrupt_cache_replace_it_once` unwrapped RepositoryBusy at
+`tests/discovery_rebuild.rs:2417` (`test.log`), before transport SSH target. CLI
+skipped by the && chain, not a CLI failure. No retry/suppression/serialization
+before explicit supervisor authorization.
+
+Supervisor authorized exact diagnosis + NORMAL discovery target and ONE further
+NORMAL full gate if both pass, no unrelated fix/timeout/sleep/ignored assertion.
+Inspection: Busy originates from shared coordination::acquire timed try-lock
+(250ms budget), used by repository and cache leases; diagnostic alone does not
+identify which lock timed out. Test releases first service's observation barrier
+concurrently with second rebuild. Rebuild acquires repository leases before begin
+and after observation; begin_operation calls ordinary begin_or_reconcile_operation
+with unchanged policy=false. New tagged binder is not called. Coordination,
+rebuild, discovery test source UNCHANGED from correction base. This is a
+**timing-sensitive validation failure**, NOT proven unrelated/pre-existing;
+source and green reruns alone are insufficient to claim baseline attribution.
+
+Authorized exact failing test (`--test discovery_rebuild
+services_sharing_a_corrupt_cache_replace_it_once -- --exact`) passed1
+(`discovery-exact.log`); whole `--test discovery_rebuild` with NORMAL threading
+passed59 (`discovery-target.log`). No meaningful Rust changes between static
+passes, failed full gate, narrow diagnosis and second full gate. Exact Rust diff
+against6166 base saved as `rust-identity.diff`, SHA256
+`cc22d3e7d7ef90dc6f9e76d6ac18c81042c776f4dad67bad695574fe6a57cbc4`
+(`rust-identity.sha256`), rechecked after second gate; correction commit has that
+same Rust content. No baseline rerun was performed or claimed.
+
+ONE authorized second NORMAL `devenv shell -- cargo test --all-features --locked`
+passed **600 standard +149 SSH =749 cases**, library168/discovery59/transport103
+(`test-second.log`), ended2026-10-06T18:38:58Z. This is SECOND-attempt success,
+NOT a once-only successful full gate. CLI then separately
+`devenv shell -- cargo run --locked --bin manyhands-cli` exit0/no window (`cli.log`).
+Both full attempts remain retained and must be visible to reviewers.
+
+`git diff --check` passes; coherent correction commit leaves clean existing
+branch/worktree/index. Original-base Task4 diff/head status regenerated at prior
+paths; focused6166..final correction diff supplied. Fresh P1 corrected with actual
+proofs, **pending independent re-review/parent acceptance**, not self-accepted.
+Client auth observations/ref checks and scan-hook/control-flow evidence do not
+claim receive-side transaction counts or full scanner entry instrumentation.
+Task5/full privacy/receive-side/nativeCI/whole-Cycle review remain pending. Stop.

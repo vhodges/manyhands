@@ -9,6 +9,18 @@ use std::{cell::Cell, path::Path};
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("synchronization_primary_service", primary_service),
     (
+        "synchronization_authoritative_replay_remote_removed",
+        authoritative_replay_remote_removed,
+    ),
+    (
+        "synchronization_existing_id_remote_removed",
+        existing_id_remote_removed,
+    ),
+    (
+        "synchronization_existing_id_remote_removed_changed_target",
+        existing_id_remote_removed_changed_target,
+    ),
+    (
         "synchronization_scope_prepare_endpoint_race",
         scope_prepare_endpoint_race,
     ),
@@ -1261,6 +1273,183 @@ fn same_id_restart_endpoint_changed() -> Result<(), FixtureError> {
     assert_eq!(case.fixture.accepted_keys().len(), effects);
     assert_eq!(destination.accepted_keys().len(), other_effects);
     assert_eq!(target_state(&case.root, &case.root)?, before);
+    assert!(
+        fixed(git2::Repository::open_bare(destination.repository_path()))?
+            .find_reference("refs/heads/main")
+            .is_err()
+    );
+    Ok(())
+}
+fn authoritative_replay_remote_removed() -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let db = database(&case)?;
+    fixed(db.execute_batch("CREATE TRIGGER fail_refresh BEFORE UPDATE ON operation_records WHEN NEW.state='completed' AND NEW.action='refresh' BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
+    let req = request(&case);
+    let (mut session, _) = session(vec![]);
+    let original = fixed(case.service.synchronize_remote(req.clone(), &mut session))?;
+    let SynchronizationResult::IndexPending(pending) = original else {
+        return Err(FixtureError);
+    };
+    fixed(db.execute_batch("DROP TRIGGER fail_refresh"))?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    fixed(std::fs::write(
+        case.root.join(".manyhands/config.toml"),
+        b"format_version = 1\nprimary_branch = \"main\"\n",
+    ))?;
+    commit_configuration(&repo)?;
+    let before = target_state(&case.root, &case.root)?;
+    let effects = case.fixture.accepted_keys().len();
+    let expected = SynchronizationResult::Complete(pending.authoritative.clone());
+    assert_eq!(
+        fixed(case.service.synchronize_remote(req.clone(), &mut session))?,
+        expected
+    );
+    // A completed empty-target remote handoff still replays, without scan or
+    // new tagged local authority, even after removal/another clean local commit.
+    case.service.set_observation_hook_for_testing(|| {
+        panic!("completed authoritative replay scanned discovery")
+    });
+    assert_eq!(
+        fixed(case.service.synchronize_remote(req.clone(), &mut session))?,
+        expected
+    );
+    assert_eq!(case.fixture.accepted_keys().len(), effects);
+    assert_eq!(target_state(&case.root, &case.root)?, before);
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT target FROM operation_records WHERE operation_ulid=?1",
+            [req.operation_id.to_string()],
+            |r| r.get::<_, String>(0)
+        ))?,
+        ""
+    );
+    Ok(())
+}
+fn existing_id_remote_removed() -> Result<(), FixtureError> {
+    remote_removed_existing_id(false)
+}
+fn existing_id_remote_removed_changed_target() -> Result<(), FixtureError> {
+    remote_removed_existing_id(true)
+}
+fn remote_removed_existing_id(changed_target: bool) -> Result<(), FixtureError> {
+    let case = prepare()?;
+    let destination = alternate_push(&case)?;
+    let req = request(&case);
+    let db = database(&case)?;
+    fixed(db.execute_batch("CREATE TRIGGER fail_fetch_batch BEFORE INSERT ON remote_observation_batches BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
+    let (mut session, _) = session(vec![]);
+    assert!(
+        case.service
+            .synchronize_remote(req.clone(), &mut session)
+            .is_err()
+    );
+    assert_eq!(
+        fixed(case.service.active_remote_operation(&case.root))?
+            .ok_or(FixtureError)?
+            .phase(),
+        RemoteOperationPhase::FetchPrepared
+    );
+    fixed(db.execute_batch("DROP TRIGGER fail_fetch_batch"))?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    restart.approval = None;
+    assert!(
+        case.service
+            .synchronize_remote(restart.clone(), &mut session)
+            .is_err()
+    );
+    let retained: (String,i64) = fixed(db.query_row("SELECT phase,configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",[req.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+    assert_eq!(retained.0, "interrupted");
+    let current: i64 = fixed(db.query_row(
+        "SELECT configuration_generation FROM remote_polling_state",
+        [],
+        |r| r.get(0),
+    ))?;
+    assert!(current > retained.1);
+    let context = if changed_target {
+        Some(author_context(&case)?)
+    } else {
+        None
+    };
+    fixed(std::fs::write(
+        case.root.join(".manyhands/config.toml"),
+        b"format_version = 1\nprimary_branch = \"main\"\n",
+    ))?;
+    // Fixture configuration commit intentionally advances HEAD. Baseline only
+    // AFTER that clean commit, never conflate it with service Git effects.
+    commit_configuration(&repo)?;
+    let linked = context
+        .as_ref()
+        .map_or(case.root.as_path(), |c| c.worktree.as_path());
+    if changed_target {
+        restart.target = context_request(&case)?.target;
+    }
+    let before = target_state(&case.root, linked)?;
+    let primary_before = target_state(&case.root, &case.root)?;
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    let remote_before = fixed(server.refname_to_id("refs/heads/main"))?;
+    let effects = case.fixture.accepted_keys().len();
+    let other_effects = destination.accepted_keys().len();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observation = observed.clone();
+    case.service.set_observation_hook_for_testing(move || {
+        observation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let result = case
+        .service
+        .synchronize_remote(restart.clone(), &mut session);
+    if changed_target {
+        assert!(matches!(
+            result,
+            Err(SynchronizationError::Repository(RepositoryError {
+                kind: RepositoryErrorKind::OperationMismatch,
+                ..
+            }))
+        ));
+    } else {
+        assert!(matches!(
+            result,
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+    }
+    // A rejected restart must not manufacture forbidden local/remote coexistence
+    // that poisons the next ordinary exact-ID replay.
+    restart.restart = false;
+    let replay = case.service.synchronize_remote(restart, &mut session);
+    if changed_target {
+        assert!(matches!(
+            replay,
+            Err(SynchronizationError::Repository(RepositoryError {
+                kind: RepositoryErrorKind::OperationMismatch,
+                ..
+            }))
+        ));
+    } else {
+        assert!(matches!(
+            replay,
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+    }
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM operation_records WHERE operation_ulid=?1",
+            [req.operation_id.to_string()],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(fixed(db.query_row("SELECT phase,configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",[req.operation_id.to_string()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))))?,retained);
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(case.fixture.accepted_keys().len(), effects);
+    assert_eq!(destination.accepted_keys().len(), other_effects);
+    assert_eq!(target_state(&case.root, linked)?, before);
+    assert_eq!(target_state(&case.root, &case.root)?, primary_before);
+    assert_eq!(
+        fixed(server.refname_to_id("refs/heads/main"))?,
+        remote_before
+    );
     assert!(
         fixed(git2::Repository::open_bare(destination.repository_path()))?
             .find_reference("refs/heads/main")

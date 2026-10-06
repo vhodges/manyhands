@@ -353,3 +353,22 @@ intent as applicable and returns recovery, never equality-based authority from
 another endpoint, rollback or index handoff. Ordinary Cycle 03 scoped operations
 use no action expectation and retain their existing policy. No schema, journal,
 public API, dependency or raw endpoint/credential persistence was introduced.
+
+### Task 4 re-review correction: no-remote exact-ID boundary
+
+A retained remote ID is not a fresh local-only ID. Stable historical typed target
+and repository identity are validated before live publication selection, without
+requiring current configuration to reproduce the old logical identity. Existing
+authoritative/index-only and cancelled replay stay before configuration inspection.
+A same-target nonauthoritative remote ID with publication removed requires
+recovery; a changed target/root is an identity mismatch. No tagged local authority,
+refresh or scan is created. New IDs and frozen existing local-only identities
+retain their accepted behavior.
+
+Initial absence inspection is not binding authority: the specialized tagged
+local binder rejects ANY colliding remote ID, in ANY phase/root, inside the same
+IMMEDIATE begin/reconcile transaction protected by the existing short cache guard.
+The ordinary recovery/refresh entry point keeps its prior policy, including the
+legitimate empty-target remote-authoritative index handoff. No schema or second
+journal was added. This does not add remote-row parsing or live configuration
+requirements to historical authoritative replay.

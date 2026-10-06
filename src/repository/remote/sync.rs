@@ -358,12 +358,20 @@ impl RepositoryService {
             canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
         request.root = root.clone();
         let existing = state::with_transaction(self, &root, |tx, id| {
+            let other_root: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",rusqlite::params![request.operation_id.to_string(),id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
+            if other_root {
+                return Err(identity_error());
+            }
             state::read_operation(tx, id, request.operation_id)
         })?;
+        // Historical identity is independent of current publication settings.
+        // Check it before every replay/restart or live local-only selection.
+        if let Some(record) = &existing {
+            validate_record_target(&record.target, &request.target)?;
+        }
         if let Some(record) = &existing
             && record.authority.is_some()
         {
-            validate_record_target(&record.target, &request.target)?;
             let RemoteReservationOutcome::Replay(inspection) =
                 self.reserve_remote_operation(&root, request.operation_id, &record.target)?
             else {
@@ -384,14 +392,12 @@ impl RepositoryService {
         if let Some(record) = &existing
             && record.phase == RemoteOperationPhase::Cancelled
         {
-            validate_record_target(&record.target, &request.target)?;
             self.reserve_remote_operation(&root, request.operation_id, &record.target)?;
             return Err(SynchronizationError::Interrupted);
         }
         if let Some(record) = &existing
             && !request.restart
         {
-            validate_record_target(&record.target, &request.target)?;
             self.reserve_remote_operation(&root, request.operation_id, &record.target)?;
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -412,6 +418,9 @@ impl RepositoryService {
             return Err(SynchronizationError::RecoveryRequired);
         };
         let Some(remote_name) = config.publication_remote.as_ref() else {
+            if existing.is_some() {
+                return Err(SynchronizationError::RecoveryRequired);
+            }
             let oid = self.bind_local_synchronization(&request, &config.primary_branch)?;
             return Ok(self.synchronization_refresh(
                 &request,
@@ -430,8 +439,6 @@ impl RepositoryService {
         // The reservation controller validates root, target and local ID coexistence.
         if existing.is_none() {
             self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
-        } else if let Some(record) = &existing {
-            validate_record_target(&record.target, &request.target)?;
         }
         // Freeze exactly the snapshot that establishes this generation. A same-ID
         // restart reconciles persisted endpoint identity BEFORE receiving ownership.
@@ -1014,7 +1021,7 @@ impl RepositoryService {
         )?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        begin_or_reconcile_operation(
+        crate::repository::recovery::begin_or_reconcile_local_synchronization(
             &mut connection,
             &request.root,
             RepositoryOperation::RefreshRepository,
@@ -1156,12 +1163,15 @@ fn fast_forward(
     Ok(())
 }
 fn identity_mismatch() -> SynchronizationError {
-    SynchronizationError::Repository(RepositoryError::new(
+    identity_error().into()
+}
+fn identity_error() -> RepositoryError {
+    RepositoryError::new(
         RepositoryOperation::RepositorySnapshot,
         None,
         RepositoryErrorKind::OperationMismatch,
         "synchronization identity mismatch",
-    ))
+    )
 }
 fn local_refresh_identity(target: &SynchronizationTarget) -> String {
     match target {

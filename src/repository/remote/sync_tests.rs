@@ -481,3 +481,127 @@ fn local_binding_sql_failure_rolls_back_and_does_not_claim_index_pending() {
         result
     );
 }
+
+#[test]
+fn local_synchronization_binding_rejects_remote_collision_after_none_inspection_in_every_phase() {
+    // Structural phase fixtures exercise the insertion policy, not effect proof.
+    // Each fresh database prevents unrelated active rows from masking the guard.
+    for phase in [
+        "completed",
+        "interrupted",
+        "cancelled",
+        "failed",
+        "reserved",
+        "advertising",
+        "persisting",
+        "fetch_prepared",
+        "fetch_observed",
+        "local_prepared",
+        "local_fast_forwarded",
+        "push_prepared",
+        "push_returned",
+        "push_verified",
+        "reconciling",
+    ] {
+        let (root, data, service) = fixture();
+        let req = request(root.path());
+        assert!(
+            state::with_transaction(&service, root.path(), |tx, id| state::read_operation(
+                tx,
+                id,
+                req.operation_id
+            ))
+            .unwrap()
+            .is_none()
+        );
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        // Simulate the remote insertion AFTER service inspection returned None,
+        // before local binding. The binder must inspect again in its transaction.
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), false)?;
+            state::insert_operation(
+                tx,
+                id,
+                req.operation_id,
+                &RemoteOperationTarget::for_primary_synchronization(&plan),
+                RemoteOperationPriority::Manual,
+                0,
+            )?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase=?1 WHERE operation_ulid=?2",
+                rusqlite::params![phase, req.operation_id.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let repo = git2::Repository::open(root.path()).unwrap();
+        let oid = repo.head().unwrap().target();
+        let index = fs::read(repo.path().join("index")).unwrap();
+        let bytes = fs::read(root.path().join("fixture.txt")).unwrap();
+        assert!(
+            matches!(
+                service.bind_local_synchronization(&req, "main"),
+                Err(SynchronizationError::RecoveryRequired)
+            ),
+            "phase {phase}"
+        );
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM operation_records WHERE operation_ulid=?1",
+                [req.operation_id.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(repo.head().unwrap().target(), oid);
+        assert_eq!(fs::read(repo.path().join("index")).unwrap(), index);
+        assert_eq!(fs::read(root.path().join("fixture.txt")).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn existing_remote_id_rejects_other_root_before_invalid_live_configuration() {
+    let (root, _data, service) = fixture();
+    let (other, _other_data, _other_service) = fixture();
+    service
+        .enable(EnableRepositoryRequest {
+            root: other.path().into(),
+            primary_branch: "main".into(),
+            identity: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let req = request(root.path());
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)?;
+        state::insert_operation(
+            tx,
+            id,
+            req.operation_id,
+            &RemoteOperationTarget::for_primary_synchronization(&plan),
+            RemoteOperationPriority::Manual,
+            0,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    fs::write(
+        other.path().join(".manyhands/config.toml"),
+        b"invalid configuration",
+    )
+    .unwrap();
+    let mut wrong = req;
+    wrong.root = other.path().into();
+    wrong.restart = true;
+    assert!(matches!(
+        service.synchronize_remote(wrong, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::OperationMismatch,
+            ..
+        }))
+    ));
+}
