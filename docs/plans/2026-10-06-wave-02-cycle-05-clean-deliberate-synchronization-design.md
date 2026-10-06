@@ -372,3 +372,23 @@ The ordinary recovery/refresh entry point keeps its prior policy, including the
 legitimate empty-target remote-authoritative index handoff. No schema or second
 journal was added. This does not add remote-row parsing or live configuration
 requirements to historical authoritative replay.
+
+### Task 6 whole-Cycle review safety corrections
+
+Locked SAFE checkout defaults to ignored overwrites: explicit
+`safe().overwrite_ignored(false)` is required at the existing locked-old-HEAD
+checkout boundary. Ignored paths remain allowed in otherwise clean targets;
+noncolliding ignored build/app files do not block integration. Incoming collisions
+return recovery with durable LocalPrepared, without ref commit, automatic rollback
+or discard authority. Actual tested collisions preserve the whole physical image;
+this is not a universal guarantee against partial filesystem I/O failure.
+
+The specialized tagged-local binding transaction also validates existing LOCAL
+rows, not only remote collisions. Its complete matcher is constructed from typed
+target + full actual Git OID. Existing root/action/full matcher must match exactly;
+all pending same-root rows must carry the exact requested ID/action/full matcher,
+never a different-ID or legacy NULL-ID refresh alias. Ordinary refresh semantics
+are unchanged. A competing binding with different OID is rejected before handoff
+rather than claiming a new outcome; subsequent exact-ID replay still reads the
+first stored frozen OID before live Git/configuration. Identical tag reuse does
+not rewrite the row. No schema/journal/public-policy expansion.

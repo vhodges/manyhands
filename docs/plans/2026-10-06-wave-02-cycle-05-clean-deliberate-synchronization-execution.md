@@ -1517,3 +1517,144 @@ Five native targets remain pending publication authorization. Whole-branch revie
 any findings/fixes and associated verification, and native execution are separate
 gates; no YAML/Linux/desktop smoke is native CI proof. Ticket stays open. No
 push/PR/dispatch/merge/closure/worktree cleanup authorization exists.
+
+## Task 6 whole-Cycle BLOCK / safety corrections — 2026-10-06T21:23:34Z
+
+Read retained whole-review.md (task6 artifact650574f8), exact reviewed clean HEAD
+`76fd280dcc2f7c300a8353fa3c7c844a3b8e9df2`, original main
+`29f3f5a25957836a8513cba8a318306e1b928063`. Two source-backed/not-executed P1s:
+ignored incoming checkout data loss, and atomic tagged-local LOCAL identity race.
+Parent authorized actual service reds first and only demonstrated corrections.
+Task4/Task5 accepted proofs are retained, not redone/weakened or self-accepted.
+
+### P1 ignored content — actual behavioral reds and green coverage
+
+`ignored_primary_file_collision` and `ignored_context_directory_collision`
+failed BEFORE correction on the explicit ignored-private-bytes assertion AFTER
+successful service integration: protected bytes were replaced/removed. Initial
+red runs at rejection assertion also retained. Persistent common Git info/exclude
+survives service reopen; no ephemeral add_ignore_rule. Incoming real authenticated
+peer descendant tracks colliding path AND changes existing fixture.txt through
+owned explicit git2 index setup (not a product force checkout/push). Both primary
+and existing materialized/published context routes use current World/receiver/
+append-only privacy controls, unchanged support fixtures.
+
+Minimum production fix: existing checkout.safe().overwrite_ignored(false).
+Locked expected-old ref transaction, old HEAD checkout order, LocalPrepared and
+actual final proof are unchanged; no reset/rollback or blanket ignored rejection.
+
+Twelve named actual service cases pass:
+- `ignored_{primary,context}_file_collision`: ignored file vs incoming tracked file.
+- `ignored_{primary,context}_directory_collision`: ignored directory/private child
+  vs incoming tracked file; protected directory tree retained.
+- `ignored_{primary,context}_incoming_directory_collision`: ignored file vs
+  incoming tracked directory/child.
+- `ignored_{primary,context}_symlink_file_collision` and
+  `ignored_{primary,context}_symlink_directory_collision`: ignored symlink identity
+  plus linked bytes/tree and owned target data retained. Actual Linux filesystem
+  symlink creation succeeded for ALL four. Windows uses corresponding symlink
+  APIs; a capability failure FAILS case, not silent native skip/passed proof. No
+  native Windows/macOS execution claimed; all five native jobs still pending.
+- `ignored_{primary,context}_noncolliding_control`: ignored artifact retained,
+  successful real fast-forward, actual index tree equals descendant, no receive
+  update from synchronization. This rules out rejecting all ignored content.
+
+For all ten tested collisions: actual whole physical snapshot/local refs/HEAD/
+index/tracked+ignored files/status identical AFTER failed call; ignored link/target
+checks additionally explicit. Durable LocalPrepared, authoritative_kind NULL,
+local branch remains old, actual remote descendant stays remote, receiver update
+inventory unchanged (not just a private client counter). No false publication or
+accepted push. Fixture setup updates are excluded by taking baselines AFTER real
+peer pushes. Another incoming tracked change is included to observe partial
+updates rather than assume none; these tested conflicts preserve all bytes.
+Recovery remains explicit if other filesystem errors partially update checkout;
+no universal atomic-filesystem or automatic rollback claim.
+
+### P1 tagged-local LOCAL identity — actual after-None reds and disposition
+
+Private thread-local operation-ID hook runs after absence inspection, BEFORE Git/
+cache leases, removes itself before callback, and is compiled only for tests.
+Allows actual competing service A to complete before losing binder B (not just
+structural rows or timing sleeps).
+
+- `local_binding_after_none_rejects_actual_other_target_service_authority`:
+  actual A primary tag completes after B materialized-context None inspection;
+  old binder reported unsupported B outcome. Red at intended recovery assertion.
+  Green: B RecoveryRequired before discovery; physical primary/context Git images
+  unchanged after A baseline, zero additional observation-hook calls, only A tag
+  retained. A replays exact first outcome; B ordinary replay mismatches identity.
+- `local_binding_after_none_rejects_competing_oid_then_replays_frozen_first_outcome`:
+  A same target completes, then deliberate clean fixture commit advances OID
+  before B binds. Red at recovery assertion. Green uses authorized REJECT competing
+  OID option, not adoption/rebasing; baseline AFTER fixture commit unchanged,
+  zero additional observation calls, subsequent correct exact-ID replay returns
+  first frozen A outcome/OID, never B current OID.
+- `local_binding_after_none_rejects_actual_plain_refresh_before_discovery`:
+  actual ordinary refresh A succeeds with same ID/empty matcher after None;
+  old tagged binder adopted it. Red at recovery assertion. Green B rejects before
+  discovery, preserves ref/index and empty matcher; ordinary replay mismatch.
+  Ordinary generic refresh was exercised successfully, not globally restricted.
+- `local_binding_transaction_rejects_incompatible_existing_and_pending_rows`:
+  structural transaction fixtures, red at target/completed. Green covers distinct
+  tagged target, conflicting OID, malformed matcher, plain matcher, local action,
+  cross-root and pending different/NULL-ID alias collisions across completed/
+  created/observed/error/indexing states (completed unrelated IDs intentionally
+  are not pending blockers). No row count/field or Git ref/index/byte mutation.
+  These are policy fixtures, NOT remote effects or claim-owner execution proof.
+- `local_binding_transaction_accepts_only_identical_complete_tag_without_rewriting`:
+  identical root/action/full typed tag+full OID accepted across five states with
+  same frozen OID and no row insertion/rewrite. Existing remote-ID ALL15-phase
+  atomic guard, noRemote/frozen local replay and authoritative empty-target handoff
+  proofs remain green.
+
+Correction is within SAME cache-guarded IMMEDIATE begin/reconcile transaction:
+strict exact LOCAL row identity and pending requested ID/root/action/full matcher
+in tagged mode, including inactive completed rows; ordinary mode's lifecycle/
+refresh/legacy aliases remain unchanged. Binder only returns computed OID if it
+was newly stored or EXACTLY equals validated stored matcher. No new schema,
+second journal, dependency/public policy, unrelated lifecycle/merge/polling code.
+
+### Actual validation and source binding
+
+Logs outside repository: `/tmp/manyhands-cycle05-task6-safety/`.
+- Six intended behavioral red logs: ignored primary file/context directory,
+  three actual local after-None cases and structural matrix. Each failure at
+  intended assertion, not compile-only evidence. Initial ignored rejection reds
+  also retained. First ignored green attempt failed due new-test SQL column typo
+  sync_authority vs existing authoritative_kind; retained `ignored-focused.log`,
+  corrected test query only, no assertion weakening or runtime workaround.
+- Final focused:20 library synchronization cases (`lib-focused-final.log`),35
+  dedicated service cases (`service-focused-final.log`,23 prior+12 new),30
+  transport synchronization cases (`transport-focused-final.log`,all retained).
+- Implementation committed BEFORE final gates as
+  `d84ad8d63e1f14182e6e734239b6d5a41d89d9a2`. All command `.meta` files embed actual
+  implementation HEAD, command/start/end/exit and original-base Rust diff SHA256.
+  Scope: `git diff 29f3f5a25957836a8513cba8a318306e1b928063..HEAD -- src tests`.
+  SHA256 `e857fdad6f0b35f7f656dfe7fb9c84ee927dfbdb427360a71cf4dd55608255f3`
+  (`rust-identity.diff`, `source-identity.txt`), recomputed equal after full/CLI.
+- FINAL `devenv shell -- cargo check --all-features --locked`,
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked
+  -- -D warnings`:exit0; logs+metadata retained.
+- FIRST NORMAL Task6 correction `devenv shell -- cargo test --all-features --locked`:
+  **605 standard +184 SSH =789 pass**, library173/discovery59/transport103/dedicated35.
+  No full retry, serialization, timeouts, ignored/assertion-suppressed cases.
+  Actual interval2026-10-06T21:11:07Z–21:23:24Z (`test.log`, `test.meta`).
+- CLI `devenv shell -- cargo run --locked --bin manyhands-cli`:exit0/no window,
+  21:23:24Z–21:23:26Z (`cli.log`, `cli.meta`). Only docs/comments after gates.
+- `git diff --check`:pass. Coherent implementation/evidence commits; clean existing
+  ticket branch/worktree/index. Original-main whole-review.diff/head artifacts
+  regenerated, focused76fd..final range supplied. Main .superpowers/ and devenv.nix~
+  remain untouched; no stash/reset/clean/rebase/new worktree/branch.
+
+Fresh whole-Cycle BLOCK findings now corrected with behavioral proofs, PENDING
+independent whole-Cycle re-review/parent acceptance, not self-accepted. Historical
+Task4 first NORMAL Busy failure remains NOT proven unrelated/pre-existing;
+explicitly authorized second749 remains second-attempt success. Original Task5
+raw-privacy claim remains withdrawn; corrected Task5 accepted evidence/772 gate
+at575f and sourcehash7f remain historical, not inferred from old769 success.
+Desktop actual startup atafb36, sanitized evidence
+`/tmp/manyhands-cycle05-desktop-OecGTp`, remains startup/toplevel/buffer/12-second
+survival only, NOT manual feature behavior; unchanged front end not rerun. Five
+actual native jobs remain pending; CI YAML/Linux is not native execution. No
+publication/dispatch/merge/closure/cleanup authority. Stop for retained fresh
+whole-Cycle re-review.
