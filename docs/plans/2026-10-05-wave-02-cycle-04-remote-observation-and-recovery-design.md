@@ -102,6 +102,14 @@ logical records; exact SQL constraints and indexes belong to implementation.
 | `remote_context_states` | repository ID, remote/ref identity, last advertised OID, last known tracking OID, publication evidence (`never_published`, `observed_published`, or `history_unknown`), state, last-seen batch/time | preserves last OID when an `observed_published` ref transitions to `remotely_deleted`; does not delete a local context. |
 | `remote_operation_records` | repository ID, operation ULID, action, priority, phase, remote/ref targets, redacted result category, yield/cancel flags, safe-point/completed observations and timestamps | at most one active reservation per repository; it is recovery evidence, never the Git lock or source of truth. |
 
+Completed batches and operation audits are retained as recovery evidence, but
+routine snapshots and transitions read only the indexed current batch, current
+context state, and active operations. After every service initialization and
+committed migration, a separate deferred read audit validates all retained
+remote history and foreign keys before the service becomes ready. Thus ordinary
+five-minute polling does not grow its immediate write transaction with history,
+while historical corruption remains recovery-required rather than ignored.
+
 The polling-policy row is repository-scoped and survives publication remote or
 selected-key removal/replacement, preserving an explicit pause and interval
 when configuration returns. Such configuration changes invalidate active

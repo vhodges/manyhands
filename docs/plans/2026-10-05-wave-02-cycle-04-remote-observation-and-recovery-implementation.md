@@ -177,20 +177,20 @@ across publication remote/key removal or replacement, while invalidating active
 reservations and remote-specific observations. The current configuration alone
 determines whether automatic polling is eligible.
 
-- [ ] Add failing tests that start from the current Cycle 03 schema and legacy
+- [x] Add failing tests that start from the current Cycle 03 schema and legacy
   operation rows, run migration repeatedly, preserve all old rows, and create
   safe defaults exactly once.
-- [ ] Test completed batch replacement, last-successful OID retention,
+- [x] Test completed batch replacement, last-successful OID retention,
   unmaterialized/malformed/deleted/history-unknown query rows, configuration
   bounds, and corrupt/invalid row rejection with recovery-required rather than
   repair.
-- [ ] Add corrupt-registry cases that prove marker publication precedes
+- [x] Add corrupt-registry cases that prove marker publication precedes
   replacement, marker-publication failure preserves the old database, fresh
   state is automatically recovery-suspended without changing `paused`, and an
   absent local context cannot become first-publication eligible after restart.
-- [ ] Scan schema, rows, WAL/journal/backups, `Display`/`Debug`, and snapshots
+- [x] Scan schema, rows, WAL/journal/backups, `Display`/`Debug`, and snapshots
   for URL, passphrase, key, remote-response, and Markdown sentinel leakage.
-- [ ] Implement one short transaction per durable transition. Do not treat
+- [x] Implement one short transaction per durable transition. Do not treat
   SQLite state as a Git lock or canonical source. Record/commit
   `feat: persist remote observations and polling policy`.
 
