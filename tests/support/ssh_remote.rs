@@ -115,10 +115,22 @@ pub(super) struct Shared {
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
+    pub receive_race: Mutex<Option<(git2::Oid, git2::Oid)>>,
+    pub receive_updates: Mutex<Vec<ReceiveUpdate>>,
+    pub receive_advertisements: AtomicUsize,
     pub repository: PathBuf,
     pub upload: GitHelper,
     pub receive: GitHelper,
     pub shutdown: watch::Receiver<bool>,
+}
+
+/// A parsed receive command paired with child completion and actual owned ref proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiveUpdate {
+    pub reference: String,
+    pub old_oid: git2::Oid,
+    pub new_oid: git2::Oid,
+    pub accepted: bool,
 }
 
 pub struct SshRemoteFixture {
@@ -231,6 +243,9 @@ impl SshRemoteFixture {
             advertisement_hold: Mutex::new(None),
             hostile: Mutex::new(None),
             receive_status_withheld: AtomicBool::new(false),
+            receive_race: Mutex::new(None),
+            receive_updates: Mutex::new(Vec::new()),
+            receive_advertisements: AtomicUsize::new(0),
             repository: repo_path,
             upload: helpers.0,
             receive: helpers.1,
@@ -257,6 +272,42 @@ impl SshRemoteFixture {
         })
     }
 
+    /// One competing owned primary write after a complete ordinary command is
+    /// received but before any of its bytes reach the real receive-pack child.
+    pub fn race_primary_update(
+        &self,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        fixed(repo.find_commit(competing))?;
+        if fixed(repo.refname_to_id("refs/heads/main"))? != expected
+            || self.shared.receive_race.lock().unwrap().is_some()
+        {
+            return Err(FixtureError);
+        }
+        *self.shared.receive_race.lock().unwrap() = Some((expected, competing));
+        Ok(())
+    }
+    pub fn receive_updates(&self) -> Vec<ReceiveUpdate> {
+        self.shared.receive_updates.lock().unwrap().clone()
+    }
+    pub fn receive_advertisements(&self) -> usize {
+        self.shared.receive_advertisements.load(Ordering::SeqCst)
+    }
+    pub fn clear_fault(&self) {
+        *self.shared.fault.lock().unwrap() = None;
+    }
+    /// Receiver-native refusal of updates to the checked-out primary. No hooks/shell.
+    pub fn reject_primary_updates(&self, reject: bool) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        let mut config = fixed(repo.config())?;
+        fixed(config.set_bool("core.bare", !reject))?;
+        fixed(config.set_str(
+            "receive.denyCurrentBranch",
+            if reject { "refuse" } else { "ignore" },
+        ))
+    }
     pub fn receive_status_withheld(&self) -> bool {
         self.shared.receive_status_withheld.load(Ordering::SeqCst)
     }
@@ -411,4 +462,8 @@ pub fn generate_key() -> Result<PrivateKey, FixtureError> {
     ))?;
     let encoded = fixed(key.to_openssh(ssh_key::LineEnding::LF))?;
     fixed(PrivateKey::from_openssh(encoded.as_bytes()))
+}
+
+pub fn receiver_command_fragmentation() -> Result<(), FixtureError> {
+    server::receiver_command_fragmentation()
 }
