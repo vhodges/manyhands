@@ -47,7 +47,7 @@ existing-worktree requirement.
 
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
-- Task 2: pending.
+- Task 2: implemented candidate at `f4f97118cf452004bbaf2063a2a55fc794b580c1`; independent review pending, unqualified full-test gate blocked by the recorded discovery race.
 - Task 3: pending.
 - Task 4: pending.
 - Task 5: pending.
@@ -252,3 +252,186 @@ Changed source files: `src/repository/remote/{refs.rs,refs_tests.rs,state.rs,mod
 and `src/repository.rs`. Durable evidence: this ledger and canonical ticket
 comment `01M5100000J5K6M7N8P9Q0R1S2`. Ticket remains open; no push/PR/merge/closure/
 cleanup occurred. Next gate: independent Task 1 review, then Task 2 durable state.
+
+## Task 2 — durable synchronization candidate — 2026-10-06T15:21:14Z
+
+Task base: `9035d6b23628a8b7c7ddadddf1d86d6750b0ef73`.
+Implementation head: `f4f97118cf452004bbaf2063a2a55fc794b580c1`
+(`feat: persist synchronization recovery boundaries`). This evidence checkpoint
+follows that implementation commit; final evidence HEAD/status are captured in
+`/tmp/manyhands-cycle05-task2-review-head.txt` and the exact base-to-final-HEAD
+range in `/tmp/manyhands-cycle05-task2-review.diff` for a read-only reviewer.
+**Candidate only: independent review pending; required normal full-test gate
+is NOT passing. Task 3 remains gated.** Ticket remains open.
+
+Reused parent preflight, approved artifacts, accepted Task 1, and the existing
+branch/worktree. No rebase/new worktree, dependency, lockfile, transport,
+synchronization orchestrator, frontend, scheduler, fixture or CI change.
+Production scope: `remote/{state,reservation}.rs`; private tests:
+`remote/{state_tests,reservation_tests}.rs`. The sole recovery-adapter edit
+extends its existing active-phase SQL predicate, keeping local lifecycle work
+fenced by the same remote reservation. `observation.rs` is unchanged: its poll
+path consumes the shared owned batch commit without duplicating its policy.
+
+### Durable interfaces for Tasks 3–4
+
+- The single `remote_operation_records` envelope gains nullable typed OID
+  evidence and action checkpoints. No second journal exists. Migration rebuilds
+  the envelope's SQL CHECKs and active unique index in the same transaction;
+  immutable target enforcement is restored. Existing completed/interrupted/
+  yielded/cancelled/failed Poll rows keep their phase, safe point, timestamps,
+  OIDs, requests, epoch and fixed outcome. They acquire no inferred publication
+  or authoritative outcome. Partial reservation/sync schemas require recovery.
+- `RemoteOperationPhase` adds `FetchPrepared`, `FetchObserved`, `LocalPrepared`,
+  `LocalFastForwarded`, `PushPrepared`, `PushReturned`, `PushVerified`,
+  `Reconciling`. Terminal phase changes do not erase `sync_checkpoint` or OIDs.
+  `RemoteOperationSafePoint` adds before/after Fetch and local update, before
+  push, after push return/verification, and before discovery. Discovery's point
+  is persisted atomically with classification, not obtained as a network token.
+- Crate-private `SynchronizationCheckpoint` names those action boundaries plus
+  `DiscoveryPending`. `SynchronizationEvidence` holds only optional
+  `expected_oid`, `local_oid` (planned/final local candidate), `tracking_oid`
+  (target Fetch tracking), `primary_tracking_oid`, `push_oid`,
+  `push_advertised_oid` (independent Push evidence). Existing advertised OIDs
+  remain in the complete Fetch batch. `SynchronizationAuthority` is
+  `Published(Oid)` or `AlreadyCurrent(Oid)`. Inspection exposes checkpoint,
+  evidence, authority and index-pending getters to Task 4. These and the new
+  transition methods remain crate-private; temporary dead-code allowances are
+  confined to the Task 4 seam and should be removed when consumed.
+- `checkpoint_synchronization(root, owner, checkpoint, evidence)` enforces
+  owner/service/epoch/generation, forward action order, immutable expected/push
+  candidate, required OIDs and exact verification. `LocalPrepared` makes the
+  candidate durable before mutation; `PushPrepared` does so before the call;
+  `PushReturned` is not publication proof. Completed Fetch observation can only
+  be claimed by the owned complete-batch transaction, not this generic method.
+- Shared `state::persist_complete_advertisement` preserves Cycle 04's complete
+  current-batch/deletion/history model without changing polling retry policy.
+  `reservation::commit_observation_batch` permits an owned synchronization
+  Fetch boundary and commits evidence/checkpoint atomically. Poll still uses
+  `complete_batch` and its existing outcome/backoff wrapper. A cancelled or
+  failed/partial batch never classifies an absent ref as deleted. Fresh Fetch
+  during reconciliation does not erase the old local/push checkpoint.
+- `restart_remote_synchronization(root, id, target)` explicitly fences the old
+  owner and returns `Reconciling`, retaining candidate/evidence. Ordinary
+  duplicates only inspect. Crate-private `reconcile_synchronization(root,
+  owner, actual_local_oid, actual_worktree_oid, actual_push_advertised_oid,
+  push_is_strict_ancestor)` requires freshly persisted Fetch, ref/worktree
+  equality, recorded candidate compatibility and non-contradictory Push proof.
+  Equal Push candidate advances to verified; divergent/mismatched evidence is
+  recovery-required; a proven ancestor can retain the recorded ordinary push
+  intent only after explicit restart. A previously verified push cannot be
+  reclassified into another push. Cycle 04's legacy manual
+  `BeforeLocalMutation` boundary remains accepted but cannot be assumed retry-safe.
+- `classify_synchronization(root, owner, authority)` durably stores exact
+  authority + `index_pending` + discovery checkpoint and releases the remote
+  slot. `finish_synchronization_index(root, id, target)` clears only that exact
+  authoritative handoff. Authoritative replay never yields a transport token,
+  including after refresh failure or cancellation. Publication authority survives
+  cancellation/yield once verified and classified.
+
+### Supervisor rulings and downstream obligations
+
+1. **Reconciliation split accepted:** Task 2 owns durable fencing/replay
+   selection, NOT actual network/local-effect observation. Task 4 must re-open
+   actual refs and the exact target worktree, prove symbolic identity,
+   cleanliness/conflicts and branch/worktree consistency under the short Git
+   lease, and independently observe the Push endpoint before passing OIDs and
+   ancestry to reconciliation. A fresh Fetch alone cannot authorize another
+   local update or push. OID/ancestor inputs are internal observations, never
+   public request authority. Task 5 owns real accepted-before-disconnect proof.
+2. **Same-ID discovery accepted:** remote-path discovery must use the same
+   operation ID too. The narrow local-ID coexistence exception requires an
+   exact Completed authoritative sync record and checks EVERY same-ID local row
+   for this repository/root's `refresh` action with empty refresh target.
+   Failed/in-progress/completed legitimate refresh records replay index-only;
+   another root/action/target or an incomplete sync remains OperationMismatch.
+   Task 4 must use existing `RefreshRepositoryRequest`/index-owner retry logic;
+   this state checkpoint neither refreshes nor bypasses local owner validation.
+3. **Terminal-slot release/cancellation preserved:** do not add a cross-ID
+   terminal lock or cancellation-unblock policy. Same-ID cancelled actions stay
+   cancelled with ambiguity retained. New IDs can acquire ownership but receive
+   no old verification/checkpoint authority. EVERY new Task 4 action must prove
+   actual local/worktree/Push state: equal candidate means no push, mismatch or
+   divergence means recovery, only freshly proved ordinary ancestry permits an
+   effect. Cross-ID non-blind safety is a REQUIRED Task 4/5 service test, not
+   claimed as state-layer proof here.
+4. **Gate failure handling:** serial full tests are diagnostic coverage only,
+   not a replacement for the required normal gate. Preserve failures and allow
+   independent review to audit cause; no retry-loop, lease-policy weakening,
+   ignoring test or out-of-scope test correction was authorized or performed.
+
+### Tests-first, regression, privacy and final-tree evidence
+
+Added **16** private tests: 13 synchronization state/reservation cases and three
+migration/integrity/bounded-history cases. Initial four sync tests were written
+before production; the focused red command exited 101 with 62 missing-contract
+compile errors. Later tests cover exact legacy SQL migration; before/after
+Fetch/local preparation/update/push preparation/return/verification/discovery
+SQL failures; preserved candidates; explicit restart; stale owner, generation,
+root and target fencing; SQL active uniqueness; immutable cancellation;
+reconciliation mismatch/ancestor/equality; exact primary/context authority;
+legitimate same-ID refresh replay and unrelated-ID rejection; polling-policy
+preservation; hostile sentinels across formatted replay, rows, live WAL and
+backup. Existing journal/side-file scans remain in the state regression suite.
+The idempotent-migration VM-step test compares before/after 4,000 completed
+remote rows and passes its bounded-work assertion. None proves real Git/network
+side effects; those remain Tasks 4–5.
+
+Raw logs (all outside the repository): `/tmp/manyhands-cycle05-task2/`.
+Repeated intermediate focused runs are retained as applicable; final green
+counts below are not substituted for the failed whole-suite gate.
+
+| Command (each Cargo invocation through Devenv) | Result / log |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib repository::remote::reservation::tests::sync_` | Expected red exit 101, absent contract (62 compile errors), `red.log` |
+| `devenv shell -- cargo test --locked --lib repository::remote::reservation::tests` | Green 15 tests at initial implementation, `green-attempt.log` |
+| `devenv shell -- cargo fmt` | Exit 0; owned-file formatting, `format.log` |
+| `devenv shell -- cargo test --locked --lib repository::remote` | Final tree green **66 passed**, 86 filtered, `remote-green.log`; intermediate 56/61/63/65 green during added coverage |
+| `devenv shell -- cargo test --locked --lib` | 149 passed at that checkpoint, `lib.log`; final normal full gate independently passed **152 library tests** |
+| `devenv shell -- cargo test --locked --test remote_reservation` | Initial 8 pass/1 fail exposed legacy BeforeLocalMutation incompatibility; fixed within seam, then **9 passed**, `reservation-regression{,-attempt}.log` |
+| `devenv shell -- cargo test --locked --test recovery_foundation_gate --test remote_reservation --test remote_observation` | **50 + 9 + 15 SSH** passed, `regressions.log` |
+| `devenv shell -- cargo check --all-features --locked` | Final tree exit 0, `check.log` |
+| `devenv shell -- cargo fmt --check` | Final tree exit 0, `fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Final tree exit 0, `clippy.log` |
+| `devenv shell -- cargo test --all-features --locked` | Default attempts exited 101 at the same discovery race, `test.log` and `test-rerun.log` (151 lib; discovery 58/59 each) |
+| `devenv shell -- cargo test --all-features --locked --test discovery_rebuild corrupt_cache_replacement_rechecks_after_the_exclusive_guard` | Focused race **1 passed**, `discovery-rerun.log` |
+| `devenv shell -- cargo test --all-features --locked --test discovery_rebuild` | Default whole target **59 passed**, `discovery-default.log` |
+| `RUST_TEST_THREADS=1 devenv shell -- cargo test --all-features --locked` | Diagnostic exit 0: **583 standard + 112 SSH = 695 passed**, `test-serial.log`; before the final added migration test |
+| `devenv shell -- cargo test --all-features --locked` | `test-final.log`: interrupted by agent's 30-minute runtime timeout during SSH fixture cases; completed library152/discovery59 and other preceding targets, but **NOT a completed gate** |
+| `devenv shell -- cargo test --all-features --locked` | Resumed once with 1,200-second command allowance: exit **101**, library152/canonical29 passed, discovery **58 pass/1 fail**, `test-resumed.log` and timestamp/load `test-resumed.meta` |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit 0, no window, `cli.log` |
+| `git diff --check` | Exit 0 before implementation commit and after timeout recovery |
+
+### Timeout recovery and unresolved normal-gate assessment
+
+Original worker timed out after final-tree focused/check/fmt/clippy succeeded,
+while another normal full run was inside SSH fixture cases. Parent confirmed
+no remaining Cargo/fixture process, HEAD still task base, five unstaged owned
+files intact, clean diff check; preserved `/tmp/manyhands-cycle05-task2-timeout.diff`.
+Revived worker confirmed that exact state at `2026-10-06T15:20:14Z`, reused the
+completed logs, added NO source/test change, and ran the required normal gate
+once as instructed. Run interval `15:20:22Z`–`15:20:29Z`; load averages were
+0.99/1.33/3.06 at start and 1.21/1.37/3.05 at finish. It again failed the same
+`corrupt_cache_replacement_rechecks_after_the_exclusive_guard` test at
+`tests/discovery_rebuild.rs:2471` with `RepositoryBusy`. No further retry.
+
+Source assessment: that unchanged test races two rebuilds and unwraps both as
+success, while existing cache/Git leases return retryable Busy after 250ms.
+The corrupt-cache replacement path runs migration under an exclusive cache
+guard; the new schema adds fixed column/CHECK/query work there, but no new
+long-lived guard or network/discovery scope. New-table creation happens once;
+legacy CHECK/index rebuild happens only when sync columns are absent;
+idempotent migration does not recreate its index or scan retained operation
+history (new VM-step regression passes). Rebuild's replacement migration is
+before its Git-lease section. The failure could be scheduling sensitivity or
+new fixed startup cost interacting with the test's bounded wait; **causation is
+NOT proven, and this is NOT labelled pre-existing** because baseline/Task 1
+normal gates passed. Focused/default discovery and serial success do not
+prove absence of a delta-caused liveness regression. Independent review must
+examine this residual; no lease or test policy was changed.
+
+Candidate committed for review per supervisor direction despite that honest
+gate blocker. No push/PR/merge/closure/cleanup or Task 3 work occurred. Next:
+independent Task 2 code and verification review, resolve/route the normal-gate
+blocker before parent accepts Task 2. Native CI remains pending publication
+permission, not claimed passing.
