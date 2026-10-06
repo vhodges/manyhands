@@ -1099,3 +1099,39 @@ proofs, **pending independent re-review/parent acceptance**, not self-accepted.
 Client auth observations/ref checks and scan-hook/control-flow evidence do not
 claim receive-side transaction counts or full scanner entry instrumentation.
 Task5/full privacy/receive-side/nativeCI/whole-Cycle review remain pending. Stop.
+
+## Task 4 parent acceptance with notes — 2026-10-06T18:49:12Z
+
+Accepted the complete original Task 4 range
+`5ee6bd8e3b0b5c8b2812f177560cd7002fb52454..ca88e002537e919899a13d61ab784d459206c953`.
+Independent retained read-only reviewer verdict: **OK with notes**, reviewed exact
+HEAD `ca88e002537e919899a13d61ab784d459206c953`; no blocking findings remain.
+Review artifact:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/7c0638a5-3e9b-42f4-a8a0-136b11f587cf/task4-id-boundary/review.md`.
+Parent verified exact HEAD, clean worktree/index, and main ancestry at the existing
+Cycle preflight base `29f3f5a25957836a8513cba8a318306e1b928063`; no reimplementation,
+new worktree, branch change, or unnecessary broad rerun.
+
+All three independently reported P1s are closed: generation reconciliation before
+same-ID restart; frozen original endpoint/authenticated-scope and post-push proof;
+and historical target/root validation plus atomic any-phase remote-ID exclusion
+from tagged local-only binding. Earlier actual context deletion, endpoint-qualified
+Push history, safe checkout/ref mismatch, cancellation/ambiguity, and exact-ID
+index-only replay proofs remain intact. Coverage comprises 30 focused service SSH
+cases, 15 focused private cases, and the retained full integration range.
+
+Acceptance DOES NOT erase the first NORMAL gate failure. The initial full run
+failed at discovery's shared-corrupt-cache RepositoryBusy assertion. Exact-case
+and normal discovery-target diagnosis passed; one expressly authorized second
+NORMAL full run on identical Rust content passed **600 standard +149 SSH =749**.
+Check/fmt/clippy and separate CLI pass. The failure remains timing-sensitive,
+**not proven unrelated/pre-existing**, and must be included in Task 6/whole-Cycle
+review; no discovery/timeout/assertion policy was changed to obtain this result.
+
+Proceed to approved Task 5 only: dedicated real two-clone acceptance target,
+receive-side effect/rejection/disconnect controls, complete recovery/index handoff
+and hostile durable-store/privacy matrix, and native-job target configuration.
+Existing client counters are not server transaction evidence. Actual five-native-
+target CI, desktop smoke where available, final gates/whole-Cycle review, and
+publication remain pending. Push/PR, merge, closure and cleanup are unauthorized;
+ticket stays open. This acceptance checkpoint changes documentation/comment only.
