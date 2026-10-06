@@ -46,7 +46,7 @@ existing-worktree requirement.
 ## Task state
 
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
-- Task 1: implemented and locally verified; independent review pending.
+- Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
 - Task 2: pending.
 - Task 3: pending.
 - Task 4: pending.
@@ -154,6 +154,23 @@ remote_observation. Task 5 must add remote_synchronization. Workflow feasibility
 is confirmed only by source inspection; **no actual native CI was run or claimed**.
 Native evidence remains pending authorized publication. Baseline is ready for
 Task 1; ticket stays open and publication/closure/cleanup remain unauthorized.
+
+## Task 1 review gate — 2026-10-06T14:46:58Z
+
+Independent fresh reviewer `6e77d809-5d0e-475e-9c06-c4607c6dadd3` inspected
+`03d7d1fd42eb51584bf8aa3180f885660ced43d0..cc53b842373daeec07a8cfec712ba2f68555868f`
+using an exact-range diff artifact and current source/tests. Confirmed current
+full HEAD and clean status. Verdict: **OK**, no issues. Parent accepts Task 1.
+The review confirmed exact ordinary mappings, restricted typed requests, virtual
+context graph evaluation, distinct failure boundaries and test fidelity. It
+reviewed the local validation logs; no new commands or mutations by reviewer.
+Review artifact: `/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/2fdcd2dc-9e86-44fc-a640-ea52d3bc7538/task1/review.md`.
+
+Task 2 may proceed. Durable replay, transport, actual mutation, privacy and
+index-only replay remain downstream gates; this is not whole-Cycle acceptance.
+Native CI remains pending publication authority. Ruling: reviewers without shell
+access receive an exact committed-range diff plus parent full-head confirmation,
+rather than treating a clean working tree as proof of a committed change.
 
 ## Task 1 — exact refs, typed targets, pure graph planning — 2026-10-06T14:41:28Z
 
