@@ -33,6 +33,7 @@
     gh
     sprite
     codex
+    pi-coding-agent
   ];
 
   # https://devenv.sh/languages/
