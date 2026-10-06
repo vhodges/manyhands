@@ -12,6 +12,11 @@ id: "01M48Y44BK0XK7XJXSEYT78ZD8"
 
 ## Disposition and scope
 
+**Historical Task 3 stop findings are preserved below.** The separately
+approved spike-only byte tolerance now permits the isolated compiled native
+host; see the [2026-10-06 S2 running-spike appendix](#2026-10-06-s2-running-spike-appendix).
+This is not an editor selection or production preservation ruling.
+
 **STOP the Zorite executable lane.** The exact published 0.10.0 dependency
 resolved with the required single GPUI identity, but its documented load paths
 unconditionally rewrite some source before any edit. This is a **source-inspected
@@ -306,3 +311,165 @@ metadata/body separation, stale-save handling, no-commit no-op saves and accepte
 editor approach. Cycle 12 owns transport cancellation characterization; Cycle 13
 owns the full native matrix/integrated journeys (including 1,000-item app data).
 The exploration does not start Wave 03 or weaken its completed-Wave-02 entry gate.
+
+## 2026-10-06 S2 running-spike appendix
+
+Authority: [running-spike amendment](../plans/2026-10-06-wave-03-readiness-running-editor-spike.md).
+This appendix adds **compiled actual entity/API seam evidence**, not observed
+native usability, editor adoption, or R3/R4 production acceptance. The earlier
+pinned-source normalization finding remains valid. No source findings above
+were replaced with candidate-generated goldens. No S1 contract was changed.
+
+### Compiled host and reproducible demonstration
+
+From this ticket worktree's repository root, after independent S2 review:
+
+```sh
+devenv shell -- cargo run --locked --features editor-probe --example editor_feasibility
+# Explicit opt-in: capture all actual initial editor readbacks on launch:
+devenv shell -- cargo run --locked --features editor-probe --example editor_feasibility -- --capture-initial
+```
+
+The fixed selector reads actual README, CLI-contract RFC, Wave03 dogfooding
+and readiness implementation-plan files at launch, plus the independently
+specified mixed-math counterexample. Only their bodies enter the editor.
+The host retains one real `Entity<EditorState>`, S1 `Draft`, rich/source state
+and `ScrollHandle` per document. Selector changes never recreate or reload
+entities. `set_markdown_style` / `clear_markdown_style` switch presentation
+on that same entity; no `set_text`, buffer replacement or history reset occurs.
+The actual entity's Render implementation is the editor (there is no separate
+public `Editor` wrapper in 0.10.0); it is rendered directly as a Kit child view.
+
+Controls: sidebar selects a document; Rich/Source and Focus return editor
+focus; Undo/Redo and Bold/Italic/Code dispatch actual pinned GPUI actions;
+Row+/Col+/Row−/Col− invoke actual public table methods at the caret (may no-op
+outside a table). Native editor context menus remain candidate-owned.
+Ctrl-Alt-N cycles documents, M toggles mode, F returns focus, S captures all
+scratch drafts. Editor Ctrl-Z/Ctrl-Shift-Z and Ctrl-B/I/E use pinned bindings.
+Buttons are tab stops. Native delivery/focus/scroll behavior is **not yet observed**.
+Source mode is the fallback for constructs lacking rich providers.
+
+Transport initialization is first; Kit initialization is inside app.run.
+The outer `cx.new` reserves Root's entity before its closure allocates Host
+and editor children, using the supported pinned Context/App APIs. Source
+anchor: GPUI-pre `app.rs:2967–2980` reserves before `build_entity`.
+This intentionally does not copy production main.rs's child-first ordering.
+The exact Zorite 0.10.0 / Kit 0.6.6 / GPUI-pre 0.3.6 seam now **checks and
+builds**. Cargo.lock is unchanged from accepted S1, SHA-256
+`51c46d1c4abb87e2ab011d8e1f4f6a58d709f8c099ab412dee8afa1201a8b5fb`.
+No dependency, graph, feature-closure, core or production-source change.
+
+### Readback, scratch policy and resources
+
+Initial `EditorState::text` readback establishes S1's load observation;
+entity notifications (not just Changed events), explicit mode/actions and
+capture read actual text again. Notifications cover private undo/redo and
+formatting handlers that do not emit Changed. Visible status separates
+changed-on-load, later byte edits versus first readback, and conservative
+byte-dirty. Undo to normalized initial bytes still cannot make a normalized
+draft clean relative to the immutable original. No reload/replacement surface
+or scratch-discard workaround is offered. This is not production dirty/store
+or external-change integration.
+
+Subscriptions capture stable document ID/generation and verify entity ID;
+missing documents, wrong entities and stale generations are ignored. Owned
+subscriptions drop with Host; Context callbacks use weak Host ownership.
+Three new pure tests cover wrong-document/stale routing, denied-request
+categories/redaction and actual fixed catalog/header separation. These do
+not construct an editor, authenticate native provenance, or exercise undo.
+Kit's test context requires the currently disabled `test-support` feature;
+no feature/dependency expansion was made. Actual load/edit/undo snapshots
+and native input tests remain S3 obligations.
+
+Capture all drafts creates a fresh S1 `CaptureRun` under ignored
+`target/editor-feasibility/native-<pid>-<nanoseconds>/`. Default launch writes
+no snapshots. The explicit opt-in captures actual initial readbacks, not
+host/pure-helper output. Manifests record originals/header/candidate hashes,
+normalization/edit/dirty state, actual readback provenance, startup checkout
+HEAD/lock and bounded action/event counts. Dispatch requests are labeled
+requests, not performed edits; captured bytes are independent actual readback.
+HEAD/lock are runtime checkout provenance, explicitly not build attestation.
+Host-recombined header proof is **not editor metadata round-trip**. Captures
+never write repo docs, and failed partial captures remain inspectable.
+Capture path guards are local single-writer safeguards, not an OS sandbox.
+
+Providers stay absent: images, chips, embeds, mermaid, math, syntax highlighting,
+spelling suggestions, clipboard writer, label/ref-count resolvers and icons.
+OpenLink/OpenWikiLink/PreviewImage events log only denied request categories
+and counts, not URLs/content and not performed opens. Math/property structural
+requests are labeled unsupported, not handled by an alternate editing model.
+No URL/OS opener or arbitrary path CLI exists. Reused pinned internal-I/O
+inspection above remains relevant: enabled editor/bidi/syntax code has no
+independent content file/network/command loader; absent image callbacks cannot
+resolve arbitrary strings. GPUI assets/fonts/display and ordinary intentional
+clipboard input remain inherited OS access, **not sandboxed**. Native resource
+negative tests and all-platform containment are still unverified.
+
+### Named integration/adoption costs and exact API gaps
+
+Physical LOC (including tests/comments/blank lines): entry **63**, host **383**,
+adapter **126**, catalog **66**; total S2 Rust **638**. Separately, reused S1
+probe-only bookkeeping is session **176** + evidence **230** = **406** LOC,
+plus its existing tests/fixtures. These counts are code size, not a time or
+production adoption estimate. Adapter tests are 35 of its 126 lines; catalog
+tests are 19 of its 66 lines. No fork/upstream patch is required to compile this
+spike; faithful product acceptance still has the known upstream/core gap.
+
+- **Theme/host:** 0.10.0 `SyntaxStyle` requires explicit colors, mono font and
+  optional fields; no Kit theme adapter is provided. This spike uses a fixed
+  dark palette with absent icons. Production theme/font/accessibility/high-DPI
+  integration is untested, not solved by compilation.
+- **History/selection:** undo/redo/format handlers are private; route public
+  actions into focused rendered entities. `cursor()` exists, but a public
+  full selected-range getter was not found. Native selection/cross-mode undo
+  fidelity remains to be observed. Core caps full-snapshot history at 256;
+  retaining five independent histories can multiply document memory.
+- **Readback/subscriptions:** Changed alone misses undo/programmatic operations;
+  notify observers plus explicit/deferred samples are needed. This simple host
+  clones full text on notifications, including some selection changes; S1
+  retains full original/load/current Strings. No event-to-render timings or
+  efficient incremental production draft bridge have been established.
+- **Tables/scroll/focus:** pinned public row/column operations may rewrite the
+  table block and no-op without context; alignment depends on painted table
+  rows. No independent row/table normalization or native table acceptance is
+  claimed. Host owns per-doc scrolling and focus return; caret auto-reveal,
+  async scroll compensation, mode-relative viewport and platform input need
+  native journeys. The available scroll-compensator hook is not installed
+  because this spike has no async content providers.
+- **Resources/metadata:** absent providers bound this demo, but adoption would
+  need owned decoding/resolution/cache policy, safe actions, notices, and
+  containment tests. Rich math/properties need dedicated structural-editor
+  integration; source remains usable without inventing those cores. Immutable
+  frontmatter is a host split, not canonical metadata editing/repair/round-trip.
+- **Normalization/product:** with_text normalizes mixed math before history;
+  the visible synthetic counterexample allows inspection after launch. Actual
+  candidate captures must retain original differences. Byte tolerance here
+  does not resolve the RFC's exact-source/untouched-block or lossless undo
+  requirements; R3 remains source-blocked for production, R4 unverified.
+- **Production/native:** crash-safe draft recovery, observation/stale-save,
+  no-op save, domain wiring, license packaging, keyboard/IME/clipboard, native
+  matrix, 100 KiB/larger behavior and rendered p95 are downstream obligations.
+  Nothing here measures responsiveness or selects an editor. API re-audit
+  against completed Wave02 main is unchanged.
+
+### S2 verification evidence and boundaries
+
+Task base `41267b9ca3c3c42c8e06e4e7edfbee7c36040b7d`.
+Full command/exit/HEAD/tree/lock/duration logs and raw/numbered owned-source
+snapshots are in ignored `target/readiness-evidence/running-spike/s2/`, with
+`task.diff`, `task-commit.txt`, `review-index.json`, `review-proof.json` and
+`artifact-hashes.txt` for shell-less review. The first focused check failed
+on two host API mistakes (FocusHandle::focus requires App; Bounds::centered
+needs synchronous App, not AsyncApp) and an unused import. Both were fixed
+within S2, with diagnostics retained; no core/dependency workaround.
+
+Focused example check/build and its three pure tests passed; nine S1 probe
+tests passed. Required all-feature check/fmt/clippy(-D warnings)/tests,
+headless CLI check and CLI smoke passed on the S2 Rust tree. Full tests report
+**668** standard-harness passes (including 9 doctests and 9 S1 tests), zero
+failures/ignored, plus existing isolated SSH harnesses 15/31/66. Example tests
+are separately run: Cargo's normal all-feature test command does not execute
+these three tests. Committed-tree gate logs are retained separately from initial
+working-tree logs. No GUI process was started by S2; no native keyboard, IME,
+clipboard, rendering, platform or production-desktop smoke pass is claimed.
+Controller owns reviewed S3 persistent launch and production smoke separately.
