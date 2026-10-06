@@ -743,3 +743,80 @@ change or failed-gate relabelling. Intermediate failures retained and diagnosed
 before rerun; final broad test gate run only once. Native CI remains pending
 publication authority; whole-Cycle acceptance/service-effect proof remains
 Tasks 4–6. Next gate: independent Task 3 review and parent acceptance.
+
+## Task 4 candidate — 2026-10-06T16:59:29Z
+
+Base `5ee6bd8e3b0b5c8b2812f177560cd7002fb52454`. Implemented the library-only
+`RepositoryService::synchronize_remote` integration consuming accepted Tasks 1–3.
+Candidate checkpoint is **review pending**, not Task 4/whole-Cycle acceptance.
+No new branch/worktree/rebase/stash/reset/clean/publication/CI/closure/cleanup.
+No dependencies, locks, front-end grammar, scheduler, merge, poll, checkpoint,
+materialization, staging, promotion or lifecycle implementation changed.
+
+The service derives targets, checks existing clean symbolic worktrees under the
+short lease, owns one durable remote envelope, performs complete Fetch list /
+exact transfer / fresh list, checks selected pre/post OIDs and current tracking,
+atomically commits complete metadata, computes the actual virtual commit graph,
+then performs at most one locked expected-old transition and safe checkout.
+Independent Push advertisements and actual commit ancestry precede ordinary
+exact push; post-push exact equality supplies durable authority. Classification
+releases the reservation before same-ID refresh. Authoritative replay is
+network/mutation-free; explicit restart reconciles actual clean refs/worktree and
+independent Push evidence before resuming intent. Cancellation stays terminal.
+
+Supervisor-approved bridges/rulings are documented in the design: (1) typed
+Push-target object-only download uses an anonymous remote bound explicitly to
+the resolved Push endpoint, never Fetch URL/tracking writes/FETCH_HEAD; (2)
+repeated owned request checks preserve action checkpoint/owner fencing; (3)
+local-only original OID+typed target are bound in the existing refresh matcher
+BEFORE handoff, no remote record or second journal; completed matching refresh
+is proof for index-only completion; (4) locked git2 lacks a baseline setter:
+LocalPrepared -> lock/verify old ref -> safe checkout against OLD HEAD ->
+recheck symbolic identity -> single ref commit -> actual final proof. An
+interrupted checkout/ref mismatch remains recovery, never rollback or force.
+
+Tests-first: initial four private service tests failed with 16 absent-contract
+compile errors (`red.log`). Intermediate failures exposed fixture data-directory
+lifetime, completed-refresh replay behavior, and real safe-checkout byte
+preservation; assertions were retained and the approved rulings resolve them.
+The added private suite now has **13 tests** (local-only exact identity/frozen
+OID/recreation, index failure and bind SQL rollback, dirty/conflicted/missing
+primary/unmaterialized/wrong branch, existing authored context isolation, real
+Git divergent/deleted/unknown graph boundaries, actual FF bytes, ref lock and
+post-checkout mismatch preservation). Existing-host extension adds **4 real SSH
+smoke cases**: primary publish/current/actual FF/index-only replay; cancellation
+before transfer; distinct Push object acquisition with ref/FETCH_HEAD
+preservation; post-acceptance verification-write failure requiring explicit
+restart and equal-candidate reconciliation. No Task 5 acceptance target, fixture
+controls or CI expansion. Consumption-specific allowances removed.
+
+Validation logs outside repository: `/tmp/manyhands-cycle05-task4/`.
+- `devenv shell -- cargo test --locked --lib repository::remote::sync::tests`:
+  red exit101, subsequent green (11 at last focused run; final suite includes13).
+- `devenv shell -- cargo test --locked --test ssh_transport synchronization_`:
+  final4 passed; initial fixture outcome assertion corrected to AlreadyEnabled.
+- `devenv shell -- cargo test --locked --lib`: 165 passed before final bind test.
+- Final `devenv shell -- cargo check --all-features --locked`, `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings`: exit0.
+  Initial clippy failed large typed transport-error closures in the new fixture
+  module; applied the same narrow result_large_err convention as existing tests.
+- Final NORMAL `devenv shell -- cargo test --all-features --locked`: exit0,
+  **598 standard +123 SSH =721 passed**, including166 library,59 discovery and
+  77 transport SSH cases. No serialization/ignored failure/repeated broad gate.
+- `devenv shell -- cargo run --locked --bin manyhands-cli`: exit0/no window.
+- `git diff --check`: exit0; no staged files after coherent checkpoint.
+
+Residual review/test obligations: Task 5 still owns full two-clone/context
+publication matrix, actual receive-side push-effect counters/disconnect controls,
+complete hostile durable-store privacy scans, native five-target CI and full
+ordered service fault matrix. Current graph/helper tests are NOT advertised as
+remote service deletion/divergence evidence. Task 4 review must assess missing
+service-level wrong registered-worktree and missing/deleted/history-unknown
+context cases, cancellation after fetch, LocalPrepared mismatch restart,
+index-flag failure after completed refresh and cancelled-old/new-ID safety;
+existing state/transport unit proofs and source checks are not substituted for
+those actual integration effects. Runtime boundary requires this coherent
+candidate checkpoint rather than silent expansion into Task 5 or lost edits.
+Exact base..HEAD diff and full HEAD/status are saved for read-only review at
+`/tmp/manyhands-cycle05-task4-review.diff` and
+`/tmp/manyhands-cycle05-task4-review-head.txt`. Ticket remains open.

@@ -10,6 +10,7 @@ enum TransferAction {
     Observe,
     Download,
     FetchTracking,
+    PushObjects,
     Push,
 }
 
@@ -66,14 +67,12 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     }
     // Task 4 owns safe points between these calls and complete pre/post OID
     // comparison. A transfer return is never proof of publication or deletion.
-    #[allow(dead_code, reason = "Consumed by Task 4 synchronization orchestration")]
     pub(crate) fn fresh_advertisement(
         &mut self,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         self.transfer(&[], TransferAction::Observe, None)
     }
 
-    #[allow(dead_code, reason = "Consumed by Task 4 synchronization orchestration")]
     pub(crate) fn fetch_exact(
         &mut self,
         plan: &RemoteRefPlan,
@@ -109,7 +108,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         .map(|_| ())
     }
 
-    #[allow(dead_code, reason = "Consumed by Task 4 synchronization orchestration")]
     pub(crate) fn push_exact(
         &mut self,
         plan: &RemoteRefPlan,
@@ -123,6 +121,54 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             Some((plan, target)),
         )
         .map(|_| ())
+    }
+
+    /// Download only the selected Push destination's commit graph. Upload-pack
+    /// is explicitly bound to its policy-resolved endpoint, not the fetch URL.
+    pub(crate) fn download_push_target(
+        &mut self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+    ) -> Result<Option<git2::Oid>, SshTransportError> {
+        self.validate_plan(plan, SshDirection::Push)?;
+        let repository = git2::Repository::open(&self.context.root).map_err(|_| {
+            self.context
+                .with_kind(SshTransportErrorKind::ProtocolFailure)
+        })?;
+        let mut remote = repository
+            .remote_anonymous(&self.prepared.endpoint.connection_url)
+            .map_err(|_| {
+                self.context
+                    .with_kind(SshTransportErrorKind::ProtocolFailure)
+            })?;
+        let source = match target {
+            SynchronizationTarget::Primary => plan.primary().clone(),
+            SynchronizationTarget::Context { kind, item_id } => plan.context(*kind, item_id),
+        };
+        let mut scoped = AuthenticatedSshRemote {
+            remote: &mut remote,
+            service: self.service,
+            prepared: self.prepared,
+            context: self.context,
+            passphrase: self.passphrase,
+            observed: self.observed.clone(),
+            trust: self.trust.clone(),
+        };
+        let advertised = scoped.transfer(
+            &[source.remote_ref()],
+            TransferAction::PushObjects,
+            Some((plan, target)),
+        )?;
+        let oid = advertised
+            .iter()
+            .find(|(name, _)| name == source.remote_ref())
+            .map(|(_, oid)| *oid);
+        if oid.is_none_or(|oid| repository.find_commit(oid).is_err()) {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ProtocolFailure));
+        }
+        Ok(oid)
     }
 
     fn validate_plan(
@@ -158,13 +204,25 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         if let Some((plan, target)) = scope
             && (!plan_matches_configuration(plan, self.context)
-                || !mappings_match_scope(plan, target, self.context.direction, refspecs))
+                || if action == TransferAction::PushObjects {
+                    let selected = match target {
+                        SynchronizationTarget::Primary => plan.primary().clone(),
+                        SynchronizationTarget::Context { kind, item_id } => {
+                            plan.context(*kind, item_id)
+                        }
+                    };
+                    self.context.direction != SshDirection::Push
+                        || refspecs != [selected.remote_ref()]
+                } else {
+                    !mappings_match_scope(plan, target, self.context.direction, refspecs)
+                })
         {
             return Err(self
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
         }
-        let push = self.context.direction == SshDirection::Push;
+        let push =
+            self.context.direction == SshDirection::Push && action != TransferAction::PushObjects;
         if action != TransferAction::Observe && (action == TransferAction::Push) != push {
             return Err(self
                 .context
@@ -250,6 +308,25 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         } else {
             None
         };
+        let object_advertisement = if action == TransferAction::PushObjects {
+            let advertised = connection
+                .list()
+                .map_err(|_| {
+                    self.context
+                        .with_kind(SshTransportErrorKind::ProtocolFailure)
+                })?
+                .iter()
+                .map(|head| (head.name().to_owned(), head.oid()))
+                .collect::<Vec<_>>();
+            if !advertised.iter().any(|(name, _)| name == refspecs[0]) {
+                return Err(self
+                    .context
+                    .with_kind(SshTransportErrorKind::ProtocolFailure));
+            }
+            advertised
+        } else {
+            Vec::new()
+        };
         let mut tracking_updates = Vec::new();
         if let Some(repository) = tracking_repository.as_ref() {
             let heads = connection.list().map_err(|_| {
@@ -299,7 +376,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             let mut options = git2::FetchOptions::new();
             options.remote_callbacks(callbacks);
             options.update_fetchhead(false);
-            if action == TransferAction::FetchTracking {
+            if matches!(
+                action,
+                TransferAction::FetchTracking | TransferAction::PushObjects
+            ) {
                 options.download_tags(git2::AutotagOption::None);
                 options.prune(git2::FetchPrune::Off);
             }
@@ -427,7 +507,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 );
             }
         }
-        Ok(Vec::new())
+        Ok(object_advertisement)
     }
     fn recheck_trust(&self) -> Result<(), SshTransportError> {
         let trust = self

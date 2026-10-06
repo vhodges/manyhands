@@ -344,3 +344,9 @@ Names introduced in later tasks are defined by Tasks 1–4, and every review
 focus item has a named owning test task. The plan deliberately contains no
 merge, polling, materialization, comment, promotion, closure, UI, or scheduler
 task, preserving downstream Cycle boundaries.
+
+Task 4 compatibility clarification: the approved locked-ref expected-old
+transition runs safe checkout against old HEAD before the single ref commit,
+with LocalPrepared durable before either effect and fresh proof afterward.
+See the design's Task 4 rulings for mismatch recovery, typed Push object download,
+and frozen local-only refresh identity. These do not authorize Task 5 scope.

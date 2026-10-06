@@ -62,19 +62,15 @@ impl From<state::StoredRemoteOperation> for RemoteOperationInspection {
 }
 
 impl RemoteOperationInspection {
-    #[allow(dead_code)] // Task 4 consumes the durable replay seam.
     pub(crate) fn sync_checkpoint(&self) -> Option<state::SynchronizationCheckpoint> {
         self.sync_checkpoint
     }
-    #[allow(dead_code)]
     pub(crate) fn sync_evidence(&self) -> &state::SynchronizationEvidence {
         &self.sync_evidence
     }
-    #[allow(dead_code)]
     pub(crate) fn authority(&self) -> Option<state::SynchronizationAuthority> {
         self.authority
     }
-    #[allow(dead_code)]
     pub(crate) fn index_pending(&self) -> bool {
         self.index_pending
     }
@@ -682,8 +678,33 @@ impl RepositoryService {
 
 // These crate-private transitions are consumed by Task 4, never by a caller's
 // request. Their OIDs must come from re-opened Git/worktree and scoped observations.
-#[allow(dead_code)]
 impl RepositoryService {
+    /// Repeated inter-call boundary: fence ownership and honor requests without
+    /// advancing the action checkpoint or claiming any effect proof.
+    pub(crate) fn check_synchronization_requests(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            if record.cancel_requested || record.yield_requested {
+                acknowledge(
+                    tx,
+                    &record,
+                    record
+                        .completed_step
+                        .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+                )
+            } else {
+                Ok(RemoteSafePointOutcome::Continue)
+            }
+        })
+    }
+
     pub(crate) fn checkpoint_synchronization(
         &self,
         root: &Path,

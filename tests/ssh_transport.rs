@@ -24,6 +24,8 @@ mod ssh_privacy;
 mod ssh_remote;
 #[path = "ssh_transport/state.rs"]
 mod state;
+#[path = "ssh_transport/synchronization.rs"]
+mod synchronization;
 #[path = "ssh_transport/transfer.rs"]
 mod transfer;
 
@@ -52,6 +54,7 @@ fn main() {
     .chain(session::CASES)
     .chain(transfer::CASES)
     .chain(exact::CASES)
+    .chain(synchronization::CASES)
     .chain(failures::CASES)
     .chain(privacy::CASES)
     .chain(state::CASES)

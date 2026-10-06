@@ -6,7 +6,7 @@ use std::{fmt, path::PathBuf};
 
 /// Process-only equality evidence. Never serialized or included in Debug/errors.
 #[derive(Clone, PartialEq, Eq)]
-struct ObservationConfiguration {
+pub(super) struct ObservationConfiguration {
     plan: RemoteRefPlan,
     fetch: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
     push: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
@@ -17,7 +17,7 @@ impl ObservationConfiguration {
     // Only validated public SSH locator metadata enters this digest. Endpoint
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.
-    fn endpoint_digest(&self) -> [u8; 32] {
+    pub(super) fn endpoint_digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
         for endpoint in [&self.fetch, &self.push] {
             match endpoint {
@@ -36,7 +36,7 @@ impl ObservationConfiguration {
 }
 
 impl RepositoryService {
-    fn observation_configuration(
+    pub(super) fn observation_configuration(
         &self,
         root: &std::path::Path,
         plan: &RemoteRefPlan,

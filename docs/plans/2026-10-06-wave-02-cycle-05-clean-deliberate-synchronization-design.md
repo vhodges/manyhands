@@ -276,3 +276,29 @@ The implementation updates the existing headless native matrix to run the new
 target. Editing the workflow is feasibility preparation only. Actual Linux,
 macOS, and Windows runs on all five existing targets, plus the required local
 Devenv gates, are final implementation evidence.
+
+## Task 4 backend and handoff compatibility rulings
+
+Locked git2 0.20.4 exposes no checkout baseline setter. Updating HEAD before
+safe checkout made the checkout return success without changing required bytes.
+The approved implementation records LocalPrepared, locks the exact branch ref,
+verifies its old OID and symbolic identity, safely checks out while HEAD still
+names the old commit, rechecks symbolic identity, then commits one locked ref
+write. Fresh branch/index/worktree proof precedes LocalFastForwarded. Any partial
+checkout or later ref-write failure retains its mismatch and durable intent for
+recovery; no rollback, reset or force checkout is permitted.
+
+Local-only synchronization binds its typed target and original PublishPending
+OID in a tagged matcher on the existing refresh operation row before handoff.
+Binding has no index owner or discovery scan; failure to bind is an error, not
+IndexPending. Exact replay reads the frozen identity before configuration/local
+preflight; mismatched root/action/target or an unrelated plain refresh is rejected.
+Ordinary public refresh still uses its empty matcher. Completed matching refresh
+is index-only proof, including after the remote index-flag write fails.
+
+The scoped adapter adds only typed Push-target object acquisition for distinct
+push destinations. Its anonymous upload-pack connection explicitly uses the
+policy-resolved Push endpoint, retains all credential/trust/configuration checks,
+and writes no refs or FETCH_HEAD. Separate receive-pack observations must match
+that object-transfer advertisement. Repeated owned request checks honor
+cancellation between calls without advancing durable action checkpoints.

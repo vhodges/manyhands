@@ -1,6 +1,10 @@
 mod observation;
 mod refs;
+mod sync;
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+pub use sync::{
+    PublishPendingReason, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+};
 #[cfg(test)]
 pub(crate) mod observation_tests;
 pub(super) mod reservation;

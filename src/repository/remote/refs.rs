@@ -223,10 +223,6 @@ fn is_valid_git_short_name(value: &str) -> bool {
 }
 
 // Kept internal: orchestration consumes the pure plan, never a public caller.
-#[allow(
-    dead_code,
-    reason = "Planning seam for the synchronization orchestration checkpoint"
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CleanIntegrationPlan {
     pub final_oid: Oid,
@@ -236,10 +232,6 @@ pub(super) struct CleanIntegrationPlan {
     pub push_needed: bool,
 }
 
-#[allow(
-    dead_code,
-    reason = "Planning seam for the synchronization orchestration checkpoint"
-)]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum CleanIntegrationError<E> {
     PrimaryMissing,
@@ -252,10 +244,6 @@ pub(super) enum CleanIntegrationError<E> {
 /// Tracking OIDs must describe the complete current Fetch advertisement, not
 /// stale tracking refs for an absent remote branch. `is_ancestor(a, b)` asks
 /// whether a is an ancestor of b; equal OIDs need no query. No mutation occurs.
-#[allow(
-    dead_code,
-    reason = "Planning seam for the synchronization orchestration checkpoint"
-)]
 pub(super) fn plan_clean_integration<E>(
     target: &SynchronizationTarget,
     local_oid: Oid,
