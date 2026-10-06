@@ -102,10 +102,15 @@ logical records; exact SQL constraints and indexes belong to implementation.
 | `remote_context_states` | repository ID, remote/ref identity, last advertised OID, last known tracking OID, publication evidence (`never_published`, `observed_published`, or `history_unknown`), state, last-seen batch/time | preserves last OID when an `observed_published` ref transitions to `remotely_deleted`; does not delete a local context. |
 | `remote_operation_records` | repository ID, operation ULID, action, priority, phase, remote/ref targets, redacted result category, yield/cancel flags, safe-point/completed observations and timestamps | at most one active reservation per repository; it is recovery evidence, never the Git lock or source of truth. |
 
-The migration preserves existing tables and rows. Every database write uses the
-existing short cache-recovery guard. A remote caller holds neither that guard
-nor the common-Git-directory lease while waiting for credentials, connecting,
-listing refs, or scanning snapshots.
+The polling-policy row is repository-scoped and survives publication remote or
+selected-key removal/replacement, preserving an explicit pause and interval
+when configuration returns. Such configuration changes invalidate active
+remote reservations and remote-specific observations; current configuration
+still determines whether automatic polling is eligible. The migration preserves
+existing tables and rows. Every database write uses the existing short
+cache-recovery guard. A remote caller holds neither that guard nor the
+common-Git-directory lease while waiting for credentials, connecting, listing
+refs, or scanning snapshots.
 
 The snapshot API joins observation/context state with the existing local
 `contexts` rows. A recognized advertised context with no matching local
@@ -134,6 +139,13 @@ resolution required before the marker can be retired.
 target identities. The public result is a typed, redacted reservation/outcome;
 it never accepts a URL, refspec, OID, key path, or passphrase from a caller.
 
+The durable operation envelope retains the validated remote name, primary and
+context remote refs, their tracking refs, and any action-relevant item, local
+branch, or worktree identities. Each observation records the relevant local,
+tracking, and advertised OIDs; fields irrelevant to an action remain absent.
+`completed_step` records the last durable transition so restart inspection
+never treats a partly recorded list as a completed advertisement.
+
 Beginning a request first reconciles active remote records and existing local
 recovery. An active manual record blocks a competing action. An active poll
 encountered by a manual request atomically marks `yield_requested` and returns
@@ -148,10 +160,12 @@ or cancellation:
 
 Acknowledgement records `interrupted` or `cancelled` and releases the active
 reservation only after the current SQLite transition finishes. Cycle 04 has no
-future local Git mutation, but it records that mandatory hook for its consumers.
-If a process stops before the successful batch transaction, reconciliation
-retains the previous batch and retries a read-only advertisement. If it stops
-after commit, retry reads the durable batch and does not infer a second effect.
+future local Git mutation or transfer-progress callback; it exposes the same
+named durable safe-point mechanism for Cycle 08 to invoke from a future fetch
+progress callback. If a process stops before the successful batch transaction,
+reconciliation retains the previous batch and retries a read-only
+advertisement. If it stops after commit, retry reads the durable batch and does
+not infer a second effect.
 
 ## Observation Flow And Public Interface
 

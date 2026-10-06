@@ -34,8 +34,9 @@ native GitHub Actions matrix.
 **Spec:** [Design](2026-10-05-wave-02-cycle-04-remote-observation-and-recovery-design.md)
 and [Cycle](../Cycles/wave-02-cycle-04-remote-observation-and-recovery.md).
 
-**Status:** Draft. The user has not yet approved this plan or authorized
-implementation, publication, merge, ticket closure, or cleanup.
+**Status:** Approved 2026-10-05. The user authorized implementation through
+subagent-driven development. Publication, merge, ticket closure, and cleanup
+remain separate later authorizations.
 
 ## Global Constraints
 
@@ -119,11 +120,11 @@ do not combine unfinished downstream synchronization behavior into a task.
 
 ## Baseline Checkpoint
 
-- [ ] Repeat the fetch/rebase/ancestry preflight in this ticket worktree and
+- [x] Repeat the fetch/rebase/ancestry preflight in this ticket worktree and
   record fetched base plus before/after ticket heads. Inspect the remote ticket
   ref before any authorized publication; never force push without new explicit
   authorization.
-- [ ] Run and record the required local baseline:
+- [x] Run and record the required local baseline:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -133,7 +134,7 @@ do not combine unfinished downstream synchronization behavior into a task.
   devenv shell -- cargo run --locked --bin manyhands-cli
   ```
 
-- [ ] Record pre-existing failures separately. Confirm the implementation
+- [x] Record pre-existing failures separately. Confirm the implementation
   begins with approved Cycle/design/plan and explicit implementation authority.
 
 ## Task 1: Define Remote Ref And State Contracts
@@ -170,6 +171,11 @@ remote-operation tables with foreign keys, bounds, uniqueness, and indexes.
 Expose query/update helpers only through the remote module. Extend snapshot
 presentation with remote states/problems while retaining existing local
 discovery semantics.
+
+The polling-policy row is repository-scoped: retain explicit pause and interval
+across publication remote/key removal or replacement, while invalidating active
+reservations and remote-specific observations. The current configuration alone
+determines whether automatic polling is eligible.
 
 - [ ] Add failing tests that start from the current Cycle 03 schema and legacy
   operation rows, run migration repeatedly, preserve all old rows, and create
@@ -208,6 +214,9 @@ journal still blocks incompatible operations.
   batch commit, after batch commit, and during per-ref persistence. Assert
   prior batch/local Git state preservation and retry of only unfinished
   read-only work.
+- [ ] Represent those hooks as durable named safe points. Cycle 04 invokes no
+  transfer-progress callback because it does not transfer; retain the same
+  mechanism for Cycle 08 to call from its later fetch-progress path.
 - [ ] Test cancellation at the same safe points, restart/reconciliation,
   legacy-local-record coexistence, and no repository lease across waits.
 - [ ] Implement SQL atomics and fixed recovery guidance; record/commit
