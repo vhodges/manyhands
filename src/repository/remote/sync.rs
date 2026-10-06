@@ -1006,6 +1006,8 @@ impl RepositoryService {
         request: &SynchronizeRemoteRequest,
         primary: &str,
     ) -> Result<git2::Oid, SynchronizationError> {
+        #[cfg(test)]
+        tests::run_local_binding_hook(request.operation_id);
         let repository = git2::Repository::open(&request.root)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         let _lease = repository_lease(
@@ -1138,7 +1140,8 @@ fn fast_forward(
         return Err(SynchronizationError::ExternalChange);
     }
     let mut checkout = git2::build::CheckoutBuilder::new();
-    checkout.safe();
+    // SAFE alone defaults to overwriting ignored user entries in locked libgit2.
+    checkout.safe().overwrite_ignored(false);
     repository
         .checkout_tree(commit.as_object(), Some(&mut checkout))
         .map_err(|_| SynchronizationError::RecoveryRequired)?;

@@ -31,6 +31,42 @@ fn main() {
     ssh_harness::run_with_output_privacy(CASES, OUTPUT_CONTROLS);
 }
 const CASES: &[ssh_harness::Case] = &[
+    ("ignored_primary_file_collision", || {
+        ignored_collision(false, IgnoredCollision::File)
+    }),
+    ("ignored_context_file_collision", || {
+        ignored_collision(true, IgnoredCollision::File)
+    }),
+    ("ignored_primary_directory_collision", || {
+        ignored_collision(false, IgnoredCollision::Directory)
+    }),
+    ("ignored_context_directory_collision", || {
+        ignored_collision(true, IgnoredCollision::Directory)
+    }),
+    ("ignored_primary_incoming_directory_collision", || {
+        ignored_collision(false, IgnoredCollision::IncomingDirectory)
+    }),
+    ("ignored_context_incoming_directory_collision", || {
+        ignored_collision(true, IgnoredCollision::IncomingDirectory)
+    }),
+    ("ignored_primary_symlink_file_collision", || {
+        ignored_collision(false, IgnoredCollision::SymlinkFile)
+    }),
+    ("ignored_context_symlink_file_collision", || {
+        ignored_collision(true, IgnoredCollision::SymlinkFile)
+    }),
+    ("ignored_primary_symlink_directory_collision", || {
+        ignored_collision(false, IgnoredCollision::SymlinkDirectory)
+    }),
+    ("ignored_context_symlink_directory_collision", || {
+        ignored_collision(true, IgnoredCollision::SymlinkDirectory)
+    }),
+    ("ignored_primary_noncolliding_control", || {
+        ignored_noncolliding(false)
+    }),
+    ("ignored_context_noncolliding_control", || {
+        ignored_noncolliding(true)
+    }),
     (
         "synchronization_raw_capture_privacy",
         synchronization_raw_capture_privacy,
@@ -1413,5 +1449,235 @@ fn synchronization_probe_union_privacy() -> Result<(), FixtureError> {
             Err(ssh_harness::IsolationFailure::OutputPrivacy)
         );
     }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum IgnoredCollision {
+    File,
+    Directory,
+    IncomingDirectory,
+    SymlinkFile,
+    SymlinkDirectory,
+}
+fn persistent_ignore(repo: &git2::Repository) -> Result<(), FixtureError> {
+    let exclude = repo.commondir().join("info/exclude");
+    fixed(std::fs::create_dir_all(exclude.parent().unwrap()))?;
+    let mut bytes = std::fs::read(&exclude).unwrap_or_default();
+    bytes.extend_from_slice(b"\n/safety-ignored\n/safety-control\n");
+    fixed(std::fs::write(exclude, bytes))
+}
+fn owned_symlink(target: &Path, link: &Path, directory: bool) -> Result<(), FixtureError> {
+    // Capability failures fail the case; no silent native skip or passed proof.
+    #[cfg(unix)]
+    {
+        let _ = directory;
+        fixed(std::os::unix::fs::symlink(target, link))
+    }
+    #[cfg(windows)]
+    {
+        if directory {
+            fixed(std::os::windows::fs::symlink_dir(target, link))
+        } else {
+            fixed(std::os::windows::fs::symlink_file(target, link))
+        }
+    }
+}
+fn collision_target(
+    w: &mut World,
+    context: bool,
+) -> Result<(git2::Repository, SynchronizeRemoteRequest, &'static str), FixtureError> {
+    if !context {
+        return Ok((w.repo()?, w.primary(), "refs/heads/main"));
+    }
+    let c = w.context()?;
+    fixed(w.sync(w.context_request()))?;
+    let mut remote = fixed(w.peer.find_remote("origin"))?;
+    let mut fetch = git2::FetchOptions::new();
+    fetch.remote_callbacks(callbacks(&w.server));
+    fixed(remote.fetch(
+        &[&format!(
+            "{CONTEXT}:refs/remotes/origin/manyhands/ticket/{ITEM}"
+        )],
+        Some(&mut fetch),
+        None,
+    ))?;
+    Ok((
+        fixed(git2::Repository::open(&c.worktree))?,
+        w.context_request(),
+        CONTEXT,
+    ))
+}
+fn incoming_owned_paths(
+    w: &World,
+    parent: git2::Oid,
+    reference: &str,
+    directory: bool,
+) -> Result<git2::Oid, FixtureError> {
+    let mut index = fixed(w.peer.index())?;
+    fixed(index.read_tree(&fixed(fixed(w.peer.find_commit(parent))?.tree())?))?;
+    let workdir = w.peer.workdir().unwrap();
+    let name = if directory {
+        "safety-ignored/child"
+    } else {
+        "safety-ignored"
+    };
+    if directory {
+        fixed(std::fs::create_dir_all(workdir.join("safety-ignored")))?;
+    }
+    fixed(std::fs::write(workdir.join(name), b"incoming tracked data"))?;
+    // Explicit owned index paths, not a product force checkout/push. Include
+    // another tracked change to observe any partial checkout rather than assume.
+    fixed(index.add_path(Path::new(name)))?;
+    fixed(std::fs::write(
+        workdir.join("fixture.txt"),
+        b"incoming tracked change",
+    ))?;
+    fixed(index.add_path(Path::new("fixture.txt")))?;
+    let tree = fixed(w.peer.find_tree(fixed(index.write_tree())?))?;
+    let parent = fixed(w.peer.find_commit(parent))?;
+    let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let next = fixed(w.peer.commit(
+        None,
+        &sig,
+        &sig,
+        "owned incoming collision",
+        &tree,
+        &[&parent],
+    ))?;
+    fixed(
+        w.peer
+            .reference(reference, next, true, "owned collision descendant"),
+    )?;
+    push_peer(&w.peer, &w.server, reference)?;
+    Ok(next)
+}
+fn ignored_collision(context: bool, kind: IgnoredCollision) -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let (repo, req, reference) = collision_target(&mut w, context)?;
+    let workdir = repo.workdir().unwrap();
+    persistent_ignore(&repo)?;
+    let ignored = workdir.join("safety-ignored");
+    let target = w.directory.path().join("owned-symlink-target");
+    let directory = matches!(
+        kind,
+        IgnoredCollision::Directory | IgnoredCollision::SymlinkDirectory
+    );
+    if directory {
+        let p = if matches!(kind, IgnoredCollision::Directory) {
+            &ignored
+        } else {
+            &target
+        };
+        fixed(std::fs::create_dir(p))?;
+        fixed(std::fs::write(p.join("private-child"), BODY.as_bytes()))?;
+    } else {
+        let p = if matches!(kind, IgnoredCollision::SymlinkFile) {
+            &target
+        } else {
+            &ignored
+        };
+        fixed(std::fs::write(p, BODY.as_bytes()))?;
+    }
+    let symlink = matches!(
+        kind,
+        IgnoredCollision::SymlinkFile | IgnoredCollision::SymlinkDirectory
+    );
+    if symlink {
+        owned_symlink(&target, &ignored, directory)?;
+    }
+    let old = fixed(repo.refname_to_id(reference))?;
+    let incoming = incoming_owned_paths(
+        &w,
+        old,
+        reference,
+        matches!(kind, IgnoredCollision::IncomingDirectory),
+    )?;
+    let mut options = git2::StatusOptions::new();
+    options.include_ignored(true);
+    assert!(
+        fixed(repo.statuses(Some(&mut options)))?
+            .iter()
+            .any(|e| e.status().contains(git2::Status::IGNORED))
+    );
+    let before = physical(&w.root, workdir)?;
+    let updates = w.server.receive_updates();
+    let req_id = req.operation_id;
+    // Must reach durable LocalPrepared, not blanket-reject all ignored artifacts.
+    let result = w.sync(req);
+    if result.is_ok() {
+        let private = if directory {
+            ignored.join("private-child")
+        } else {
+            ignored.clone()
+        };
+        assert!(
+            std::fs::read(private).ok().as_deref() == Some(BODY.as_bytes()),
+            "ignored user content discarded after successful integration"
+        );
+    }
+    assert!(
+        matches!(result, Err(SynchronizationError::RecoveryRequired)),
+        "ignored collision must reject integration"
+    );
+    assert_eq!(physical(&w.root, workdir)?, before);
+    assert_eq!(fixed(repo.refname_to_id(reference))?, old);
+    assert_eq!(w.server.receive_updates(), updates);
+    assert_eq!(fixed(w.bare()?.refname_to_id(reference))?, incoming);
+    let checkpoint:(String,Option<String>) = fixed(w.db()?.query_row("SELECT sync_checkpoint,authoritative_kind FROM remote_operation_records WHERE operation_ulid=?1",[req_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))))?;
+    assert_eq!(checkpoint, ("local_prepared".into(), None));
+    if symlink {
+        assert!(
+            fixed(std::fs::symlink_metadata(&ignored))?
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            fixed(std::fs::read_link(&ignored))? == target,
+            "ignored symlink identity preserved"
+        );
+    }
+    let private = if directory {
+        ignored.join("private-child")
+    } else {
+        ignored.clone()
+    };
+    assert!(
+        fixed(std::fs::read(private))? == BODY.as_bytes(),
+        "ignored private bytes preserved"
+    );
+    if symlink {
+        let private = if directory {
+            target.join("private-child")
+        } else {
+            target
+        };
+        assert!(
+            fixed(std::fs::read(private))? == BODY.as_bytes(),
+            "symlink target data preserved"
+        );
+    }
+    Ok(())
+}
+fn ignored_noncolliding(context: bool) -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let (repo, req, reference) = collision_target(&mut w, context)?;
+    let workdir = repo.workdir().unwrap();
+    persistent_ignore(&repo)?;
+    fixed(std::fs::write(
+        workdir.join("safety-control"),
+        BODY.as_bytes(),
+    ))?;
+    let old = fixed(repo.refname_to_id(reference))?;
+    let next = incoming_owned_paths(&w, old, reference, false)?;
+    let updates = w.server.receive_updates();
+    outcome(fixed(w.sync(req.clone()))?, false, req.target, next);
+    assert_eq!(fixed(repo.refname_to_id(reference))?, next);
+    assert_eq!(
+        fixed(fixed(repo.index())?.write_tree())?,
+        fixed(repo.find_commit(next))?.tree_id()
+    );
+    assert!(fixed(std::fs::read(workdir.join("safety-control")))? == BODY.as_bytes());
+    assert_eq!(w.server.receive_updates(), updates);
     Ok(())
 }

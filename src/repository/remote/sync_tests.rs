@@ -605,3 +605,391 @@ fn existing_remote_id_rejects_other_root_before_invalid_live_configuration() {
         }))
     ));
 }
+
+type LocalBindingHook = (OperationId, Box<dyn FnOnce()>);
+thread_local! {
+    static LOCAL_BINDING_HOOK: std::cell::RefCell<Option<LocalBindingHook>> = const { std::cell::RefCell::new(None) };
+}
+struct LocalBindingHookGuard;
+impl Drop for LocalBindingHookGuard {
+    fn drop(&mut self) {
+        LOCAL_BINDING_HOOK.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+impl RepositoryService {
+    // Runs after None inspection, before Git/cache leases. Removed before invocation
+    // so a competing service call can deterministically finish its real binding.
+    pub(crate) fn set_local_binding_hook_for_testing(
+        &self,
+        id: OperationId,
+        hook: impl FnOnce() + 'static,
+    ) -> impl Drop {
+        LOCAL_BINDING_HOOK
+            .with(|slot| assert!(slot.borrow_mut().replace((id, Box::new(hook))).is_none()));
+        LocalBindingHookGuard
+    }
+}
+pub(super) fn run_local_binding_hook(id: OperationId) {
+    let hook = LOCAL_BINDING_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|(expected, _)| *expected == id) {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, hook)) = hook {
+        hook();
+    }
+}
+fn materialize_local_context(service: &RepositoryService, root: &Path) -> SynchronizationTarget {
+    let item_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+    let result = service
+        .save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: root.into(),
+                kind: AuthoringKind::Ticket,
+                item_id,
+                intent: ContextIntent::Create,
+                operation_id: OperationId::new(),
+            },
+            draft: TicketDraft {
+                title: "Fixture".into(),
+                body: "fixture".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+            },
+            expected_path: ExpectedPathObservation::Missing,
+        })
+        .unwrap();
+    let context = match result {
+        SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
+        _ => panic!("fixture context"),
+    };
+    let linked = git2::Repository::open(&context.worktree).unwrap();
+    let mut index = linked.index().unwrap();
+    index
+        .read_tree(&linked.head().unwrap().peel_to_tree().unwrap())
+        .unwrap();
+    index.write().unwrap();
+    SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: context.item_id,
+    }
+}
+fn local_binding_image(root: &Path) -> [u8; 32] {
+    let repo = git2::Repository::open(root).unwrap();
+    let mut hash = blake3::Hasher::new();
+    let mut refs = repo
+        .references_glob("refs/heads/*")
+        .unwrap()
+        .map(|r| {
+            let r = r.unwrap();
+            format!("{} {:?}", r.name().unwrap(), r.target())
+        })
+        .collect::<Vec<_>>();
+    refs.sort();
+    for r in refs {
+        hash.update(r.as_bytes());
+    }
+    let mut worktrees = vec![root.to_owned()];
+    for name in repo.worktrees().unwrap().iter().flatten() {
+        worktrees.push(repo.find_worktree(name).unwrap().path().to_owned());
+    }
+    for path in worktrees {
+        let linked = git2::Repository::open(&path).unwrap();
+        for name in ["HEAD", "index"] {
+            hash.update(&fs::read(linked.path().join(name)).unwrap());
+        }
+        for entry in linked.index().unwrap().iter() {
+            hash.update(&entry.path);
+            hash.update(&fs::read(path.join(std::str::from_utf8(&entry.path).unwrap())).unwrap());
+        }
+    }
+    *hash.finalize().as_bytes()
+}
+#[test]
+fn local_binding_after_none_rejects_actual_other_target_service_authority() {
+    let (root, data, service) = fixture();
+    let target = materialize_local_context(&service, root.path());
+    let service = std::sync::Arc::new(service);
+    let primary = request(root.path());
+    let mut context = primary.clone();
+    context.target = target;
+    let original = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let first = original.clone();
+    let competing = service.clone();
+    let first_request = primary.clone();
+    let path = root.path().to_owned();
+    let image = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let snapshot = image.clone();
+    let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = scans.clone();
+    let hook = service.set_local_binding_hook_for_testing(context.operation_id, move || {
+        *first.lock().unwrap() = Some(
+            competing
+                .synchronize_remote(first_request, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        *snapshot.lock().unwrap() = Some(local_binding_image(&path));
+        competing.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+    assert!(matches!(
+        service.synchronize_remote(context.clone(), &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(hook);
+    assert_eq!(
+        local_binding_image(root.path()),
+        image.lock().unwrap().unwrap()
+    );
+    assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .synchronize_remote(primary, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        original.lock().unwrap().clone().unwrap()
+    );
+    assert!(matches!(
+        service.synchronize_remote(context, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::OperationMismatch,
+            ..
+        }))
+    ));
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM operation_records WHERE target LIKE 'synchronization-local-v1/%'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}
+#[test]
+fn local_binding_after_none_rejects_competing_oid_then_replays_frozen_first_outcome() {
+    let (root, _data, service) = fixture();
+    let service = std::sync::Arc::new(service);
+    let req = request(root.path());
+    let first_request = req.clone();
+    let competing = service.clone();
+    let path = root.path().to_owned();
+    let original = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let first = original.clone();
+    let image = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let snapshot = image.clone();
+    let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = scans.clone();
+    let hook = service.set_local_binding_hook_for_testing(req.operation_id, move || {
+        *first.lock().unwrap() = Some(
+            competing
+                .synchronize_remote(first_request, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let repo = git2::Repository::open(&path).unwrap();
+        fs::write(path.join("fixture.txt"), b"later committed fixture").unwrap();
+        commit_all(&repo);
+        // Baseline AFTER deliberate fixture commit, before the losing binder.
+        *snapshot.lock().unwrap() = Some(local_binding_image(&path));
+        competing.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+    assert!(matches!(
+        service.synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(hook);
+    assert_eq!(
+        local_binding_image(root.path()),
+        image.lock().unwrap().unwrap()
+    );
+    assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .synchronize_remote(req, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        original.lock().unwrap().clone().unwrap()
+    );
+}
+
+#[test]
+fn local_binding_after_none_rejects_actual_plain_refresh_before_discovery() {
+    let (root, data, service) = fixture();
+    let service = std::sync::Arc::new(service);
+    let req = request(root.path());
+    let first_request = req.clone();
+    let competing = service.clone();
+    let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = scans.clone();
+    let hook = service.set_local_binding_hook_for_testing(req.operation_id, move || {
+        // Ordinary plain refresh is still legitimate; only tagged adoption fails.
+        assert!(matches!(
+            competing
+                .refresh_repository(RefreshRepositoryRequest {
+                    root: first_request.root,
+                    operation_id: first_request.operation_id
+                })
+                .unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+        competing.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let oid = repo.head().unwrap().target();
+    let index = fs::read(repo.path().join("index")).unwrap();
+    assert!(matches!(
+        service.synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    drop(hook);
+    assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(repo.head().unwrap().target(), oid);
+    assert_eq!(fs::read(repo.path().join("index")).unwrap(), index);
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT target FROM operation_records WHERE operation_ulid=?1",
+            [req.operation_id.to_string()],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        ""
+    );
+    assert!(matches!(
+        service.synchronize_remote(req, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::OperationMismatch,
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn local_binding_transaction_rejects_incompatible_existing_and_pending_rows() {
+    // Structural row fixtures prove binding policy only, not effect/discovery.
+    for status in ["completed", "created", "observed", "error", "indexing"] {
+        for collision in [
+            "target",
+            "oid",
+            "malformed",
+            "plain",
+            "action",
+            "root",
+            "pending_id",
+            "pending_alias",
+        ] {
+            if status == "completed" && matches!(collision, "pending_id" | "pending_alias") {
+                continue;
+            }
+            let (root, data, service) = fixture();
+            let req = request(root.path());
+            assert!(
+                service
+                    .local_synchronization_replay(&req)
+                    .unwrap()
+                    .is_none()
+            );
+            let repo = git2::Repository::open(root.path()).unwrap();
+            let oid = repo.head().unwrap().target().unwrap();
+            let matcher = format!("{}/{oid}", local_refresh_identity(&req.target));
+            let foreign = tempfile::tempdir().unwrap();
+            let stored_root = if collision == "root" {
+                foreign.path()
+            } else {
+                root.path()
+            };
+            let stored_id = match collision {
+                "pending_id" => Some(OperationId::new().to_string()),
+                "pending_alias" => None,
+                _ => Some(req.operation_id.to_string()),
+            };
+            let stored_action = if collision == "action" {
+                "enable"
+            } else {
+                "refresh"
+            };
+            let stored_target = match collision {
+                "target" => {
+                    format!("synchronization-local-v1/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV/{oid}")
+                }
+                "oid" => format!("synchronization-local-v1/primary/{}", git2::Oid::zero()),
+                "malformed" => "synchronization-local-v1/primary/not-an-oid".into(),
+                "plain" => String::new(),
+                _ => matcher.clone(),
+            };
+            let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute("INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,?4,?5,0)",rusqlite::params![stored_root.to_str().unwrap(),stored_id,stored_action,stored_target,status]).unwrap();
+            let count: i64 = db
+                .query_row("SELECT count(*) FROM operation_records", [], |r| r.get(0))
+                .unwrap();
+            let index = fs::read(repo.path().join("index")).unwrap();
+            let bytes = fs::read(root.path().join("fixture.txt")).unwrap();
+            assert!(
+                matches!(
+                    service.bind_local_synchronization(&req, "main"),
+                    Err(SynchronizationError::RecoveryRequired)
+                ),
+                "{collision}/{status}"
+            );
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM operation_records", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                count
+            );
+            assert_eq!(db.query_row("SELECT root_path,action,target,state FROM operation_records ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).unwrap(),(stored_root.to_str().unwrap().into(),stored_action.into(),stored_target,status.into()));
+            assert_eq!(repo.head().unwrap().target(), Some(oid));
+            assert_eq!(fs::read(repo.path().join("index")).unwrap(), index);
+            assert_eq!(fs::read(root.path().join("fixture.txt")).unwrap(), bytes);
+        }
+    }
+}
+#[test]
+fn local_binding_transaction_accepts_only_identical_complete_tag_without_rewriting() {
+    for status in ["completed", "created", "observed", "error", "indexing"] {
+        let (root, data, service) = fixture();
+        let req = request(root.path());
+        let oid = git2::Repository::open(root.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        let matcher = format!("{}/{oid}", local_refresh_identity(&req.target));
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute("INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,'refresh',?3,?4,0)",rusqlite::params![root.path().to_str().unwrap(),req.operation_id.to_string(),matcher,status]).unwrap();
+        let count: i64 = db
+            .query_row("SELECT count(*) FROM operation_records", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            service.bind_local_synchronization(&req, "main").unwrap(),
+            oid
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM operation_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            count
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT target,state FROM operation_records WHERE operation_ulid=?1",
+                [req.operation_id.to_string()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            )
+            .unwrap(),
+            (matcher, status.into())
+        );
+    }
+}

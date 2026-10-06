@@ -255,7 +255,7 @@ fn begin_or_reconcile(
     operation: RepositoryOperation,
     operation_id: OperationId,
     target: &str,
-    reject_remote_id: bool,
+    tagged_local_binding: bool,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
@@ -265,7 +265,7 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    if reject_remote_id {
+    if tagged_local_binding {
         let remote_id: bool = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)",
@@ -304,6 +304,15 @@ fn begin_or_reconcile(
         if existing_root != root_path {
             return Err(mismatch(operation, root));
         }
+        // Tagged callers supply the complete typed identity + full Git OID.
+        // Equality validates the whole frozen matcher, not refresh's aliases.
+        if tagged_local_binding
+            && (action != "refresh"
+                || existing_action != action
+                || existing_target.as_deref() != Some(target))
+        {
+            return Err(mismatch(operation, root));
+        }
         if !(same_lifecycle_action(existing_action, action)
             || action == "refresh" && existing_action != "refresh")
             || action != "refresh" && existing_target.as_deref() != Some(target)
@@ -333,16 +342,23 @@ fn begin_or_reconcile(
     if !pending.is_empty() {
         let mut matching = None;
         for (id, existing_id, existing_action, existing_target) in pending {
-            if existing_id.as_deref() == Some(&requested)
-                && (same_lifecycle_action(&existing_action, action)
-                    || action == "refresh" && existing_action != "refresh")
-                && (action == "refresh" || existing_target.as_deref() == Some(target))
-                || existing_id.is_none()
-                    && matches!(
-                        (existing_action.as_str(), action),
-                        ("refresh", "refresh") | ("rebuild", "rebuild")
-                    )
-            {
+            let compatible = if tagged_local_binding {
+                existing_id.as_deref() == Some(&requested)
+                    && action == "refresh"
+                    && existing_action == action
+                    && existing_target.as_deref() == Some(target)
+            } else {
+                existing_id.as_deref() == Some(&requested)
+                    && (same_lifecycle_action(&existing_action, action)
+                        || action == "refresh" && existing_action != "refresh")
+                    && (action == "refresh" || existing_target.as_deref() == Some(target))
+                    || existing_id.is_none()
+                        && matches!(
+                            (existing_action.as_str(), action),
+                            ("refresh", "refresh") | ("rebuild", "rebuild")
+                        )
+            };
+            if compatible {
                 matching = Some(id);
             } else {
                 return Err(recovery_required(operation, root));
