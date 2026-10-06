@@ -1440,3 +1440,41 @@ All five actual native executions remain pending authorized publication; Linux/
 YAML do not prove them. No Task6, publication/dispatch, merge, closure or cleanup.
 Ticket stays open. All five reported proof gaps corrected locally, **fresh independent
 re-review and parent acceptance still required**. Stop for that gate.
+
+## Task 5 parent acceptance with notes — 2026-10-06T20:18:42Z
+
+Accepted the complete original Task 5 range
+`0601c6bf76485fa98e9935e36266631a32efa793..0026ec993b891de7d3c595411974f635bd25ca2e`.
+Independent read-only re-review verdict **OK with notes**, no issues found, all
+five prior proof findings closed. Review artifact:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/c2276511-1b38-4a86-8e41-5060091009c6/task5-privacy-fixes/review.md`.
+Parent verified exact clean HEAD and independently recomputed original-base Rust
+content SHA256 `7f0daff64f39ec0b1a94b496620f3d20608921cd15e45b08fd1b1fe9d2bd0abe`.
+All src/tests/manifests/locks/toolchain/CI content is unchanged from tested
+implementation HEAD `575f657c21c16323fc64a367acef93608e528ec2`; subsequent commits
+add evidence only. Reuse final gates on this identical tree rather than perform
+an unnecessary unchanged broad rerun, per verification/delivery skill.
+
+Accepted proof includes real two-clone receiver effects (advertisements separated
+from ordinary update commands), rejection and honest expected-old race labels,
+post-accept disconnect/persistence exact-ID no-duplicate replay, index-only handoff,
+physical preservation, complete generated-store/row/WAL/journal/backup privacy,
+and raw stdout/stderr scanning BEFORE filtering on success AND failure. Case-wide
+probe union retains first-World keys/URLs; meaningful nested negative controls
+and fail-closed inventories close the two P1s. Immediate context current/update,
+FF/index-tree and new-Push-destination no-effect assertions close all three P2s.
+No production/schema/public-policy/lockfile/dependency widening in Task 5.
+
+Final focused23 and FIRST NORMAL correction full **600 standard +172 SSH =772**
+pass; required check/fmt/clippy and CLI pass. Actual full metadata/source identity
+are retained. Original769 pass did not prove the old privacy claim; its explicit
+withdrawal remains. Task4's first NORMAL Busy failure and expressly authorized
+second749 pass remain disclosed, NOT proven unrelated/preexisting. Carry these
+qualifications to whole-Cycle review; no erased failures or synthetic baseline.
+
+Proceed to parent-owned Task 6 final evidence/front-end smoke and fresh independent
+whole-Cycle review. Active DISPLAY/WAYLAND variables and a present Wayland socket
+were inspected; desktop launch smoke can run. Native five-target execution stays
+pending publication authorization; workflow configuration is not execution proof.
+No push/PR/dispatch, merge, closure or cleanup authority; ticket remains open.
+This acceptance checkpoint changes documentation/comment only.
