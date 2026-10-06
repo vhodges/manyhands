@@ -623,3 +623,146 @@ fn replacing_configuration_does_not_turn_known_publication_into_first_publicatio
         RemotePublicationEvidence::HistoryUnknown
     );
 }
+
+// Exact Cycle 04 envelope (before synchronization checkpoints), including its
+// original CHECKs. Testing an empty/new database would not exercise this upgrade.
+const CYCLE04_OPERATION_SCHEMA: &str = r#"
+        CREATE TABLE IF NOT EXISTS remote_operation_records (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            operation_ulid TEXT NOT NULL, configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            remote_name TEXT NOT NULL, primary_branch TEXT NOT NULL,
+            primary_ref TEXT NOT NULL, primary_tracking_ref TEXT NOT NULL,
+            context_ref TEXT, context_tracking_ref TEXT, kind TEXT CHECK(kind IN ('document','ticket')),
+            item_id TEXT, local_branch TEXT,
+            action TEXT NOT NULL CHECK(action IN ('poll','synchronize_context','synchronize_primary','promote','close')),
+            priority TEXT NOT NULL CHECK(priority IN ('poll','manual')),
+            phase TEXT NOT NULL CHECK(phase IN ('reserved','advertising','persisting','completed','interrupted','cancelled','failed')),
+            completed_step TEXT CHECK(completed_step IN ('before_transport','after_advertisement','between_observations','before_batch_commit','after_batch_commit','before_local_mutation')),
+            local_oid TEXT CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
+            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            advertised_oid TEXT CHECK(length(advertised_oid)=40 AND advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            created_at INTEGER NOT NULL CHECK(created_at >= 0), updated_at INTEGER NOT NULL CHECK(updated_at >= created_at),
+            outcome TEXT CHECK(outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
+            UNIQUE(repository_id,operation_ulid),
+            CHECK((context_ref IS NULL)=(context_tracking_ref IS NULL)),
+            CHECK((context_ref IS NULL)=(kind IS NULL)), CHECK((kind IS NULL)=(item_id IS NULL)),
+            CHECK((action IN ('poll','synchronize_primary'))=(context_ref IS NULL)),
+            CHECK((action='poll')=(local_branch IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS remote_operations_repository ON remote_operation_records(repository_id,phase,created_at);
+        CREATE TRIGGER IF NOT EXISTS remote_operation_target_immutable BEFORE UPDATE OF
+            repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,created_at
+            ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable remote operation target'); END;
+ALTER TABLE remote_operation_records ADD COLUMN yield_requested INTEGER NOT NULL DEFAULT 0 CHECK(yield_requested IN (0,1));
+ALTER TABLE remote_operation_records ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1));
+ALTER TABLE remote_operation_records ADD COLUMN owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK(owner_epoch>=0);
+CREATE UNIQUE INDEX remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting');
+"#;
+
+#[test]
+fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication() {
+    let (data, root, service) = fixture();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_operation_records")
+        .unwrap();
+    connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
+    let cases = [
+        ("completed", "after_batch_commit", Some("completed"), 0, 0),
+        ("interrupted", "after_advertisement", None, 0, 0),
+        ("interrupted", "before_batch_commit", None, 1, 0),
+        ("cancelled", "before_transport", Some("cancelled"), 0, 1),
+        (
+            "failed",
+            "after_advertisement",
+            Some("transport_unavailable"),
+            0,
+            0,
+        ),
+    ];
+    let mut ids = Vec::new();
+    for (phase, step, outcome, yield_requested, cancel_requested) in cases {
+        let id = crate::repository::OperationId::new();
+        ids.push(id);
+        connection.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,completed_step,tracking_oid,advertised_oid,created_at,updated_at,outcome,yield_requested,cancel_requested,owner_epoch) VALUES(1,?1,1,'origin','main','refs/heads/main','refs/remotes/origin/main','poll','poll',?2,?3,?4,?5,123,124,?6,?7,?8,3)",params![id.to_string(),phase,step,TRACKING,ADVERTISED,outcome,yield_requested,cancel_requested]).unwrap();
+    }
+    drop(connection);
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    with_transaction(&reopened, root.path(), |tx, id| {
+        let records = read_operations(tx, id)?;
+        assert_eq!(records.len(), cases.len());
+        for ((record, id), (phase, step, outcome, yield_requested, cancel_requested)) in
+            records.iter().zip(ids).zip(cases)
+        {
+            assert_eq!(record.operation_id, id);
+            let stored: (String, String, Option<String>) = tx
+                .query_row(
+                    "SELECT phase,completed_step,outcome FROM remote_operation_records WHERE id=?1",
+                    [record.id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (phase.into(), step.into(), outcome.map(str::to_owned))
+            );
+            assert_eq!(record.tracking_oid, Some(Oid::from_str(TRACKING).unwrap()));
+            assert_eq!(
+                record.advertised_oid,
+                Some(Oid::from_str(ADVERTISED).unwrap())
+            );
+            assert_eq!(record.created_at, 123);
+            assert_eq!(record.updated_at, 124);
+            assert_eq!(record.owner_epoch, 3);
+            assert_eq!(record.yield_requested, yield_requested == 1);
+            assert_eq!(record.cancel_requested, cancel_requested == 1);
+            assert_eq!(record.sync_checkpoint, None);
+            assert_eq!(record.authority, None);
+            assert!(!record.index_pending);
+            assert!(!record.reconciliation_required);
+            assert_eq!(record.sync_evidence.expected_oid, None);
+            assert_eq!(record.sync_evidence.push_oid, None);
+        }
+        assert!(read_snapshot(tx, id)?.contexts().is_empty());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn partial_sync_schema_does_not_discard_durable_candidate() {
+    let (data, _root, _service) = fixture();
+    Connection::open(data.path().join(REGISTRY_FILE))
+        .unwrap()
+        .execute_batch("ALTER TABLE remote_operation_records DROP COLUMN push_oid")
+        .unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+}
+
+#[test]
+fn idempotent_sync_migration_does_not_scan_retained_operation_history() {
+    let (data, _root, _service) = fixture();
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let transaction = connection.transaction().unwrap();
+    let (result, before) = vm_work(&transaction, || migrate(&transaction));
+    result.unwrap();
+    transaction.commit().unwrap();
+    connection.execute_batch("WITH RECURSIVE numbers(n) AS (VALUES(1000) UNION ALL SELECT n+1 FROM numbers WHERE n<4999)
+        INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at)
+        SELECT 1,printf('%026d',n),0,'origin','main','refs/heads/main','refs/remotes/origin/main','poll','poll','completed',123,123 FROM numbers").unwrap();
+    let transaction = connection.transaction().unwrap();
+    let (result, after) = vm_work(&transaction, || migrate(&transaction));
+    result.unwrap();
+    assert!(
+        after <= before + 100,
+        "idempotent migration walked completed remote history: {before} -> {after} VM steps"
+    );
+    transaction.commit().unwrap();
+}

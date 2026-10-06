@@ -38,6 +38,10 @@ pub struct RemoteOperationInspection {
     yield_requested: bool,
     cancel_requested: bool,
     outcome: Option<RemoteOutcomeCategory>,
+    sync_checkpoint: Option<state::SynchronizationCheckpoint>,
+    sync_evidence: state::SynchronizationEvidence,
+    authority: Option<state::SynchronizationAuthority>,
+    index_pending: bool,
 }
 
 impl From<state::StoredRemoteOperation> for RemoteOperationInspection {
@@ -49,11 +53,32 @@ impl From<state::StoredRemoteOperation> for RemoteOperationInspection {
             yield_requested: record.yield_requested,
             cancel_requested: record.cancel_requested,
             outcome: record.outcome,
+            sync_checkpoint: record.sync_checkpoint,
+            sync_evidence: record.sync_evidence,
+            authority: record.authority,
+            index_pending: record.index_pending,
         }
     }
 }
 
 impl RemoteOperationInspection {
+    #[allow(dead_code)] // Task 4 consumes the durable replay seam.
+    pub(crate) fn sync_checkpoint(&self) -> Option<state::SynchronizationCheckpoint> {
+        self.sync_checkpoint
+    }
+    #[allow(dead_code)]
+    pub(crate) fn sync_evidence(&self) -> &state::SynchronizationEvidence {
+        &self.sync_evidence
+    }
+    #[allow(dead_code)]
+    pub(crate) fn authority(&self) -> Option<state::SynchronizationAuthority> {
+        self.authority
+    }
+    #[allow(dead_code)]
+    pub(crate) fn index_pending(&self) -> bool {
+        self.index_pending
+    }
+
     pub fn operation_id(&self) -> OperationId {
         self.operation_id
     }
@@ -98,6 +123,17 @@ fn mismatch() -> RepositoryError {
     )
 }
 
+/// The sole allowed local-ID coexistence is the exact authoritative action's
+/// ordinary refresh handoff. Check every row, including failed/in-progress rows.
+fn validate_index_identity(
+    tx: &Transaction<'_>,
+    id: i64,
+    operation_id: OperationId,
+) -> Result<(), RepositoryError> {
+    let unrelated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (repository_id IS NULL OR repository_id!=?2 OR root_path!=(SELECT root_path FROM repositories WHERE id=?2) OR action!='refresh' OR target IS NULL OR target!=''))",params![operation_id.to_string(),id],|row|row.get(0)).map_err(|_| state::recovery_required())?;
+    if unrelated { Err(mismatch()) } else { Ok(()) }
+}
+
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp().max(0)
 }
@@ -122,6 +158,14 @@ fn active(phase: RemoteOperationPhase) -> bool {
         RemoteOperationPhase::Reserved
             | RemoteOperationPhase::Advertising
             | RemoteOperationPhase::Persisting
+            | RemoteOperationPhase::FetchPrepared
+            | RemoteOperationPhase::FetchObserved
+            | RemoteOperationPhase::LocalPrepared
+            | RemoteOperationPhase::LocalFastForwarded
+            | RemoteOperationPhase::PushPrepared
+            | RemoteOperationPhase::PushReturned
+            | RemoteOperationPhase::PushVerified
+            | RemoteOperationPhase::Reconciling
     )
 }
 
@@ -149,6 +193,71 @@ pub(super) fn owned(
     Ok(record)
 }
 
+fn is_sync(target: &RemoteOperationTarget) -> bool {
+    matches!(
+        target.action(),
+        RemoteOperationAction::SynchronizePrimary | RemoteOperationAction::SynchronizeContext
+    )
+}
+fn phase_name(phase: RemoteOperationPhase) -> &'static str {
+    match phase {
+        RemoteOperationPhase::Reserved => "reserved",
+        RemoteOperationPhase::Advertising => "advertising",
+        RemoteOperationPhase::Persisting => "persisting",
+        RemoteOperationPhase::Completed => "completed",
+        RemoteOperationPhase::Interrupted => "interrupted",
+        RemoteOperationPhase::Cancelled => "cancelled",
+        RemoteOperationPhase::Failed => "failed",
+        RemoteOperationPhase::FetchPrepared => "fetch_prepared",
+        RemoteOperationPhase::FetchObserved => "fetch_observed",
+        RemoteOperationPhase::LocalPrepared => "local_prepared",
+        RemoteOperationPhase::LocalFastForwarded => "local_fast_forwarded",
+        RemoteOperationPhase::PushPrepared => "push_prepared",
+        RemoteOperationPhase::PushReturned => "push_returned",
+        RemoteOperationPhase::PushVerified => "push_verified",
+        RemoteOperationPhase::Reconciling => "reconciling",
+    }
+}
+fn validate_sync_point(
+    record: &state::StoredRemoteOperation,
+    point: RemoteOperationSafePoint,
+) -> Result<(), RepositoryError> {
+    use RemoteOperationSafePoint as P;
+    use state::SynchronizationCheckpoint as C;
+    let valid = match point {
+        P::BeforeFetch => matches!(
+            record.phase,
+            RemoteOperationPhase::FetchPrepared | RemoteOperationPhase::Reconciling
+        ),
+        P::AfterFetch => record.completed_step == Some(P::AfterFetch),
+        P::BeforeLocalUpdate => {
+            !record.reconciliation_required && record.sync_checkpoint == Some(C::LocalPrepared)
+        }
+        P::AfterLocalUpdate => {
+            !record.reconciliation_required && record.sync_checkpoint == Some(C::LocalFastForwarded)
+        }
+        P::BeforePush => {
+            !record.reconciliation_required && record.sync_checkpoint == Some(C::PushPrepared)
+        }
+        P::AfterPushReturn => {
+            !record.reconciliation_required && record.sync_checkpoint == Some(C::PushReturned)
+        }
+        P::AfterPushVerification => {
+            !record.reconciliation_required && record.sync_checkpoint == Some(C::PushVerified)
+        }
+        P::BeforeDiscovery => false, // classified outcomes release the remote reservation for index-only replay
+        // Cycle 04 exposed this boundary for manual targets before action
+        // checkpoints existed. Retain it, but never infer a retry-safe effect.
+        P::BeforeLocalMutation => record.sync_checkpoint.is_none(),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(state::recovery_required())
+    }
+}
+
 fn point_name(point: RemoteOperationSafePoint) -> &'static str {
     match point {
         RemoteOperationSafePoint::BeforeTransport => "before_transport",
@@ -157,6 +266,14 @@ fn point_name(point: RemoteOperationSafePoint) -> &'static str {
         RemoteOperationSafePoint::BeforeBatchCommit => "before_batch_commit",
         RemoteOperationSafePoint::AfterBatchCommit => "after_batch_commit",
         RemoteOperationSafePoint::BeforeLocalMutation => "before_local_mutation",
+        RemoteOperationSafePoint::BeforeFetch => "before_fetch",
+        RemoteOperationSafePoint::AfterFetch => "after_fetch",
+        RemoteOperationSafePoint::BeforeLocalUpdate => "before_local_update",
+        RemoteOperationSafePoint::AfterLocalUpdate => "after_local_update",
+        RemoteOperationSafePoint::BeforePush => "before_push",
+        RemoteOperationSafePoint::AfterPushReturn => "after_push_return",
+        RemoteOperationSafePoint::AfterPushVerification => "after_push_verification",
+        RemoteOperationSafePoint::BeforeDiscovery => "before_discovery",
     }
 }
 
@@ -168,6 +285,14 @@ fn point_order(point: RemoteOperationSafePoint) -> u8 {
         RemoteOperationSafePoint::BeforeBatchCommit => 3,
         RemoteOperationSafePoint::AfterBatchCommit => 4,
         RemoteOperationSafePoint::BeforeLocalMutation => 5,
+        RemoteOperationSafePoint::BeforeFetch => 0,
+        RemoteOperationSafePoint::AfterFetch => 1,
+        RemoteOperationSafePoint::BeforeLocalUpdate => 2,
+        RemoteOperationSafePoint::AfterLocalUpdate => 3,
+        RemoteOperationSafePoint::BeforePush => 4,
+        RemoteOperationSafePoint::AfterPushReturn => 5,
+        RemoteOperationSafePoint::AfterPushVerification => 6,
+        RemoteOperationSafePoint::BeforeDiscovery => 7,
     }
 }
 
@@ -195,9 +320,14 @@ fn acknowledge(
             RemoteSafePointOutcome::Continue,
         )
     };
+    let phase = if result == RemoteSafePointOutcome::Continue && is_sync(&record.target) {
+        phase_name(record.phase)
+    } else {
+        phase
+    };
     tx.execute("UPDATE remote_operation_records SET phase=?2,completed_step=?3,outcome=?4,updated_at=max(updated_at,?5) WHERE id=?1",
         params![record.id,phase,point_name(point),outcome,now()]).map_err(|_| state::recovery_required())?;
-    if result == RemoteSafePointOutcome::Cancelled {
+    if result == RemoteSafePointOutcome::Cancelled && !is_sync(&record.target) {
         tx.execute("UPDATE remote_polling_state SET latest_outcome='cancelled' WHERE repository_id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
             [record.id]).map_err(|_| state::recovery_required())?;
     }
@@ -216,17 +346,53 @@ pub(in super::super) fn commit_observation_batch(
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
         let record = owned(service, tx, id, owner)?;
-        if record.target.action() != RemoteOperationAction::Poll
+        let synchronization = is_sync(&record.target);
+        if synchronization {
+            if record.authority.is_some()
+                || !(record.phase == RemoteOperationPhase::FetchPrepared
+                    || record.phase == RemoteOperationPhase::Reconciling)
+                || record.completed_step != Some(RemoteOperationSafePoint::BeforeFetch)
+            {
+                return Err(state::recovery_required());
+            }
+        } else if record.target.action() != RemoteOperationAction::Poll
             || record.completed_step != Some(RemoteOperationSafePoint::BeforeBatchCommit)
         {
             return Err(state::recovery_required());
         }
-        let decision = acknowledge(tx, &record, RemoteOperationSafePoint::BeforeBatchCommit)?;
+        let decision = acknowledge(
+            tx,
+            &record,
+            if synchronization {
+                RemoteOperationSafePoint::BeforeFetch
+            } else {
+                RemoteOperationSafePoint::BeforeBatchCommit
+            },
+        )?;
         if decision != RemoteSafePointOutcome::Continue {
             return Ok(decision);
         }
-        state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
-        acknowledge(tx, &record, RemoteOperationSafePoint::AfterBatchCommit)
+        if synchronization {
+            state::persist_complete_advertisement(
+                tx,
+                id,
+                plan,
+                owner.generation,
+                observations,
+                observed_at,
+            )?;
+        } else {
+            state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
+        }
+        if synchronization {
+            // Fresh Fetch evidence cannot erase an unresolved local/push checkpoint.
+            tx.execute("UPDATE remote_operation_records SET phase=CASE WHEN reconciliation_required=1 THEN 'reconciling' ELSE 'fetch_observed' END,sync_checkpoint=CASE WHEN reconciliation_required=1 THEN sync_checkpoint ELSE 'fetch_observed' END WHERE id=?1",[record.id]).map_err(|_| state::recovery_required())?;
+            let current = state::read_operation(tx, id, owner.operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            acknowledge(tx, &current, RemoteOperationSafePoint::AfterFetch)
+        } else {
+            acknowledge(tx, &record, RemoteOperationSafePoint::AfterBatchCommit)
+        }
     })
 }
 
@@ -243,21 +409,24 @@ fn finish(
     };
     // Persist future automatic retry policy, without scheduling or delaying this
     // call. Attention states and explicit failures retain the existing policy.
-    let previous = state::read_snapshot(tx, id)?.polling().automatic_backoff();
-    let delay = match category {
-        RemoteOutcomeCategory::Completed => None,
-        RemoteOutcomeCategory::TransportUnavailable | RemoteOutcomeCategory::ProtocolRejected
-            if record.priority == RemoteOperationPriority::Poll =>
-        {
-            Some(previous.map_or(60, |delay| delay.as_secs().saturating_mul(2).min(900)))
-        }
-        _ => previous.map(|delay| delay.as_secs()),
-    };
-    let backoff = delay
-        .map(super::AutomaticBackoff::from_seconds)
-        .transpose()
-        .map_err(|_| state::recovery_required())?;
-    state::record_outcome(tx, id, category, backoff)?;
+    if !is_sync(&record.target) {
+        let previous = state::read_snapshot(tx, id)?.polling().automatic_backoff();
+        let delay = match category {
+            RemoteOutcomeCategory::Completed => None,
+            RemoteOutcomeCategory::TransportUnavailable
+            | RemoteOutcomeCategory::ProtocolRejected
+                if record.priority == RemoteOperationPriority::Poll =>
+            {
+                Some(previous.map_or(60, |delay| delay.as_secs().saturating_mul(2).min(900)))
+            }
+            _ => previous.map(|delay| delay.as_secs()),
+        };
+        let backoff = delay
+            .map(super::AutomaticBackoff::from_seconds)
+            .transpose()
+            .map_err(|_| state::recovery_required())?;
+        state::record_outcome(tx, id, category, backoff)?;
+    }
     tx.execute("UPDATE remote_operation_records SET phase=?2,outcome=?3,updated_at=max(updated_at,?4) WHERE id=?1",
         params![record.id,phase,state::outcome_name(category),now()]).map_err(|_| state::recovery_required())?;
     Ok(())
@@ -302,14 +471,26 @@ impl RepositoryService {
                     |row| row.get(0),
                 )
                 .map_err(|_| state::recovery_required())?;
-            if local_id {
+            let other_root: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",params![operation_id.to_string(), repository_id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
+            if is_sync(target) && other_root {
                 return Err(mismatch());
             }
             if let Some(record) = state::read_operation(tx, repository_id, operation_id)? {
                 if &record.target != target || record.priority != priority {
                     return Err(mismatch());
                 }
+                if record.authority.is_some()
+                    && record.phase == RemoteOperationPhase::Completed
+                    && is_sync(target)
+                {
+                    validate_index_identity(tx, repository_id, operation_id)?;
+                } else if local_id {
+                    return Err(mismatch());
+                }
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            if local_id {
+                return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
             state::read_snapshot(tx, repository_id)?;
@@ -373,6 +554,21 @@ impl RepositoryService {
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
+            if is_sync(&record.target) {
+                validate_sync_point(&record, point)?;
+            } else if matches!(
+                point,
+                RemoteOperationSafePoint::BeforeFetch
+                    | RemoteOperationSafePoint::AfterFetch
+                    | RemoteOperationSafePoint::BeforeLocalUpdate
+                    | RemoteOperationSafePoint::AfterLocalUpdate
+                    | RemoteOperationSafePoint::BeforePush
+                    | RemoteOperationSafePoint::AfterPushReturn
+                    | RemoteOperationSafePoint::AfterPushVerification
+                    | RemoteOperationSafePoint::BeforeDiscovery
+            ) {
+                return Err(state::recovery_required());
+            }
             if record
                 .completed_step
                 .is_some_and(|previous| point_order(previous) > point_order(point))
@@ -463,9 +659,10 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
-            if record.target.action() != RemoteOperationAction::Poll
+            if !(record.target.action() == RemoteOperationAction::Poll || is_sync(&record.target))
                 || category == RemoteOutcomeCategory::Completed
-                    && point != RemoteOperationSafePoint::AfterBatchCommit
+                    && (is_sync(&record.target)
+                        || point != RemoteOperationSafePoint::AfterBatchCommit)
             {
                 return Err(state::recovery_required());
             }
@@ -479,6 +676,291 @@ impl RepositoryService {
             } else {
                 RemoteSafePointOutcome::Continue
             })
+        })
+    }
+}
+
+// These crate-private transitions are consumed by Task 4, never by a caller's
+// request. Their OIDs must come from re-opened Git/worktree and scoped observations.
+#[allow(dead_code)]
+impl RepositoryService {
+    pub(crate) fn checkpoint_synchronization(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        checkpoint: state::SynchronizationCheckpoint,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::SynchronizationCheckpoint as C;
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target)
+                || record.authority.is_some()
+                || record.reconciliation_required
+            {
+                return Err(state::recovery_required());
+            }
+            let valid = match checkpoint {
+                C::FetchPrepared => record.sync_checkpoint.is_none(),
+                C::FetchObserved | C::DiscoveryPending => false, // only atomic batch/classification writes
+                C::LocalPrepared => record.sync_checkpoint == Some(C::FetchObserved),
+                C::LocalFastForwarded => {
+                    record.sync_checkpoint == Some(C::LocalPrepared)
+                        && record.completed_step
+                            == Some(RemoteOperationSafePoint::BeforeLocalUpdate)
+                }
+                C::PushPrepared => matches!(
+                    record.sync_checkpoint,
+                    Some(C::FetchObserved | C::LocalFastForwarded)
+                ),
+                C::PushReturned => {
+                    record.sync_checkpoint == Some(C::PushPrepared)
+                        && record.completed_step == Some(RemoteOperationSafePoint::BeforePush)
+                }
+                C::PushVerified => matches!(
+                    record.sync_checkpoint,
+                    Some(
+                        C::FetchObserved
+                            | C::LocalFastForwarded
+                            | C::PushPrepared
+                            | C::PushReturned
+                    )
+                ),
+            };
+            if !valid {
+                return Err(state::recovery_required());
+            }
+            let previous = &record.sync_evidence;
+            if previous.expected_oid.is_some() && previous.expected_oid != evidence.expected_oid
+                || previous.push_oid.is_some() && previous.push_oid != evidence.push_oid
+                || previous.local_oid.is_some()
+                    && previous.local_oid != evidence.local_oid
+                    && !(checkpoint == C::LocalPrepared
+                        && previous.local_oid == previous.expected_oid)
+                || checkpoint != C::FetchPrepared
+                    && (evidence.expected_oid.is_none()
+                        || evidence.local_oid.is_none()
+                        || evidence.primary_tracking_oid.is_none())
+                || matches!(
+                    checkpoint,
+                    C::PushPrepared | C::PushReturned | C::PushVerified
+                ) && (evidence.push_oid.is_none() || evidence.local_oid != evidence.push_oid)
+                || checkpoint == C::PushVerified
+                    && evidence.push_advertised_oid != evidence.push_oid
+                || checkpoint == C::FetchPrepared
+                    && (evidence.push_oid.is_some() || evidence.push_advertised_oid.is_some())
+            {
+                return Err(state::recovery_required());
+            }
+            if let Some(point) = record.completed_step {
+                let decision = acknowledge(tx, &record, point)?;
+                if decision != RemoteSafePointOutcome::Continue {
+                    return Ok(decision);
+                }
+            } else if record.cancel_requested || record.yield_requested {
+                return acknowledge(tx, &record, RemoteOperationSafePoint::BeforeFetch);
+            }
+            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?2,expected_oid=?3,local_oid=?4,tracking_oid=?5,primary_tracking_oid=?6,push_oid=?7,push_advertised_oid=?8,updated_at=max(updated_at,?9) WHERE id=?1",
+                params![record.id,checkpoint.name(),evidence.expected_oid.map(|v|v.to_string()),evidence.local_oid.map(|v|v.to_string()),evidence.tracking_oid.map(|v|v.to_string()),evidence.primary_tracking_oid.map(|v|v.to_string()),evidence.push_oid.map(|v|v.to_string()),evidence.push_advertised_oid.map(|v|v.to_string()),now()]).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Explicit restart fences the old executor but retains every unproved effect.
+    /// An ordinary duplicate and any authoritative outcome can never get a token.
+    pub(crate) fn restart_remote_synchronization(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            if &record.target != target || !is_sync(target) {
+                return Err(mismatch());
+            }
+            if record.authority.is_some() {
+                validate_index_identity(tx, id, operation_id)?;
+            } else if tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+                    [operation_id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|_| state::recovery_required())?
+            {
+                return Err(mismatch());
+            }
+            if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
+                return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            if record.generation != state::generation(tx, id)?
+                || record.sync_checkpoint.is_none()
+                    && record.completed_step == Some(RemoteOperationSafePoint::BeforeLocalMutation)
+            {
+                return Err(state::recovery_required());
+            }
+            if state::read_operation_rows(tx, id, true)?
+                .iter()
+                .any(|other| other.id != record.id)
+            {
+                return Ok(RemoteReservationOutcome::Busy);
+            }
+            if record.cancel_requested {
+                acknowledge(
+                    tx,
+                    &record,
+                    record
+                        .completed_step
+                        .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+                )?;
+                return Ok(RemoteReservationOutcome::Replay(
+                    state::read_operation(tx, id, operation_id)?
+                        .ok_or_else(state::recovery_required)?
+                        .into(),
+                ));
+            }
+            let epoch = record
+                .owner_epoch
+                .checked_add(1)
+                .ok_or_else(state::recovery_required)?;
+            tx.execute("UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,outcome=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
+        })
+    }
+
+    /// Caller must freshly prove identity, cleanliness, actual ref/worktree OIDs,
+    /// complete Fetch and independent Push advertisement/ancestry. Neither a fresh
+    /// Fetch nor the old push intent by itself authorizes another push.
+    pub(crate) fn reconcile_synchronization(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        local_oid: git2::Oid,
+        worktree_oid: git2::Oid,
+        push_advertised_oid: Option<git2::Oid>,
+        push_is_ancestor: bool,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::SynchronizationCheckpoint as C;
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target)
+                || !record.reconciliation_required
+                || record.phase != RemoteOperationPhase::Reconciling
+                || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
+                || local_oid != worktree_oid
+            {
+                return Err(state::recovery_required());
+            }
+            let evidence = &record.sync_evidence;
+            let candidate = evidence.push_oid.or(evidence.local_oid);
+            if push_is_ancestor
+                && (push_advertised_oid.is_none() || push_advertised_oid == candidate)
+            {
+                return Err(state::recovery_required());
+            }
+            // No effect was prepared: actual graph planning remains Task 4's job.
+            let (checkpoint, phase) = if matches!(
+                record.sync_checkpoint,
+                None | Some(C::FetchPrepared | C::FetchObserved)
+            ) {
+                if evidence
+                    .expected_oid
+                    .is_some_and(|expected| expected != local_oid)
+                {
+                    return Err(state::recovery_required());
+                }
+                (C::FetchObserved, "fetch_observed")
+            } else {
+                let candidate = candidate.ok_or_else(state::recovery_required)?;
+                if local_oid != candidate {
+                    if record.sync_checkpoint == Some(C::LocalPrepared)
+                        && evidence.expected_oid == Some(local_oid)
+                    {
+                        (C::FetchObserved, "fetch_observed")
+                    } else {
+                        return Err(state::recovery_required());
+                    }
+                } else if evidence.push_oid.is_some() {
+                    if record.sync_checkpoint == Some(C::PushVerified)
+                        && push_advertised_oid != Some(candidate)
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    if push_advertised_oid == Some(candidate) {
+                        (C::PushVerified, "push_verified")
+                    } else if (push_advertised_oid.is_some() && push_is_ancestor)
+                        || (push_advertised_oid.is_none()
+                            && evidence.push_advertised_oid.is_none()
+                            && !push_is_ancestor)
+                    {
+                        (C::PushPrepared, "push_prepared")
+                    } else {
+                        return Err(state::recovery_required());
+                    }
+                } else {
+                    (C::LocalFastForwarded, "local_fast_forwarded")
+                }
+            };
+            let decision = acknowledge(tx, &record, RemoteOperationSafePoint::AfterFetch)?;
+            if decision != RemoteSafePointOutcome::Continue {
+                return Ok(decision);
+            }
+            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5 WHERE id=?1",
+                params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string())]).map_err(|_|state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Persist authority and index-only handoff together before discovery. This
+    /// releases the remote slot; exact-ID replay returns inspection, not ownership.
+    pub(crate) fn classify_synchronization(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        authority: state::SynchronizationAuthority,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || record.sync_checkpoint != Some(state::SynchronizationCheckpoint::PushVerified)
+                || record.sync_evidence.local_oid != Some(authority.oid())
+                || record.sync_evidence.push_oid != Some(authority.oid())
+                || record.sync_evidence.push_advertised_oid != Some(authority.oid())
+            {
+                return Err(state::recovery_required());
+            }
+            // Verified Git authority survives cancellation/yield. Discovery is
+            // non-mutating and must remain the only possible exact-ID retry.
+            tx.execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',authoritative_kind=?2,authoritative_oid=?3,index_pending=1,outcome='completed',updated_at=max(updated_at,?4) WHERE id=?1",
+                params![record.id,authority.name(),authority.oid().to_string(),now()]).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    pub(crate) fn finish_synchronization_index(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            if &record.target != target || !is_sync(target) {
+                return Err(mismatch());
+            }
+            if record.authority.is_none() || record.phase != RemoteOperationPhase::Completed {
+                return Err(state::recovery_required());
+            }
+            validate_index_identity(tx, id, operation_id)?;
+            tx.execute("UPDATE remote_operation_records SET index_pending=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
+            Ok(())
         })
     }
 }

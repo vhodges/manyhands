@@ -88,34 +88,10 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
             PRIMARY KEY(repository_id,remote_ref)
         );
         CREATE INDEX IF NOT EXISTS remote_context_item ON remote_context_states(repository_id,kind,item_id);
-        CREATE TABLE IF NOT EXISTS remote_operation_records (
-            id INTEGER PRIMARY KEY,
-            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            operation_ulid TEXT NOT NULL, configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
-            remote_name TEXT NOT NULL, primary_branch TEXT NOT NULL,
-            primary_ref TEXT NOT NULL, primary_tracking_ref TEXT NOT NULL,
-            context_ref TEXT, context_tracking_ref TEXT, kind TEXT CHECK(kind IN ('document','ticket')),
-            item_id TEXT, local_branch TEXT,
-            action TEXT NOT NULL CHECK(action IN ('poll','synchronize_context','synchronize_primary','promote','close')),
-            priority TEXT NOT NULL CHECK(priority IN ('poll','manual')),
-            phase TEXT NOT NULL CHECK(phase IN ('reserved','advertising','persisting','completed','interrupted','cancelled','failed')),
-            completed_step TEXT CHECK(completed_step IN ('before_transport','after_advertisement','between_observations','before_batch_commit','after_batch_commit','before_local_mutation')),
-            local_oid TEXT CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
-            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
-            advertised_oid TEXT CHECK(length(advertised_oid)=40 AND advertised_oid NOT GLOB '*[^0-9a-f]*'),
-            created_at INTEGER NOT NULL CHECK(created_at >= 0), updated_at INTEGER NOT NULL CHECK(updated_at >= created_at),
-            outcome TEXT CHECK(outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
-            UNIQUE(repository_id,operation_ulid),
-            CHECK((context_ref IS NULL)=(context_tracking_ref IS NULL)),
-            CHECK((context_ref IS NULL)=(kind IS NULL)), CHECK((kind IS NULL)=(item_id IS NULL)),
-            CHECK((action IN ('poll','synchronize_primary'))=(context_ref IS NULL)),
-            CHECK((action='poll')=(local_branch IS NULL))
-        );
-        CREATE INDEX IF NOT EXISTS remote_operations_repository ON remote_operation_records(repository_id,phase,created_at);
-        CREATE TRIGGER IF NOT EXISTS remote_operation_target_immutable BEFORE UPDATE OF
-            repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,created_at
-            ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable remote operation target'); END;
     ", history=i32::from(history_unknown))).map_err(|_| recovery_required())?;
+    transaction
+        .execute_batch(REMOTE_OPERATION_SCHEMA)
+        .map_err(|_| recovery_required())?;
     if table_count == 0 {
         transaction
             .execute(
@@ -165,7 +141,9 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
                 .map_err(|_| recovery_required())?;
         }
     }
-    transaction.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting')")
+    migrate_synchronization(transaction)?;
+    transaction
+        .execute_batch(REMOTE_OPERATION_INDEXES)
         .map_err(|_| recovery_required())?;
     let has_digest = table_count == 0
         || transaction
@@ -182,6 +160,107 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         transaction.execute_batch("ALTER TABLE remote_polling_state ADD COLUMN endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32))")
             .map_err(|_| recovery_required())?;
     }
+    Ok(())
+}
+
+const REMOTE_OPERATION_SCHEMA: &str = r#"        CREATE TABLE IF NOT EXISTS remote_operation_records (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            operation_ulid TEXT NOT NULL, configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            remote_name TEXT NOT NULL, primary_branch TEXT NOT NULL,
+            primary_ref TEXT NOT NULL, primary_tracking_ref TEXT NOT NULL,
+            context_ref TEXT, context_tracking_ref TEXT, kind TEXT CHECK(kind IN ('document','ticket')),
+            item_id TEXT, local_branch TEXT,
+            action TEXT NOT NULL CHECK(action IN ('poll','synchronize_context','synchronize_primary','promote','close')),
+            priority TEXT NOT NULL CHECK(priority IN ('poll','manual')),
+            phase TEXT NOT NULL CHECK(phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling','completed','interrupted','cancelled','failed')),
+            completed_step TEXT CHECK(completed_step IN ('before_transport','after_advertisement','between_observations','before_batch_commit','after_batch_commit','before_local_mutation','before_fetch','after_fetch','before_local_update','after_local_update','before_push','after_push_return','after_push_verification','before_discovery')),
+            local_oid TEXT CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
+            tracking_oid TEXT CHECK(length(tracking_oid)=40 AND tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            advertised_oid TEXT CHECK(length(advertised_oid)=40 AND advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            created_at INTEGER NOT NULL CHECK(created_at >= 0), updated_at INTEGER NOT NULL CHECK(updated_at >= created_at),
+            outcome TEXT CHECK(outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
+            sync_checkpoint TEXT CHECK(sync_checkpoint IN ('fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','discovery_pending')),
+            expected_oid TEXT CHECK(length(expected_oid)=40 AND expected_oid NOT GLOB '*[^0-9a-f]*'),
+            primary_tracking_oid TEXT CHECK(length(primary_tracking_oid)=40 AND primary_tracking_oid NOT GLOB '*[^0-9a-f]*'),
+            push_oid TEXT CHECK(length(push_oid)=40 AND push_oid NOT GLOB '*[^0-9a-f]*'),
+            push_advertised_oid TEXT CHECK(length(push_advertised_oid)=40 AND push_advertised_oid NOT GLOB '*[^0-9a-f]*'),
+            authoritative_kind TEXT CHECK(authoritative_kind IN ('published','already_current')),
+            authoritative_oid TEXT CHECK(length(authoritative_oid)=40 AND authoritative_oid NOT GLOB '*[^0-9a-f]*'),
+            index_pending INTEGER NOT NULL DEFAULT 0 CHECK(index_pending IN (0,1)),
+            reconciliation_required INTEGER NOT NULL DEFAULT 0 CHECK(reconciliation_required IN (0,1)),
+            CHECK((authoritative_kind IS NULL)=(authoritative_oid IS NULL)),
+            CHECK(index_pending=0 OR authoritative_kind IS NOT NULL),
+            UNIQUE(repository_id,operation_ulid),
+            CHECK((context_ref IS NULL)=(context_tracking_ref IS NULL)),
+            CHECK((context_ref IS NULL)=(kind IS NULL)), CHECK((kind IS NULL)=(item_id IS NULL)),
+            CHECK((action IN ('poll','synchronize_primary'))=(context_ref IS NULL)),
+            CHECK((action='poll')=(local_branch IS NULL))
+        );
+"#;
+const REMOTE_OPERATION_INDEXES: &str = r#"        CREATE INDEX IF NOT EXISTS remote_operations_repository ON remote_operation_records(repository_id,phase,created_at);
+        CREATE TRIGGER IF NOT EXISTS remote_operation_target_immutable BEFORE UPDATE OF
+            repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,created_at
+            ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable remote operation target'); END;
+        CREATE UNIQUE INDEX IF NOT EXISTS remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling');
+"#;
+
+fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let columns = tx
+        .prepare("PRAGMA table_info(remote_operation_records)")
+        .and_then(|mut q| {
+            q.query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    let sync_columns = [
+        "sync_checkpoint",
+        "expected_oid",
+        "primary_tracking_oid",
+        "push_oid",
+        "push_advertised_oid",
+        "authoritative_kind",
+        "authoritative_oid",
+        "index_pending",
+        "reconciliation_required",
+    ];
+    let count = sync_columns
+        .iter()
+        .filter(|name| columns.iter().any(|column| column == **name))
+        .count();
+    if count == sync_columns.len() {
+        return Ok(());
+    }
+    if count != 0 {
+        return Err(recovery_required());
+    }
+    // Rebuild CHECK constraints and the active index in this same migration transaction.
+    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository; ALTER TABLE remote_operation_records RENAME TO remote_operation_records_cycle04;")
+        .map_err(|_| recovery_required())?;
+    tx.execute_batch(REMOTE_OPERATION_SCHEMA)
+        .map_err(|_| recovery_required())?;
+    for (name, definition) in [
+        (
+            "yield_requested",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(yield_requested IN (0,1))",
+        ),
+        (
+            "cancel_requested",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1))",
+        ),
+        (
+            "owner_epoch",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(owner_epoch >= 0)",
+        ),
+    ] {
+        tx.execute_batch(&format!(
+            "ALTER TABLE remote_operation_records ADD COLUMN {name} {definition}"
+        ))
+        .map_err(|_| recovery_required())?;
+    }
+    let list = columns.join(",");
+    tx.execute_batch(&format!("INSERT INTO remote_operation_records({list}) SELECT {list} FROM remote_operation_records_cycle04; DROP TABLE remote_operation_records_cycle04;"))
+        .map_err(|_| recovery_required())?;
     Ok(())
 }
 
@@ -347,6 +426,14 @@ pub enum RemoteOperationPhase {
     Interrupted,
     Cancelled,
     Failed,
+    FetchPrepared,
+    FetchObserved,
+    LocalPrepared,
+    LocalFastForwarded,
+    PushPrepared,
+    PushReturned,
+    PushVerified,
+    Reconciling,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -357,6 +444,81 @@ pub enum RemoteOperationSafePoint {
     BeforeBatchCommit,
     AfterBatchCommit,
     BeforeLocalMutation,
+    BeforeFetch,
+    AfterFetch,
+    BeforeLocalUpdate,
+    AfterLocalUpdate,
+    BeforePush,
+    AfterPushReturn,
+    AfterPushVerification,
+    BeforeDiscovery,
+}
+
+/// Action checkpoint survives interruption; terminal phase never erases effect evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SynchronizationCheckpoint {
+    FetchPrepared,
+    FetchObserved,
+    LocalPrepared,
+    LocalFastForwarded,
+    PushPrepared,
+    PushReturned,
+    PushVerified,
+    DiscoveryPending,
+}
+impl SynchronizationCheckpoint {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::FetchPrepared => "fetch_prepared",
+            Self::FetchObserved => "fetch_observed",
+            Self::LocalPrepared => "local_prepared",
+            Self::LocalFastForwarded => "local_fast_forwarded",
+            Self::PushPrepared => "push_prepared",
+            Self::PushReturned => "push_returned",
+            Self::PushVerified => "push_verified",
+            Self::DiscoveryPending => "discovery_pending",
+        }
+    }
+    fn parse(value: &str) -> Result<Self, RepositoryError> {
+        Ok(match value {
+            "fetch_prepared" => Self::FetchPrepared,
+            "fetch_observed" => Self::FetchObserved,
+            "local_prepared" => Self::LocalPrepared,
+            "local_fast_forwarded" => Self::LocalFastForwarded,
+            "push_prepared" => Self::PushPrepared,
+            "push_returned" => Self::PushReturned,
+            "push_verified" => Self::PushVerified,
+            "discovery_pending" => Self::DiscoveryPending,
+            _ => return Err(recovery_required()),
+        })
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SynchronizationEvidence {
+    pub expected_oid: Option<Oid>,
+    pub local_oid: Option<Oid>,
+    pub tracking_oid: Option<Oid>,
+    pub primary_tracking_oid: Option<Oid>,
+    pub push_oid: Option<Oid>,
+    pub push_advertised_oid: Option<Oid>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SynchronizationAuthority {
+    Published(Oid),
+    AlreadyCurrent(Oid),
+}
+impl SynchronizationAuthority {
+    pub(super) fn oid(self) -> Oid {
+        match self {
+            Self::Published(oid) | Self::AlreadyCurrent(oid) => oid,
+        }
+    }
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Published(_) => "published",
+            Self::AlreadyCurrent(_) => "already_current",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -790,7 +952,7 @@ pub(in super::super) fn configure(
         .generation
         .checked_add(1)
         .ok_or_else(recovery_required)?;
-    transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting')",[repository_id]).map_err(|_| recovery_required())?;
+    transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT id FROM remote_observation_batches WHERE repository_id=?1)",[repository_id]).map_err(|_| recovery_required())?;
     transaction
         .execute(
@@ -838,7 +1000,7 @@ pub(in super::super) fn configure_endpoints(
     digest: &[u8; 32],
 ) -> Result<i64, RepositoryError> {
     let previous = read_endpoint_digest(tx, id)?;
-    let has_history: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_observation_batches WHERE repository_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting'))", [id], |row| row.get(0))
+    let has_history: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_observation_batches WHERE repository_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling'))", [id], |row| row.get(0))
         .map_err(|_| recovery_required())?;
     let changed = previous
         .as_ref()
@@ -894,6 +1056,32 @@ pub(in super::super) fn complete_batch(
     observations: &[RemoteRefObservation],
     observed_at: i64,
 ) -> Result<i64, RepositoryError> {
+    let batch = persist_complete_advertisement(
+        transaction,
+        repository_id,
+        plan,
+        generation,
+        observations,
+        observed_at,
+    )?;
+    record_outcome(
+        transaction,
+        repository_id,
+        RemoteOutcomeCategory::Completed,
+        None,
+    )?;
+    Ok(batch)
+}
+
+/// Shared complete-advertisement model, independent of polling retry policy.
+pub(in super::super) fn persist_complete_advertisement(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: &RemoteRefPlan,
+    generation: i64,
+    observations: &[RemoteRefObservation],
+    observed_at: i64,
+) -> Result<i64, RepositoryError> {
     read_snapshot(transaction, repository_id)?;
     let policy = read_policy(transaction, repository_id)?;
     if observed_at < 0 || policy.generation != generation || policy.plan.as_ref() != Some(plan) {
@@ -942,12 +1130,6 @@ pub(in super::super) fn complete_batch(
                 params![repository_id,target.remote_ref(),target.tracking_ref(),kind,item_id.to_string(),observation.advertised_oid.to_string(),observation.tracking_oid.map(|value|value.to_string()),observed_at]).map_err(|_| recovery_required())?;
         }
     }
-    record_outcome(
-        transaction,
-        repository_id,
-        RemoteOutcomeCategory::Completed,
-        None,
-    )?;
     Ok(batch)
 }
 
@@ -982,6 +1164,11 @@ pub(in super::super) struct StoredRemoteOperation {
     pub yield_requested: bool,
     pub cancel_requested: bool,
     pub owner_epoch: i64,
+    pub sync_checkpoint: Option<SynchronizationCheckpoint>,
+    pub sync_evidence: SynchronizationEvidence,
+    pub authority: Option<SynchronizationAuthority>,
+    pub index_pending: bool,
+    pub reconciliation_required: bool,
 }
 
 fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, RepositoryError> {
@@ -1036,6 +1223,14 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         "interrupted" => RemoteOperationPhase::Interrupted,
         "cancelled" => RemoteOperationPhase::Cancelled,
         "failed" => RemoteOperationPhase::Failed,
+        "fetch_prepared" => RemoteOperationPhase::FetchPrepared,
+        "fetch_observed" => RemoteOperationPhase::FetchObserved,
+        "local_prepared" => RemoteOperationPhase::LocalPrepared,
+        "local_fast_forwarded" => RemoteOperationPhase::LocalFastForwarded,
+        "push_prepared" => RemoteOperationPhase::PushPrepared,
+        "push_returned" => RemoteOperationPhase::PushReturned,
+        "push_verified" => RemoteOperationPhase::PushVerified,
+        "reconciling" => RemoteOperationPhase::Reconciling,
         _ => return Err(recovery_required()),
     };
     let priority = match text("priority")?.as_str() {
@@ -1052,6 +1247,14 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
                 "before_batch_commit" => RemoteOperationSafePoint::BeforeBatchCommit,
                 "after_batch_commit" => RemoteOperationSafePoint::AfterBatchCommit,
                 "before_local_mutation" => RemoteOperationSafePoint::BeforeLocalMutation,
+                "before_fetch" => RemoteOperationSafePoint::BeforeFetch,
+                "after_fetch" => RemoteOperationSafePoint::AfterFetch,
+                "before_local_update" => RemoteOperationSafePoint::BeforeLocalUpdate,
+                "after_local_update" => RemoteOperationSafePoint::AfterLocalUpdate,
+                "before_push" => RemoteOperationSafePoint::BeforePush,
+                "after_push_return" => RemoteOperationSafePoint::AfterPushReturn,
+                "after_push_verification" => RemoteOperationSafePoint::AfterPushVerification,
+                "before_discovery" => RemoteOperationSafePoint::BeforeDiscovery,
                 _ => return Err(recovery_required()),
             })
         })
@@ -1068,6 +1271,109 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         || (priority == RemoteOperationPriority::Poll
             && target.action() != RemoteOperationAction::Poll)
         || (target.action() == RemoteOperationAction::Poll && local_oid.is_some())
+    {
+        return Err(recovery_required());
+    }
+    let sync_checkpoint = optional("sync_checkpoint")?
+        .as_deref()
+        .map(SynchronizationCheckpoint::parse)
+        .transpose()?;
+    let sync_evidence = SynchronizationEvidence {
+        expected_oid: oid(optional("expected_oid")?)?,
+        local_oid,
+        tracking_oid: oid(optional("tracking_oid")?)?,
+        primary_tracking_oid: oid(optional("primary_tracking_oid")?)?,
+        push_oid: oid(optional("push_oid")?)?,
+        push_advertised_oid: oid(optional("push_advertised_oid")?)?,
+    };
+    let authority = match (
+        optional("authoritative_kind")?.as_deref(),
+        oid(optional("authoritative_oid")?)?,
+    ) {
+        (None, None) => None,
+        (Some("published"), Some(oid)) => Some(SynchronizationAuthority::Published(oid)),
+        (Some("already_current"), Some(oid)) => Some(SynchronizationAuthority::AlreadyCurrent(oid)),
+        _ => return Err(recovery_required()),
+    };
+    let index_pending = flag(number("index_pending")?)?;
+    let reconciliation_required = flag(number("reconciliation_required")?)?;
+    let is_sync = matches!(
+        target.action(),
+        RemoteOperationAction::SynchronizePrimary | RemoteOperationAction::SynchronizeContext
+    );
+    let sync_phase = matches!(
+        phase,
+        RemoteOperationPhase::FetchPrepared
+            | RemoteOperationPhase::FetchObserved
+            | RemoteOperationPhase::LocalPrepared
+            | RemoteOperationPhase::LocalFastForwarded
+            | RemoteOperationPhase::PushPrepared
+            | RemoteOperationPhase::PushReturned
+            | RemoteOperationPhase::PushVerified
+            | RemoteOperationPhase::Reconciling
+    );
+    let checkpoint_phase = sync_checkpoint.map(|checkpoint| match checkpoint {
+        SynchronizationCheckpoint::FetchPrepared => RemoteOperationPhase::FetchPrepared,
+        SynchronizationCheckpoint::FetchObserved => RemoteOperationPhase::FetchObserved,
+        SynchronizationCheckpoint::LocalPrepared => RemoteOperationPhase::LocalPrepared,
+        SynchronizationCheckpoint::LocalFastForwarded => RemoteOperationPhase::LocalFastForwarded,
+        SynchronizationCheckpoint::PushPrepared => RemoteOperationPhase::PushPrepared,
+        SynchronizationCheckpoint::PushReturned => RemoteOperationPhase::PushReturned,
+        SynchronizationCheckpoint::PushVerified => RemoteOperationPhase::PushVerified,
+        SynchronizationCheckpoint::DiscoveryPending => RemoteOperationPhase::Completed,
+    });
+    let effect_prepared = matches!(
+        sync_checkpoint,
+        Some(
+            SynchronizationCheckpoint::LocalPrepared
+                | SynchronizationCheckpoint::LocalFastForwarded
+                | SynchronizationCheckpoint::PushPrepared
+                | SynchronizationCheckpoint::PushReturned
+                | SynchronizationCheckpoint::PushVerified
+                | SynchronizationCheckpoint::DiscoveryPending
+        )
+    );
+    let push_prepared = matches!(
+        sync_checkpoint,
+        Some(
+            SynchronizationCheckpoint::PushPrepared
+                | SynchronizationCheckpoint::PushReturned
+                | SynchronizationCheckpoint::PushVerified
+                | SynchronizationCheckpoint::DiscoveryPending
+        )
+    );
+    if (sync_phase && phase != RemoteOperationPhase::Reconciling && checkpoint_phase != Some(phase))
+        || (phase == RemoteOperationPhase::Reconciling && !reconciliation_required)
+        || (effect_prepared
+            && (sync_evidence.expected_oid.is_none()
+                || sync_evidence.local_oid.is_none()
+                || sync_evidence.primary_tracking_oid.is_none()))
+        || (push_prepared
+            && (sync_evidence.push_oid.is_none()
+                || sync_evidence.local_oid != sync_evidence.push_oid))
+        || (sync_checkpoint == Some(SynchronizationCheckpoint::PushVerified)
+            && sync_evidence.push_advertised_oid != sync_evidence.push_oid)
+        || (sync_checkpoint == Some(SynchronizationCheckpoint::DiscoveryPending)
+            && authority.is_none())
+        || (!is_sync
+            && (sync_phase
+                || sync_checkpoint.is_some()
+                || authority.is_some()
+                || index_pending
+                || reconciliation_required
+                || sync_evidence.expected_oid.is_some()
+                || sync_evidence.push_oid.is_some()
+                || sync_evidence.primary_tracking_oid.is_some()
+                || sync_evidence.push_advertised_oid.is_some()))
+        || (index_pending && authority.is_none())
+        || authority.is_some_and(|value| {
+            sync_checkpoint != Some(SynchronizationCheckpoint::DiscoveryPending)
+                || phase != RemoteOperationPhase::Completed
+                || reconciliation_required
+                || sync_evidence.local_oid != Some(value.oid())
+                || sync_evidence.push_oid != Some(value.oid())
+                || sync_evidence.push_advertised_oid != Some(value.oid())
+        })
     {
         return Err(recovery_required());
     }
@@ -1089,6 +1395,11 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         yield_requested: flag(number("yield_requested")?)?,
         cancel_requested: flag(number("cancel_requested")?)?,
         owner_epoch,
+        sync_checkpoint,
+        sync_evidence,
+        authority,
+        index_pending,
+        reconciliation_required,
     })
 }
 
@@ -1105,7 +1416,7 @@ pub(super) fn read_operation_rows(
     active_only: bool,
 ) -> Result<Vec<StoredRemoteOperation>, RepositoryError> {
     let query = if active_only {
-        "SELECT * FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting') ORDER BY id"
+        "SELECT * FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') ORDER BY id"
     } else {
         "SELECT * FROM remote_operation_records WHERE repository_id=?1 ORDER BY id"
     };
