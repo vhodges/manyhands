@@ -2459,7 +2459,7 @@ fn corrupt_cache_replacement_rechecks_after_the_exclusive_guard() {
     }
     let operation_id = support::operation_id();
 
-    std::thread::scope(|scope| {
+    let (first_result, second_result) = std::thread::scope(|scope| {
         let first = scope.spawn(|| {
             first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         });
@@ -2468,10 +2468,24 @@ fn corrupt_cache_replacement_rechecks_after_the_exclusive_guard() {
         });
         entered_receive.recv().unwrap();
         release_send.send(()).unwrap();
-        first.join().unwrap().unwrap();
-        second.join().unwrap().unwrap();
+        (first.join().unwrap(), second.join().unwrap())
     });
 
+    assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    // The overlapping calls must recheck under the exclusive guard, but the
+    // bounded cache lease may return Busy while replacement/migration finishes.
+    // Join both before retrying only that caller once with its original ID.
+    for (service, result) in [
+        (&first_service, first_result),
+        (&second_service, second_result),
+    ] {
+        if let Err(error) = result {
+            assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+            service
+                .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+                .unwrap();
+        }
+    }
     assert_eq!(corrupt_diagnostic_count(data.path()), 1);
     assert!(first_service.repository_snapshot(&fixture.root).is_ok());
     assert!(second_service.repository_snapshot(&fixture.root).is_ok());

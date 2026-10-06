@@ -47,7 +47,7 @@ existing-worktree requirement.
 
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
-- Task 2: implemented candidate at `f4f97118cf452004bbaf2063a2a55fc794b580c1`; independent review pending, unqualified full-test gate blocked by the recorded discovery race.
+- Task 2: implemented candidate at `f4f97118cf452004bbaf2063a2a55fc794b580c1`; normal final gates now pass after approved discovery-test Busy-contract correction (diagnosis below); fresh targeted review pending, not accepted.
 - Task 3: pending.
 - Task 4: pending.
 - Task 5: pending.
@@ -435,3 +435,140 @@ gate blocker. No push/PR/merge/closure/cleanup or Task 3 work occurred. Next:
 independent Task 2 code and verification review, resolve/route the normal-gate
 blocker before parent accepts Task 2. Native CI remains pending publication
 permission, not claimed passing.
+
+## Task 2 verification-blocker diagnosis and correction — 2026-10-06T15:47:39Z
+
+Reviewer `42a6675a-11bb-401c-ad87-403ccb42b44b` found **no source issues** in
+`9035d6b23628a8b7c7ddadddf1d86d6750b0ef73..9596bf40a32d08dd3a08386aa8427d1d8eff3ea2`,
+but verdict **BLOCK** for the normal full gate. This follow-up addresses that
+blocker only. Original implementation/replay rulings and downstream actual-state
+proof obligations remain unchanged; no Task 3 work or state implementation edit.
+Diagnosis/correction base: `9596bf40a32d08dd3a08386aa8427d1d8eff3ea2`.
+Source comparison base: `9035d6b23628a8b7c7ddadddf1d86d6750b0ef73`.
+Final correction HEAD/status are captured in
+`/tmp/manyhands-cycle05-task2-diagnosis-review-head.txt`; exact correction-range
+diff is `/tmp/manyhands-cycle05-task2-diagnosis-review.diff`.
+
+### Controlled comparison and artifact identity
+
+Parent authorized an immutable `git archive` snapshot of the exact source base
+into owned scratch, not a new branch/worktree. All Cargo invocations ran through
+Devenv FROM the existing ticket worktree. No concurrent Cargo/fixture process;
+resolved target is this ticket's actual directory, not a shared symlink.
+Snapshot manifest recorded in
+`/tmp/manyhands-cycle05-task2-diagnosis/base-snapshot.txt`.
+
+Initial purported base repetitions reused HEAD artifacts without recompilation,
+despite selecting the snapshot manifest; these **base1–3 logs are INVALID
+baseline evidence**. Preserved, not counted as comparative results. Parent then
+approved narrowly invalidating `manyhands` package artifacts only, sequentially
+with explicit ticket target directory (`cargo clean -p manyhands`, not git clean,
+not a general Cargo/dependency cleanup). The first valid base and HEAD builds
+explicitly recompiled manyhands from their respective manifest locations.
+SHA-256 identities retained in `base-identity.txt`/`head-identity.txt`:
+
+| Identity | Exact base | Pre-correction HEAD |
+| --- | --- | --- |
+| state.rs SHA-256 | `5314eba672c71e05051a461677f62e8f6042ec15cafc5169f7f295130f81fdf2` | `9c636ffe9e70f72eca00998906a6df498983b69e3f669d42e5656b0ec72e70a2` |
+| coordination.rs SHA-256 | `0372f54299a6afea209b28b9eda97262c9b935221fb35cbc02af54eae7625914` | identical |
+| discovery executable SHA-256 | `c10861131408303a489f07090ed395e92799280684991e47feacd9c1ea903977` | `5b4d75e25436db8af68568ef5cd62ad7fda6dcd52122c61adea56cdab585271a` |
+
+Executable filename is the same in both builds; SHA, source and recompilation
+logs distinguish them. Valid default whole discovery-target comparison:
+
+- Base: **59/59 passed in all three runs**, harness durations
+  5.33/5.24/5.27s; command durations 14/6/6s (first includes package rebuild).
+- HEAD: **58 passed/1 failed in all three runs**, same corrupt-cache race;
+  harness durations 5.47/5.40/5.45s; command durations 14/6/6s.
+
+This implicates changed startup work/timing, not an unrelated broad SSH failure.
+It does not quantify production performance distribution from three samples.
+Earlier failures are NOT relabelled pre-existing.
+
+### Wait/holder attribution
+
+Temporary fixed-category/duration-only instrumentation was applied to the
+existing worktree, with one diagnostic source backup tar and retained temporary
+diff outside the repository. No path, endpoint, credential or backend payload
+was logged by instrumentation. An initial diagnostic compile error (moved path)
+was corrected solely in temporary instrumentation, not production code.
+
+- Full wait/hold tracing perturbed scheduling: instrumented whole targets passed
+  3/3, so those passes are NOT comparative safety evidence.
+- Minimal timeout-only tracing reproduced a **cache** acquisition timeout at
+  **253413us** and **251130us**, not Git.
+- Holder-phase tracing reproduced specifically **cache exclusive** wait timeout
+  **250590us**. The replacement holder returned after **243993us**, with its
+  critical test hook consuming only **14us**, and migration **128540us**.
+  Remaining hold time covers replacement/marker/open/other work; no finer causal
+  partition is asserted. Close-boundary wait vs measured hold may include time
+  before/after the instrumented span and scheduling; do not infer exact additive
+  decomposition or an exact production latency from this one sample.
+
+High confidence: the reproduced failure is the bounded exclusive CACHE wait,
+and the measured hook release is prompt rather than a main-thread channel stall.
+Valid base-vs-HEAD evidence supports changed cache replacement/schema work
+interacting with the existing 250ms policy/test success assumption. Precise
+performance delta and failure probability remain unmeasured; instrumentation
+changes scheduling. No longer-lived guard scope, Git-lease policy change, or
+unbounded history scan was identified, and no speculative production refactor
+was made. The original bounded-history VM test alone is not wall-clock proof.
+
+### Approved smallest correction
+
+Parent accepted a deterministic **test caller correction**, not a production
+lease/Busy/retry change. Only
+`tests/discovery_rebuild.rs::corrupt_cache_replacement_rechecks_after_the_exclusive_guard`
+changes:
+
+1. Keep both original concurrent same-ID rebuilds, decision barrier and
+   exclusive-guard hook overlap.
+2. Join BOTH callers before any retry. Check exactly one corrupt diagnostic
+   backup immediately after the initial pair.
+3. Accept initial error ONLY if exactly `RepositoryBusy`; unexpected errors
+   fail. Retry ONLY each Busy caller ONCE with its original service/root and
+   SAME operation ID. No sleeps, retry loops, new IDs or serialized initial calls.
+4. Check exactly one backup again after retries, and retain BOTH service
+   snapshot assertions. Hooks are already one-shot/consumed; a remaining
+   critical closure shares the entered flag and cannot resend/wait on retry.
+
+The test now respects the service's existing retryable-Busy boundary while
+retaining authoritative recovery/recheck/one-replacement assertions, rather
+than requiring every concurrent attempt to finish within 250ms. Targeted fresh
+review must verify this correction still proves the invariant, not just success.
+Temporary timing instrumentation was restored byte-for-byte before formatting
+and all final checks; final production source equals pre-correction HEAD.
+
+### Commands and final uninstrumented validation
+
+Logs and exact comparative identities live outside the repository in
+`/tmp/manyhands-cycle05-task2-diagnosis/`; prior failure/timeout logs stay intact.
+`runs.txt` labels invalid initial baseline evidence; `temporary-timing.diff`
+and `diagnostic-source-backup.tar` retain instrumentation provenance.
+
+| Command | Outcome |
+| --- | --- |
+| `git archive 9035d6b23628a8b7c7ddadddf1d86d6750b0ef73` into immutable owned scratch | Selected exact baseline source; no branch/worktree/source reset |
+| `devenv shell -- cargo metadata --manifest-path <snapshot>/Cargo.toml --no-deps --format-version 1` | Confirms snapshot manifest selection; insufficient alone to prove artifact binding |
+| `devenv shell -- cargo clean --manifest-path <selected>/Cargo.toml --target-dir <ticket-target> -p manyhands` | Base and HEAD package-only invalidations succeeded; explicit source recompilation follows each |
+| `devenv shell -- cargo test --manifest-path <snapshot>/Cargo.toml --target-dir <ticket-target> --all-features --locked --test discovery_rebuild` | Three valid base runs59/59; first recompiled snapshot package |
+| `devenv shell -- cargo test --target-dir <ticket-target> --all-features --locked --test discovery_rebuild` | Three valid pre-correction HEAD runs58/59; first recompiled ticket package |
+| `devenv shell -- cargo test --all-features --locked --test discovery_rebuild` with temporary diagnostic tracing | Perturbation noted; timeout-only2/3 and holder-timing1/3 reproduce exact cache categories/durations above |
+| `devenv shell -- cargo fmt` | Exit0, corrected test formatting |
+| `devenv shell -- cargo test --all-features --locked --test discovery_rebuild` on corrected uninstrumented tree | Exit0, **59/59**, 5.37s |
+| `devenv shell -- cargo check --all-features --locked` | Exit0, command2s |
+| `devenv shell -- cargo fmt --check` | Exit0, command1s |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit0, command6s |
+| `devenv shell -- cargo test --all-features --locked` | **NORMAL default gate exit0**, command303s; **584 standard +112 SSH =696 passed**, including library152 and discovery59 |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit0, command6s; no window |
+| `git diff --check` | Exit0 |
+
+Final gate interval: `2026-10-06T15:41:54Z`–`15:47:12Z`; no test-thread
+serialization or diagnostic timing environment. Shared target now contains
+rebuilt current package artifacts. No production state/coordination edits,
+dependencies, locks, transport/Task3, scheduler, frontend or CI changes.
+
+Normal verification blocker is now resolved locally **by the approved test
+contract correction**, not by declaring old failures harmless. Task 2 still
+requires fresh targeted independent review and parent acceptance. Ticket open;
+publication/native CI/merge/closure/cleanup remain unauthorized.
