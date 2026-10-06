@@ -1478,3 +1478,42 @@ were inspected; desktop launch smoke can run. Native five-target execution stays
 pending publication authorization; workflow configuration is not execution proof.
 No push/PR/dispatch, merge, closure or cleanup authority; ticket remains open.
 This acceptance checkpoint changes documentation/comment only.
+
+## Task 6 local verification and whole-Cycle review checkpoint — 2026-10-06T20:24:37Z
+
+Final Rust/build/CI tree remains identical to tested implementation575f after
+Task5 acceptanceafb36; parent independently recomputed the recorded SHA and
+verified src/tests/manifests/locks/toolchain/CI equality. Reuse required final
+check/fmt/clippy, first NORMAL772-case gate and CLI evidence rather than repeat
+unchanged broad checks. Qualification remains: Task4 first NORMAL Busy failure
+was retained; its authorized second-pass success does not establish causality.
+
+Active DISPLAY and WAYLAND variables, existing socket and COSMIC Wayland session
+were inspected. Parent ran exactly
+`devenv shell -- cargo run --locked --features desktop --bin manyhands`, using
+owned temporary XDG data/cache directories. Actual executable launched; captured
+own-client protocol proves xdg_surface.get_toplevel and non-null wl_surface buffer
+attach/commit. It remained alive12 seconds, with no panic/NoWaylandLib/startup
+error, then parent terminated ONLY its owned smoke process group with SIGTERM.
+No manual visual/feature interaction claim. Initial live regex expected @ protocol
+IDs, whereas this backend uses #; false live-observer booleans were corrected by
+inspection of actual captured requests, NOT an additional synthetic launch.
+Protocol event payloads were removed from the owned diagnostic afterward; retained
+artifact contains build lines/safe event summary and explicit postInspection.
+Evidence: `/tmp/manyhands-cycle05-desktop-OecGTp/{desktop.log,result.json}`;
+completed2026-10-06T20:24:37.878Z. No unrelated process or source change.
+
+Whole-Cycle review is next, not yet approved. Parent final inspection raised an
+unresolved no-discard concern: sync.rs uses CheckoutBuilder.safe() without an
+explicit overwrite_ignored(false); locked git2 0.20.4 build.rs460–464 documents
+ignored overwrite default TRUE, while preflight includes untracked but not ignored.
+Review must examine incoming tracked-path collisions with existing ignored user
+files/directories; no behavioral regression or production correction has yet
+been run/made for this concern. Do not equate clean status plus safe() with a proof
+that ignored user content is preserved. Route any finding to the implementer with
+actual service red evidence before fixes; no broad runtime/privacy contract change.
+
+Five native targets remain pending publication authorization. Whole-branch review,
+any findings/fixes and associated verification, and native execution are separate
+gates; no YAML/Linux/desktop smoke is native CI proof. Ticket stays open. No
+push/PR/dispatch/merge/closure/worktree cleanup authorization exists.
