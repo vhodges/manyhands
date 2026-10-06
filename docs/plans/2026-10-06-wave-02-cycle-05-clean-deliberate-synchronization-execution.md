@@ -47,7 +47,7 @@ existing-worktree requirement.
 
 - Baseline: passed; API prerequisites reconciled (checkpoint below).
 - Task 1: complete; independent review accepted at `cc53b842373daeec07a8cfec712ba2f68555868f`.
-- Task 2: implemented candidate at `f4f97118cf452004bbaf2063a2a55fc794b580c1`; normal final gates now pass after approved discovery-test Busy-contract correction (diagnosis below); fresh targeted review pending, not accepted.
+- Task 2: complete; source review and targeted correction review accepted at `77018dc16b806c0a380bf9b02a5b926d59acf781`; normal required local gates pass.
 - Task 3: pending.
 - Task 4: pending.
 - Task 5: pending.
@@ -435,6 +435,27 @@ gate blocker. No push/PR/merge/closure/cleanup or Task 3 work occurred. Next:
 independent Task 2 code and verification review, resolve/route the normal-gate
 blocker before parent accepts Task 2. Native CI remains pending publication
 permission, not claimed passing.
+
+## Task 2 review acceptance — 2026-10-06T15:56:22Z
+
+Parent accepts Task 2 at `77018dc16b806c0a380bf9b02a5b926d59acf781`, after
+original independent source review (no source defects, verification blocker)
+and fresh targeted review `99cde9a2-9fb4-4302-831d-95754d1b2c37`.
+Targeted range: `9596bf40a32d08dd3a08386aa8427d1d8eff3ea2..77018dc16b806c0a380bf9b02a5b926d59acf781`.
+Verdict: **OK with notes**, no findings; prior local-gate blocker resolved.
+Reviewer confirmed retry still exercises the exclusive-guard recheck because
+availability is service-local; hooks are consumed safely, original ID/owner
+semantics remain, and backup/snapshot assertions are retained. Final normal
+Devenv tests: 584 standard + 112 SSH = **696 passed**; check/fmt/clippy/CLI pass.
+Parent confirmed exact clean HEAD, correction-only diff and final logs/counts.
+
+Performance notes remain: valid base/HEAD timing changed near the bounded cache
+wait; instrumentation perturbs scheduling, and no production latency distribution
+is claimed. This was source/artifact review, not a separate reviewer runtime run.
+Review artifact: `/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/46574008-7e86-4177-a9c3-7cd370167cba/task2-correction/review.md`.
+Task 3 may proceed. Actual refs/worktree/Push reconciliation, real effect and
+cross-ID recovery tests remain Tasks 4–5; native CI and whole-Cycle review remain
+pending. No publication, closure, cleanup or overall merge authority implied.
 
 ## Task 2 verification-blocker diagnosis and correction — 2026-10-06T15:47:39Z
 
