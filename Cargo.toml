@@ -28,6 +28,7 @@ toml = "0.8"
 ulid = "1"
 
 [target.'cfg(windows)'.dependencies]
+libssh2-sys = { version = "=0.3.3", features = ["openssl-on-win32", "vendored-openssl"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_Threading"] }
 
 [[bin]]
@@ -38,3 +39,15 @@ required-features = ["desktop"]
 [[bin]]
 name = "manyhands-cli"
 path = "src/bin/manyhands-cli.rs"
+
+[dev-dependencies]
+russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "process", "sync", "time", "io-util"] }
+
+[[test]]
+name = "ssh_fixture"
+harness = false
+
+[[test]]
+name = "ssh_transport"
+harness = false

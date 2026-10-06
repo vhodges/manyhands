@@ -140,6 +140,24 @@ pub struct UnlockRequest {
     pub key_id: SharedKeyId,
     pub label: String,
     pub source: KeySourceToken,
+    pub reason: UnlockReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnlockReason {
+    ProtectedKey,
+    AuthenticationAmbiguous,
+}
+
+impl UnlockReason {
+    pub fn guidance(self) -> &'static str {
+        match self {
+            Self::ProtectedKey => "Supply the passphrase for the protected key.",
+            Self::AuthenticationAmbiguous => {
+                "The SSH connection could not be verified. The key may need a passphrase, the server may have rejected it, or the connection may have failed. You can supply a passphrase once or cancel."
+            }
+        }
+    }
 }
 
 impl fmt::Debug for UnlockRequest {
@@ -149,6 +167,7 @@ impl fmt::Debug for UnlockRequest {
             .field("key_id", &self.key_id)
             .field("label", &self.label)
             .field("source", &self.source)
+            .field("reason", &self.reason)
             .finish()
     }
 }
@@ -271,14 +290,19 @@ impl<P: SessionCredentialProvider> SessionCredentials<P> {
         }
     }
 
+    /// Reports only whether the selected key and observed source match.
+    pub fn has_cached_passphrase(&self, request: &UnlockRequest) -> bool {
+        self.cached.as_ref().is_some_and(|cached| {
+            cached.key_id == request.key_id && cached.source == request.source
+        })
+    }
+
     pub fn with_passphrase<T>(
         &mut self,
         request: UnlockRequest,
         use_passphrase: impl FnOnce(&str) -> Result<T, PassphraseUseFailure>,
     ) -> Result<T, SessionUnlockFailure> {
-        let cache_matches = self.cached.as_ref().is_some_and(|cached| {
-            cached.key_id == request.key_id && cached.source == request.source
-        });
+        let cache_matches = self.has_cached_passphrase(&request);
 
         if cache_matches {
             let result = use_passphrase(
@@ -359,6 +383,7 @@ mod tests {
             key_id: SharedKeyId::new(),
             label: "primary".to_owned(),
             source: KeySourceToken::observe(&path).unwrap(),
+            reason: UnlockReason::ProtectedKey,
         };
         let drops = Arc::new(AtomicUsize::new(0));
         let response = || {

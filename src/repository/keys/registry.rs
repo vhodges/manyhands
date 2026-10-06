@@ -564,7 +564,7 @@ fn shared_key_stored_path(
     Ok(path)
 }
 
-pub(in crate::repository) fn migrate_material_schema(
+pub(in super::super) fn migrate_material_schema(
     transaction: &Transaction<'_>,
 ) -> Result<(), RepositoryError> {
     transaction

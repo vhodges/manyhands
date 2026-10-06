@@ -46,6 +46,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
+            git \
+            openssl \
             libasound2-dev \
             libfontconfig-dev \
             libglib2.0-dev \
@@ -57,6 +59,38 @@ jobs:
             libxkbcommon-x11-dev \
             pkg-config
 
+      - name: Install macOS fixture dependencies
+        if: matrix.os == 'macos'
+        run: |
+          brew install git openssl@3
+          brew --prefix openssl@3 | sed 's|$|/bin|' >> "$GITHUB_PATH"
+
+      - name: Provision native SSH fixture helpers
+        shell: pwsh
+        run: |
+          # Git for Windows may omit standalone aliases for built-in helpers.
+          # Check the same capabilities used by the shell-free fixture fallback.
+          $git = (Get-Command git -ErrorAction Stop).Source
+          $builtins = & $git --list-cmds=builtins
+          if ($LASTEXITCODE -ne 0) { throw "Git helper discovery failed" }
+          foreach ($name in @("upload-pack", "receive-pack")) {
+            if ($builtins -notcontains $name) {
+              throw "Required Git helper is unavailable"
+            }
+          }
+          # Preserve the runner's native tools: Git's usr/bin also contains an
+          # MSYS Perl that cannot configure the vendored MSVC OpenSSL build.
+          if ($IsWindows) {
+            $perl = (Get-Command perl -ErrorAction Stop).Source
+            Write-Output "OpenSSL build Perl: $perl"
+            & $perl -MIPC::Cmd -e 'exit($^O ne q(MSWin32))'
+            if ($LASTEXITCODE -ne 0) { throw "Native Perl with IPC::Cmd is required" }
+          }
+          # Native runner OpenSSL generates the later external RSA PEM fixture.
+          $openssl = (Get-Command openssl -ErrorAction Stop).Source
+          & $openssl version
+          if ($LASTEXITCODE -ne 0) { throw "External key fixture generator is unavailable" }
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -66,6 +100,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-on-failure: true
 
       - name: Build release binaries
         run: cargo build --locked --release --all-features --bins --target ${{ matrix.target }}
@@ -83,7 +118,7 @@ jobs:
           }
 
       - name: Test headless credential and platform contracts
-        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4

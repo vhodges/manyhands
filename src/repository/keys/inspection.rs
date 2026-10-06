@@ -68,6 +68,7 @@ impl RepositoryService {
                     key_id: registration.id,
                     label: registration.label.clone(),
                     source: source.clone(),
+                    reason: UnlockReason::ProtectedKey,
                 },
                 |passphrase| {
                     let validated: Result<(), KeyMaterialError> = (|| {

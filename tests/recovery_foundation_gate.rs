@@ -24,6 +24,109 @@ use rusqlite::{Connection, params};
 mod support;
 
 #[test]
+fn corrupt_recovery_publishes_permanent_host_trust_fence() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let marker = data.path().join("ssh-host-trust-reapproval-required");
+    let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+    for _ in 0..2 {
+        fs::write(&registry, b"structurally corrupt registry").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read(&marker).unwrap(),
+            b"manyhands SSH host trust reapproval required v1\n"
+        );
+    }
+}
+
+#[test]
+fn corrupt_recovery_marker_failure_preserves_original_database() {
+    for directory in [false, true] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        let marker = data.path().join("ssh-host-trust-reapproval-required");
+        if directory {
+            fs::create_dir(&marker).unwrap();
+        } else {
+            fs::write(&marker, b"invalid version").unwrap();
+        }
+        let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+        fs::write(&registry, b"structurally corrupt registry").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        assert!(
+            service
+                .rebuild_repository(RebuildRepositoryRequest {
+                    root: fixture.root.clone(),
+                    operation_id: OperationId::new(),
+                })
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&registry).unwrap(),
+            b"structurally corrupt registry"
+        );
+    }
+}
+
+#[test]
+fn ordinary_rebuild_preserves_host_pins_and_repository_registration() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+    let key =
+        ssh_key::PublicKey::from(ssh_key::private::Ed25519Keypair::from_seed(&[42; 32]).public);
+    let fingerprint = key.fingerprint(ssh_key::HashAlg::Sha256).to_string();
+    let connection = Connection::open(&registry).unwrap();
+    connection
+        .execute(
+            "INSERT INTO ssh_host_pins VALUES ('example.invalid', 22, 'ssh-ed25519', ?1)",
+            [&fingerprint],
+        )
+        .unwrap();
+    drop(connection);
+    service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    drop(service);
+    let _service = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(&registry).unwrap();
+    let stored: String = connection
+        .query_row(
+            "SELECT sha256 FROM ssh_host_pins WHERE host='example.invalid' AND port=22",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, fingerprint);
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM repositories", [], |row| row
+                .get::<_, usize>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        !data
+            .path()
+            .join("ssh-host-trust-reapproval-required")
+            .exists()
+    );
+}
+
+#[test]
 fn common_git_lease_child() {
     let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
         return;

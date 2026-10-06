@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
     fmt,
-    io::Read,
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread,
@@ -10,7 +9,7 @@ use std::{
 #[cfg(unix)]
 use std::{
     ffi::CString,
-    io::Write,
+    io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,
@@ -30,6 +29,7 @@ mod coordination;
 mod discovery;
 pub mod keys;
 mod recovery;
+pub mod transport;
 
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
@@ -2855,6 +2855,12 @@ impl RepositoryService {
             Err(error) if is_structural_sqlite_corruption(&error) => {
                 self.run_corrupt_cache_hook(&self.corrupt_cache_critical_hook, operation, root)?;
                 self.check_failure(FailurePoint::BeforeCorruptCacheReplacement, operation, root)?;
+                transport::trust::publish_reapproval_marker(
+                    self.registry_path
+                        .parent()
+                        .expect("registry data directory"),
+                )
+                .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
                 replace_corrupt_registry(&self.registry_path, root)?;
                 let mut connection = open_registry(&self.registry_path, &mut |_| {})
                     .map_err(|error| error.for_operation(operation, root))?;
@@ -3180,8 +3186,8 @@ impl RepositoryService {
             return Err(error);
         }
         if let Some(name) = request.name.as_deref() {
-            let remote = match repository.find_remote(name) {
-                Ok(remote) => remote,
+            match repository.find_remote(name) {
+                Ok(_) => {}
                 Err(error) if error.code() == git2::ErrorCode::NotFound => {
                     self.complete_lifecycle(&root, operation, record)?;
                     return Err(RepositoryError::new(
@@ -3195,10 +3201,8 @@ impl RepositoryService {
                     self.complete_lifecycle(&root, operation, record)?;
                     return Err(RepositoryError::git(operation, Some(root), error));
                 }
-            };
-            if !remote.url().is_some_and(|fetch| {
-                ssh_compatible(fetch) && ssh_compatible(remote.pushurl().unwrap_or(fetch))
-            }) {
+            }
+            if !publication_remote_eligible_for(&repository, &root, name, operation)? {
                 self.complete_lifecycle(&root, operation, record)?;
                 return Err(RepositoryError::new(
                     operation,
@@ -7956,88 +7960,15 @@ fn publication_remote_eligible_for(
             ));
         }
     };
-    let Some(fetch) = remote.url() else {
-        return Ok(false);
-    };
-    Ok(ssh_compatible(fetch) && ssh_compatible(remote.pushurl().unwrap_or(fetch)))
-}
-
-fn ssh_compatible(url: &str) -> bool {
-    if let Some(rest) = url.strip_prefix("ssh://") {
-        let Some((authority, path)) = rest.split_once('/') else {
-            return false;
-        };
-        return !authority.is_empty()
-            && !path.is_empty()
-            && authority.matches('@').count() <= 1
-            && !authority.contains(['/', '\\'])
-            && !authority.contains(char::is_whitespace)
-            && ssh_authority_compatible(authority);
-    }
-    if url.contains("://") || url.contains('\\') || url.contains(char::is_whitespace) {
-        return false;
-    }
-    let Some((host, path)) = url.split_once(':') else {
-        return false;
-    };
-    let (user, hostname) = host
-        .split_once('@')
-        .map_or((None, host), |(user, hostname)| (Some(user), hostname));
-    !host.is_empty()
-        && !path.is_empty()
-        && !hostname.is_empty()
-        && host.matches('@').count() <= 1
-        && user.is_none_or(valid_scp_user)
-        && valid_scp_host(hostname)
-        && !(host.len() == 1 && host.as_bytes()[0].is_ascii_alphabetic())
-}
-
-fn valid_scp_user(user: &str) -> bool {
-    !user.is_empty()
-        && user
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-}
-
-fn valid_scp_host(host: &str) -> bool {
-    !matches!(host, "file" | "http" | "https")
-        && !host.starts_with(['.', '/'])
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
-        && host
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && host
-            .bytes()
-            .last()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-}
-
-fn ssh_authority_compatible(authority: &str) -> bool {
-    let host_port = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host_port)| host_port);
-    if let Some(rest) = host_port.strip_prefix('[') {
-        let Some((host, port)) = rest.split_once(']') else {
-            return false;
-        };
-        return !host.is_empty()
-            && match port {
-                "" => true,
-                port if port.starts_with(':') => valid_ssh_port(&port[1..]),
-                _ => false,
-            };
-    }
-    match host_port.split_once(':') {
-        Some((host, port)) => !host.is_empty() && valid_ssh_port(port),
-        None => !host_port.is_empty(),
-    }
-}
-
-fn valid_ssh_port(port: &str) -> bool {
-    port.parse::<u16>().is_ok()
+    drop(remote);
+    Ok([
+        transport::SshDirection::Fetch,
+        transport::SshDirection::Push,
+    ]
+    .into_iter()
+    .all(|direction| {
+        transport::endpoint::configured_remote_endpoint(repository, name, direction).is_ok()
+    }))
 }
 
 fn resolve_identity(
@@ -8144,8 +8075,9 @@ fn remote_info_for(
             name: name.to_owned(),
             fetch_url: fetch_url.to_owned(),
             push_url: remote.pushurl().unwrap_or(fetch_url).to_owned(),
-            publication_eligible: ssh_compatible(fetch_url)
-                && ssh_compatible(remote.pushurl().unwrap_or(fetch_url)),
+            publication_eligible: publication_remote_eligible_for(
+                repository, root, name, operation,
+            )?,
         });
     }
     remotes.sort_by(|left, right| left.name.cmp(&right.name));
