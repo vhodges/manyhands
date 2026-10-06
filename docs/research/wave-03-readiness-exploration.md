@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 Editor and API Readiness Exploration"
 date: 2026-10-06
-status: proposed
+status: approved
 author: "Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -19,8 +19,10 @@ and does not change the Wave 03 entry gate or ordered implementation Cycles.
 The user authorized ticket creation and planning, and selected these boundaries:
 editor plus provisional API audit; small host adapters; Zorite first; assess
 Velotype on a blocker but request approval before executable extraction.
-The contract, design and implementation plan are proposed. Executable probes
-require their approval and explicit execution authorization.
+The user approved the contract, design and implementation plan on 2026-10-06
+at reviewed revision `aa51f96`. Executable probes still require explicit
+execution authorization; document approval does not authorize implementation,
+publication, merge, closure or cleanup.
 
 - [Ticket](../../.manyhands/tickets/01M48S808PF2D8ZWVYM918RK2M/ticket.md).
 - [Design](../plans/2026-10-06-wave-03-readiness-exploration-design.md).

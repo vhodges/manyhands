@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 Readiness Exploration Design"
 date: 2026-10-06
-status: proposed
+status: approved
 author: "Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,20 +14,21 @@ id: "01M48S808QBNHZGCW88DVDE28F"
 **Plan:** [Implementation](2026-10-06-wave-03-readiness-exploration-implementation.md).
 **Ticket:** [01M48S808PF2D8ZWVYM918RK2M](../../.manyhands/tickets/01M48S808PF2D8ZWVYM918RK2M/ticket.md).
 
-Proposed for review; execution remains unauthorized. The user selected editor
-plus provisional API audit, small host adapters only, and source assessment
-followed by a checkpoint before executable Velotype extraction.
+Approved by the user on 2026-10-06 at reviewed revision `aa51f96`; execution
+remains unauthorized. The user selected editor plus provisional API audit,
+small host adapters only, and source assessment followed by a checkpoint
+before executable Velotype extraction.
 
 ## Architecture and containment
 
-Keep the single root Cargo package. After approval, add an optional exact
+Keep the single root Cargo package. After execution authorization, add an optional exact
 `zorite-editor = "=0.10.0"` dependency, an opt-in `editor-probe` feature including
 `desktop`, one explicitly declared example and one explicitly declared test
 target requiring that feature. Do not create a workspace, second package or
 production entry point. The headless default library/CLI remain free of GPUI;
 no GPUI type enters `src/lib.rs`-reachable domain modules.
 
-Proposed file layout:
+Planned file layout:
 
 ```text
 Cargo.toml, Cargo.lock                       # opt-in dependency/target only
@@ -239,5 +240,5 @@ failed checks and source-only results remain visible.
 | Probe retention/selection | Decision gate | Recommend retention/removal and editor adoption separately; no cleanup, closure or selection by report alone. |
 
 No further product-policy question is presently needed: the answered boundaries
-allow a safe proposed plan. Material findings during execution return to the
+define the approved bounded plan. Material findings during execution return to the
 user before excluded changes, dependency selection or scope expansion.

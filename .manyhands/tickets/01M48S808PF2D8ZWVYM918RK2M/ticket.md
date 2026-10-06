@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "plan-review"
+status: "plan-approved"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -16,12 +16,12 @@ relax the approved Wave entry gate or reorder its implementation Cycles.
 
 ## Authorized Now
 
-Create this ticket, its canonical branch/worktree, and detailed reviewable
-planning artifacts. Review gaps, ambiguities and risks, and ask material
-questions. No executable feasibility probes, production implementation,
-publishing, merge, closure or cleanup are authorized by this planning request.
+The user approved all three planning documents on 2026-10-06 at reviewed
+revision `aa51f96` and authorized updating/committing their status with a ticket
+approval comment in the same commit. No executable feasibility probes,
+production implementation, publishing, merge, closure or cleanup are authorized.
 
-## Proposed Exploration
+## Approved Exploration
 
 - Evaluate pinned Zorite first for one compatible GPUI Kit graph, faithful
   Markdown rich/source editing, host-controlled resources and persistence,
@@ -50,8 +50,10 @@ publishing, merge, closure or cleanup are authorized by this planning request.
 - [x] Write exploration contract, design and detailed implementation plan.
 - [x] Audit plan decisions, evidence claims, risks and cross-document consistency.
 - [x] Prepare artifacts for user review and explicit execution authorization.
+- [x] Receive user approval of the contract, design and implementation plan.
+- [ ] Receive explicit execution authorization.
 
-## Proposed Approval Artifacts
+## Approved Planning Artifacts
 
 - [Exploration contract](../../../docs/research/wave-03-readiness-exploration.md).
 - [Design and decision audit](../../../docs/plans/2026-10-06-wave-03-readiness-exploration-design.md).
@@ -59,7 +61,8 @@ publishing, merge, closure or cleanup are authorized by this planning request.
 
 The user selected editor plus provisional API audit, small host adapters only,
 and source assessment/checkpoint before executable Velotype extraction. These
-answers bound the plan, not its execution. Approval remains pending.
+answers bound the plan, not its execution. All three documents are approved;
+execution authorization remains pending.
 
 ## Governing Sources
 

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 Readiness Exploration Implementation Plan"
 date: 2026-10-06
-status: proposed
+status: approved
 author: "Codex"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,9 +10,10 @@ id: "01M48S808QSMSGWP5B2NQ65AQC"
 
 # Wave 03 Readiness Exploration Implementation Plan
 
-> Do not execute this plan until the user approves the exploration contract,
-> design and plan and explicitly authorizes executable investigation. Planning
-> approval alone is not execution, publication, merge or closure authorization.
+> The user approved the exploration contract, design and plan on 2026-10-06
+> at reviewed revision `aa51f96`. Do not execute this plan until the user
+> explicitly authorizes executable investigation. Document approval alone is
+> not execution, publication, merge or closure authorization.
 
 **Goal:** Obtain reproducible editor feasibility evidence and a complete
 provisional CLI/desktop API inventory without starting Wave 03 implementation.
@@ -31,7 +32,7 @@ mutate other Wave 02 worktrees. A later delegation choice requires authorization
 
 | Item | Recorded state |
 | --- | --- |
-| Current user authorization | File ticket/branch/worktree; draft and review plan; ask material questions. No executable probe authorized. |
+| Current user authorization | All three documents approved on 2026-10-06 at reviewed revision `aa51f96`; update approval status and commit it with the ticket approval comment. No executable probe authorized. |
 | User scope decision | Editor plus provisional API audit. |
 | Adaptation boundary | Small host adapters only; stop before GPUI upgrades, vendoring, forks or editor-core rewrites. |
 | Fallback boundary | Source-assess Velotype after Zorite blockage; approval before extraction/executable evaluation. |
@@ -353,4 +354,5 @@ answered. Material unknowns are named execution gates, not hidden assumptions:
 compiled GPUI compatibility, pinned editor fidelity/undo/input, safe resource
 hooks, test-context availability and actual rendered-response measurements.
 No Rust probe, native journey, editor selection or final API readiness is
-claimed complete. Request approval before Task 1 execution.
+claimed complete. All three documents are approved; request explicit execution
+authorization before Task 1.
