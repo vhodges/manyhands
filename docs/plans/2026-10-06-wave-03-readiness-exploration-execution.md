@@ -63,7 +63,7 @@ reopen parent coordination; no polling/sleep loop or unnecessary blocking waits.
 | Task | State | Implementation range / evidence | Independent review | Next action |
 | --- | --- | --- | --- | --- |
 | 1 preflight/baseline | complete | Six commands passed at `a416d83`, unchanged source/lockfile; evidence below | READY (`c0df9b7e`) | No repeat broad checks until Rust/dependencies change. |
-| 2 API inventory | written; corrections required | `a416d83..83572f7`; one new inventory document, 106 rows | BLOCK (`33978e7d`): one P1, two P2 findings accepted | Same implementer corrects source-observation, read-side-effect and outcome-name claims; fresh review follows. |
+| 2 API inventory | corrected; review output retry pending | Inventory `83572f7`; fixes `6d4e631..0906c3e`, sole-file correction | Reviewer content says ready, but run `44c2bbf7` failed required-output delivery | Retry fresh read-only review with ordinary Markdown report; Task 3 remains gated. |
 | 3 candidate/graph | pending | none | pending | Resolve exact 0.10.0 without changing locked GPUI identity. |
 | 4 fixture/session | pending; Task 3-dependent executable target | none | pending | Build independent goldens and reject false/missing evidence. |
 | 5 native host | pending | none | pending | Embed editor using Kit and thin adapters only. |
@@ -130,9 +130,33 @@ all three findings against actual baseline source and accepted them:
   writable SQLite; document its read-side effects with operation-list evidence.
 - P2: key-clear outcome is `AlreadyCleared`, not `NoSelection`.
 
-Fixes return to the existing implementer, followed by independent fresh review.
-Reports live under the same workflow artifact directory's
+Same implementer applied all three corrections in
+`0906c3e3edba6cb9c779afdd9e405054be7ab6b6`, sole-file diff from `6d4e631`.
+Coverage remains 106 rows; source/link/anchor/whitespace validation passed.
+Reports from the first pass live under that workflow artifact directory's
 `api-audit/{handoff,review}.md`. No project source/Cargo/lockfile changes occurred.
+
+### Review delivery infrastructure blocker and same-protocol retry
+
+Workflow `e6282a86-cd83-4c72-bcbd-93249f9d7fce`, reviewer child
+`44c2bbf7-f44a-49db-9bfb-05a432250667`, failed terminal output delivery:
+`Required file-only output was not produced` at its configured
+`api-corrections/review.json` artifact path. Preserved reviewer output reports
+ready/no findings with source references, but a failed run is not a successful
+workflow gate. Task 3 never launched.
+
+Parent inspected terminal workflow state, correction handoff, preserved review
+and clean tracked/staged checkout at `0906c3e`. No partial source mutation
+requires recovery. Same-protocol retry uses a fresh read-only reviewer and
+ordinary Markdown file output, without the failed structured/file-only pairing.
+Resuming the failed reviewer would retain that same output contract; the new
+launch is a corrected-contract retry, not a change of execution mode/model or
+an attempt to redo completed implementation. Do not repeat baseline/fixes.
+
+Artifacts for the failed pass are retained under workflow
+`e6282a86-cd83-4c72-bcbd-93249f9d7fce`: correction handoff and terminal workflow
+receipt, plus child `44c2bbf7`'s preserved reviewer output. Await successful
+review handoff before starting candidate dependencies.
 
 ## Verification policy
 
