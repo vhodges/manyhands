@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fmt, time::Duration};
 
 use git2::Oid;
 
@@ -187,7 +183,6 @@ pub struct RemoteOperationTarget {
     context_ref: Option<RemoteRefTarget>,
     item: Option<(AuthoringKind, ItemId)>,
     local_branch: Option<String>,
-    worktree: Option<PathBuf>,
 }
 
 impl RemoteOperationTarget {
@@ -199,7 +194,6 @@ impl RemoteOperationTarget {
             context_ref: None,
             item: None,
             local_branch: None,
-            worktree: None,
         }
     }
 
@@ -211,7 +205,6 @@ impl RemoteOperationTarget {
             context_ref: None,
             item: None,
             local_branch: Some(plan.primary_branch().to_owned()),
-            worktree: None,
         }
     }
 
@@ -220,7 +213,6 @@ impl RemoteOperationTarget {
         action: RemoteOperationAction,
         kind: AuthoringKind,
         item_id: ItemId,
-        worktree: &Path,
     ) -> Result<Self, RemoteOperationTargetError> {
         if !matches!(
             action,
@@ -243,7 +235,6 @@ impl RemoteOperationTarget {
             context_ref: Some(context_ref),
             item: Some((kind, item_id)),
             local_branch: Some(local_branch),
-            worktree: Some(worktree.to_owned()),
         })
     }
 
@@ -269,10 +260,6 @@ impl RemoteOperationTarget {
 
     pub fn local_branch(&self) -> Option<&str> {
         self.local_branch.as_deref()
-    }
-
-    pub fn worktree(&self) -> Option<&Path> {
-        self.worktree.as_deref()
     }
 }
 
@@ -320,8 +307,7 @@ impl fmt::Display for RemoteOutcomeCategory {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteRefObservation {
-    remote_ref: String,
-    tracking_ref: Option<String>,
+    target: Option<RemoteRefTarget>,
     advertised_oid: Oid,
     tracking_oid: Option<Oid>,
     classification: RemoteRefClassification,
@@ -336,22 +322,25 @@ impl RemoteRefObservation {
         tracking_oid: Option<Oid>,
     ) -> Option<Self> {
         let classification = plan.classify_advertised_ref(remote_ref)?;
-        let tracking_ref = plan.tracking_ref_for(remote_ref);
+        let target = plan.target_for_advertised_ref(remote_ref);
         Some(Self {
-            remote_ref: remote_ref.to_owned(),
-            tracking_ref,
+            target,
             advertised_oid,
             tracking_oid,
             classification,
         })
     }
 
-    pub fn remote_ref(&self) -> &str {
-        &self.remote_ref
+    pub fn target(&self) -> Option<&RemoteRefTarget> {
+        self.target.as_ref()
+    }
+
+    pub fn remote_ref(&self) -> Option<&str> {
+        self.target.as_ref().map(RemoteRefTarget::remote_ref)
     }
 
     pub fn tracking_ref(&self) -> Option<&str> {
-        self.tracking_ref.as_deref()
+        self.target.as_ref().map(RemoteRefTarget::tracking_ref)
     }
 
     pub fn advertised_oid(&self) -> Oid {
@@ -397,8 +386,7 @@ impl fmt::Display for RemoteContextState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteContextSnapshot {
-    remote_ref: String,
-    tracking_ref: Option<String>,
+    target: Option<RemoteRefTarget>,
     kind: Option<AuthoringKind>,
     item_id: Option<ItemId>,
     advertised_oid: Option<Oid>,
@@ -411,8 +399,7 @@ impl RemoteContextSnapshot {
     #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        remote_ref: String,
-        tracking_ref: Option<String>,
+        target: Option<RemoteRefTarget>,
         kind: Option<AuthoringKind>,
         item_id: Option<ItemId>,
         advertised_oid: Option<Oid>,
@@ -421,8 +408,7 @@ impl RemoteContextSnapshot {
         state: RemoteContextState,
     ) -> Self {
         Self {
-            remote_ref,
-            tracking_ref,
+            target,
             kind,
             item_id,
             advertised_oid,
@@ -432,12 +418,16 @@ impl RemoteContextSnapshot {
         }
     }
 
-    pub fn remote_ref(&self) -> &str {
-        &self.remote_ref
+    pub fn target(&self) -> Option<&RemoteRefTarget> {
+        self.target.as_ref()
+    }
+
+    pub fn remote_ref(&self) -> Option<&str> {
+        self.target.as_ref().map(RemoteRefTarget::remote_ref)
     }
 
     pub fn tracking_ref(&self) -> Option<&str> {
-        self.tracking_ref.as_deref()
+        self.target.as_ref().map(RemoteRefTarget::tracking_ref)
     }
 
     pub fn kind(&self) -> Option<AuthoringKind> {

@@ -12,7 +12,7 @@ pub use state::{
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, str::FromStr, time::Duration};
+    use std::{str::FromStr, time::Duration};
 
     use git2::Oid;
 
@@ -72,6 +72,21 @@ mod tests {
             "main:refs/heads/evil",
             "main\nnext",
             "main\0next",
+        ] {
+            assert_eq!(
+                RemoteRefPlan::from_configuration("origin", primary),
+                Err(RemoteRefPlanError::InvalidPrimaryBranch)
+            );
+        }
+    }
+
+    #[test]
+    fn ref_plan_rejects_primary_names_reserved_for_context_families() {
+        for primary in [
+            "manyhands/document",
+            "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "manyhands/ticket",
+            "manyhands/ticket/01BX5ZZKBKACTAV9WEVGEMMVRZ",
         ] {
             assert_eq!(
                 RemoteRefPlan::from_configuration("origin", primary),
@@ -242,7 +257,6 @@ mod tests {
         assert_eq!(poll.context_ref(), None);
         assert_eq!(poll.item(), None);
         assert_eq!(poll.local_branch(), None);
-        assert_eq!(poll.worktree(), None);
 
         let item_id = ItemId::from_str(TICKET_ID).unwrap();
         let context = RemoteOperationTarget::for_context(
@@ -250,7 +264,6 @@ mod tests {
             RemoteOperationAction::SynchronizeContext,
             AuthoringKind::Ticket,
             item_id.clone(),
-            Path::new("/worktrees/ticket"),
         )
         .unwrap();
         assert_eq!(context.item(), Some((AuthoringKind::Ticket, &item_id)));
@@ -258,7 +271,6 @@ mod tests {
             context.local_branch(),
             Some("manyhands/ticket/01BX5ZZKBKACTAV9WEVGEMMVRZ")
         );
-        assert_eq!(context.worktree(), Some(Path::new("/worktrees/ticket")));
         assert_eq!(
             context.context_ref().unwrap().tracking_ref(),
             "refs/remotes/origin/manyhands/ticket/01BX5ZZKBKACTAV9WEVGEMMVRZ"
@@ -269,10 +281,23 @@ mod tests {
                 RemoteOperationAction::Poll,
                 AuthoringKind::Ticket,
                 item_id,
-                Path::new("/worktrees/ticket"),
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn operation_targets_do_not_retain_or_render_raw_worktree_paths() {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ItemId::from_str(TICKET_ID).unwrap(),
+        )
+        .unwrap();
+
+        assert!(!format!("{target:?}").contains("worktree"));
     }
 
     #[test]
@@ -299,6 +324,43 @@ mod tests {
         let outcome = RemoteObservationOutcome::new(RemoteOutcomeCategory::Completed, snapshot);
         assert_eq!(outcome.category(), RemoteOutcomeCategory::Completed);
         assert_eq!(outcome.snapshot().observations().len(), 1);
+    }
+
+    #[test]
+    fn observation_does_not_retain_unvalidated_ref_text() {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &plan,
+            "refs/heads/manyhands/document/private-marker\nnext",
+            Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            observation.classification(),
+            &RemoteRefClassification::MalformedContext
+        );
+        assert_eq!(observation.remote_ref(), None);
+        assert_eq!(observation.tracking_ref(), None);
+        assert!(!format!("{observation:?}").contains("private-marker"));
+    }
+
+    #[test]
+    fn context_snapshot_accepts_only_validated_ref_targets() {
+        let snapshot = RemoteContextSnapshot::new(
+            None,
+            None,
+            None,
+            Some(Oid::from_str("1111111111111111111111111111111111111111").unwrap()),
+            None,
+            RemotePublicationEvidence::NeverPublished,
+            RemoteContextState::Malformed,
+        );
+
+        assert_eq!(snapshot.target(), None);
+        assert_eq!(snapshot.remote_ref(), None);
+        assert_eq!(snapshot.tracking_ref(), None);
     }
 
     #[test]

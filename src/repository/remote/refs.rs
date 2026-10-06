@@ -38,7 +38,10 @@ impl RemoteRefPlan {
         if !is_valid_git_short_name(remote_name) {
             return Err(RemoteRefPlanError::InvalidRemoteName);
         }
-        if !is_valid_git_short_name(primary_branch) || primary_branch == "HEAD" {
+        if !is_valid_git_short_name(primary_branch)
+            || primary_branch == "HEAD"
+            || is_reserved_context_family(primary_branch)
+        {
             return Err(RemoteRefPlanError::InvalidPrimaryBranch);
         }
 
@@ -98,15 +101,22 @@ impl RemoteRefPlan {
     }
 
     pub fn tracking_ref_for(&self, remote_ref: &str) -> Option<String> {
+        self.target_for_advertised_ref(remote_ref)
+            .map(|target| target.tracking_ref)
+    }
+
+    pub(crate) fn target_for_advertised_ref(&self, remote_ref: &str) -> Option<RemoteRefTarget> {
         match self.classify_advertised_ref(remote_ref)? {
-            RemoteRefClassification::Primary => Some(self.primary.tracking_ref.clone()),
+            RemoteRefClassification::Primary => Some(self.primary.clone()),
             RemoteRefClassification::RecognizedContext { kind, item_id } => {
-                Some(self.context(kind, &item_id).tracking_ref)
+                Some(self.context(kind, &item_id))
             }
             RemoteRefClassification::MalformedContext => {
                 let branch = remote_ref.strip_prefix(HEADS_PREFIX)?;
-                is_valid_git_short_name(branch)
-                    .then(|| format!("refs/remotes/{}/{branch}", self.remote_name))
+                is_valid_git_short_name(branch).then(|| RemoteRefTarget {
+                    remote_ref: remote_ref.to_owned(),
+                    tracking_ref: format!("refs/remotes/{}/{branch}", self.remote_name),
+                })
             }
         }
     }
@@ -164,6 +174,12 @@ fn kind_segment(kind: AuthoringKind) -> &'static str {
         AuthoringKind::Document => "document",
         AuthoringKind::Ticket => "ticket",
     }
+}
+
+fn is_reserved_context_family(branch: &str) -> bool {
+    ["manyhands/document", "manyhands/ticket"]
+        .into_iter()
+        .any(|family| branch == family || branch.starts_with(&format!("{family}/")))
 }
 
 fn is_valid_git_short_name(value: &str) -> bool {
