@@ -29,6 +29,7 @@ mod coordination;
 mod discovery;
 pub mod keys;
 mod recovery;
+mod remote;
 pub mod transport;
 
 use coordination::{
@@ -49,6 +50,14 @@ use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
     claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
+};
+pub use remote::{
+    AutomaticBackoff, PollingInterval, RemoteContextSnapshot, RemoteContextState,
+    RemoteObservationOutcome, RemoteOperationAction, RemoteOperationPhase, RemoteOperationPriority,
+    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
+    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
+    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
+    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteSnapshot,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
