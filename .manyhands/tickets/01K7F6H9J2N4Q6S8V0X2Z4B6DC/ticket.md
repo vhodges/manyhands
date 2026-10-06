@@ -16,8 +16,8 @@ observable before any operation changes local branches.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-04-remote-observation-and-recovery.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-04-remote-observation-and-recovery.md`.
+- [x] Create the implementation plan and record its checkpoints as ticket
   comments.
 
 ## Entry Gate
