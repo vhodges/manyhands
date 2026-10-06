@@ -287,6 +287,12 @@ impl<P: SessionCredentialProvider> SessionCredentials<P> {
         self.blocked = None;
     }
 
+    /// An unrelated repository failure may discard secret material without
+    /// granting permission to prompt again for a cancelled shared-session key.
+    pub(crate) fn clear_cached_passphrase(&mut self) {
+        self.cached = None;
+    }
+
     pub fn invalidate(&mut self, key_id: SharedKeyId) {
         if self.cached.as_ref().map(|cached| cached.key_id) == Some(key_id)
             || self.blocked.as_ref().map(|(request, _)| request.key_id) == Some(key_id)

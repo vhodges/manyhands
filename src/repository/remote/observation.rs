@@ -57,7 +57,7 @@ impl RepositoryService {
         let plan = match observation_plan(root) {
             Ok(plan) => plan,
             Err(error) => {
-                session.clear();
+                session.clear_cached_passphrase();
                 state::with_transaction(self, root, |tx, id| {
                     state::configure(tx, id, None, false)?;
                     state::record_outcome(

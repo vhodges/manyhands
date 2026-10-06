@@ -198,7 +198,7 @@ fn acknowledge(
     tx.execute("UPDATE remote_operation_records SET phase=?2,completed_step=?3,outcome=?4,updated_at=max(updated_at,?5) WHERE id=?1",
         params![record.id,phase,point_name(point),outcome,now()]).map_err(|_| state::recovery_required())?;
     if result == RemoteSafePointOutcome::Cancelled {
-        tx.execute("UPDATE remote_polling_state SET latest_outcome='cancelled',automatic_backoff_seconds=NULL WHERE repository_id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
+        tx.execute("UPDATE remote_polling_state SET latest_outcome='cancelled' WHERE repository_id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
             [record.id]).map_err(|_| state::recovery_required())?;
     }
     Ok(result)

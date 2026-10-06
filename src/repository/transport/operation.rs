@@ -52,7 +52,7 @@ impl RepositoryService {
         let prepared = match self.prepare_ssh(request, &mut context) {
             Ok(prepared) => prepared,
             Err(kind) => {
-                session.clear();
+                invalidate_preflight_session(session, &kind);
                 return Err(context.with_kind(kind));
             }
         };
@@ -107,7 +107,7 @@ impl RepositoryService {
         });
         // Cancellation/unavailability can also race state changes in the provider.
         if let Err(kind) = self.recheck_ssh(&prepared, &context) {
-            session.clear();
+            invalidate_preflight_session(session, &kind);
             return Err(context.with_kind(kind));
         }
         if let Some(error) = connection_error {
@@ -300,6 +300,24 @@ fn source_failure(error: KeyMaterialError) -> SshTransportErrorKind {
     match error.kind {
         KeyMaterialErrorKind::SourceMissing => SshTransportErrorKind::KeyMissing,
         _ => SshTransportErrorKind::KeyUnreadable,
+    }
+}
+
+fn invalidate_preflight_session<P: SessionCredentialProvider>(
+    session: &mut SessionCredentials<P>,
+    kind: &SshTransportErrorKind,
+) {
+    if matches!(
+        kind,
+        SshTransportErrorKind::NoSelectedKey
+            | SshTransportErrorKind::SelectionChanged
+            | SshTransportErrorKind::KeyMissing
+            | SshTransportErrorKind::KeyUnreadable
+            | SshTransportErrorKind::KeySourceChanged
+    ) {
+        session.clear();
+    } else {
+        session.clear_cached_passphrase();
     }
 }
 pub(super) fn authentication_failure(kind: &SshTransportErrorKind) -> bool {

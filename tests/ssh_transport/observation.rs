@@ -18,6 +18,16 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
     ("observe_automatic_backoff", automatic_backoff),
     ("observe_block_reset", block_reset),
     ("observe_configuration_race", configuration_race),
+    (
+        "observe_shared_block_config_failure",
+        shared_block_config_failure,
+    ),
+    (
+        "observe_shared_block_preflight_failure",
+        shared_block_preflight_failure,
+    ),
+    ("observe_explicit_cancel_backoff", explicit_cancel_backoff),
+    ("observe_automatic_cancel_backoff", automatic_cancel_backoff),
 ];
 
 fn setup(encrypted: bool) -> Result<Case, FixtureError> {
@@ -590,5 +600,108 @@ fn configuration_race() -> Result<(), FixtureError> {
             .observations()
             .is_empty()
     );
+    Ok(())
+}
+
+fn shared_block_config_failure() -> Result<(), FixtureError> {
+    shared_block_across_repositories(true)
+}
+
+fn shared_block_preflight_failure() -> Result<(), FixtureError> {
+    shared_block_across_repositories(false)
+}
+
+// A failure in repository B must not authorize another automatic prompt for A.
+fn shared_block_across_repositories(invalid_config: bool) -> Result<(), FixtureError> {
+    use crate::repository::keys::PassphraseResponse;
+    let case = setup(true)?;
+    let other_root = case.directory.path().join("other-repo");
+    fixed(git2::Repository::init(&other_root))?;
+    fixed(std::fs::create_dir(other_root.join(".manyhands")))?;
+    fixed(std::fs::write(
+        other_root.join(".manyhands/config.toml"),
+        if invalid_config {
+            "format_version = 1\nprimary_branch = \"main\"\n"
+        } else {
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+        },
+    ))?;
+    let db = fixed(rusqlite::Connection::open(
+        case.directory.path().join("data").join(REGISTRY_FILE),
+    ))?;
+    fixed(db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [other_root.to_str().unwrap()]))?;
+    let before = crate::failures::Preservation::capture(&case)?;
+    let (mut session, requests) = session(vec![PassphraseResponse::Cancelled, secret(PASSWORD)]);
+    assert!(
+        matches!(case.service.observe_publication_remote(request(&case), &mut session), Err(RemoteObservationError::Transport(e)) if e.kind == SshTransportErrorKind::UnlockCancelled)
+    );
+    let mut other = request(&case);
+    other.root = other_root;
+    other.invocation = RemotePollInvocation::Automatic;
+    assert!(
+        matches!(case.service.observe_publication_remote(other, &mut session), Err(RemoteObservationError::Transport(e)) if e.kind == SshTransportErrorKind::PublicationRemoteMissing)
+    );
+    let mut automatic = request(&case);
+    automatic.invocation = RemotePollInvocation::Automatic;
+    assert!(
+        matches!(case.service.observe_publication_remote(automatic, &mut session), Err(RemoteObservationError::Transport(e)) if e.kind == SshTransportErrorKind::UnlockCancelled)
+    );
+    assert_eq!(requests.borrow().len(), 1);
+    fixed(
+        case.service
+            .observe_publication_remote(request(&case), &mut session),
+    )?;
+    assert_eq!(requests.borrow().len(), 2);
+    before.check(&case)
+}
+
+fn explicit_cancel_backoff() -> Result<(), FixtureError> {
+    cancel_preserves_backoff(RemotePollInvocation::Explicit)
+}
+
+fn automatic_cancel_backoff() -> Result<(), FixtureError> {
+    cancel_preserves_backoff(RemotePollInvocation::Automatic)
+}
+
+// Cancellation is not a successful batch or a new network failure.
+fn cancel_preserves_backoff(invocation: RemotePollInvocation) -> Result<(), FixtureError> {
+    use crate::repository::observation_tests::install_hook;
+    for point in [
+        RemoteOperationSafePoint::BeforeTransport,
+        RemoteOperationSafePoint::BeforeBatchCommit,
+        RemoteOperationSafePoint::AfterBatchCommit,
+    ] {
+        let case = setup(false)?;
+        let db = fixed(rusqlite::Connection::open(
+            case.directory.path().join("data").join(REGISTRY_FILE),
+        ))?;
+        fixed(db.execute("UPDATE remote_polling_state SET remote_name='origin',primary_branch='main',automatic_backoff_seconds=240,paused=1", []))?;
+        let mut req = request(&case);
+        req.invocation = invocation;
+        let operation_id = req.operation_id;
+        let data = case.directory.path().join("data");
+        let root = case.root.clone();
+        let guard = install_hook(move |at| {
+            if at == point {
+                RepositoryService::open_at(&data)
+                    .unwrap()
+                    .cancel_remote_operation(&root, operation_id)
+                    .unwrap();
+            }
+        });
+        let (mut session, _) = session(vec![]);
+        let result = fixed(case.service.observe_publication_remote(req, &mut session))?;
+        drop(guard);
+        assert_eq!(result.category(), RemoteOutcomeCategory::Cancelled);
+        assert!(result.snapshot().polling().paused());
+        assert_eq!(
+            result.snapshot().polling().automatic_backoff(),
+            if point == RemoteOperationSafePoint::AfterBatchCommit {
+                None
+            } else {
+                Some(std::time::Duration::from_secs(240))
+            }
+        );
+    }
     Ok(())
 }
