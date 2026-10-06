@@ -148,16 +148,16 @@ operation action/priority/phase, snapshot state, and redacted outcomes. Keep
 the exact branch/ref formulas in one pure module. A caller supplies no URL,
 refspec, OID, or credential.
 
-- [ ] Add failing tests for primary names, valid document/ticket ULIDs,
+- [x] Add failing tests for primary names, valid document/ticket ULIDs,
   unsupported family-shaped refs, nested/suffixed IDs, ref separators/control
   characters, remote-name changes, tracking-name derivation, and all three
   exact `+` refspecs.
-- [ ] Add failing boundary tests for five-minute defaults, one/sixty-minute
+- [x] Add failing boundary tests for five-minute defaults, one/sixty-minute
   intervals, one/fifteen-minute backoff, explicit-call backoff exemption, and
   fixed/redacted status rendering.
-- [ ] Implement pure contracts with no repository, SQLite, or network access.
+- [x] Implement pure contracts with no repository, SQLite, or network access.
   Assert no valid classification is mistaken for canonical-tree validation.
-- [ ] Run focused library tests red then green; record the contract checkpoint
+- [x] Run focused library tests red then green; record the contract checkpoint
   and commit `feat: define remote observation contracts`.
 
 ## Task 2: Migrate And Query Non-Secret Remote State
