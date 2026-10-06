@@ -4,6 +4,8 @@ mod production;
 pub use production::*;
 #[path = "ssh_transport/endpoints.rs"]
 mod endpoints;
+#[path = "ssh_transport/exact.rs"]
+mod exact;
 #[path = "ssh_transport/failures.rs"]
 mod failures;
 #[path = "ssh_transport/formats.rs"]
@@ -49,6 +51,7 @@ fn main() {
     .chain(endpoints::CASES)
     .chain(session::CASES)
     .chain(transfer::CASES)
+    .chain(exact::CASES)
     .chain(failures::CASES)
     .chain(privacy::CASES)
     .chain(state::CASES)

@@ -32,6 +32,10 @@ pub(crate) enum Checkpoint {
     Prepared,
     ProviderReturned,
     Authenticated,
+    Reconnected,
+    TrackingDownloaded,
+    BeforeTrackingWrite,
+    TrackingWritten,
 }
 type Hook = Box<dyn FnMut(Checkpoint)>;
 thread_local! { static HOOK: RefCell<Option<Hook>> = RefCell::new(None); }
