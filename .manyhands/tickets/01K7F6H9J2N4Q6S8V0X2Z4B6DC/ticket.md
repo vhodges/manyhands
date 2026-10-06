@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DC"
 title: "Wave 02 Cycle 04: Remote Observation And Recovery Model"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "02"
