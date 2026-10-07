@@ -15,10 +15,14 @@ pub fn create(body: &str, window: &mut Window, cx: &mut App) -> Entity<EditorSta
     })
 }
 
+pub fn text<'a>(editor: &'a Entity<EditorState>, cx: &'a App) -> &'a str {
+    editor.read(cx).text()
+}
+
 pub fn readback(editor: &Entity<EditorState>, generation: u64, cx: &App) -> Readback {
     Readback {
         generation,
-        body: editor.read(cx).text().to_owned(),
+        body: text(editor, cx).to_owned(),
         provenance: Provenance::ActualEditorReadback,
     }
 }
@@ -39,8 +43,14 @@ pub fn focus(editor: &Entity<EditorState>, window: &mut Window, cx: &mut App) {
 
 /// Stable document identity + generation, not the current selector index.
 /// Missing/dropped docs are rejected by the host before this guard.
-pub fn accepts(draft: &Draft, expected_id: &str, id: &str, generation: u64) -> bool {
-    expected_id == id && draft.check_generation(generation).is_ok()
+pub fn accepts(
+    draft: &Draft,
+    expected_id: &str,
+    id: &str,
+    generation: u64,
+    same_entity: bool,
+) -> bool {
+    same_entity && expected_id == id && draft.check_generation(generation).is_ok()
 }
 
 /// Fixed categories only: never logs destination strings, LaTeX or properties.
@@ -99,13 +109,14 @@ mod tests {
     fn routing_rejects_other_doc_and_stale_generation() {
         let mut draft = Draft::new(Original::new("body".into()).unwrap());
         draft.observe(0, "body".into()).unwrap();
-        assert!(accepts(&draft, "a", "a", 0));
-        assert!(!accepts(&draft, "a", "b", 0));
+        assert!(accepts(&draft, "a", "a", 0, true));
+        assert!(!accepts(&draft, "a", "b", 0, true));
+        assert!(!accepts(&draft, "a", "a", 0, false));
         draft
             .replace_clean(0, Original::new("next".into()).unwrap())
             .unwrap();
-        assert!(!accepts(&draft, "a", "a", 0));
-        assert!(accepts(&draft, "a", "a", 1));
+        assert!(!accepts(&draft, "a", "a", 0, true));
+        assert!(accepts(&draft, "a", "a", 1, true));
     }
 
     #[test]

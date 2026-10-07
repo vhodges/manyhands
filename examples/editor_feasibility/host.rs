@@ -3,7 +3,8 @@ use super::{
     adapter,
     catalog::Document,
     evidence::{CaptureContext, CaptureRun, hash},
-    session::Draft,
+    observation::{self, Metrics, Signal},
+    session::{Draft, DraftStatus},
 };
 use gpui_kit::component::button::*;
 use gpui_kit::*;
@@ -12,7 +13,7 @@ use zorite_editor::EditorState;
 
 actions!(
     editor_spike,
-    [ToggleMode, NextDocument, FocusEditor, Capture]
+    [ToggleMode, NextDocument, FocusEditor, Capture, Diagnostics]
 );
 
 pub fn bind_keys(cx: &mut App) {
@@ -21,6 +22,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-alt-n", NextDocument, Some("EditorSpike")),
         KeyBinding::new("ctrl-alt-f", FocusEditor, Some("EditorSpike")),
         KeyBinding::new("ctrl-alt-s", Capture, Some("EditorSpike")),
+        KeyBinding::new("ctrl-alt-d", Diagnostics, Some("EditorSpike")),
     ]);
 }
 
@@ -55,6 +57,8 @@ struct Scratch {
     rich: bool,
     scroll: ScrollHandle,
     counts: BTreeMap<&'static str, u64>,
+    status: Option<DraftStatus>,
+    metrics: Option<Metrics>,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +75,7 @@ enum Control {
     DeleteRow,
     DeleteColumn,
     Capture,
+    Diagnostics,
     Next,
 }
 
@@ -81,6 +86,7 @@ pub struct Host {
     _subscriptions: Vec<Subscription>,
     provenance: RunningProvenance,
     message: String,
+    diagnostics: bool,
 }
 
 impl Host {
@@ -88,6 +94,7 @@ impl Host {
         documents: Vec<Document>,
         provenance: RunningProvenance,
         capture_initial: bool,
+        diagnostics: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -110,34 +117,57 @@ impl Host {
                 draft.status()
             );
             subscriptions.push(cx.observe(&editor, move |host, entity, cx| {
-                host.sample(id, generation, &entity, cx);
+                host.sample(id, generation, &entity, Signal::Notification, cx);
             }));
             subscriptions.push(cx.subscribe(&editor, move |host, entity, event, cx| {
                 let Some(doc) = host.docs.iter_mut().find(|d| d.id == id) else {
                     return;
                 };
-                if !adapter::accepts(&doc.draft, doc.id, id, generation)
-                    || doc.editor.entity_id() != entity.entity_id()
-                {
+                if !adapter::accepts(
+                    &doc.draft,
+                    doc.id,
+                    id,
+                    generation,
+                    doc.editor.entity_id() == entity.entity_id(),
+                ) {
                     return;
                 }
                 let category = adapter::event_category(event);
-                let count = doc.counts.entry(category).or_default();
-                *count = count.saturating_add(1);
-                if category.starts_with("denied-") || category.starts_with("unsupported-") {
-                    host.message = format!("{id}: {category} (no opener/provider)");
+                let signal = if matches!(event, zorite_editor::EditorEvent::Changed) {
+                    let count = doc.counts.entry(category).or_default();
+                    *count = count.saturating_add(1);
+                    Signal::Changed
+                } else {
+                    Signal::NonEdit
+                };
+                let request =
+                    category.starts_with("denied-") || category.starts_with("unsupported-");
+                if request {
+                    let count = doc.counts.entry(category).or_default();
+                    *count = count.saturating_add(1);
                     eprintln!("scratch id={id} event={category} count={count}");
                 }
-                host.sample(id, generation, &entity, cx);
+                host.sample(id, generation, &entity, signal, cx);
+                if request {
+                    let message = format!("{id}: {category} (no opener/provider)");
+                    if host.message != message {
+                        host.message = message;
+                        // Explicit resource requests change chrome, not draft state.
+                        host.request_redraw();
+                        cx.notify();
+                    }
+                }
             }));
             docs.push(Scratch {
                 id,
                 label: document.label,
+                status: draft.status(),
                 draft,
                 editor,
                 rich: true,
                 scroll: ScrollHandle::new(),
                 counts: BTreeMap::from([("initial-actual-readback", 1)]),
+                metrics: diagnostics.then(Metrics::loaded),
             });
         }
         let mut host = Self {
@@ -146,6 +176,7 @@ impl Host {
             _subscriptions: subscriptions,
             provenance,
             message: "Scratch only • originals never saved • no resource providers".into(),
+            diagnostics,
         };
         if capture_initial {
             host.capture(cx);
@@ -158,30 +189,64 @@ impl Host {
         id: &str,
         generation: u64,
         entity: &Entity<EditorState>,
+        signal: Signal,
         cx: &mut Context<Self>,
     ) {
+        let visible = self.docs.get(self.active).is_some_and(|doc| doc.id == id);
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else {
             return;
         };
-        if !adapter::accepts(&doc.draft, doc.id, id, generation)
-            || entity.entity_id() != doc.editor.entity_id()
-        {
+        if !adapter::accepts(
+            &doc.draft,
+            doc.id,
+            id,
+            generation,
+            entity.entity_id() == doc.editor.entity_id(),
+        ) {
             return;
         }
-        let readback = adapter::readback(entity, generation, cx);
-        let changed = doc.draft.current() != Some(readback.body.as_str());
-        if doc.draft.observe(generation, readback.body).is_err() {
+        let Ok(decision) = observation::synchronize(
+            &mut doc.draft,
+            generation,
+            signal,
+            visible,
+            &mut doc.metrics,
+            || adapter::text(entity, cx),
+        ) else {
             return;
-        }
-        if changed {
+        };
+        if decision.changed {
+            doc.status = doc.draft.status();
             let count = doc.counts.entry("observed-byte-change").or_default();
             *count = count.saturating_add(1);
+        }
+        if decision.notify_host {
+            self.request_redraw();
+            cx.notify();
+        }
+    }
+
+    fn request_redraw(&mut self) {
+        if let Some(metrics) = &mut self.docs[self.active].metrics {
+            metrics.host_notify();
+        }
+    }
+
+    fn diagnostics(&self) {
+        if !self.diagnostics {
+            eprintln!("scratch diagnostics disabled; opt in with --diagnostics");
+            return;
+        }
+        for doc in &self.docs {
             eprintln!(
-                "scratch id={id} observed_changes={count} status={:?}",
-                doc.draft.status()
+                "scratch diagnostics id={} generation={} active={} metrics={:?}",
+                doc.id,
+                doc.draft.generation(),
+                doc.id == self.docs[self.active].id,
+                doc.metrics
             );
         }
-        cx.notify();
+        // Explicit aggregate request only: no text reads, files or redraw.
     }
 
     fn capture(&mut self, cx: &mut Context<Self>) {
@@ -194,9 +259,23 @@ impl Host {
             let run = CaptureRun::create(&format!("native-{}-{nonce}", std::process::id()))?;
             for doc in &mut self.docs {
                 let readback = adapter::readback(&doc.editor, doc.draft.generation(), cx);
-                doc.draft
-                    .observe(readback.generation, readback.body.clone())
-                    .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                if let Some(metrics) = &mut doc.metrics {
+                    metrics.owned_readback(); // explicit capture payload
+                }
+                let decision = observation::synchronize(
+                    &mut doc.draft,
+                    readback.generation,
+                    Signal::Capture,
+                    false,
+                    &mut doc.metrics,
+                    || &readback.body,
+                )
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                if decision.changed {
+                    doc.status = doc.draft.status();
+                    let count = doc.counts.entry("observed-byte-change").or_default();
+                    *count = count.saturating_add(1);
+                }
                 let mut actions = vec![
                     format!("catalog={}", doc.label),
                     format!("presentation={}", if doc.rich { "rich" } else { "source" }),
@@ -238,12 +317,17 @@ impl Host {
                 )
             }
         };
+        self.request_redraw();
         cx.notify();
     }
 
     fn control(&mut self, control: Control, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(control, Control::Capture) {
             self.capture(cx);
+            return;
+        }
+        if matches!(control, Control::Diagnostics) {
+            self.diagnostics();
             return;
         }
         if matches!(control, Control::Next) {
@@ -285,37 +369,37 @@ impl Host {
                 });
                 "table-operation-invoked-may-noop-outside-table"
             }
-            Control::Capture | Control::Next => unreachable!(),
+            Control::Capture | Control::Diagnostics | Control::Next => unreachable!(),
         };
         let count = doc.counts.entry(category).or_default();
         *count = count.saturating_add(1);
-        self.message = format!(
-            "{}: {category}; capture/notifications read actual text",
-            doc.id
-        );
-        // dispatch_action is deferred. Undo/redo notify without Changed;
-        // formatting emits Changed and notifies. Deferred sample handles no-ops.
-        let id = doc.id;
-        let generation = doc.draft.generation();
-        let editor = doc.editor.clone();
-        cx.defer_in(window, move |host, _, cx| {
-            host.sample(id, generation, &editor, cx)
-        });
-        cx.notify();
+        if matches!(control, Control::Mode) {
+            self.request_redraw(); // actual presentation chrome change
+            cx.notify();
+        } else if !matches!(control, Control::Focus) {
+            // Only supported edit controls get deferred hooks. Native keyboard/
+            // menu undo/redo are covered by the guarded generic observer.
+            let id = doc.id;
+            let generation = doc.draft.generation();
+            let editor = doc.editor.clone();
+            cx.defer_in(window, move |host, _, cx| {
+                host.sample(id, generation, &editor, Signal::EditHook, cx)
+            });
+        }
     }
 
     fn select(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.docs.len() {
             return;
         }
+        let changed_selection = self.active != index;
         self.active = index;
-        let doc = &self.docs[index];
-        let id = doc.id;
-        let generation = doc.draft.generation();
-        let editor = doc.editor.clone();
-        adapter::focus(&editor, window, cx);
-        self.sample(id, generation, &editor, cx);
-        // No reload, replacement, reset or discarded history on selection.
+        adapter::focus(&self.docs[index].editor, window, cx);
+        if changed_selection {
+            self.request_redraw(); // selector chrome, not a text observation
+            cx.notify();
+        }
+        // No readback, reload, replacement, reset or discarded history.
     }
 
     fn button(
@@ -337,7 +421,7 @@ impl Host {
 impl Render for Host {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let doc = &self.docs[self.active];
-        let status = doc.draft.status();
+        let status = doc.status;
         let status = format!(
             "{} • load-normalized={} • later-edits={} • conservative-dirty={} • body={} B • protected-header={} B",
             if doc.rich { "Rich" } else { "Source" },
@@ -353,6 +437,7 @@ impl Render for Host {
             .on_action(cx.listener(|host, _: &NextDocument, window, cx| host.control(Control::Next, window, cx)))
             .on_action(cx.listener(|host, _: &FocusEditor, window, cx| host.control(Control::Focus, window, cx)))
             .on_action(cx.listener(|host, _: &Capture, window, cx| host.control(Control::Capture, window, cx)))
+            .on_action(cx.listener(|host, _: &Diagnostics, _, _| host.diagnostics()))
             .child("Zorite 0.10.0 • repo-document scratch demo • byte changes tolerated ONLY for spike")
             .child(div().flex().gap_2().flex_wrap()
                 .child(self.button("mode", "Rich / Source", Control::Mode, cx))
@@ -366,8 +451,9 @@ impl Render for Host {
                 .child(self.button("column", "Col +", Control::Column, cx))
                 .child(self.button("delete-row", "Row −", Control::DeleteRow, cx))
                 .child(self.button("delete-column", "Col −", Control::DeleteColumn, cx))
-                .child(self.button("capture", "Capture all drafts", Control::Capture, cx)))
-            .child("Ctrl-Alt: N next doc • M mode • F focus • S capture. Editor: Ctrl-Z / Ctrl-Shift-Z, Ctrl-B/I/E. Table controls require caret in table.")
+                .child(self.button("capture", "Capture all drafts", Control::Capture, cx))
+                .children(self.diagnostics.then(|| self.button("diagnostics", "Print counters", Control::Diagnostics, cx))))
+            .child("Ctrl-Alt: N next doc • M mode • F focus • S capture • D print opt-in counters. Editor: Ctrl-Z / Ctrl-Shift-Z, Ctrl-B/I/E. Table controls require caret in table.")
             .child(status)
             .child(div().flex().flex_1().min_h_0().gap_3()
                 .child(div().id("catalog").w(px(245.)).flex_shrink_0().overflow_y_scroll().flex().flex_col().gap_2()

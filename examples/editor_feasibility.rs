@@ -9,6 +9,8 @@ mod catalog;
 mod evidence;
 #[path = "editor_feasibility/host.rs"]
 mod host;
+#[path = "editor_feasibility/observation.rs"]
+mod observation;
 #[allow(dead_code)]
 #[path = "editor_feasibility/session.rs"]
 mod session;
@@ -22,14 +24,18 @@ fn main() {
         eprintln!("Git transport initialization failed");
         std::process::exit(1);
     }
-    let capture_initial = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
-        [] => false,
-        [arg] if arg == "--capture-initial" => true,
-        _ => {
-            eprintln!("Usage: editor_feasibility [--capture-initial]");
-            std::process::exit(2);
+    let mut capture_initial = false;
+    let mut diagnostics = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--capture-initial" if !capture_initial => capture_initial = true,
+            "--diagnostics" if !diagnostics => diagnostics = true,
+            _ => {
+                eprintln!("Usage: editor_feasibility [--capture-initial] [--diagnostics]");
+                std::process::exit(2);
+            }
         }
-    };
+    }
     let documents = catalog::load().expect("fixed repository catalog must be readable");
     let provenance = host::running_provenance().expect("HEAD/lock provenance unavailable");
     gpui_kit::application()
@@ -50,7 +56,14 @@ fn main() {
                         // Every child (including Host/editors) is allocated inside it.
                         cx.new(|cx| {
                             let host = cx.new(|cx| {
-                                host::Host::new(documents, provenance, capture_initial, window, cx)
+                                host::Host::new(
+                                    documents,
+                                    provenance,
+                                    capture_initial,
+                                    diagnostics,
+                                    window,
+                                    cx,
+                                )
                             });
                             Root::new(host, window, cx)
                         })

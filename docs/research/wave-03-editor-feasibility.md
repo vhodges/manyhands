@@ -16,6 +16,8 @@ id: "01M48Y44BK0XK7XJXSEYT78ZD8"
 approved spike-only byte tolerance now permits the isolated compiled native
 host; see the [2026-10-06 S2 running-spike appendix](#2026-10-06-s2-running-spike-appendix).
 This is not an editor selection or production preservation ruling.
+For the later user-requested host update/release comparison, see the
+[2026-10-07 scroll-performance appendix](#2026-10-07-edit-driven-host-updates-and-release-comparison).
 
 **STOP the Zorite executable lane.** The exact published 0.10.0 dependency
 resolved with the required single GPUI identity, but its documented load paths
@@ -561,3 +563,125 @@ no issues, correction READY / OK. Old erroneous evidence remains immutable and
 superseded, not rewritten. Current code differs from the originally launched reviewed binary
 only in that accurate comment; its recorded launch/provenance remains `2c53127`.
 Further report/ledger bookkeeping does not invalidate final Rust source gates.
+
+## 2026-10-07 edit-driven host updates and release comparison
+
+Authority: [scroll-performance continuation](../plans/2026-10-07-wave-03-editor-scroll-performance.md).
+User liked appearance/behavior, but reported README scrolling quickly and Wave03
+lagging, then exited the demo. This is subjective native feedback, not a timing
+benchmark or a proven bottleneck. The prior binary was an unoptimized dev build.
+Document size, wrapping and rich complexity covary; this change does not assign
+all lag to the host or claim wholly unvirtualized editor rendering.
+
+### Rebased source and bounded host change
+
+Task base `e1fc6cb1293f2cd84cf65185686e11f56d5ce195` follows the controller's
+fresh rebase onto main `40fc971c29a1722d9b4e5284e1da5401c95b15f1`.
+Earlier trees/counts/commit IDs above remain historical (S2 code rebased to
+`239a79`, comment correction to `9c88`); they are not verification of new main.
+Both upstream remote_synchronization and existing probe target registrations
+remain intact. This continuation changes only example host/adapter/entry,
+a small pure observation/metrics module and this appendix; it changes no
+Cargo/dependency/lock/Devenv/domain/CLI/production source or original/golden.
+Exact Zorite 0.10.0 / Kit 0.6.6 / GPUI-pre 0.3.6 remain locked.
+
+Previously every editor notification and subscribed event owned full text,
+replaced Draft.current even if unchanged, then requested a Host redraw. The
+new borrowed gate compares actual `EditorState::text()` bytes with the current
+Draft **before** `to_owned`, Draft.observe or Host.notify. Same-length edits
+are detected by byte equality, not length/hash heuristics. Duplicate Changed,
+notify and deferred-hook signals for the same bytes cannot repeat the owned
+readback, draft replacement or edit-status redraw. Cached DraftStatus is
+refreshed only after actual draft changes, not recomputed across full bodies
+inside Host.render. Initial load and explicit captures retain actual readbacks.
+
+Changed is the preferred edit signal (typing/deletion/paste/IME/suggestions and
+formatting). Supported host edit controls also have deferred hooks. Complete
+edit-only coverage is **not available in this pin**: native keyboard/menu undo
+and redo notify without Changed. The generic observer is therefore retained
+with the same lazy borrowed equality gate. It still does callback/guard work
+and, on valid generic notifications, a potentially O(body bytes) comparison.
+This is **not zero notification work**, an SDK edit subscription, or a claim
+that scrolling can never notify the candidate. No private/core hooks are used.
+
+Selection and other non-edit event hints never call the text getter. Unchanged
+scroll/caret/focus/blink/presentation notifications do no owned body readback,
+draft replacement or Host edit-status notify. Native vertical wheel handling
+at pinned `tables.rs:60–75` exits for dx=0 without notifying; horizontal table
+scroll and other notifications can still reach the borrowed fallback. Layout
+in `element.rs:114` uses cached shaping; later code shapes/paints a visible band.
+No supported per-frame profiler was found. Release profile, larger/wrapping
+bodies and rich layout cost remain hypotheses to compare, not assigned causes.
+
+Routing still verifies stable document ID, actual entity ID and generation
+before any read. Missing/stale/wrong-entity events are ignored. Valid inactive
+documents retain their changes/status without redrawing the active document;
+selection later shows cached status on the existing editor/history. Mode and
+selector changes never reload/set_text/reset history. Mode/changed selector,
+explicit capture and changed denied-request messages may redraw their chrome;
+focus and unchanged selection do not request redundant Host redraws. Resource
+requests remain denied and logged by category, without body reads or openers.
+
+### Optional aggregate counters and runtime controls
+
+Diagnostics are **off by default**. `--diagnostics` allocates per-document
+aggregate integer counters. Press **Print counters** or **Ctrl-Alt-D** for an
+explicit stderr summary; the request reads no body, writes no files, does not
+notify Host or start a timer. No per-frame/edit diagnostic printing remains.
+Counters change without notifying Host on ignored/unchanged callbacks.
+Existing bounded action/request trace counts remain separate capture metadata.
+
+Counts include valid notifications, Changed events, non-edit hints, deferred
+edit hooks, capture samples, borrowed comparisons, owned body readbacks, actual
+draft changes and Host.notify requests. Initial load contributes one owned
+readback/one draft change per document. An explicit capture always adds its
+owned evidence payload; it updates the draft only if bytes differ. Host notify
+counts include actual chrome changes as well as edit-status changes, attributed
+to the active document; they exclude candidate/Root/window refresh and are NOT
+frame counts, allocator instrumentation, latency or p95. Compare counter deltas
+around a scroll-only interval, excluding deliberate mode/select/capture actions.
+
+After independent review, launch the already-built release binary from this
+worktree root (controller owns user-facing launch and native observations):
+
+```sh
+devenv shell -- env -u ZORITE_WHEEL_DEBUG ./target/release/examples/editor_feasibility --diagnostics
+# Optional, explicit initial actual-readback captures:
+devenv shell -- env -u ZORITE_WHEEL_DEBUG ./target/release/examples/editor_feasibility --diagnostics --capture-initial
+```
+
+Unsetting the upstream wheel-debug variable avoids inherited per-wheel logging;
+it is unrelated to our off-by-default aggregate diagnostics. Flags may be used
+independently; unknown/duplicate flags and arbitrary paths are rejected.
+Ctrl-Alt-N/M/F/S continue next document/mode/focus/capture; native editing keys
+and table controls are retained. Use the **same document** in Rich and Source
+mode for a user-owned comparison. No worker GUI launch/global input automation,
+clipboard inspection, automatic captures or timer/frame logging is authorized.
+All builds/tests finish before handoff so comparison does not compete with Cargo.
+
+### Pure regression proof and remaining native obligations
+
+Six new pure observation tests exercise unchanged scroll-like/caret/focus/blink
+notifications (zero owned readback/draft-change/notify decision), lazy non-edit
+hints (getter never called), same-length edits, duplicate signals in both orders,
+notify-only undo/redo and table-hook changes, normalized-on-load dirty state,
+inactive-document retention, stale generations and disabled metrics. Adapter
+routing tests also reject a wrong entity as well as wrong document/generation.
+These are source-policy tests with simulated bodies, **not native hook/event
+coverage, actual scroll/undo journeys, allocation measurements or rendered p95**.
+
+New-main focused example tests, required all-feature check/fmt/clippy/test,
+headless CLI check/CLI smoke and the exact locked release build have their full
+command/status/HEAD/index-tree/source-hash/duration logs under ignored
+`target/readiness-evidence/running-spike/scroll-performance/`. That evidence's
+`test-counts.json` derives actual new-main counts from complete logs rather than
+reusing historical 568. `review-proof.json`, raw/numbered snapshots and exact
+`task.diff` map the tested staged source to the local commit; `release-binary.json`
+records the optimized binary's hash/size and explicit runtime flags. This is
+compiled release readiness for reviewed comparison, not observed smoothness.
+Prior evidence remains unchanged. No duplicate postcommit suite is needed for
+the exact tested source. The controller still owes native scroll-only counters,
+edit/undo/redo/resource checks and user feedback; keyboard/IME/clipboard/platform,
+large-document memory/history, semantic fidelity and true rendered response
+measurements remain unverified. Byte tolerance remains spike-only: no editor
+selection, production fidelity ruling or adoption/maintenance time estimate.
