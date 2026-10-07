@@ -244,6 +244,25 @@ Focused Devenv formatting and merge tests passed for this test-only correction.
 It remains Linux local fixture evidence; it does not add native-platform,
 orchestration, persistence/replay, canonical-resolution, or remote/SSH proof.
 
+### Task 1 validation remediation — 2026-10-07
+
+The required all-target/all-feature clippy validation found
+`clippy::unnecessary_mut_passed` in the linked-worktree portion of the Task 1
+test at `src/repository/remote/merge_tests.rs:428`. Commit
+`e5a3ab2a8c5a4b6e39149c25bbe07844c4393422`
+(`test: pass immutable worktree options`) corrects only that call site:
+`WorktreeAddOptions` remains mutable while `reference(...)` configures it, then
+is passed to `Repository::worktree` as `Some(&worktree_options)` rather than
+`Some(&mut worktree_options)`. The ODB/mempack isolation, conflict-state,
+index, and linked-worktree assertions are unchanged.
+
+Required Devenv validation passed with exit 0: `cargo fmt --check`; `cargo test
+--locked --lib repository::remote::merge` (9 tests); `cargo clippy --all-targets
+--all-features --locked -- -D warnings`; and `git diff --check`. This remains
+local Linux fixture evidence only; native five-target and later Cycle evidence
+remain pending. No product behavior, dependencies, network/orchestration,
+canonical writes, UI/CLI, CI, push/PR, merge, closure, or cleanup changed.
+
 ## Task 2 — ordered recovery and resolution evidence — 2026-10-07
 
 Task 2 source checkpoint is
