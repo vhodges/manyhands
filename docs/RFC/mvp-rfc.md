@@ -558,12 +558,21 @@ docs/Waves/wave-NN-<slug>.md
 
 Each Wave document MUST state its outcome, PRD/RFC traceability, entry gate,
 ordered Cycle list, integration gate, deferred work, risks, and the evidence
-required to declare it complete.
+required to declare it complete. A Wave MAY organize its Cycles into named
+tracks that run in parallel. It MUST then state each track's ordered Cycle
+list and every dependency between tracks.
 
 Cycle documents MUST be created at:
 
 ```text
 docs/Cycles/wave-NN-cycle-NN-<slug>.md
+```
+
+In a Wave organized into tracks, the track name replaces `cycle` and `NN`
+numbers the Cycle within its track:
+
+```text
+docs/Cycles/wave-NN-<track>-NN-<slug>.md
 ```
 
 Each Cycle document MUST state its parent Wave, purpose, prerequisites,

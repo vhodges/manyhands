@@ -94,7 +94,38 @@ directives and extensions the renderer does not understand. They appear as
 labeled source blocks with a source-edit action. If a construct cannot be
 isolated safely, the affected region remains source-editable and read-only in
 rich text. No operation silently drops or simplifies it. Switching modes,
-opening a document and a no-change save preserve its bytes and create no commit.
+opening a document and a no-change save write nothing and create no commit.
+
+### Editor load normalization (amended 2026-10-07)
+
+The product owner selected `zorite-editor` on 2026-10-07 and accepted the
+byte changes its load normalization makes. This amends the preservation rules
+above for the desktop editor only:
+
+- When the editor loads a body, it may rewrite that body with the pinned
+  editor release's own load normalization. For the evaluated pin, 0.10.0,
+  that is math-fence canonicalization: a `$$…$$` pair mixed into a line of
+  words is moved onto its own lines. See the
+  [feasibility record](../research/wave-03-editor-feasibility.md#pinned-source-preservation-blocker-r3).
+- Normalization is not a user edit. The host treats the normalized body as the
+  clean baseline, so opening, switching modes and a no-change save still write
+  nothing, create no commit and do not mark the item dirty. The canonical file
+  keeps its original bytes until the user saves an actual edit.
+- A save after an actual edit may write the normalized body. Bytes outside the
+  edited region can therefore differ from the original where normalization
+  applied. Undo returns to the normalized baseline, not the original bytes.
+- The acceptance covers layout-only rewrites that keep the Markdown's meaning.
+  A normalization that drops, truncates or simplifies content is still
+  prohibited, and unsupported syntax still appears as labeled source.
+- Metadata does not pass through the editor. Unknown front-matter values keep
+  the protection of the canonical RFC.
+- The set of normalizations is recorded for the pinned release. Changing the
+  pin requires recording its normalizations again and reviewing any new one
+  before adoption.
+
+The CLI and the headless library do not load bodies through the editor; the
+canonical RFC's preservation contract applies to them unchanged.
+
 The existing canonical serializer's metadata formatting is not promised to be
 byte-preserving after an actual metadata change; unknown values and body content
 remain protected by the canonical RFC.
@@ -292,8 +323,10 @@ was not selected by the product owner.
 The approved test strategy adopts the following required evidence:
 
 - Golden source fixtures cover unknown YAML values, CRLF, Unicode, embedded
-  HTML, unsupported extensions, tables and mixed formatting. Mode switches and
-  no-op saves preserve bytes; focused edits preserve untouched content.
+  HTML, unsupported extensions, tables and mixed formatting. Opening, mode
+  switches and no-op saves write nothing to the canonical file. Focused edits
+  preserve untouched content except for the recorded load normalization of
+  the pinned editor, whose exact output is itself a golden fixture.
 - Real-repository tests cover draft persistence failure/crash, stale saves,
   polling during unsaved edits, two processes editing an item, source repair,
   identity recovery, move collisions and partial checkpoint/index failure.

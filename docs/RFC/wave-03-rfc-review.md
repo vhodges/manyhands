@@ -50,7 +50,7 @@ pushing or merging the planning branch.
 
 | ID | Decision or remaining risk | State / owner / gate |
 | --- | --- | --- |
-| W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. Carry forward the charter's minor preference for `zorite-editor`, with extraction from Velotype as the alternative. | Product-owner mode direction recorded 2026-10-05; candidate preference comes from the charter. Technical Lead must evaluate pinned candidates for a single compatible GPUI graph, fidelity, host integration and native input before editor Cycle planning. No library selection is approved yet. |
+| W3-01 | Rich-text editing with Markdown source mode; preserve unsupported constructs and untouched source. Carry forward the charter's minor preference for `zorite-editor`, with extraction from Velotype as the alternative. | Product-owner mode direction recorded 2026-10-05; candidate preference comes from the charter. Technical Lead must evaluate pinned candidates for a single compatible GPUI graph, fidelity, host integration and native input before editor Cycle planning. The product owner selected `zorite-editor` on 2026-10-07; on the same date the product owner accepted the byte changes of its recorded load normalization, and the desktop/editor and canonical RFCs are amended to bound that exception. |
 | W3-02 | Background polling/indexing runs in a desktop-owned worker. CLI daemon mode is removed; explicit one-shot poll/refresh remains. No separate executable, shared singleton or IPC. | Product-owner clarification adopted in PRD 0.5 on 2026-10-05; supersedes the earlier daemon unlock/restart choice. |
 | W3-03 | A clean worktree can have unsaved in-memory drafts. Use protected crash-recovery files, base observations and explicit stale-edit review. | Approved with the RFC set on 2026-10-05; Technical Lead must verify persistence failures and the stated crash guarantee during editor work. |
 | W3-04 | Ticket branches can contain code; resolve canonical Markdown in-app and provide explicit external-tool guidance for other conflicts. | Product-owner direction recorded 2026-10-05. Keep the owned-path boundary and prove safe re-observation after external repair. |
@@ -156,5 +156,9 @@ desktop layout and read-only CLI work now have approved RFC contracts.
 Individual Cycles still require planning and authorization. Editor fidelity
 and recovery must be proved before polishing rich interactions.
 End-to-end/native evidence should accumulate throughout the Wave
-rather than wait for its final Cycle. The Wave's thirteen-Cycle allocation is
-approved; each Cycle still requires its own detailed planning and review.
+rather than wait for its final Cycle. The Wave's original thirteen-Cycle
+allocation was approved on 2026-10-05 and replanned on 2026-10-07 into a
+two-Cycle foundation, parallel CLI and desktop tracks and one joint gate; see
+[Tracks And Cycles](../Waves/wave-03-dogfooding.md#tracks-and-cycles). Each
+Cycle still requires its own detailed planning and review. The `W3-NN`
+identifiers in this register name decisions, not Cycles, and are unaffected.
