@@ -227,15 +227,16 @@ platform claim.
 
 Independent review correctly found that the original mempack fixture checked
 only the resolved current HEAD target, so a write to another destination ref
-could have escaped the assertion. Commit
-`b9931fd21c5a724028c503d5f3c09bb4b696879f` resolves that P1 without product
+could have escaped the assertion. Commits
+`b9931fd21c5a724028c503d5f3c09bb4b696879f` and
+`b80ba384bb0393b0ea9c7e4b0582937783050b50` resolve that P1 without product
 behavior changes. Before worker preparation, the fixture now recursively
 snapshots byte-for-byte the common Git directory and the worktree Git directory
 for `HEAD`, loose `refs`, optional `packed-refs`, and reflogs. The snapshot
 records directories, regular-file bytes, symlink targets, and path absence by
-map membership; equality after the worker merge therefore detects changed,
-created, or removed loose/packed refs, symbolic/direct HEAD contents, and
-reflogs in either repository layout location. The original destination object,
+map membership; equality after both the initial and reset/recomputed worker
+merges therefore detects changed, created, or removed loose/packed refs,
+symbolic/direct HEAD contents, and reflogs in either repository layout location. The original destination object,
 index, worktree, other-handle visibility, mempack-lifetime, and explicit-import
 assertions remain intact.
 
