@@ -1,0 +1,37 @@
+# Small explicit inventory, not a fixture runner. All offsets are UTF-8 bytes.
+[[case]]
+id = "crlf-math"
+original = "crlf-math.md"
+body_start = 70
+simulated_math_difference = "crlf-math-observed.md"
+simulated_crlf_difference = "crlf-math-lf.md"
+
+[[case]]
+id = "unicode-table-unsupported"
+original = "unicode-table.md"
+body_start = 71
+edit_start = 62
+edit_end = 65
+replacement = "ONE"
+expected_full = "unicode-table-edited.md"
+# Untouched body intervals: [0,62) and [65,body_len); header always immutable.
+
+[[case]]
+id = "no-final-newline"
+original = "no-final-newline.md"
+body_start = 0
+simulated_math_difference = "math-observed.md"
+
+[[case]]
+id = "empty-body"
+original = "empty-body.md"
+body_start = 41
+
+[large]
+# Repeat UTF-8 source, truncate to the last character boundary <= size, then
+# pad with ASCII spaces to exactly size. Hashes identify originals, not readback.
+pattern = "# Scratch\n\nCafé 😀 עברית\n\n| A | B |\n| --- | --- |\n| one | two |\n\n:::unknown\nraw $$x$$ words\n:::\n"
+small_bytes = 102400
+larger_bytes = 262144
+small_blake3 = "5e0e3ab7f3dd1f5f3baad7a981202463860900f731c3a4f4bf6e44bedb0c1bac"
+larger_blake3 = "fc7f6a11497e93aed2aa40af990611746d172dee1bb150a42d70955cfafeea52"

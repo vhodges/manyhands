@@ -1,0 +1,4 @@
+# Exact byte originals and independent expectations, including CRLF/no final LF.
+*.md -text
+# CR is a deliberate line-ending byte, not trailing space; retain other checks.
+crlf-math*.md whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
