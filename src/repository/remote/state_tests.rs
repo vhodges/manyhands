@@ -669,7 +669,7 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_operation_records")
+        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_operation_records")
         .unwrap();
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
@@ -823,6 +823,81 @@ fn partial_task2_evidence_schema_and_orphan_rows_fail_closed() {
     drop(connection);
     let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     assert!(audit_registry(&mut connection).is_err());
+}
+
+#[test]
+fn weakened_complete_task2_evidence_schema_requires_recovery() {
+    for (label, schema) in [
+        (
+            "foreign key",
+            MERGE_EVIDENCE_SCHEMA.replace(" ON DELETE RESTRICT", ""),
+        ),
+        (
+            "check constraint",
+            MERGE_EVIDENCE_SCHEMA.replace(
+                "CHECK(phase!='applied' OR checkpoint_oid IS NOT NULL)",
+                "CHECK(1)",
+            ),
+        ),
+        (
+            "index",
+            MERGE_EVIDENCE_SCHEMA.replace(
+                "CREATE INDEX remote_resolution_attempts_operation ON remote_resolution_attempts(operation_record_id,integration_step_id);",
+                "",
+            ),
+        ),
+        (
+            "trigger behavior",
+            MERGE_EVIDENCE_SCHEMA.replace(
+                "SELECT RAISE(ABORT,'immutable resolution evidence')",
+                "SELECT 1",
+            ),
+        ),
+    ] {
+        let (data, _root, _service) = fixture();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;",
+            )
+            .unwrap();
+        connection.execute_batch(&schema).unwrap();
+        drop(connection);
+        assert!(
+            matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired),
+            "accepted weakened {label} schema"
+        );
+    }
+}
+
+#[test]
+fn incompatible_context_integration_stage_requires_recovery() {
+    let (data, root, service) = fixture();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+    }
+    .operation_target(&plan());
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            crate::repository::OperationId::new(),
+            &target,
+            RemoteOperationPriority::Manual,
+            123,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    Connection::open(data.path().join(REGISTRY_FILE))
+        .unwrap()
+        .execute_batch("INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,phase) VALUES(1,1,0,0,'primary','1111111111111111111111111111111111111111','2222222222222222222222222222222222222222','3333333333333333333333333333333333333333',zeroblob(32),'prepared')")
+        .unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+    );
 }
 
 #[test]
