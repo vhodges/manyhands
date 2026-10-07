@@ -685,3 +685,33 @@ edit/undo/redo/resource checks and user feedback; keyboard/IME/clipboard/platfor
 large-document memory/history, semantic fidelity and true rendered response
 measurements remain unverified. Byte tolerance remains spike-only: no editor
 selection, production fidelity ruling or adoption/maintenance time estimate.
+
+### Release user comparison (2026-10-07)
+
+After review132b8cc2 (no issues, READY / OK with notes), controller verified the
+recorded release binary hash and launched through Devenv with --diagnostics,
+without Cargo/per-frame logging/automatic captures. Relaunch PID3501399 followed
+explicit user readiness because the first launch took focus before instructions.
+The requested protocol was same-Wave03 Rich then Source, Ctrl-Alt-D before/after
+scroll-only intervals. User feedback: **"It felt fine"**. Feedback is not
+mode-specific or a timed/controlled A/B result; both release optimization and
+host policy changed, so their contributions cannot be separated.
+
+Frozen evidence under ignored
+`target/readiness-evidence/running-spike/scroll-performance/release-relaunch-1791335947220/`
+includes observed-counters.log and observation.json. Fourteen explicit snapshots
+per document: owned_readbacks and draft_changes remain1 (initial load) for all
+five docs, with Changed/edit_hooks/capture_samples0. Wave03 generic notifications
+and borrowed checks progress0→15; there are no additional body copies/draft
+updates. Active Wave03 snapshot pairs stay6/6/1 and15/15/3 respectively
+(notifications/checks/Host notify); Host notify changes across selection/mode
+activity, so do not attribute its total3 to scrolling or claim zero GPUI work.
+No source-edited or native undo/IME/table journey is established by these logs.
+
+This is positive manual scrolling evidence for this optimized host, not frame
+latency/p95, full-platform/100KiB acceptance, exact source fidelity or product
+editor selection. User subsequently confirmed **happy with the overall
+performance**; keyboard/caret-follow/PageUp/PageDown integration was discussed
+but explicitly not requested in this demo. Pinned bindings already include
+arrows/Home/End; actual viewport-follow/page-navigation acceptance remains
+unverified. Remaining native/production obligations above stay unchanged.

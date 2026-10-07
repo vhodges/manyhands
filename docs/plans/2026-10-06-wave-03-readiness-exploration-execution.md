@@ -256,7 +256,7 @@ this task does not substitute for final-main API audit.
 | --- | --- | --- |
 | P1 | One serialized owner: edit-only draft update guard/hooks, optional counters, pure regressions/report; final Devenv gates and release build | complete e1fc6cb..fee2439; tested/committed tree94c833c; all gates/release passed |
 | P2 | Fresh independent exact-task review; preserve notify-only undo/redo and cheap fallback honesty | reviewer132b8cc2: no issues, performance-host READY / OK with notes |
-| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | running owned release PID/group3493901, diagnostics opt-in; awaiting user's comparison, no competing Cargo |
+| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | complete manual observation: user "It felt fine"; relaunch3501399,14 counter snapshots/doc, zero additional owned readbacks/draft updates; not timing/native-suite acceptance |
 
 Scrolling/caret/focus/blink must not copy/update drafts or cause extra host notify.
 Changed covers many edits, but undo/redo only notify; supported hooks or a cheap
@@ -297,6 +297,18 @@ owned readbacks/draft changes/Host notify should be zero for unchanged scroll;
 borrowed checks may rise, not zero GPUI work or measured frames/p95. Actual
 counters/user feedback remain pending. Do not restart/automate/stop user's app.
 Rust remains exactlyfee2439; further checkpoint is docs-only, no redundant gates.
+
+Controller relaunched release PID3501399 after user acknowledged instructions
+(the first launch stole focus). Frozen logs/summary under
+`scroll-performance/release-relaunch-1791335947220/{observed-counters.log,observation.json}`.
+User says **It felt fine** after requested Rich/Source protocol; not mode-labeled
+or timed A/B. All14 snapshots/doc show owned readbacks/draft changes remain1,
+no Changed/edit/capture events. Wave03 notifications/borrowed checks0→15,
+active snapshot pairs6/6/1 and15/15/3 stable; chrome actions explain intervening
+Host notify totals, not an attribution to scroll. No per-frame/rendered-p95 or
+native edit/undo/IME/table acceptance follows. Release+host fixes changed together,
+so no isolated causal claim. P1/P2/P3 bounded work delivered; ticket returns to
+review-ready/lifecycle-open, remaining product/native/API gates unchanged.
 
 ## Task state
 
