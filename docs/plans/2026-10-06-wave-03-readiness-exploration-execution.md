@@ -322,6 +322,25 @@ Basic native history/status smoke now complete; final implementation source and
 review/gate proofs unchangedfee2439. Remaining full native/production gates still
 unverified, closure/publication requires explicit authorization/approval.
 
+### Approved local closure (2026-10-07)
+
+User now explicitly approves documents/recommendations, closing the ticket in
+this branch, and local main merge. Earlier no-closure/local-merge restrictions
+are superseded only for those operations. No push/PR/remote merge/cleanup or
+editor adoption/fidelity policy authority follows. Ticket closes in final
+pre-merge checkpoint; scratch worktree/artifacts remain retained.
+
+Local main is3ea8c6e, with two Cycle05 publication-receipt documentation paths
+added since base40fc971 and no Rust/dependency/Devenv/test/CI delta. Normal local
+merge preserves both histories, reviewed fee2439 identity and upstream receipts.
+No source/gate rerun needed for docs-only closure/integration; frozen614-standard,
+separate SSH15/35/31/103 and9 pure example proofs remain correctly scoped. All
+full-native/production/preservation/completed-main API obligations stay separate.
+User-approved recommendation remains feasible Zorite experimental host, not
+production editor selection; strict normalization blocker remains unresolved.
+Main's unrelated .superpowers/ and devenv.nix~ are hash-preserved. No worktree
+cleanup, reset, history rewrite or remote operations are performed.
+
 ## Task state
 
 The following table records the **initial, independently reviewed stop-path

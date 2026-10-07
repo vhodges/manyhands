@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "review-ready"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -175,6 +175,28 @@ dirty state updated correctly. [Smoke evidence](../../../docs/research/wave-03-e
 records counter/source/process provenance and limits; no new code, exact per-key
 native proof, full native suite or product ruling. Bounded exploration work is
 ready for approval/delivery; closure/publication remains separately authorized.
+
+## Approved closure and local integration (2026-10-07)
+
+User explicitly approved the documents/recommendations, closing this ticket on
+its branch, and merging to local main. This supersedes earlier lifecycle-open
+restrictions for these local operations only. No push/PR/remote merge, worktree
+removal, editor adoption or production fidelity ruling is authorized.
+
+Exploration delivered: provisional API inventory; pinned Zorite/Velotype source
+assessment; reviewed scratch host, fresh gates, optimized comparison, aggregate
+counters and user-confirmed basic native edit/undo/redo/status behavior. Retain
+Zorite as a feasible experimental candidate, not a selected production editor.
+Strict normalization/preservation blocker, full native/production matrix and
+completed-Wave02 API re-audit remain separately required and are not waived by
+closing the exploration. Keyboard/page navigation remains outside this demo.
+
+Final implementation source fee2439 was tested and independently reviewed;
+subsequent observations/closure are docs-only. Local main3ea8c6e adds only two
+Cycle05 publication-receipt docs since verified base40fc971; normal local merge
+will preserve both histories without rewriting frozen source/review identities.
+Closure is recorded in this branch's final pre-merge commit. Main's unrelated
+.superpowers/ and devenv.nix~ are preserved; worktree/evidence retained.
 
 ## Exit Boundary
 
