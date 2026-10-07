@@ -601,6 +601,73 @@ fn sync_owner(service: &RepositoryService, root: &Path) -> RemoteReservation {
         other => panic!("{other:?}"),
     }
 }
+#[test]
+fn integration_steps_require_context_then_primary_ordering() {
+    use super::super::merge::IntegrationStage;
+    use crate::repository::{AuthoringKind, SynchronizationTarget};
+
+    let (_data, root, service) = fixture();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    }
+    .operation_target(&plan());
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    let intent = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: IntegrationStage::Context,
+        local_oid: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        incoming_oid: git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap(),
+        baseline_tree_oid: git2::Oid::from_str("3333333333333333333333333333333333333333").unwrap(),
+        baseline_index_digest: [7; 32],
+    };
+    assert!(
+        service
+            .prepare_synchronization_integration(
+                root.path(),
+                &owner,
+                &state::IntegrationStepIntent {
+                    stage: IntegrationStage::Primary,
+                    ..intent.clone()
+                },
+            )
+            .is_err()
+    );
+    service
+        .prepare_synchronization_integration(root.path(), &owner, &intent)
+        .unwrap();
+    assert!(
+        service
+            .prepare_synchronization_integration(
+                root.path(),
+                &owner,
+                &state::IntegrationStepIntent {
+                    ordinal: 1,
+                    stage: IntegrationStage::Context,
+                    ..intent.clone()
+                },
+            )
+            .is_err()
+    );
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 1,
+                stage: IntegrationStage::Primary,
+                ..intent
+            },
+        )
+        .unwrap();
+}
+
 fn sync_evidence() -> state::SynchronizationEvidence {
     state::SynchronizationEvidence {
         expected_oid: Some(
@@ -713,12 +780,20 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
             .is_err()
     );
+    let confirmation = state::IdentityConfirmationIntent {
+        confirmation_id: OperationId::new(),
+        input_digest: [4; 32],
+        configuration_digest: [5; 32],
+    };
+    other
+        .prepare_synchronization_identity_confirmation(root.path(), &reacquired, &confirmation)
+        .unwrap();
     let attempt = state::ResolutionAttemptIntent {
         attempt_id: OperationId::new(),
         step_ordinal: 0,
         observation_digest: conflict,
         input_digest: [3; 32],
-        identity_confirmation_id: None,
+        identity_confirmation_id: Some(confirmation.confirmation_id),
     };
     let path = state::ResolutionPathIntent {
         ordinal: 0,
@@ -735,7 +810,7 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             root.path(),
             &reacquired,
             &attempt,
-            &[path.clone()],
+            std::slice::from_ref(&path),
         )
         .unwrap();
     other
@@ -743,7 +818,7 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             root.path(),
             &reacquired,
             &attempt,
-            &[path.clone()],
+            std::slice::from_ref(&path),
         )
         .unwrap();
     let mismatched = state::ResolutionAttemptIntent {
@@ -756,18 +831,35 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
                 root.path(),
                 &reacquired,
                 &mismatched,
-                &[path]
+                std::slice::from_ref(&path)
             )
             .is_err()
     );
-    let confirmation = state::IdentityConfirmationIntent {
+    let changed_confirmation = state::IdentityConfirmationIntent {
         confirmation_id: OperationId::new(),
         input_digest: [4; 32],
         configuration_digest: [5; 32],
     };
     other
-        .prepare_synchronization_identity_confirmation(root.path(), &reacquired, &confirmation)
+        .prepare_synchronization_identity_confirmation(
+            root.path(),
+            &reacquired,
+            &changed_confirmation,
+        )
         .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_resolution_attempt(
+                root.path(),
+                &reacquired,
+                &state::ResolutionAttemptIntent {
+                    identity_confirmation_id: Some(changed_confirmation.confirmation_id),
+                    ..attempt.clone()
+                },
+                std::slice::from_ref(&path),
+            )
+            .is_err()
+    );
     other
         .begin_synchronization_identity_confirmation_effect(
             root.path(),
