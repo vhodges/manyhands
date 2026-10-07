@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -277,6 +277,62 @@ fn snapshot_objects(repository: &Repository) -> BTreeSet<PathBuf> {
     paths
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RefStorageEntry {
+    Directory,
+    File(Vec<u8>),
+    Symlink(PathBuf),
+}
+
+fn snapshot_ref_storage_path(
+    path: &Path,
+    relative_path: &Path,
+    snapshot: &mut BTreeMap<PathBuf, RefStorageEntry>,
+) {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("could not read ref storage {}: {error}", path.display()),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        snapshot.insert(relative_path.to_owned(), RefStorageEntry::Directory);
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            snapshot_ref_storage_path(
+                &entry.path(),
+                &relative_path.join(entry.file_name()),
+                snapshot,
+            );
+        }
+    } else if file_type.is_file() {
+        snapshot.insert(
+            relative_path.to_owned(),
+            RefStorageEntry::File(fs::read(path).unwrap()),
+        );
+    } else if file_type.is_symlink() {
+        snapshot.insert(
+            relative_path.to_owned(),
+            RefStorageEntry::Symlink(fs::read_link(path).unwrap()),
+        );
+    } else {
+        panic!("unexpected ref storage entry {}", path.display());
+    }
+}
+
+fn snapshot_ref_storage(repository: &Repository) -> BTreeMap<PathBuf, RefStorageEntry> {
+    let mut snapshot = BTreeMap::new();
+    for (name, root) in [
+        ("common", repository.commondir()),
+        ("git", repository.path()),
+    ] {
+        for path in ["HEAD", "packed-refs", "refs", "logs"] {
+            snapshot_ref_storage_path(&root.join(path), &Path::new(name).join(path), &mut snapshot);
+        }
+    }
+    snapshot
+}
+
 #[test]
 fn worker_mempack_merge_keeps_generated_blobs_out_of_destination_odb_until_import() {
     let directory = tempfile::tempdir().unwrap();
@@ -286,6 +342,7 @@ fn worker_mempack_merge_keeps_generated_blobs_out_of_destination_odb_until_impor
         b"one\ntwo\nincoming\n",
     );
     let before_objects = snapshot_objects(&primary);
+    let before_ref_storage = snapshot_ref_storage(&primary);
     let before_index = fs::read(primary.path().join("index")).unwrap();
     let before_worktree = fs::read(directory.path().join("merge.txt")).unwrap();
     let before_head = primary.head().unwrap().target();
@@ -305,6 +362,7 @@ fn worker_mempack_merge_keeps_generated_blobs_out_of_destination_odb_until_impor
     );
 
     assert_eq!(snapshot_objects(&primary), before_objects);
+    assert_eq!(snapshot_ref_storage(&primary), before_ref_storage);
     assert_eq!(
         fs::read(primary.path().join("index")).unwrap(),
         before_index
