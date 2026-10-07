@@ -23,16 +23,15 @@ preserve conflicts for explicit resolution.
 - [x] Self-review using `review-cycle-docs`; record decisions/rulings in the
   [planning/execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-06-merge-and-conflict-recovery-execution.md).
 - [x] Owner approves the Cycle, design and implementation plan: 2026-10-07.
-- [ ] Obtain explicit implementation authorization and execution method.
+- [x] Obtain explicit implementation authorization and execution method: 2026-10-07; sequential subagent-driven execution with local checkpoint commits.
 - [ ] Implement, verify, review and record per-task checkpoints.
 - [ ] Obtain code-review/PR approval and separate delivery/closure authority.
 
 Cycle, design and implementation plan approved by the owner on 2026-10-07.
-The owner authorized committing these planning artifacts and preparing a brief
-for a separate implementation session. Ticket remains open. No implementation,
-publication, CI execution, merge or cleanup occurred. Proposed future execution:
-sequential direct tasks in this existing worktree; implementation authorization
-remains a separate gate.
+Implementation authorization followed in the present session: execute Tasks 0–7
+sequentially in this existing worktree with subagent-driven development and local
+checkpoint commits. Ticket remains open. Push/PR, CI dispatch, merge, closure
+and cleanup remain separately unauthorized.
 
 ## Planning Evidence And Decision
 

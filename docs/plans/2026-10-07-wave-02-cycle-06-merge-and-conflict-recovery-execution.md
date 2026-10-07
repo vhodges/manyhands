@@ -159,6 +159,36 @@ No material question remains open after the owner's answer. Backend safe-
 checkout/merge-metadata characterization and native-platform behavior are future
 feasibility/evidence gates; stop for document reassessment if they fail.
 
+## Implementation entry — Task 0 — 2026-10-07
+
+The user explicitly authorized implementation of Tasks 0–7 in this ticket
+worktree, requested sequential execution with local checkpoint commits, and
+requested subagent-driven development. The ticket remains open; no push/PR, CI
+dispatch, merge, closure or cleanup is authorized.
+
+Fresh preflight preserved the unrelated main-checkout `.superpowers/` and
+`devenv.nix~` entries and all other worktrees. The clean ticket branch started
+at `a3c051f599172dec7c487dc6836460416289ac67`. `git fetch origin main` observed
+`origin/main` at `b666c1e1f0a708562ff4cc25b0dfb18dc99dd6a9`; rebasing the ticket
+onto it was a no-op. The resulting head remains
+`a3c051f599172dec7c487dc6836460416289ac67`, fetched-main ancestry passed, the
+planning commit remains an ancestor, and ticket status was clean before this
+Task 0 record.
+
+Fresh baseline on that revision passed through Devenv:
+
+- `cargo check --all-features --locked` (exit 0);
+- `cargo fmt --check` (exit 0);
+- `cargo clippy --all-targets --all-features --locked -- -D warnings` (exit 0);
+- `cargo test --all-features --locked` (exit 0); and
+- `cargo run --locked --bin manyhands-cli` (exit 0; headless smoke test).
+
+This is new Cycle 06 local evidence, not a substitution for the planned
+backend/remote tests or native five-target evidence. Native evidence remains
+pending and must be collected through separately authorized manual CI execution;
+Cycle 05's deferral does not apply. Task 1 may proceed subject to the approved
+mempack-isolation stop condition.
+
 ## Next lifecycle checkpoints
 
 1. Completed 2026-10-07: owner approved Cycle, design and implementation plan.
