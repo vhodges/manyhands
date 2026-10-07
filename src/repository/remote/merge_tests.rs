@@ -383,6 +383,7 @@ fn worker_mempack_merge_keeps_generated_blobs_out_of_destination_odb_until_impor
         index.get_path(Path::new("merge.txt"), 0).unwrap().id,
         generated
     );
+    assert_eq!(snapshot_ref_storage(&primary), before_ref_storage);
     let generated_object = odb.read(generated).unwrap();
     let imported = primary
         .odb()
