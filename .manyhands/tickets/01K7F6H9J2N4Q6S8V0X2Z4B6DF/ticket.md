@@ -16,14 +16,27 @@ item-context synchronization action.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-07-comment-publication.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
-  comments.
+- [x] Create [Cycle](../../../docs/Cycles/wave-02-cycle-07-comment-publication.md).
+- [x] Create [design](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-design.md)
+  and [detailed implementation plan](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-implementation.md).
+- [x] Record planning/rebase and skill-based self-review checkpoints as comments.
+- [x] User approval of Cycle, design, and implementation plan (2026-10-07).
+- [ ] Explicit implementation authorization after dependency gate passes.
+
+The user approved the planning documents on 2026-10-07 and authorized the
+approval-state updates and local planning commit. Implementation remains
+unauthorized and dependency-gated; this ticket stays open. The
+[execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-execution.md)
+records the decision matrix, internal rulings and verification/lifecycle gates.
 
 ## Entry Gate
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
-is approved and Wave 01 verification evidence is current.
+is approved and Wave 01 verification evidence is current. Cycle 06's approved,
+reviewed merge/conflict implementation must also be present on the refreshed
+base; its documents and code are absent from main at this planning checkpoint.
+No Cycle 06 work will be duplicated here. Native evidence remains pending
+separately authorized execution or explicit owner deferral.
 
 ## Exit Evidence
 
