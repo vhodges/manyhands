@@ -300,6 +300,43 @@ Native five-target behavior remains pending; no CI was enabled or dispatched.
 No remote/network, canonical file, UI/CLI, dependency, workflow, push/PR,
 merge, closure or cleanup change was made. Ticket remains open.
 
+### Task 2 P1 review remediation — 2026-10-07
+
+The independent-review P1 findings are remediated in a focused source checkpoint.
+Context synchronization now permits only `context` at ordinal 0 and `primary` at
+ordinal 1; primary synchronization permits only `primary` at ordinal 0. Both
+preparation and retained-evidence audit reject any other pairing, and new
+reservation/startup-corruption tests cover it. Same-ID resolution-attempt replay
+now resolves the supplied confirmation to a parent-bound row before comparing its
+stored foreign key, so absent, changed, foreign, or otherwise mismatched
+confirmation input is recovery-required; the regression test prepares two valid
+parent-bound confirmations and rejects replay with the changed one.
+
+Merge-evidence schema validation now compares normalized canonical SQLite
+fingerprints for every Task 2 child table, explicit child index, and immutable
+trigger during migration and startup audit. The fingerprints cover table
+CHECK/UNIQUE/FK definitions and trigger bodies while tolerating case/whitespace
+normalization. Existing complete-but-weakened schemas are rejected rather than
+repaired. A disposable SQLite test recreates all four named child tables with a
+weakened foreign key, CHECK, index, or no-op immutable-trigger body and proves
+startup returns `RecoveryRequired` for each.
+
+Focused Devenv evidence after remediation (all exit 0):
+
+- `cargo test --locked --lib repository::remote::state` (23 tests);
+- `cargo test --locked --lib repository::remote::reservation` (26 tests);
+- `cargo test --locked --test recovery_foundation_gate` (50 tests);
+- `cargo fmt --check`; `cargo clippy --locked --lib -- -D warnings`; and
+  `git diff --check`.
+
+The wider required `cargo clippy --all-targets --all-features --locked -- -D
+warnings` remains blocked by the pre-existing unrelated
+`clippy::unnecessary_mut_passed` at `src/repository/remote/merge_tests.rs:428`;
+that file is outside this remediation and was not changed. No source scope was
+widened to repair it. Native five-target behavior remains pending; no network,
+canonical, UI/CLI, dependency, CI, push/PR, merge, closure, or cleanup action was
+performed.
+
 ## Next lifecycle checkpoints
 
 1. Completed 2026-10-07: owner approved Cycle, design and implementation plan.
