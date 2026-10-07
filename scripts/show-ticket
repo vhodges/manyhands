@@ -108,10 +108,11 @@ done
 
 case ${#ticket_candidate_files[@]} in
     0) fail "ticket $requested_ticket_id not found" ;;
-    1) ;;
-    *) fail "multiple canonical tickets found for $requested_ticket_id" ;;
 esac
 
+# Ticket contexts are ordered from the primary worktree to its direct
+# .manyhands/worktrees children. Prefer the first copy so stale nested worktree
+# metadata cannot mask the canonical primary copy after merge.
 selected_ticket_file=${ticket_candidate_files[0]}
 selected_context=${ticket_candidate_contexts[0]}
 if ! read_ticket "$selected_ticket_file"; then

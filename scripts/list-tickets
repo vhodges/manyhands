@@ -76,10 +76,10 @@ for context in "${ticket_contexts[@]}"; do
             duplicate_ticket=false
             for (( index = 0; index < ${#listed_ticket_ids[@]}; index += 1 )); do
                 if [[ ${listed_ticket_ids[$index]} == "$listed_ticket_id" ]]; then
-                    if ! malformed_ticket "$ticket_file" \
-                        "duplicate canonical ticket ID $listed_ticket_id also found in ${listed_ticket_files[$index]}"; then
-                        exit 2
-                    fi
+                    # Ticket contexts are ordered from the primary worktree to
+                    # its direct .manyhands/worktrees children. Prefer the
+                    # first copy so stale nested worktree metadata cannot break
+                    # listing after a ticket has merged back to the primary.
                     duplicate_ticket=true
                     break
                 fi

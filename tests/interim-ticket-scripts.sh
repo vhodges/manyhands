@@ -155,9 +155,6 @@ assert_malformed_ticket_rejections() {
     assert_contains "$output" \
         "$plain_mapping_ticket_id/ticket.md: required field title is not a scalar" \
         'plain mapping ticket diagnostic'
-    assert_contains "$output" \
-        "$list_duplicate_ticket_id/ticket.md: duplicate canonical ticket ID" \
-        'duplicate ticket collision diagnostic'
     case $output in
         *"${collection_title_ticket_id}"$'\t'*)
             fail 'collection-valued ticket was listed'
@@ -334,6 +331,7 @@ unicode_separator_ticket_id=01ARZ3NDEKTSV4RRFFQ69G5FBD
 c1_control_ticket_id=01ARZ3NDEKTSV4RRFFQ69G5FBE
 plain_mapping_ticket_id=01ARZ3NDEKTSV4RRFFQ69G5FBF
 plain_comment_colon_ticket_id=01ARZ3NDEKTSV4RRFFQ69G5FBG
+nested_worktree_ticket_id=01ARZ3NDEKTSV4RRFFQ69G5FBH
 primary_ticket_row="${primary_ticket_id}"$'\topen\ttask\tPrimary ticket title'
 worktree_ticket_row="${worktree_ticket_id}"$'\tdone\tbug\tWorktree ticket # title'
 inline_comment_ticket_row="${inline_comment_ticket_id}"$'\topen\ttask\tPlain#title'
@@ -817,6 +815,19 @@ printf '%s\n' \
     'Equal-instant higher-ID worktree comment body.' \
     >"$worktree/.manyhands/comments/$worktree_ticket_id/$equal_instant_higher_comment_id.md"
 
+nested_worktree=$worktree/.manyhands/worktrees/$nested_worktree_ticket_id
+mkdir -p "$nested_worktree/.manyhands/tickets/$nested_worktree_ticket_id"
+printf '%s\n' \
+    '---' \
+    'manyhands_managed: true' \
+    'manyhands_kind: ticket' \
+    "id: $nested_worktree_ticket_id" \
+    'title: Nested worktree ticket' \
+    'type: task' \
+    'status: open' \
+    '---' \
+    >"$nested_worktree/.manyhands/tickets/$nested_worktree_ticket_id/ticket.md"
+
 nested_primary_directory=$repository/nested/directory
 nested_worktree_directory=$worktree/nested/directory
 mkdir -p "$nested_primary_directory" "$nested_worktree_directory"
@@ -827,6 +838,8 @@ for nested_directory in "$nested_primary_directory" "$nested_worktree_directory"
     fi
     assert_ticket_rows "$list_output"
     assert_malformed_ticket_rejections "$list_output"
+    assert_not_contains "$list_output" "$nested_worktree_ticket_id" \
+        'nested worktree ticket row'
     assert_not_contains "$list_output" $'\nstate\ttask\tkind\tControl' \
         'forged control-escape TSV row'
     assert_not_contains "$list_output" $'\302\205' 'raw Unicode NEL TSV field'
@@ -1008,12 +1021,14 @@ printf '%s\n' \
     'status: open' \
     '---' \
     >"$worktree/.manyhands/tickets/$malformed_duplicate_ticket_id/ticket.md"
-if malformed_duplicate_output=$(cd -- "$nested_primary_directory" && \
+if ! malformed_duplicate_output=$(cd -- "$nested_primary_directory" && \
     "$project_root/scripts/show-ticket" "$malformed_duplicate_ticket_id" 2>&1); then
-    fail 'show-ticket accepted duplicate candidates with malformed metadata'
+    fail "show-ticket rejected primary ticket due to a nested worktree duplicate: $malformed_duplicate_output"
 fi
-assert_contains "$malformed_duplicate_output" 'multiple canonical tickets' \
-    'malformed duplicate-ticket diagnostic'
+assert_contains "$malformed_duplicate_output" 'Valid duplicate candidate' \
+    'primary duplicate isolation diagnostic'
+assert_not_contains "$malformed_duplicate_output" 'multiple canonical tickets' \
+    'primary duplicate isolation diagnostic'
 
 mkdir -p "$repository/.manyhands/tickets/$malformed_ticket_id"
 printf '%s\n' \
@@ -1045,11 +1060,12 @@ printf '%s\n' \
     'status: done' \
     '---' \
     >"$repository/.manyhands/tickets/$worktree_ticket_id/ticket.md"
-if duplicate_output=$(cd -- "$nested_primary_directory" && \
+if ! duplicate_output=$(cd -- "$nested_primary_directory" && \
     "$project_root/scripts/show-ticket" "$worktree_ticket_id" 2>&1); then
-    fail 'show-ticket succeeded for duplicate canonical tickets'
+    fail "show-ticket rejected primary ticket due to a nested worktree duplicate: $duplicate_output"
 fi
-assert_contains "$duplicate_output" 'multiple canonical tickets' 'duplicate-ticket diagnostic'
+assert_contains "$duplicate_output" 'Duplicate worktree ticket' 'primary duplicate isolation diagnostic'
+assert_not_contains "$duplicate_output" 'multiple canonical tickets' 'primary duplicate isolation diagnostic'
 
 if unknown_output=$(cd -- "$nested_primary_directory" && "$project_root/scripts/show-ticket" "$unknown_ticket_id" 2>&1); then
     fail 'show-ticket succeeded for an unknown ticket'
