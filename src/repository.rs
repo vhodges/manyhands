@@ -54,16 +54,19 @@ use recovery::{
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, PublishPendingReason,
-    RemoteContextSnapshot, RemoteContextState, RemoteObservationError, RemoteObservationOutcome,
-    RemoteOperationAction, RemoteOperationInspection, RemoteOperationPhase,
-    RemoteOperationPriority, RemoteOperationSafePoint, RemoteOperationTarget,
-    RemoteOperationTargetError, RemoteOutcomeCategory, RemotePollInvocation,
-    RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
-    RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
-    RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
-    RemoteSnapshot, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
-    SynchronizationTarget, SynchronizeRemoteRequest,
+    AutomaticBackoff, ConfirmedCommitIdentity, ConflictObservation, ConflictPathToken,
+    EphemeralSynchronizationConflictSides, ObservePublicationRemoteRequest, PollingInterval,
+    PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
+    RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
+    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
+    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
+    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
+    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteReservation,
+    RemoteReservationOutcome, RemoteSafePointOutcome, RemoteSnapshot,
+    SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
+    SynchronizationOutcome, SynchronizationResult, SynchronizationStage, SynchronizationTarget,
+    SynchronizeRemoteRequest,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";

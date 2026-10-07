@@ -71,13 +71,30 @@ pub(super) fn classify_integration<E>(
 
 /// Opaque optimistic precondition returned by conflict inspection.  It is not a
 /// path or content capability and deliberately has redacted formatting.
+/// Opaque optimistic precondition for one observed synchronization conflict.
+/// Its private fields bind the operation, stage, target state and conflict set;
+/// formatting never exposes those details.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct ConflictObservation([u8; 32]);
+pub struct ConflictObservation {
+    pub(super) operation_id: OperationId,
+    pub(super) ordinal: u8,
+    pub(super) fingerprint: [u8; 32],
+    pub(super) head: Oid,
+    pub(super) configuration: [u8; 32],
+    pub(super) root: std::path::PathBuf,
+}
 
 impl ConflictObservation {
     #[cfg(test)]
     fn for_testing(value: [u8; 32]) -> Self {
-        Self(value)
+        Self {
+            operation_id: OperationId::new(),
+            ordinal: 0,
+            fingerprint: value,
+            head: Oid::zero(),
+            configuration: [0; 32],
+            root: std::path::PathBuf::new(),
+        }
     }
 }
 
@@ -88,11 +105,26 @@ impl fmt::Debug for ConflictObservation {
 }
 
 /// An inspection-issued path capability.  It has no caller-supplied path text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ConflictPathToken(u32);
+/// Opaque capability for exactly one conflict entry from an inspection.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConflictPathToken {
+    pub(super) observation: ConflictObservation,
+    pub(super) ordinal: u32,
+    pub(super) path: Vec<u8>,
+    pub(super) base: Option<Oid>,
+    pub(super) local: Option<Oid>,
+    pub(super) incoming: Option<Oid>,
+    pub(super) mode: u32,
+}
+
+impl fmt::Debug for ConflictPathToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConflictPathToken(<redacted>)")
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConflictEligibility {
+pub enum ConflictEligibility {
     EligibleCanonical,
     ExternalResolutionRequired,
 }
@@ -146,10 +178,20 @@ pub(super) fn conflict_eligibility(entries: &[ConflictCandidate]) -> ConflictEli
     }
 }
 
+/// Ephemeral conflict content. Callers may consume bytes but diagnostics never
+/// render their contents.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct RedactedConflictBytes(Vec<u8>);
+pub struct RedactedConflictBytes(Vec<u8>);
 
 impl RedactedConflictBytes {
+    pub(super) fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     #[cfg(test)]
     fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
@@ -165,8 +207,11 @@ impl fmt::Debug for RedactedConflictBytes {
 /// Caller confirmation can only supplement a missing effective identity.  The
 /// configuration observation is a digest, never configuration text.
 #[allow(dead_code)] // The caller boundary is persisted by Task 2.
+/// Caller-confirmed identity is accepted only at a committing boundary when
+/// the effective Git configuration has no complete identity. Its configuration
+/// digest makes a confirmation stale when that boundary changes.
 #[derive(Clone)]
-pub(super) struct ConfirmedCommitIdentity {
+pub struct ConfirmedCommitIdentity {
     pub confirmation_id: OperationId,
     pub identity: CommitIdentity,
     pub expected_configuration: [u8; 32],

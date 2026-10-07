@@ -124,6 +124,14 @@ const CASES: &[ssh_harness::Case] = &[
         "context_virtual_primary_divergence_preservation",
         context_virtual_primary_divergence_preservation,
     ),
+    (
+        "primary_conflict_is_retained_and_inspectable",
+        primary_conflict_is_retained_and_inspectable,
+    ),
+    (
+        "context_stage_is_retained_when_primary_conflicts",
+        context_stage_is_retained_when_primary_conflicts,
+    ),
     ("remote_change_during_fetch", remote_change_during_fetch),
     (
         "verified_context_immediate_deletion",
@@ -341,6 +349,7 @@ impl World {
             operation_id: OperationId::new(),
             target,
             restart: false,
+            confirmed_identity: None,
             approval: Some(HostApproval {
                 authority: SshAuthority {
                     host: "127.0.0.1".into(),
@@ -900,17 +909,21 @@ fn context_dirty_wrong_detached_preservation() -> Result<(), FixtureError> {
 fn primary_divergence_preservation() -> Result<(), FixtureError> {
     let w = World::new()?;
     let repo = w.repo()?;
-    advance(&repo, "refs/heads/main", "local-divergent")?;
-    advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
-    let before = physical(&w.root, &w.root)?;
     let n = w.server.receive_updates().len();
-    assert!(matches!(
-        w.sync(w.primary()),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(physical(&w.root, &w.root)?, before);
-    assert_eq!(w.server.receive_updates().len(), n);
+    let result = fixed(w.sync(w.primary()))?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    let merge = fixed(repo.find_commit(oid))?;
+    assert_eq!(merge.parent_count(), 2);
+    assert_eq!(fixed(merge.parent_id(0))?, local);
+    assert_eq!(fixed(merge.parent_id(1))?, incoming);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
     Ok(())
 }
 fn context_remote_divergence_preservation() -> Result<(), FixtureError> {
@@ -921,7 +934,7 @@ fn context_virtual_primary_divergence_preservation() -> Result<(), FixtureError>
 }
 fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
     let mut w = World::new()?;
-    let context = w.context()?;
+    let _context = w.context()?;
     fixed(w.sync(w.context_request()))?;
     let server = w.bare()?;
     let base = fixed(server.refname_to_id("refs/heads/main"))?;
@@ -937,19 +950,135 @@ fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
         let primary = commit(&server, base, "primary-divergent", b"primary-divergent")?;
         fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
     }
-    let before = physical(&w.root, &context.worktree)?;
-    let primary = physical(&w.root, &w.root)?;
+    let primary = if virtual_primary {
+        Some(fixed(server.refname_to_id("refs/heads/main"))?)
+    } else {
+        None
+    };
     let n = w.server.receive_updates().len();
-    assert!(matches!(
-        w.sync(w.context_request()),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(physical(&w.root, &context.worktree)?, before);
-    assert_eq!(physical(&w.root, &w.root)?, primary);
-    assert_eq!(fixed(w.repo()?.refname_to_id(CONTEXT))?, local);
-    assert_eq!(w.server.receive_updates().len(), n);
+    let result = fixed(w.sync(w.context_request()))?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    let repository = w.repo()?;
+    let merge = fixed(repository.find_commit(oid))?;
+    assert_eq!(merge.parent_count(), 2);
+    assert_eq!(
+        fixed(merge.parent_id(0))?,
+        if virtual_primary { remote } else { local }
+    );
+    assert_eq!(fixed(merge.parent_id(1))?, primary.unwrap_or(remote));
+    assert_eq!(fixed(w.bare()?.refname_to_id(CONTEXT))?, oid);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
     Ok(())
 }
+fn primary_conflict_is_retained_and_inspectable() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local_base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, local_base, "conflict", b"local conflict")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let incoming_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(&w.peer, incoming_base, "conflict", b"incoming conflict")?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    let receives = w.server.receive_updates().len();
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending {
+            operation_id: actual,
+            stage: SynchronizationStage::Primary,
+            ..
+        }) if actual == operation_id
+    ));
+    drop(repo);
+    let mut repo = w.repo()?;
+    assert_eq!(fixed(repo.head())?.target(), Some(local));
+    assert!(fixed(repo.index())?.has_conflicts());
+    let mut merge_heads = Vec::new();
+    fixed(repo.mergehead_foreach(|oid| {
+        merge_heads.push(*oid);
+        true
+    }))?;
+    assert_eq!(merge_heads, vec![incoming]);
+    assert!(fixed(std::fs::read_to_string(w.root.join("conflict")))?.contains("<<<<<<<"));
+    assert_eq!(w.server.receive_updates().len(), receives);
+
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.local_parent, local);
+    assert_eq!(inspection.incoming_parent, incoming);
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(!format!("{inspection:?}").contains("<<<<<<<"));
+    let sides = fixed(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+    )?;
+    assert!(sides.local.is_some() && sides.incoming.is_some());
+    assert!(!format!("{sides:?}").contains("conflict"));
+    fixed(std::fs::write(
+        w.root.join(".manyhands/config.toml"),
+        "format_version = 1\nprimary_branch = \"main\"\n# stale\n",
+    ))?;
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    Ok(())
+}
+
+fn context_stage_is_retained_when_primary_conflicts() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let context = w.context()?;
+    fixed(w.sync(w.context_request()))?;
+    let server = w.bare()?;
+    let base = fixed(server.refname_to_id("refs/heads/main"))?;
+    let context_old = fixed(server.refname_to_id(CONTEXT))?;
+    let context_next = commit(&server, context_old, "conflict", b"context side")?;
+    fixed(server.reference(CONTEXT, context_next, true, "fixture"))?;
+    let primary = commit(&server, base, "conflict", b"primary side")?;
+    fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
+    let request = w.context_request();
+    let operation_id = request.operation_id;
+    let receives = w.server.receive_updates().len();
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending {
+            operation_id: actual,
+            stage: SynchronizationStage::Primary,
+            ..
+        }) if actual == operation_id
+    ));
+    let repository = w.repo()?;
+    assert_eq!(fixed(repository.refname_to_id(CONTEXT))?, context_next);
+    let context_repo = fixed(git2::Repository::open(&context.worktree))?;
+    assert_eq!(fixed(context_repo.head())?.target(), Some(context_next));
+    assert!(fixed(context_repo.index())?.has_conflicts());
+    assert!(fixed(std::fs::read_to_string(context.worktree.join("conflict")))?.contains("<<<<<<<"));
+    assert_eq!(w.server.receive_updates().len(), receives);
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.stage, SynchronizationStage::Primary);
+    assert_eq!(inspection.local_parent, context_next);
+    assert_eq!(inspection.incoming_parent, primary);
+    Ok(())
+}
+
 fn remote_change_during_fetch() -> Result<(), FixtureError> {
     let w = World::new()?;
     let bare_path = w.server.repository_path().to_owned();
