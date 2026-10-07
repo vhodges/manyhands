@@ -724,6 +724,67 @@ impl RepositoryService {
         })
     }
 
+    /// Read one owned, fenced candidate application during explicit restart.
+    /// The returned immutable intent is never reconstructed from live refs.
+    pub(super) fn applying_synchronization_candidate(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<Option<state::IntegrationStepEvidence>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) || !record.reconciliation_required {
+                return Err(state::recovery_required());
+            }
+            for ordinal in 0..=1 {
+                if let Some(step) = state::integration_step(tx, record.id, ordinal)?
+                    && step.phase == state::IntegrationStepPhase::Applying
+                    && step.candidate_oid.is_some()
+                {
+                    return Ok(Some(step));
+                }
+            }
+            Ok(None)
+        })
+    }
+
+    /// Commit the already-observed child application into the legacy envelope.
+    /// This is the only restart transition permitted for a pending candidate.
+    pub(super) fn reconcile_synchronization_candidate_applied(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            use state::SynchronizationCheckpoint as C;
+            let step = state::integration_step(tx, record.id, ordinal)?
+                .ok_or_else(state::recovery_required)?;
+            if !is_sync(&record.target)
+                || !record.reconciliation_required
+                || record.sync_checkpoint != Some(C::FetchObserved)
+                || step.phase != state::IntegrationStepPhase::Applied
+                || step.candidate_oid != Some(candidate)
+                || step.result_oid != Some(candidate)
+                || step.observed_tree_oid != Some(tree)
+                || evidence.expected_oid != record.sync_evidence.expected_oid
+                || evidence.local_oid != Some(candidate)
+                || evidence.primary_tracking_oid.is_none()
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='local_fast_forwarded', sync_checkpoint='local_fast_forwarded', reconciliation_required=0, local_oid=?2, tracking_oid=?3, primary_tracking_oid=?4, updated_at=max(updated_at,?5) WHERE id=?1",
+                params![record.id, candidate.to_string(), evidence.tracking_oid.map(|oid| oid.to_string()), evidence.primary_tracking_oid.map(|oid| oid.to_string()), now()],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
     #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
     pub(super) fn begin_synchronization_integration_effect(
         &self,

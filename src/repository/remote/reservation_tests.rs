@@ -711,6 +711,134 @@ fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteRe
 }
 
 #[test]
+fn candidate_reconciliation_advances_fetch_observed_once_after_child_observation() {
+    use super::super::merge::IntegrationStage;
+    let (_data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    let local = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let incoming = git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let fetch_evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &fetch_evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &owner,
+        &plan(),
+        &[observation()],
+        123,
+    )
+    .unwrap();
+    let candidate = git2::Oid::from_str("4444444444444444444444444444444444444444").unwrap();
+    let tree = git2::Oid::from_str("5555555555555555555555555555555555555555").unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: local,
+                baseline_index_digest: [0; 32],
+            },
+        )
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!(),
+    };
+    let step = service
+        .applying_synchronization_candidate(root.path(), &resumed)
+        .unwrap()
+        .unwrap();
+    service
+        .observe_synchronization_integration_effect(root.path(), &resumed, 0, candidate, tree)
+        .unwrap();
+    let record = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert!(record.reconciliation_required);
+    assert_eq!(
+        record.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::FetchObserved)
+    );
+    let mut evidence = record.sync_evidence;
+    evidence.local_oid = Some(candidate);
+    evidence.primary_tracking_oid = Some(local);
+    evidence.tracking_oid = Some(local);
+    assert_eq!(step.candidate_oid, Some(candidate));
+    service
+        .reconcile_synchronization_candidate_applied(
+            root.path(),
+            &resumed,
+            0,
+            candidate,
+            tree,
+            &evidence,
+        )
+        .unwrap();
+    let completed = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        completed.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+    assert!(!completed.reconciliation_required);
+    // A distinct candidate cannot be adopted after completion; the durable
+    // child evidence remains the exact recorded candidate.
+    let mismatched = git2::Oid::from_str("6666666666666666666666666666666666666666").unwrap();
+    assert!(
+        service
+            .reconcile_synchronization_candidate_applied(
+                root.path(),
+                &resumed,
+                0,
+                mismatched,
+                tree,
+                &evidence,
+            )
+            .is_err()
+    );
+    let unchanged = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        unchanged.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+}
+
+#[test]
 fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition() {
     use super::super::merge::IntegrationStage;
     let (data, root, service) = fixture();

@@ -129,6 +129,22 @@ const CASES: &[ssh_harness::Case] = &[
         primary_conflict_is_retained_and_inspectable,
     ),
     (
+        "binary_primary_conflict_side_read_is_refused",
+        binary_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "symlink_primary_conflict_side_read_is_refused",
+        symlink_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "mixed_mode_primary_conflict_side_read_is_refused",
+        mixed_mode_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "worktree_symlink_is_never_followed_during_conflict_side_read",
+        worktree_symlink_is_never_followed_during_conflict_side_read,
+    ),
+    (
         "context_stage_is_retained_when_primary_conflicts",
         context_stage_is_retained_when_primary_conflicts,
     ),
@@ -216,9 +232,18 @@ fn commit(
     name: &str,
     bytes: &[u8],
 ) -> Result<git2::Oid, FixtureError> {
+    commit_with_mode(repo, parent, name, bytes, 0o100644)
+}
+fn commit_with_mode(
+    repo: &git2::Repository,
+    parent: git2::Oid,
+    name: &str,
+    bytes: &[u8],
+    mode: i32,
+) -> Result<git2::Oid, FixtureError> {
     let parent = fixed(repo.find_commit(parent))?;
     let mut builder = fixed(repo.treebuilder(Some(&fixed(parent.tree())?)))?;
-    fixed(builder.insert(name, fixed(repo.blob(bytes))?, 0o100644))?;
+    fixed(builder.insert(name, fixed(repo.blob(bytes))?, mode))?;
     let tree = fixed(repo.find_tree(fixed(builder.write())?))?;
     let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
     fixed(repo.commit(None, &sig, &sig, "owned fixture child", &tree, &[&parent]))
@@ -1037,6 +1062,182 @@ fn primary_conflict_is_retained_and_inspectable() -> Result<(), FixtureError> {
             .read_synchronization_conflict(&inspection.paths[0].token),
         Err(SynchronizationError::ExternalChange)
     ));
+    Ok(())
+}
+
+fn binary_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_BINARY_CANARY\0")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_BINARY_CANARY\0",
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("BINARY_CANARY"));
+    Ok(())
+}
+
+fn symlink_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit_with_mode(&repo, base, "fixture.txt", b"LOCAL_LINK_CANARY", 0o120000)?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit_with_mode(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_LINK_CANARY",
+        0o120000,
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("LINK_CANARY"));
+    Ok(())
+}
+
+fn mixed_mode_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_REGULAR_CANARY\n")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit_with_mode(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_LINK_CANARY",
+        0o120000,
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("REGULAR_CANARY"));
+    assert!(!format!("{inspection:?}").contains("LINK_CANARY"));
+    Ok(())
+}
+
+fn worktree_symlink_is_never_followed_during_conflict_side_read() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_REGULAR_CANARY\n")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_REGULAR_CANARY\n",
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    let sentinel = w.root.join("outside-conflict-canary");
+    fixed(std::fs::write(&sentinel, b"EXTERNAL_SYMLINK_CANARY"))?;
+    let conflict_path = w.root.join("fixture.txt");
+    fixed(std::fs::remove_file(&conflict_path))?;
+    owned_symlink(&sentinel, &conflict_path, false)?;
+    let sides = fixed(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+    )?;
+    assert!(sides.current.is_none());
+    assert!(!format!("{sides:?}").contains("EXTERNAL_SYMLINK_CANARY"));
     Ok(())
 }
 

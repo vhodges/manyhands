@@ -81,6 +81,31 @@ passes its configured `WorktreeAddOptions` by immutable reference to
 altering its ODB/mempack or conflict assertions. Required Devenv formatting,
 merge-test (9 tests), all-target/all-feature clippy, and diff checks passed.
 
+## Tasks 0–3 checkpoint
+
+Task 0 baseline/preflight is committed at `456b509`. Task 1's private mempack
+isolation and Task 2's ordered durable evidence, including their review fixes,
+are committed through `50fea1c`. Task 3's initial ordered integration/conflict
+recovery source and verification are `3a9c197` and `03fe4d6`; its subsequent
+P1 remediation is ready for a local checkpoint commit.
+
+Task 3 now persists a candidate before preparation, reconciles an owned
+applying candidate on exact old/candidate HEAD only, re-fetches before final
+candidate-envelope completion, and refuses any third-head mismatch. It
+rechecks frozen configuration/tracking/clean-target inputs under the mutation
+lease. Conflict side reads bind opaque tokens to the current operation/index
+state, reject unsafe paths and all non-regular stage modes before materializing
+blobs, and never read `current` from the worktree (preventing symlink follow).
+
+Final independent review reports no blocking findings. Required local Devenv
+validation passed: all-feature check, formatting, all-target/all-feature
+clippy with warnings denied, all-feature tests (including 103 SSH cases), and
+the headless CLI smoke test. One P2 test-depth note remains: no separate public
+SSH failure-point test stops exactly while a candidate child is `Applying`; the
+controller-level restart regression covers the mandatory fresh fetch and
+finalization transition. Ticket remains open. Tasks 4–7, native five-target
+verification, code-review/PR approval, delivery, and closure remain pending.
+
 ## Entry Gate
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite

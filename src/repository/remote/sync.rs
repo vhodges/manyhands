@@ -530,14 +530,139 @@ fn committing_identity(
     Ok(confirmation.identity.clone())
 }
 
+#[derive(Clone, Copy)]
+struct ReconciledCandidate {
+    ordinal: u8,
+    oid: git2::Oid,
+    tree: git2::Oid,
+}
+
+/// Observe a candidate's local ref transition on restart, but keep the outer
+/// synchronization envelope reconciling until Fetch is observed again. The
+/// re-fetch is mandatory before any push/publication continuation.
+fn reconcile_pending_candidate(
+    service: &RepositoryService,
+    root: &Path,
+    primary_branch: &str,
+    target: &SynchronizationTarget,
+    owner: &RemoteReservation,
+    evidence: &mut state::SynchronizationEvidence,
+) -> Result<Option<ReconciledCandidate>, SynchronizationError> {
+    let Some(step) = service.applying_synchronization_candidate(root, owner)? else {
+        return Ok(None);
+    };
+    let candidate = step
+        .candidate_oid
+        .ok_or(SynchronizationError::RecoveryRequired)?;
+    let repository = local_target(root, primary_branch, target)?;
+    let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+    let head = local_oid(&repository)?;
+    let commit = repository
+        .find_commit(candidate)
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let parents = [commit.parent_id(0).ok(), commit.parent_id(1).ok()];
+    if commit.parent_count() != 2
+        || parents != [Some(step.intent.local_oid), Some(step.intent.incoming_oid)]
+    {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    let tree = commit.tree_id();
+    if head == step.intent.local_oid {
+        let old = repository
+            .find_commit(head)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        if old.tree_id() != step.intent.baseline_tree_oid
+            || index_digest(old.tree_id()) != step.intent.baseline_index_digest
+        {
+            return Err(SynchronizationError::RecoveryRequired);
+        }
+        let branch = repository
+            .find_reference("HEAD")
+            .ok()
+            .and_then(|reference| reference.symbolic_target().map(str::to_owned))
+            .ok_or(SynchronizationError::RecoveryRequired)?;
+        fast_forward(&repository, &branch, head, candidate)?;
+    } else if head != candidate {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    let observed = local_oid(&repository)?;
+    if observed != candidate {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    service.observe_synchronization_integration_effect(
+        root,
+        owner,
+        step.intent.ordinal,
+        candidate,
+        tree,
+    )?;
+    evidence.local_oid = Some(candidate);
+    Ok(Some(ReconciledCandidate {
+        ordinal: step.intent.ordinal,
+        oid: candidate,
+        tree,
+    }))
+}
+
+/// Once the restarted Fetch has replaced the frozen tracking evidence, commit
+/// the already-observed candidate into the outer synchronization envelope.
+fn finalize_reconciled_candidate(
+    service: &RepositoryService,
+    root: &Path,
+    owner: &RemoteReservation,
+    candidate: ReconciledCandidate,
+    evidence: &state::SynchronizationEvidence,
+) -> Result<(), SynchronizationError> {
+    decision(service.reconcile_synchronization_candidate_applied(
+        root,
+        owner,
+        candidate.ordinal,
+        candidate.oid,
+        candidate.tree,
+        evidence,
+    )?)
+}
+
+#[derive(Clone, Copy)]
 struct DivergenceInputs<'a> {
     root: &'a Path,
     primary_branch: &'a str,
     target: &'a SynchronizationTarget,
     request: &'a SynchronizeRemoteRequest,
     owner: &'a RemoteReservation,
+    plan: &'a RemoteRefPlan,
+    configuration: &'a super::observation::ObservationConfiguration,
+    selected: &'a RemoteRefTarget,
+    primary_tracking: Option<git2::Oid>,
+    selected_tracking: Option<git2::Oid>,
     context: Option<git2::Oid>,
     primary: git2::Oid,
+}
+
+/// Re-observe every input that was frozen after Fetch before mutating the
+/// destination. Preparation is intentionally outside the lease; it is never
+/// authority to apply a merge after configuration, tracking, branch, index or
+/// worktree state changes.
+fn recheck_divergence_inputs(
+    service: &RepositoryService,
+    input: &DivergenceInputs<'_>,
+    expected_local: git2::Oid,
+) -> Result<(), SynchronizationError> {
+    let target_repository = local_target(input.root, input.primary_branch, input.target)?;
+    if local_oid(&target_repository)? != expected_local
+        || service.observation_configuration(input.root, input.plan)? != *input.configuration
+        || target_repository
+            .refname_to_id(input.plan.primary().tracking_ref())
+            .ok()
+            != input.primary_tracking
+        || target_repository
+            .refname_to_id(input.selected.tracking_ref())
+            .ok()
+            != input.selected_tracking
+    {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    Ok(())
 }
 
 fn integrate_divergence(
@@ -552,6 +677,7 @@ fn integrate_divergence(
         owner,
         context,
         primary,
+        ..
     } = input;
     let target_repository = local_target(root, primary_branch, target)?;
     let path = target_repository
@@ -597,12 +723,14 @@ fn integrate_divergence(
             baseline_index_digest: index_digest(local_commit.tree_id()),
         };
         drop(local_commit);
+        // Persist the exact ordered parents before even preparing a candidate;
+        // a restart must never synthesize another candidate for this stage.
+        service.prepare_synchronization_integration(root, owner, &intent)?;
         let prepared = if classification == merge::IntegrationDisposition::MergeRequired {
             Some(prepare_clean_merge(&path, local, incoming)?)
         } else {
             None
         };
-        service.prepare_synchronization_integration(root, owner, &intent)?;
         match classification {
             merge::IntegrationDisposition::Equal
             | merge::IntegrationDisposition::IncomingAlreadyIntegrated => {
@@ -625,6 +753,17 @@ fn integrate_divergence(
                 )?;
             }
             merge::IntegrationDisposition::FastForward => {
+                let _lease = repository_lease(
+                    &target_repository,
+                    root,
+                    RepositoryOperation::RepositorySnapshot,
+                )?;
+                #[cfg(test)]
+                super::observation_tests::checkpoint(RemoteOperationSafePoint::BeforeLocalMutation);
+                recheck_divergence_inputs(service, &input, local)?;
+                if target_repository.find_commit(incoming).is_err() {
+                    return Err(SynchronizationError::ExternalChange);
+                }
                 service.begin_synchronization_integration_effect(
                     root,
                     owner,
@@ -659,7 +798,10 @@ fn integrate_divergence(
                     .map_err(|_| SynchronizationError::RecoveryRequired)?;
                 let _lease =
                     repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
-                if local_oid(&repository)? != local {
+                #[cfg(test)]
+                super::observation_tests::checkpoint(RemoteOperationSafePoint::BeforeLocalMutation);
+                recheck_divergence_inputs(service, &input, local)?;
+                if repository.find_commit(incoming).is_err() {
                     return Err(SynchronizationError::ExternalChange);
                 }
                 if let Some(prepared) = prepared {
@@ -991,9 +1133,11 @@ impl RepositoryService {
                     ordinal: entry_ordinal as u32,
                     path: entry.path.clone(),
                     base: conflict.ancestor.as_ref().map(|entry| entry.id),
+                    base_mode: conflict.ancestor.as_ref().map(|entry| entry.mode),
                     local: conflict.our.as_ref().map(|entry| entry.id),
+                    local_mode: conflict.our.as_ref().map(|entry| entry.mode),
                     incoming: conflict.their.as_ref().map(|entry| entry.id),
-                    mode: entry.mode,
+                    incoming_mode: conflict.their.as_ref().map(|entry| entry.mode),
                 },
                 eligibility: merge::ConflictEligibility::ExternalResolutionRequired,
             });
@@ -1024,6 +1168,23 @@ impl RepositoryService {
         {
             return Err(SynchronizationError::ExternalChange);
         }
+        let safe_path = std::str::from_utf8(&token.path).ok().filter(|path| {
+            !path.is_empty()
+                && std::path::Path::new(path)
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+        });
+        if safe_path.is_none()
+            || [token.base_mode, token.local_mode, token.incoming_mode]
+                .into_iter()
+                .flatten()
+                .any(|mode| mode != 0o100644)
+        {
+            return Err(SynchronizationError::ExternalResolutionRequired {
+                target: inspection.target,
+                operation_id: token.observation.operation_id,
+            });
+        }
         let mut repository =
             Self::inspect_conflict_target(&token.observation.root, &inspection.target)?;
         let _lease = repository_lease(
@@ -1039,23 +1200,30 @@ impl RepositoryService {
             return Err(SynchronizationError::ExternalChange);
         }
         let read = |oid: Option<git2::Oid>| -> Result<Option<merge::RedactedConflictBytes>, SynchronizationError> {
-            oid.map(|oid| repository.find_blob(oid).map(|blob| merge::RedactedConflictBytes::from_bytes(blob.content().to_vec())).map_err(|_| SynchronizationError::RecoveryRequired)).transpose()
+            oid.map(|oid| {
+                let blob = repository.find_blob(oid).map_err(|_| SynchronizationError::RecoveryRequired)?;
+                if blob.is_binary() {
+                    return Err(SynchronizationError::ExternalResolutionRequired {
+                        target: inspection.target.clone(),
+                        operation_id: token.observation.operation_id,
+                    });
+                }
+                Ok(merge::RedactedConflictBytes::from_bytes(blob.content().to_vec()))
+            }).transpose()
         };
-        let current = repository
-            .workdir()
-            .and_then(|root| std::fs::read(root.join(std::str::from_utf8(&token.path).ok()?)).ok())
-            .map(merge::RedactedConflictBytes::from_bytes);
+        // Current worktree bytes are deliberately unavailable: a path-based
+        // read could follow a post-inspection symlink. The three immutable index
+        // stages above are the complete safe inspection surface.
         let sides = EphemeralSynchronizationConflictSides {
             base: read(token.base)?,
             local: read(token.local)?,
             incoming: read(token.incoming)?,
-            current,
+            current: None,
         };
-        if token.mode != 0o100644
-            || [&sides.base, &sides.local, &sides.incoming]
-                .into_iter()
-                .flatten()
-                .any(|bytes| std::str::from_utf8(bytes.bytes()).is_err())
+        if [&sides.base, &sides.local, &sides.incoming]
+            .into_iter()
+            .flatten()
+            .any(|bytes| std::str::from_utf8(bytes.bytes()).is_err())
         {
             return Err(SynchronizationError::ExternalResolutionRequired {
                 target: inspection.target,
@@ -1235,6 +1403,19 @@ impl RepositoryService {
                 local_oid: Some(initial),
                 ..Evidence::default()
             });
+        let pending_candidate = if prior.is_some() {
+            reconcile_pending_candidate(
+                self,
+                &root,
+                &config.primary_branch,
+                &request.target,
+                &owner,
+                &mut evidence,
+            )?
+        } else {
+            None
+        };
+        let candidate_reconciled = pending_candidate.is_some();
         if prior.is_none() {
             decision(self.checkpoint_synchronization(
                 &root,
@@ -1344,6 +1525,16 @@ impl RepositoryService {
         if primary.is_none() {
             return Err(SynchronizationError::PrimaryMissing);
         }
+        let mut resumed = None;
+        if let Some(candidate) = pending_candidate {
+            finalize_reconciled_candidate(self, &root, &owner, candidate, &evidence)?;
+            let record = state::with_transaction(self, &root, |tx, id| {
+                state::read_operation(tx, id, request.operation_id)
+            })?
+            .ok_or(SynchronizationError::RecoveryRequired)?;
+            evidence = record.sync_evidence;
+            resumed = record.sync_checkpoint;
+        }
         let push_absence_boundary =
             self.synchronization_push_absence_boundary(&root, &owner, prior.is_some())?;
         if let Some(boundary) = push_absence_boundary {
@@ -1364,8 +1555,7 @@ impl RepositoryService {
                 return Err(boundary.error());
             }
         }
-        let mut resumed = None;
-        if prior.is_some() {
+        if prior.is_some() && !candidate_reconciled {
             let actual =
                 self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
             let push = self.synchronization_push_observation(
@@ -1421,6 +1611,11 @@ impl RepositoryService {
                     target: &request.target,
                     request: &request,
                     owner: &owner,
+                    plan: &plan,
+                    configuration: &configuration,
+                    selected: &selected,
+                    primary_tracking: evidence.primary_tracking_oid,
+                    selected_tracking: evidence.tracking_oid,
                     context,
                     primary: primary.ok_or(SynchronizationError::PrimaryMissing)?,
                 },

@@ -112,9 +112,11 @@ pub struct ConflictPathToken {
     pub(super) ordinal: u32,
     pub(super) path: Vec<u8>,
     pub(super) base: Option<Oid>,
+    pub(super) base_mode: Option<u32>,
     pub(super) local: Option<Oid>,
+    pub(super) local_mode: Option<u32>,
     pub(super) incoming: Option<Oid>,
-    pub(super) mode: u32,
+    pub(super) incoming_mode: Option<u32>,
 }
 
 impl fmt::Debug for ConflictPathToken {

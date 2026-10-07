@@ -381,22 +381,85 @@ checkpoint. This supporting ledger is now an active lifecycle record; its
 historical planning entries remain intact. Preserved the owner-approved
 whole-merge external mixed-conflict decision and all review rulings.
 
-Authorized scope now: one local planning/approval commit and a handoff brief.
-Implementation is NOT started or authorized in this session. Explicit future
-implementation authorization/method remains a separate gate. No push/PR, CI
-dispatch, merge, ticket closure or cleanup is authorized. No Rust/native tests
-are claimed from documentation-only approval bookkeeping. Repeat fresh ticket
-fetch/rebase/ancestry and baseline checks at implementation entry.
+## Task 3 P1 remediation and acceptance checkpoint — 2026-10-07
 
-Commit scope: four Cycle 06 documentation files, this existing ticket and its
-planning/review/approval comments only. Main and other worktrees remain
-untouched. Do not include unrelated files or change the approved contract.
+Initial Task 3 checkpoints are `3a9c197` (ordered synchronization conflict
+recovery) and `03fe4d6` (its first verification record). Independent review
+found three P1s: an owned applying candidate could not continue through the
+public restart envelope; conflict side reads selected one mode while
+materializing all sides; and prepared divergence inputs were not completely
+re-observed under the lease. A later focused review found a fourth P1: reading
+`current` through the worktree could follow a post-inspection symlink.
 
-Approval-bookkeeping validation: all eight scoped files have managed
-frontmatter, valid ULIDs, balanced fences/final newlines/whitespace; 33 local
-links resolve and IDs are unique. Three specification states are `approved`;
-ticket remains open. Wider ULID-shape scan found one pre-existing 25-character
-ID in Cycle 01 comment
+The remediation keeps a prepared candidate private until verified import,
+persists its intent before preparation, and accepts restart replay only at the
+recorded old HEAD or candidate HEAD. Candidate reconciliation now observes that
+local ref state but deliberately remains `reconciling` through a fresh Fetch;
+it finalizes the outer local-fast-forward envelope only after that Fetch batch
+is durable, preserving ordinary push/publication continuation. Any third head
+remains recovery-required. Before every divergence fast-forward or clean merge
+mutation, the service reopens the selected target under the common-Git lease
+and rechecks its clean symbolic HEAD/index/worktree, endpoint/key
+configuration, primary tracking ref, and selected tracking ref.
+
+Conflict inspection tokens now retain the mode of every present ancestor/local/
+incoming index entry. A side read rejects unsafe/non-UTF-8/traversal paths and
+any non-regular or executable stage before opening blobs. It returns immutable
+Git index sides only: `current` is deliberately `None`, so no worktree path is
+read or symlink followed after inspection. This protects opaque-token privacy
+and retains the external whole-merge recovery boundary for unsupported/mixed
+conflicts.
+
+New regression coverage includes exact old/candidate/third-head candidate
+restart handling; configuration and tracking races at the pre-mutation recheck;
+binary, symlink, and mixed regular/symlink conflict sides; and an actual
+conflicted worktree file replaced by a symlink to an external canary. The
+existing SSH divergence test was updated from Task 2's obsolete
+`MergeRequired` expectation to verify Task 3 ordered two-parent integration
+and publication.
+
+Three independent reviews were completed. The final reviewer found no P0/P1.
+It retained only a P2 coverage-depth note: the candidate restart test exercises
+the controller-level fresh-fetch/finalization path rather than a separate
+public SSH failure-point exactly at child `Applying`. This is explicit residual
+test depth, not a behavior or safety exemption.
+
+Final required local Devenv validation passed, all exit 0:
+
+- `cargo check --all-features --locked`;
+- `cargo fmt --check`;
+- `cargo clippy --all-targets --all-features --locked -- -D warnings`;
+- `cargo test --all-features --locked` (including 15 + 41 + 31 + 103 SSH
+  harness cases and all named integration/unit suites); and
+- `cargo run --locked --bin manyhands-cli`.
+
+The first full validation exposed the stale repository-schema expectation in
+`tests/repository_enablement.rs`; it was updated to list the Task 2 child
+tables. It also exposed an obsolete SSH divergence expectation; it now asserts
+Task 3's ordered parents and published ref. Revalidation after both corrections
+passed. Native five-target evidence remains mandatory and pending; no CI,
+push/PR, merge, ticket closure, or cleanup occurred. Task 3 is ready for one
+local remediation checkpoint commit; Tasks 4–7 remain pending.
+
+Current authority is Task 0–7 sequential implementation with local checkpoint
+commits only; delivery actions remain explicitly unauthorized. The following
+three paragraphs are a historical record of the earlier planning-only approval,
+not a current implementation or delivery constraint.
+
+Historical record — implementation was not then authorized. Future work
+required a fresh ticket fetch/rebase/ancestry check and baseline checks at
+implementation entry; no push/PR, CI dispatch, merge, ticket closure, or cleanup
+was authorized.
+
+Historical record — the planning checkpoint commit scope was four Cycle 06
+documentation files, this ticket and its planning/review/approval comments only.
+Main and other worktrees were preserved.
+
+Historical record — approval-bookkeeping validation found all eight scoped files
+had managed frontmatter, valid ULIDs, balanced fences/final newlines/whitespace;
+33 local links resolved and IDs were unique. Three specification states were
+`approved`; ticket remained open. Wider ULID-shape scan found one pre-existing
+25-character ID in Cycle 01 comment
 `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6D9/01M44B2KM3C6H6SG8M2W5P7R9.md`.
 Verified it is already in HEAD; left this unrelated canonical content untouched.
 This is not a Cycle 06 metadata regression or a claim of globally valid content.
