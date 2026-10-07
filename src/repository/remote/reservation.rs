@@ -951,6 +951,41 @@ impl RepositoryService {
         })
     }
 
+    /// Records a completed ordered merge after the child step has durably
+    /// observed its guarded ref transition. Unlike a fast-forward, the merge
+    /// application has its own child intent/effect journal rather than the
+    /// legacy before-local-update safe point.
+    pub(super) fn checkpoint_synchronization_merge_applied(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            use state::SynchronizationCheckpoint as C;
+            let applied: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND phase='applied')",
+                [record.id],
+                |row| row.get(0),
+            ).map_err(|_| state::recovery_required())?;
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || record.sync_checkpoint != Some(C::FetchObserved)
+                || !applied
+                || evidence.expected_oid != record.sync_evidence.expected_oid
+                || evidence.local_oid.is_none()
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='local_fast_forwarded',sync_checkpoint='local_fast_forwarded',local_oid=?2,tracking_oid=?3,primary_tracking_oid=?4,updated_at=max(updated_at,?5) WHERE id=?1",
+                params![record.id,evidence.local_oid.map(|oid|oid.to_string()),evidence.tracking_oid.map(|oid|oid.to_string()),evidence.primary_tracking_oid.map(|oid|oid.to_string()),now()],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
     pub(crate) fn checkpoint_synchronization(
         &self,
         root: &Path,

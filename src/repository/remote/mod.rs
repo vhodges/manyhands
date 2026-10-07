@@ -2,9 +2,14 @@ mod merge;
 mod observation;
 mod refs;
 mod sync;
+pub use merge::{
+    ConfirmedCommitIdentity, ConflictObservation, ConflictPathToken, RedactedConflictBytes,
+};
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
 pub use sync::{
-    PublishPendingReason, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+    EphemeralSynchronizationConflictSides, PublishPendingReason, SynchronizationConflictInspection,
+    SynchronizationConflictPath, SynchronizationError, SynchronizationOutcome,
+    SynchronizationResult, SynchronizationStage,
 };
 #[cfg(test)]
 pub(crate) mod observation_tests;

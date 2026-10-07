@@ -174,6 +174,7 @@ fn request(case: &Case) -> SynchronizeRemoteRequest {
         operation_id: OperationId::new(),
         target: SynchronizationTarget::Primary,
         approval: case.request().approval,
+        confirmed_identity: None,
         restart: false,
     }
 }

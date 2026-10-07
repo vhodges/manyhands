@@ -65,6 +65,7 @@ fn request(root: &Path) -> SynchronizeRemoteRequest {
         operation_id: OperationId::new(),
         target: SynchronizationTarget::Primary,
         approval: None,
+        confirmed_identity: None,
         restart: false,
     }
 }
@@ -150,6 +151,22 @@ fn wrong_branch_and_unmaterialized_context_are_nonmutating() {
     ));
     assert_eq!(repo.head().unwrap().target(), Some(oid));
 }
+#[test]
+fn foreign_merge_rebase_and_cherry_pick_metadata_are_refused_without_adoption() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let head = repo.head().unwrap().target().unwrap().to_string();
+    for metadata in ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"] {
+        fs::write(repo.path().join(metadata), format!("{head}\n")).unwrap();
+        assert!(matches!(
+            local_target(root.path(), "main", &SynchronizationTarget::Primary),
+            Err(SynchronizationError::WorktreeConflicted { .. })
+        ));
+        fs::remove_file(repo.path().join(metadata)).unwrap();
+    }
+    assert!(local_target(root.path(), "main", &SynchronizationTarget::Primary).is_ok());
+}
+
 #[test]
 fn no_remote_index_pending_retains_exact_outcome_and_replays_refresh_only() {
     let (root, _data, service) = fixture();

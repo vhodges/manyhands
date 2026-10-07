@@ -164,7 +164,15 @@ fn redacted_recovery_contracts_never_format_caller_bytes_or_identity() {
         attempt_id: OperationId::new(),
         observation: ConflictObservation::for_testing([7; 32]),
         resolutions: vec![(
-            super::ConflictPathToken(0),
+            super::ConflictPathToken {
+                observation: ConflictObservation::for_testing([7; 32]),
+                ordinal: 0,
+                path: b"private-path".to_vec(),
+                base: None,
+                local: None,
+                incoming: None,
+                mode: 0o100644,
+            },
             RedactedConflictBytes::new(secret.to_vec()),
         )],
         identity: None,

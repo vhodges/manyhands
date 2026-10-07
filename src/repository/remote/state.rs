@@ -4,7 +4,10 @@ use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::Path;
 
-use super::{RemoteRefClassification, RemoteRefPlan, RemoteRefTarget, merge::IntegrationStage};
+use super::{
+    RemoteRefClassification, RemoteRefPlan, RemoteRefTarget,
+    merge::{ConfirmedCommitIdentity, IntegrationStage},
+};
 use crate::repository::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
 use crate::{canonical::ItemId, repository::AuthoringKind};
 
@@ -787,6 +790,9 @@ pub struct SynchronizeRemoteRequest {
     pub operation_id: crate::repository::OperationId,
     pub target: SynchronizationTarget,
     pub approval: Option<crate::repository::transport::HostApproval>,
+    /// Optional confirmation for the missing-effective-identity commit boundary.
+    /// It has no effect on no-op or fast-forward synchronization.
+    pub confirmed_identity: Option<ConfirmedCommitIdentity>,
     /// Explicitly resume the same interrupted or publication-ambiguous action;
     /// ordinary duplicate calls never steal ownership.
     pub restart: bool,
