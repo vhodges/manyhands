@@ -74,6 +74,13 @@ The ticket remains open. Task 2 has not started; native five-target behavior
 and all orchestration/recovery work remain pending. See the Task 1 comments and
 execution ledger for exact commands, isolation observations and residual gaps.
 
+Task 1 validation remediation is committed at
+`e5a3ab2a8c5a4b6e39149c25bbe07844c4393422`: the linked-worktree test now
+passes its configured `WorktreeAddOptions` by immutable reference to
+`Repository::worktree`, resolving `clippy::unnecessary_mut_passed` without
+altering its ODB/mempack or conflict assertions. Required Devenv formatting,
+merge-test (9 tests), all-target/all-feature clippy, and diff checks passed.
+
 ## Entry Gate
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
