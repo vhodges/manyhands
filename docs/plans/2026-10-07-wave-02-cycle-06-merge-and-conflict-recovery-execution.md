@@ -223,6 +223,26 @@ persistence/replay, canonical parsing and public resolution behavior remain
 unimplemented and unverified future tasks; this local result is not a native
 platform claim.
 
+## Task 1 review remediation — 2026-10-07
+
+Independent review correctly found that the original mempack fixture checked
+only the resolved current HEAD target, so a write to another destination ref
+could have escaped the assertion. Commit
+`b9931fd21c5a724028c503d5f3c09bb4b696879f` resolves that P1 without product
+behavior changes. Before worker preparation, the fixture now recursively
+snapshots byte-for-byte the common Git directory and the worktree Git directory
+for `HEAD`, loose `refs`, optional `packed-refs`, and reflogs. The snapshot
+records directories, regular-file bytes, symlink targets, and path absence by
+map membership; equality after the worker merge therefore detects changed,
+created, or removed loose/packed refs, symbolic/direct HEAD contents, and
+reflogs in either repository layout location. The original destination object,
+index, worktree, other-handle visibility, mempack-lifetime, and explicit-import
+assertions remain intact.
+
+Focused Devenv formatting and merge tests passed for this test-only correction.
+It remains Linux local fixture evidence; it does not add native-platform,
+orchestration, persistence/replay, canonical-resolution, or remote/SSH proof.
+
 ## Next lifecycle checkpoints
 
 1. Completed 2026-10-07: owner approved Cycle, design and implementation plan.
