@@ -237,6 +237,33 @@ no Rust/Cargo/fixture changes or redundant Rust suite. Ticket remains lifecycle-
 open/review-ready; no push/PR/merge/closure/cleanup. Final delivery validation is
 saved separately from the immutable reviewer input under running-spike/final.
 
+## Scroll-performance continuation (2026-10-07)
+
+[Approved performance plan](2026-10-07-wave-03-editor-scroll-performance.md)
+continues the same ticket. User reports README fast, Wave03 laggiest, exited
+previous demo and approved release Rich/Source comparison with edit-driven
+updates. Previous basic usability approval is not scrolling/performance approval.
+
+Fresh origin/main40fc971 (31 newer commits) rebased clean8b53d25→ba750a3;
+one Cargo conflict retained BOTH remote_synchronization and probe registrations.
+Ancestry/clean state verified; main .superpowers/ and devenv.nix~ untouched.
+Pins Kit0.6.6/pre0.3.6/Zorite0.10.0 unchanged. Old source proofs remain historical.
+Mapping: 3f3bc11→b429740,2c53127→239a79a,7ab466f→9c88f93,
+14ebcb4→fdc3d38,8b53d25→ba750a3. Source/API reports remain old-base provisional;
+this task does not substitute for final-main API audit.
+
+| Step | Owner/scope | State |
+| --- | --- | --- |
+| P1 | One serialized owner: edit-only draft update guard/hooks, optional counters, pure regressions/report; final Devenv gates and release build | dispatching after checkpoint |
+| P2 | Fresh independent exact-task review; preserve notify-only undo/redo and cheap fallback honesty | pending P1 |
+| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | pending reviewed P1/P2; no competing Cargo work |
+
+Scrolling/caret/focus/blink must not copy/update drafts or cause extra host notify.
+Changed covers many edits, but undo/redo only notify; supported hooks or a cheap
+borrowed comparison fallback are necessary, explicitly measured, no lost edits.
+Diagnostics default off, aggregate only on request, no per-frame logging/timers.
+No SDK/dependency/core/production/policy/lifecycle scope expansion.
+
 ## Task state
 
 The following table records the **initial, independently reviewed stop-path

@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M48S808PF2D8ZWVYM918RK2M"
 title: "Wave 03 readiness: editor feasibility and provisional API audit"
 type: "exploration"
-status: "review-ready"
+status: "in-progress"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -149,6 +149,18 @@ execution using subagent-driven development is now authorized.
 - [CLI RFC](../../../docs/RFC/cli-contract.md).
 - [Runtime RFC](../../../docs/RFC/application-runtime-and-polling.md).
 - [Wave 03 decision register](../../../docs/RFC/wave-03-rfc-review.md).
+
+## Authorized scroll-performance continuation
+
+The user approved a release-mode Rich/Source comparison and notification/readback
+measurement after reporting README fast and Wave03 scrolling slow. Actual edits,
+not scrolling/caret/focus/redraw, must drive draft updates. Preserve undo/redo,
+IME/paste/table changes and stable body-only document sessions; no core patch or
+product byte ruling. The
+[scroll plan](../../../docs/plans/2026-10-07-wave-03-editor-scroll-performance.md)
+continues this same ticket and serialized subagent-driven method. Original review
+ranges/proofs remain historical; fresh main40fc971 was fetched/rebased before
+this work, with new gates required. Ticket is in-progress/lifecycle-open again.
 
 ## Exit Boundary
 
