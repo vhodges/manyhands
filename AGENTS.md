@@ -45,7 +45,10 @@
 
 ## Working on a ticket
 
-Since each the branch and worktree will be pre-existing from some branch point in the last, before starting, rebase main onto the ticket branch before starting any work, planning or implementation.
+A ticket's branch and worktree already exist, created from some earlier point
+on main, and other work may have landed since. Before starting any planning or
+implementation, fetch the latest main and rebase the ticket branch onto it from
+inside the ticket worktree. Never rebase main onto the ticket branch.
 
 ## Linux Toolchain
 
