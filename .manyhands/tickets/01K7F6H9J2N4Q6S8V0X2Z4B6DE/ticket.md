@@ -62,10 +62,14 @@ Cycle 05's native deferral does not automatically authorize a Cycle 06 deferral.
 ## Task 1 checkpoint
 
 Task 1 backend/API characterization is committed at
-`6f65a79c9a0be0f52b5891d5a9b098b6f2ed3682`. The locked mempack isolation
-stop gate passed in a real local fixture; focused merge and ref tests passed.
+`6f65a79c9a0be0f52b5891d5a9b098b6f2ed3682`. Independent review found the
+mempack fixture's single HEAD-target assertion insufficient to prove that no
+other destination ref storage changed. Valid P1 remediation is committed at
+`b9931fd21c5a724028c503d5f3c09bb4b696879f`: byte-for-byte layout-aware
+snapshots now cover common and worktree Git directories' `HEAD`, loose `refs`,
+optional `packed-refs`, and reflogs (including absence/presence and symlinks).
 The ticket remains open. Task 2 has not started; native five-target behavior
-and all orchestration/recovery work remain pending. See the Task 1 comment and
+and all orchestration/recovery work remain pending. See the Task 1 comments and
 execution ledger for exact commands, isolation observations and residual gaps.
 
 ## Entry Gate
