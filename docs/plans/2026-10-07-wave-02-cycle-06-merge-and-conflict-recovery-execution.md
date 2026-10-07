@@ -246,8 +246,11 @@ orchestration, persistence/replay, canonical-resolution, or remote/SSH proof.
 
 ## Task 2 — ordered recovery and resolution evidence — 2026-10-07
 
-Task 2 adds the approved child evidence to the existing remote operation
-journal, without a second lock or any transport/canonical mutation:
+Task 2 source checkpoint is
+`2db1632bfc78fcc9a79698f36568613034c5b82f`
+(`remote: persist ordered merge recovery evidence`). It adds the approved child
+evidence to the existing remote operation journal, without a second lock or any
+transport/canonical mutation:
 `remote_integration_steps`, `remote_identity_confirmations`,
 `remote_resolution_attempts`, and `remote_resolution_paths`. The migration is
 one SQLite transaction and refuses partially present child schema. Required
