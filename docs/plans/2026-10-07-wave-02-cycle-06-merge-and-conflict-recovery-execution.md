@@ -244,6 +244,59 @@ Focused Devenv formatting and merge tests passed for this test-only correction.
 It remains Linux local fixture evidence; it does not add native-platform,
 orchestration, persistence/replay, canonical-resolution, or remote/SSH proof.
 
+## Task 2 — ordered recovery and resolution evidence — 2026-10-07
+
+Task 2 adds the approved child evidence to the existing remote operation
+journal, without a second lock or any transport/canonical mutation:
+`remote_integration_steps`, `remote_identity_confirmations`,
+`remote_resolution_attempts`, and `remote_resolution_paths`. The migration is
+one SQLite transaction and refuses partially present child schema. Required
+columns and immutable triggers are checked on repeat migration; startup audits
+foreign keys for the child tables and decodes linked evidence while preserving
+all Cycle 04/05 operation rows. Existing terminal authority, index-pending,
+cancellation and ambiguous-push evidence is retained and does not infer a
+merge/resolution/identity effect.
+
+Rows bind operation record/repository target through the immutable parent,
+configuration generation, owner epoch, ordered stage ordinal, immutable OIDs,
+and 32-byte digests. Bounded indexes and operation-scoped queries avoid walking
+retained history in ordinary transitions. Integration intent becomes durable
+before its effect; observed OID/tree completion is written only afterwards.
+Identity confirmation has independently bound input/configuration digests and
+observed configuration progress. Resolution attempts bind exact observation and
+input digest, optional confirmation reference and digest-only per-owned-path
+facts; no body, credential, endpoint, server text or arbitrary path is stored.
+
+Conflict release changes only the active parent slot to interrupted after the
+conflict stage row is durable. The conflict is retained, a different
+synchronization is busy, old tokens are fenced, normal restart cannot adopt it,
+and explicit reacquisition requires the matching operation target, generation,
+stage and conflict digest before advancing the epoch. The new state-only
+transitions cover prepare/apply/observe for integration, identity, resolution
+paths, candidate and checkpoint; Task 3/4 remain responsible for real Git and
+canonical effects.
+
+Focused Devenv commands passed (all exit 0):
+
+- `cargo test --locked --lib repository::remote::state` (21 tests);
+- `cargo test --locked --lib repository::remote::reservation` (25 tests);
+- `cargo test --locked --test remote_reservation --test recovery_foundation_gate`
+  (9 and 50 tests);
+- `cargo fmt --check`;
+- `cargo clippy --locked --lib -- -D warnings`; and
+- `git diff --check`.
+
+Regression coverage exercises actual disposable SQLite migration/repeated
+migration, legacy published/index-pending preservation, partial schema and
+orphan rows, bounded retained-history migration, ID replay mismatch, stale
+owner/two-service race/conflict reacquisition, ordered durable-before-effect
+and observed-after-effect transitions. Privacy coverage scans schema, live WAL,
+database and `VACUUM INTO` backup for body/credential/endpoint sentinels;
+formatted state contains only fixed values. This is local Linux SQLite evidence.
+Native five-target behavior remains pending; no CI was enabled or dispatched.
+No remote/network, canonical file, UI/CLI, dependency, workflow, push/PR,
+merge, closure or cleanup change was made. Ticket remains open.
+
 ## Next lifecycle checkpoints
 
 1. Completed 2026-10-07: owner approved Cycle, design and implementation plan.

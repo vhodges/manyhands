@@ -4,7 +4,7 @@ use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::Path;
 
-use super::{RemoteRefClassification, RemoteRefPlan, RemoteRefTarget};
+use super::{RemoteRefClassification, RemoteRefPlan, RemoteRefTarget, merge::IntegrationStage};
 use crate::repository::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
 use crate::{canonical::ItemId, repository::AuthoringKind};
 
@@ -142,6 +142,7 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         }
     }
     migrate_synchronization(transaction)?;
+    migrate_merge_evidence(transaction)?;
     transaction
         .execute_batch(REMOTE_OPERATION_INDEXES)
         .map_err(|_| recovery_required())?;
@@ -204,6 +205,211 @@ const REMOTE_OPERATION_INDEXES: &str = r#"        CREATE INDEX IF NOT EXISTS rem
             ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable remote operation target'); END;
         CREATE UNIQUE INDEX IF NOT EXISTS remote_active_reservation ON remote_operation_records(repository_id) WHERE phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling');
 "#;
+
+const MERGE_EVIDENCE_SCHEMA: &str = r#"
+        CREATE TABLE remote_integration_steps (
+            id INTEGER PRIMARY KEY,
+            operation_record_id INTEGER NOT NULL REFERENCES remote_operation_records(id) ON DELETE CASCADE,
+            configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            owner_epoch INTEGER NOT NULL CHECK(owner_epoch >= 0),
+            ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 1),
+            stage TEXT NOT NULL CHECK(stage IN ('context','primary')),
+            local_oid TEXT NOT NULL CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
+            incoming_oid TEXT NOT NULL CHECK(length(incoming_oid)=40 AND incoming_oid NOT GLOB '*[^0-9a-f]*'),
+            baseline_tree_oid TEXT NOT NULL CHECK(length(baseline_tree_oid)=40 AND baseline_tree_oid NOT GLOB '*[^0-9a-f]*'),
+            baseline_index_digest BLOB NOT NULL CHECK(typeof(baseline_index_digest)='blob' AND length(baseline_index_digest)=32),
+            candidate_oid TEXT CHECK(length(candidate_oid)=40 AND candidate_oid NOT GLOB '*[^0-9a-f]*'),
+            result_oid TEXT CHECK(length(result_oid)=40 AND result_oid NOT GLOB '*[^0-9a-f]*'),
+            observed_tree_oid TEXT CHECK(length(observed_tree_oid)=40 AND observed_tree_oid NOT GLOB '*[^0-9a-f]*'),
+            conflict_digest BLOB CHECK(conflict_digest IS NULL OR (typeof(conflict_digest)='blob' AND length(conflict_digest)=32)),
+            phase TEXT NOT NULL CHECK(phase IN ('prepared','applying','conflict_pending','resolution_prepared','commit_prepared','applied','recovery_required')),
+            UNIQUE(operation_record_id,ordinal), UNIQUE(operation_record_id,stage),
+            CHECK(phase!='conflict_pending' OR conflict_digest IS NOT NULL),
+            CHECK(phase!='commit_prepared' OR candidate_oid IS NOT NULL),
+            CHECK(phase!='applied' OR (result_oid IS NOT NULL AND observed_tree_oid IS NOT NULL))
+        );
+        CREATE INDEX remote_integration_steps_operation ON remote_integration_steps(operation_record_id,ordinal);
+        CREATE INDEX remote_integration_steps_pending ON remote_integration_steps(operation_record_id) WHERE phase='conflict_pending';
+        CREATE TABLE remote_identity_confirmations (
+            id INTEGER PRIMARY KEY,
+            confirmation_ulid TEXT NOT NULL UNIQUE,
+            operation_record_id INTEGER NOT NULL REFERENCES remote_operation_records(id) ON DELETE CASCADE,
+            configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            owner_epoch INTEGER NOT NULL CHECK(owner_epoch >= 0),
+            input_digest BLOB NOT NULL CHECK(typeof(input_digest)='blob' AND length(input_digest)=32),
+            configuration_digest BLOB NOT NULL CHECK(typeof(configuration_digest)='blob' AND length(configuration_digest)=32),
+            phase TEXT NOT NULL CHECK(phase IN ('prepared','applying','applied','recovery_required')),
+            applied_configuration_digest BLOB CHECK(applied_configuration_digest IS NULL OR (typeof(applied_configuration_digest)='blob' AND length(applied_configuration_digest)=32)),
+            CHECK(phase!='applied' OR applied_configuration_digest IS NOT NULL)
+        );
+        CREATE INDEX remote_identity_confirmations_operation ON remote_identity_confirmations(operation_record_id);
+        CREATE TABLE remote_resolution_attempts (
+            id INTEGER PRIMARY KEY,
+            attempt_ulid TEXT NOT NULL UNIQUE,
+            operation_record_id INTEGER NOT NULL REFERENCES remote_operation_records(id) ON DELETE CASCADE,
+            integration_step_id INTEGER NOT NULL REFERENCES remote_integration_steps(id) ON DELETE CASCADE,
+            configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            owner_epoch INTEGER NOT NULL CHECK(owner_epoch >= 0),
+            observation_digest BLOB NOT NULL CHECK(typeof(observation_digest)='blob' AND length(observation_digest)=32),
+            input_digest BLOB NOT NULL CHECK(typeof(input_digest)='blob' AND length(input_digest)=32),
+            identity_confirmation_id INTEGER REFERENCES remote_identity_confirmations(id) ON DELETE RESTRICT,
+            candidate_oid TEXT CHECK(length(candidate_oid)=40 AND candidate_oid NOT GLOB '*[^0-9a-f]*'),
+            checkpoint_oid TEXT CHECK(length(checkpoint_oid)=40 AND checkpoint_oid NOT GLOB '*[^0-9a-f]*'),
+            phase TEXT NOT NULL CHECK(phase IN ('prepared','paths_applying','candidate_prepared','applied','recovery_required')),
+            CHECK(phase NOT IN ('candidate_prepared','applied') OR candidate_oid IS NOT NULL),
+            CHECK(phase!='applied' OR checkpoint_oid IS NOT NULL)
+        );
+        CREATE INDEX remote_resolution_attempts_operation ON remote_resolution_attempts(operation_record_id,integration_step_id);
+        CREATE TABLE remote_resolution_paths (
+            attempt_id INTEGER NOT NULL REFERENCES remote_resolution_attempts(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            path_digest BLOB NOT NULL CHECK(typeof(path_digest)='blob' AND length(path_digest)=32),
+            expected_digest BLOB NOT NULL CHECK(typeof(expected_digest)='blob' AND length(expected_digest)=32),
+            result_digest BLOB NOT NULL CHECK(typeof(result_digest)='blob' AND length(result_digest)=32),
+            base_blob_oid TEXT CHECK(length(base_blob_oid)=40 AND base_blob_oid NOT GLOB '*[^0-9a-f]*'),
+            local_blob_oid TEXT CHECK(length(local_blob_oid)=40 AND local_blob_oid NOT GLOB '*[^0-9a-f]*'),
+            incoming_blob_oid TEXT CHECK(length(incoming_blob_oid)=40 AND incoming_blob_oid NOT GLOB '*[^0-9a-f]*'),
+            mode INTEGER NOT NULL CHECK(mode IN (33188,33261)),
+            applied INTEGER NOT NULL DEFAULT 0 CHECK(applied IN (0,1)),
+            PRIMARY KEY(attempt_id,ordinal), UNIQUE(attempt_id,path_digest)
+        );
+        CREATE TRIGGER remote_integration_step_immutable BEFORE UPDATE OF operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest ON remote_integration_steps BEGIN SELECT RAISE(ABORT,'immutable integration evidence'); END;
+        CREATE TRIGGER remote_identity_confirmation_immutable BEFORE UPDATE OF confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest ON remote_identity_confirmations BEGIN SELECT RAISE(ABORT,'immutable identity evidence'); END;
+        CREATE TRIGGER remote_resolution_attempt_immutable BEFORE UPDATE OF attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,identity_confirmation_id ON remote_resolution_attempts BEGIN SELECT RAISE(ABORT,'immutable resolution evidence'); END;
+        CREATE TRIGGER remote_resolution_path_immutable BEFORE UPDATE OF attempt_id,ordinal,path_digest,expected_digest,result_digest,base_blob_oid,local_blob_oid,incoming_blob_oid,mode ON remote_resolution_paths BEGIN SELECT RAISE(ABORT,'immutable resolution path evidence'); END;
+"#;
+
+fn migrate_merge_evidence(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let tables = [
+        "remote_integration_steps",
+        "remote_identity_confirmations",
+        "remote_resolution_attempts",
+        "remote_resolution_paths",
+    ];
+    let present = tables
+        .iter()
+        .map(|table| {
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [*table],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|_| recovery_required())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+    if present != 0 && present != tables.len() {
+        return Err(recovery_required());
+    }
+    if present == 0 {
+        tx.execute_batch(MERGE_EVIDENCE_SCHEMA)
+            .map_err(|_| recovery_required())?;
+    }
+    validate_merge_evidence_schema(tx)
+}
+
+fn validate_merge_evidence_schema(connection: &Connection) -> Result<(), RepositoryError> {
+    for (table, required) in [
+        (
+            "remote_integration_steps",
+            &[
+                "id",
+                "operation_record_id",
+                "configuration_generation",
+                "owner_epoch",
+                "ordinal",
+                "stage",
+                "local_oid",
+                "incoming_oid",
+                "baseline_tree_oid",
+                "baseline_index_digest",
+                "candidate_oid",
+                "result_oid",
+                "observed_tree_oid",
+                "conflict_digest",
+                "phase",
+            ] as &[_],
+        ),
+        (
+            "remote_identity_confirmations",
+            &[
+                "id",
+                "confirmation_ulid",
+                "operation_record_id",
+                "configuration_generation",
+                "owner_epoch",
+                "input_digest",
+                "configuration_digest",
+                "phase",
+                "applied_configuration_digest",
+            ],
+        ),
+        (
+            "remote_resolution_attempts",
+            &[
+                "id",
+                "attempt_ulid",
+                "operation_record_id",
+                "integration_step_id",
+                "configuration_generation",
+                "owner_epoch",
+                "observation_digest",
+                "input_digest",
+                "identity_confirmation_id",
+                "candidate_oid",
+                "checkpoint_oid",
+                "phase",
+            ],
+        ),
+        (
+            "remote_resolution_paths",
+            &[
+                "attempt_id",
+                "ordinal",
+                "path_digest",
+                "expected_digest",
+                "result_digest",
+                "base_blob_oid",
+                "local_blob_oid",
+                "incoming_blob_oid",
+                "mode",
+                "applied",
+            ],
+        ),
+    ] {
+        let columns = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|_| recovery_required())?;
+        if columns != required {
+            return Err(recovery_required());
+        }
+    }
+    for trigger in [
+        "remote_integration_step_immutable",
+        "remote_identity_confirmation_immutable",
+        "remote_resolution_attempt_immutable",
+        "remote_resolution_path_immutable",
+    ] {
+        let present: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?1)",
+                [trigger],
+                |row| row.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        if !present {
+            return Err(recovery_required());
+        }
+    }
+    Ok(())
+}
 
 fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let columns = tx
@@ -1145,6 +1351,83 @@ fn oid(value: Option<String>) -> Result<Option<Oid>, RepositoryError> {
         .transpose()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct IntegrationStepIntent {
+    pub ordinal: u8,
+    pub stage: IntegrationStage,
+    pub local_oid: Oid,
+    pub incoming_oid: Oid,
+    pub baseline_tree_oid: Oid,
+    pub baseline_index_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Task 3 supplies caller-confirmed identity before candidates.
+pub(super) struct IdentityConfirmationIntent {
+    pub confirmation_id: crate::repository::OperationId,
+    pub input_digest: [u8; 32],
+    pub configuration_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Task 4 supplies actual conflict observations and paths.
+pub(super) struct ResolutionAttemptIntent {
+    pub attempt_id: crate::repository::OperationId,
+    pub step_ordinal: u8,
+    pub observation_digest: [u8; 32],
+    pub input_digest: [u8; 32],
+    pub identity_confirmation_id: Option<crate::repository::OperationId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Task 4 supplies actual conflict observations and paths.
+pub(super) struct ResolutionPathIntent {
+    pub ordinal: u32,
+    pub path_digest: [u8; 32],
+    pub expected_digest: [u8; 32],
+    pub result_digest: [u8; 32],
+    pub base_blob_oid: Option<Oid>,
+    pub local_blob_oid: Option<Oid>,
+    pub incoming_blob_oid: Option<Oid>,
+    pub mode: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IntegrationStepPhase {
+    Prepared,
+    Applying,
+    ConflictPending,
+    ResolutionPrepared,
+    CommitPrepared,
+    Applied,
+    RecoveryRequired,
+}
+
+impl IntegrationStepPhase {
+    fn parse(value: &str) -> Result<Self, RepositoryError> {
+        Ok(match value {
+            "prepared" => Self::Prepared,
+            "applying" => Self::Applying,
+            "conflict_pending" => Self::ConflictPending,
+            "resolution_prepared" => Self::ResolutionPrepared,
+            "commit_prepared" => Self::CommitPrepared,
+            "applied" => Self::Applied,
+            "recovery_required" => Self::RecoveryRequired,
+            _ => return Err(recovery_required()),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct IntegrationStepEvidence {
+    pub intent: IntegrationStepIntent,
+    pub phase: IntegrationStepPhase,
+    pub candidate_oid: Option<Oid>,
+    pub result_oid: Option<Oid>,
+    pub observed_tree_oid: Option<Oid>,
+    pub conflict_digest: Option<[u8; 32]>,
+}
+
 #[allow(dead_code)] // Consumed by the reservation controller in Task 3.
 #[derive(Clone, Debug)]
 pub(in super::super) struct StoredRemoteOperation {
@@ -1407,7 +1690,11 @@ pub(in super::super) fn read_operations(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<Vec<StoredRemoteOperation>, RepositoryError> {
-    read_operation_rows(connection, repository_id, false)
+    let records = read_operation_rows(connection, repository_id, false)?;
+    for record in &records {
+        audit_merge_evidence(connection, record)?;
+    }
+    Ok(records)
 }
 
 pub(super) fn read_operation_rows(
@@ -1420,7 +1707,7 @@ pub(super) fn read_operation_rows(
     } else {
         "SELECT * FROM remote_operation_records WHERE repository_id=?1 ORDER BY id"
     };
-    connection
+    let records = connection
         .prepare(query)
         .and_then(|mut statement| {
             statement
@@ -1429,7 +1716,11 @@ pub(super) fn read_operation_rows(
         })
         .map_err(|_| recovery_required())?
         .into_iter()
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    for record in &records {
+        audit_merge_evidence(connection, record)?;
+    }
+    Ok(records)
 }
 
 pub(super) fn read_operation(
@@ -1437,7 +1728,7 @@ pub(super) fn read_operation(
     repository_id: i64,
     operation_id: crate::repository::OperationId,
 ) -> Result<Option<StoredRemoteOperation>, RepositoryError> {
-    connection
+    let record = connection
         .query_row(
             "SELECT * FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2",
             params![repository_id, operation_id.to_string()],
@@ -1445,7 +1736,11 @@ pub(super) fn read_operation(
         )
         .optional()
         .map_err(|_| recovery_required())?
-        .transpose()
+        .transpose()?;
+    if let Some(record) = &record {
+        audit_merge_evidence(connection, record)?;
+    }
+    Ok(record)
 }
 
 /// The remote operations the status reads look at: the one with this ID,
@@ -1540,6 +1835,436 @@ pub(super) fn generation(
     repository_id: i64,
 ) -> Result<i64, RepositoryError> {
     Ok(read_policy(connection, repository_id)?.generation)
+}
+
+fn stage_name(stage: IntegrationStage) -> &'static str {
+    match stage {
+        IntegrationStage::Context => "context",
+        IntegrationStage::Primary => "primary",
+    }
+}
+
+fn digest(value: Option<Vec<u8>>) -> Result<Option<[u8; 32]>, RepositoryError> {
+    value
+        .map(|value| value.try_into().map_err(|_| recovery_required()))
+        .transpose()
+}
+
+fn synchronization_record(record: &StoredRemoteOperation) -> Result<(), RepositoryError> {
+    if !matches!(
+        record.target.action(),
+        RemoteOperationAction::SynchronizePrimary | RemoteOperationAction::SynchronizeContext
+    ) {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
+pub(super) fn prepare_integration_step(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    intent: &IntegrationStepIntent,
+) -> Result<IntegrationStepEvidence, RepositoryError> {
+    synchronization_record(record)?;
+    if intent.ordinal > 1
+        || (record.target.action() == RemoteOperationAction::SynchronizePrimary
+            && (intent.ordinal != 0 || intent.stage != IntegrationStage::Primary))
+        || (intent.ordinal == 1 && intent.stage != IntegrationStage::Primary)
+    {
+        return Err(recovery_required());
+    }
+    if let Some(existing) = integration_step(tx, record.id, intent.ordinal)? {
+        if existing.intent != *intent || existing.phase != IntegrationStepPhase::Prepared {
+            return Err(recovery_required());
+        }
+        return Ok(existing);
+    }
+    let expected_ordinal: i64 = tx
+        .query_row(
+            "SELECT count(*) FROM remote_integration_steps WHERE operation_record_id=?1",
+            [record.id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if expected_ordinal != i64::from(intent.ordinal) {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,phase) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'prepared')",
+        params![record.id,record.generation,record.owner_epoch,i64::from(intent.ordinal),stage_name(intent.stage),intent.local_oid.to_string(),intent.incoming_oid.to_string(),intent.baseline_tree_oid.to_string(),intent.baseline_index_digest.as_slice()],
+    ).map_err(|_| recovery_required())?;
+    integration_step(tx, record.id, intent.ordinal)?.ok_or_else(recovery_required)
+}
+
+pub(super) fn begin_integration_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    ordinal: u8,
+    candidate_oid: Option<Oid>,
+) -> Result<(), RepositoryError> {
+    let step = integration_step(tx, record.id, ordinal)?.ok_or_else(recovery_required)?;
+    if step.phase != IntegrationStepPhase::Prepared {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='applying',candidate_oid=?2 WHERE operation_record_id=?1 AND ordinal=?3",
+        params![record.id,candidate_oid.map(|oid| oid.to_string()),i64::from(ordinal)],
+    ).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn observe_integration_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    ordinal: u8,
+    result_oid: Oid,
+    observed_tree_oid: Oid,
+) -> Result<(), RepositoryError> {
+    let step = integration_step(tx, record.id, ordinal)?.ok_or_else(recovery_required)?;
+    if step.phase != IntegrationStepPhase::Applying {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='applied',result_oid=?2,observed_tree_oid=?3 WHERE operation_record_id=?1 AND ordinal=?4",
+        params![record.id,result_oid.to_string(),observed_tree_oid.to_string(),i64::from(ordinal)],
+    ).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn record_integration_conflict(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    ordinal: u8,
+    conflict_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    let step = integration_step(tx, record.id, ordinal)?.ok_or_else(recovery_required)?;
+    if step.phase != IntegrationStepPhase::Applying {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='conflict_pending',conflict_digest=?2 WHERE operation_record_id=?1 AND ordinal=?3",
+        params![record.id,conflict_digest.as_slice(),i64::from(ordinal)],
+    ).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn integration_step(
+    connection: &Connection,
+    operation_record_id: i64,
+    ordinal: u8,
+) -> Result<Option<IntegrationStepEvidence>, RepositoryError> {
+    connection.query_row(
+        "SELECT ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,phase,candidate_oid,result_oid,observed_tree_oid,conflict_digest FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2",
+        params![operation_record_id,i64::from(ordinal)],
+        |row| {
+            let stage = match row.get::<_, String>(1)?.as_str() {
+                "context" => IntegrationStage::Context,
+                "primary" => IntegrationStage::Primary,
+                _ => return Err(rusqlite::Error::InvalidQuery),
+            };
+            let phase = row.get::<_, String>(6)?;
+            Ok((
+                IntegrationStepIntent {
+                    ordinal: row.get::<_, i64>(0)? as u8,
+                    stage,
+                    local_oid: Oid::from_str(&row.get::<_, String>(2)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    incoming_oid: Oid::from_str(&row.get::<_, String>(3)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    baseline_tree_oid: Oid::from_str(&row.get::<_, String>(4)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    baseline_index_digest: row.get::<_, Vec<u8>>(5)?.try_into().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                },
+                phase,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<Vec<u8>>>(10)?,
+            ))
+        },
+    ).optional().map_err(|_| recovery_required())?.map(|(intent, phase, candidate, result, tree, conflict)| {
+        let phase = IntegrationStepPhase::parse(&phase)?;
+        let candidate_oid = oid(candidate)?;
+        let result_oid = oid(result)?;
+        let observed_tree_oid = oid(tree)?;
+        let conflict_digest = digest(conflict)?;
+        if (phase == IntegrationStepPhase::ConflictPending && conflict_digest.is_none())
+            || (phase == IntegrationStepPhase::CommitPrepared && candidate_oid.is_none())
+            || (phase == IntegrationStepPhase::Applied
+                && (result_oid.is_none() || observed_tree_oid.is_none()))
+        {
+            return Err(recovery_required());
+        }
+        Ok(IntegrationStepEvidence { intent, phase, candidate_oid, result_oid, observed_tree_oid, conflict_digest })
+    }).transpose()
+}
+
+fn audit_merge_evidence(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+) -> Result<(), RepositoryError> {
+    let steps = connection.prepare("SELECT ordinal FROM remote_integration_steps WHERE operation_record_id=?1 ORDER BY ordinal")
+        .and_then(|mut statement| statement.query_map([record.id], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>())
+        .map_err(|_| recovery_required())?;
+    for (expected, ordinal) in steps.into_iter().enumerate() {
+        if ordinal != expected as i64 || !(0..=1).contains(&ordinal) {
+            return Err(recovery_required());
+        }
+        let step = integration_step(connection, record.id, ordinal as u8)?
+            .ok_or_else(recovery_required)?;
+        synchronization_record(record)?;
+        if (ordinal == 1 && step.intent.stage != IntegrationStage::Primary)
+            || (record.target.action() == RemoteOperationAction::SynchronizePrimary
+                && (ordinal != 0 || step.intent.stage != IntegrationStage::Primary))
+        {
+            return Err(recovery_required());
+        }
+    }
+    let invalid_attempt: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt LEFT JOIN remote_integration_steps step ON step.id=attempt.integration_step_id WHERE attempt.operation_record_id=?1 AND (step.operation_record_id!=attempt.operation_record_id OR step.configuration_generation!=attempt.configuration_generation OR attempt.configuration_generation!=?2 OR attempt.owner_epoch<0 OR length(attempt.observation_digest)!=32 OR length(attempt.input_digest)!=32))",
+        params![record.id,record.generation],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    let invalid_confirmation: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_identity_confirmations WHERE operation_record_id=?1 AND (configuration_generation!=?2 OR owner_epoch<0 OR length(input_digest)!=32 OR length(configuration_digest)!=32 OR (phase='applied' AND applied_configuration_digest IS NULL)))",
+        params![record.id,record.generation],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    let invalid_paths: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_resolution_paths path JOIN remote_resolution_attempts attempt ON attempt.id=path.attempt_id WHERE attempt.operation_record_id=?1 AND (length(path.path_digest)!=32 OR length(path.expected_digest)!=32 OR length(path.result_digest)!=32 OR path.mode NOT IN (33188,33261)))",
+        [record.id],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    if invalid_attempt || invalid_confirmation || invalid_paths {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
+pub(super) fn has_pending_conflict(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<bool, RepositoryError> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND step.phase='conflict_pending')",
+        [repository_id],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())
+}
+
+fn validate_child_id(
+    tx: &Transaction<'_>,
+    operation_id: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    let id = operation_id.to_string();
+    let collision: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_identity_confirmations WHERE confirmation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_resolution_attempts WHERE attempt_ulid=?1)",
+        [&id],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    if collision {
+        Err(recovery_required())
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn prepare_identity_confirmation(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    intent: &IdentityConfirmationIntent,
+) -> Result<(), RepositoryError> {
+    synchronization_record(record)?;
+    let id = intent.confirmation_id.to_string();
+    let existing = tx.query_row(
+        "SELECT operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest FROM remote_identity_confirmations WHERE confirmation_ulid=?1",
+        [&id],
+        |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Vec<u8>>(4)?)),
+    ).optional().map_err(|_| recovery_required())?;
+    if let Some((parent, generation, epoch, input, configuration)) = existing {
+        if parent == record.id
+            && generation == record.generation
+            && epoch == record.owner_epoch
+            && input.as_slice() == intent.input_digest
+            && configuration.as_slice() == intent.configuration_digest
+        {
+            return Ok(());
+        }
+        return Err(recovery_required());
+    }
+    validate_child_id(tx, intent.confirmation_id)?;
+    tx.execute("INSERT INTO remote_identity_confirmations(confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest,phase) VALUES(?1,?2,?3,?4,?5,?6,'prepared')",params![id,record.id,record.generation,record.owner_epoch,intent.input_digest.as_slice(),intent.configuration_digest.as_slice()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn prepare_resolution_attempt(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    intent: &ResolutionAttemptIntent,
+    paths: &[ResolutionPathIntent],
+) -> Result<(), RepositoryError> {
+    synchronization_record(record)?;
+    if paths.is_empty()
+        || paths.iter().enumerate().any(|(index, path)| {
+            path.ordinal as usize != index || !matches!(path.mode, 33188 | 33261)
+        })
+    {
+        return Err(recovery_required());
+    }
+    let step =
+        integration_step(tx, record.id, intent.step_ordinal)?.ok_or_else(recovery_required)?;
+    if step.phase != IntegrationStepPhase::ConflictPending
+        || step.conflict_digest != Some(intent.observation_digest)
+    {
+        return Err(recovery_required());
+    }
+    let attempt = intent.attempt_id.to_string();
+    let existing = tx.query_row("SELECT operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest FROM remote_resolution_attempts WHERE attempt_ulid=?1",[&attempt],|row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?,row.get::<_,Vec<u8>>(4)?,row.get::<_,Vec<u8>>(5)?))).optional().map_err(|_| recovery_required())?;
+    if let Some((parent, step_id, generation, epoch, observation, input)) = existing {
+        let expected_step: i64 = tx.query_row("SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2",params![record.id,i64::from(intent.step_ordinal)],|row| row.get(0)).map_err(|_| recovery_required())?;
+        if parent == record.id
+            && step_id == expected_step
+            && generation == record.generation
+            && epoch == record.owner_epoch
+            && observation.as_slice() == intent.observation_digest
+            && input.as_slice() == intent.input_digest
+        {
+            return Ok(());
+        }
+        return Err(recovery_required());
+    }
+    validate_child_id(tx, intent.attempt_id)?;
+    let step_id: i64 = tx
+        .query_row(
+            "SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2",
+            params![record.id, i64::from(intent.step_ordinal)],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    let identity_id = intent.identity_confirmation_id.map(|confirmation| tx.query_row("SELECT id FROM remote_identity_confirmations WHERE confirmation_ulid=?1 AND operation_record_id=?2",params![confirmation.to_string(),record.id],|row| row.get::<_,i64>(0)).map_err(|_| recovery_required())).transpose()?;
+    tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,identity_confirmation_id,phase) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'prepared')",params![attempt,record.id,step_id,record.generation,record.owner_epoch,intent.observation_digest.as_slice(),intent.input_digest.as_slice(),identity_id]).map_err(|_| recovery_required())?;
+    let attempt_id = tx.last_insert_rowid();
+    for path in paths {
+        tx.execute("INSERT INTO remote_resolution_paths(attempt_id,ordinal,path_digest,expected_digest,result_digest,base_blob_oid,local_blob_oid,incoming_blob_oid,mode) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![attempt_id,i64::from(path.ordinal),path.path_digest.as_slice(),path.expected_digest.as_slice(),path.result_digest.as_slice(),path.base_blob_oid.map(|oid|oid.to_string()),path.local_blob_oid.map(|oid|oid.to_string()),path.incoming_blob_oid.map(|oid|oid.to_string()),i64::from(path.mode)]).map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
+
+fn resolution_attempt_id(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<(i64, String), RepositoryError> {
+    connection.query_row(
+        "SELECT id,phase FROM remote_resolution_attempts WHERE attempt_ulid=?1 AND operation_record_id=?2 AND configuration_generation=?3 AND owner_epoch=?4",
+        params![attempt.to_string(),record.id,record.generation,record.owner_epoch],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional().map_err(|_| recovery_required())?.ok_or_else(recovery_required)
+}
+
+pub(super) fn begin_resolution_path_effects(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    let (attempt_id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if phase != "prepared" {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_resolution_attempts SET phase='paths_applying' WHERE id=?1",
+        [attempt_id],
+    )
+    .map_err(|_| recovery_required())?;
+    tx.execute("UPDATE remote_integration_steps SET phase='resolution_prepared' WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1) AND phase='conflict_pending'", [attempt_id]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn observe_resolution_path_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    ordinal: u32,
+) -> Result<(), RepositoryError> {
+    let (attempt_id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if phase != "paths_applying" {
+        return Err(recovery_required());
+    }
+    if tx.execute("UPDATE remote_resolution_paths SET applied=1 WHERE attempt_id=?1 AND ordinal=?2 AND applied=0",params![attempt_id,i64::from(ordinal)]).map_err(|_| recovery_required())? != 1 { return Err(recovery_required()); }
+    Ok(())
+}
+
+pub(super) fn prepare_resolution_candidate(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    candidate_oid: Oid,
+) -> Result<(), RepositoryError> {
+    let (attempt_id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if phase != "paths_applying" {
+        return Err(recovery_required());
+    }
+    let incomplete: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_resolution_paths WHERE attempt_id=?1 AND applied=0)",[attempt_id],|row|row.get(0)).map_err(|_| recovery_required())?;
+    if incomplete {
+        return Err(recovery_required());
+    }
+    tx.execute("UPDATE remote_resolution_attempts SET phase='candidate_prepared',candidate_oid=?2 WHERE id=?1",params![attempt_id,candidate_oid.to_string()]).map_err(|_| recovery_required())?;
+    tx.execute("UPDATE remote_integration_steps SET phase='commit_prepared',candidate_oid=?2 WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1) AND phase='resolution_prepared'",params![attempt_id,candidate_oid.to_string()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn observe_resolution_checkpoint(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    checkpoint_oid: Oid,
+    observed_tree_oid: Oid,
+) -> Result<(), RepositoryError> {
+    let (attempt_id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if phase != "candidate_prepared" {
+        return Err(recovery_required());
+    }
+    let candidate: String = tx
+        .query_row(
+            "SELECT candidate_oid FROM remote_resolution_attempts WHERE id=?1",
+            [attempt_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if Oid::from_str(&candidate).map_err(|_| recovery_required())? != checkpoint_oid {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_resolution_attempts SET phase='applied',checkpoint_oid=?2 WHERE id=?1",
+        params![attempt_id, checkpoint_oid.to_string()],
+    )
+    .map_err(|_| recovery_required())?;
+    tx.execute("UPDATE remote_integration_steps SET phase='applied',result_oid=?2,observed_tree_oid=?3 WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1) AND phase='commit_prepared'",params![attempt_id,checkpoint_oid.to_string(),observed_tree_oid.to_string()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn begin_identity_confirmation_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    confirmation: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    let changed = tx.execute("UPDATE remote_identity_confirmations SET phase='applying' WHERE confirmation_ulid=?1 AND operation_record_id=?2 AND configuration_generation=?3 AND owner_epoch=?4 AND phase='prepared'",params![confirmation.to_string(),record.id,record.generation,record.owner_epoch]).map_err(|_| recovery_required())?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(recovery_required())
+    }
+}
+
+pub(super) fn observe_identity_confirmation_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    confirmation: crate::repository::OperationId,
+    applied_configuration_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    let changed = tx.execute("UPDATE remote_identity_confirmations SET phase='applied',applied_configuration_digest=?5 WHERE confirmation_ulid=?1 AND operation_record_id=?2 AND configuration_generation=?3 AND owner_epoch=?4 AND phase='applying'",params![confirmation.to_string(),record.id,record.generation,record.owner_epoch,applied_configuration_digest.as_slice()]).map_err(|_| recovery_required())?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(recovery_required())
+    }
 }
 
 /// Inserts a validated immutable audit envelope. Arbitration and transitions
@@ -1656,6 +2381,10 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         "remote_ref_observations",
         "remote_context_states",
         "remote_operation_records",
+        "remote_integration_steps",
+        "remote_identity_confirmations",
+        "remote_resolution_attempts",
+        "remote_resolution_paths",
     ] {
         if transaction
             .prepare(&format!("PRAGMA foreign_key_check({table})"))

@@ -489,6 +489,9 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            if is_sync(target) && state::has_pending_conflict(tx, repository_id)? {
+                return Ok(RemoteReservationOutcome::Busy);
+            }
             state::read_snapshot(tx, repository_id)?;
             if let Some(record) = state::read_operation_rows(tx, repository_id, true)?
                 .into_iter()
@@ -705,6 +708,249 @@ impl RepositoryService {
         })
     }
 
+    /// Child intent is durable before a merge/index effect. The owner epoch is
+    /// captured in the immutable row; a later reacquisition receives a new
+    /// token and cannot rewrite the earlier intent.
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn prepare_synchronization_integration(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::IntegrationStepIntent,
+    ) -> Result<state::IntegrationStepEvidence, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_integration_step(tx, &record, intent)
+        })
+    }
+
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn begin_synchronization_integration_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        candidate_oid: Option<git2::Oid>,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::begin_integration_effect(tx, &record, ordinal, candidate_oid)
+        })
+    }
+
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn observe_synchronization_integration_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        result_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_integration_effect(tx, &record, ordinal, result_oid, observed_tree_oid)
+        })
+    }
+
+    /// A conflict is observed after the Git effect and then releases only the
+    /// active slot. The immutable operation/stage remains for explicit matching
+    /// reconciliation; another synchronization cannot adopt it.
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn release_synchronization_conflict(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::record_integration_conflict(tx, &record, ordinal, conflict_digest)?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                params![record.id, now(), owner.epoch],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
+    /// Reacquisition is deliberately separate from ordinary restart: it proves
+    /// the exact durable operation, target, generation and conflict digest.
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn reacquire_synchronization_conflict(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            if &record.target != target
+                || !is_sync(target)
+                || record.phase != RemoteOperationPhase::Interrupted
+                || record.generation != state::generation(tx, id)?
+                || record.cancel_requested
+            {
+                return Err(state::recovery_required());
+            }
+            let step = state::integration_step(tx, record.id, ordinal)?
+                .ok_or_else(state::recovery_required)?;
+            if step.phase != state::IntegrationStepPhase::ConflictPending
+                || step.conflict_digest != Some(conflict_digest)
+            {
+                return Err(state::recovery_required());
+            }
+            if state::read_operation_rows(tx, id, true)?
+                .iter()
+                .any(|other| other.id != record.id)
+            {
+                return Ok(RemoteReservationOutcome::Busy);
+            }
+            let epoch = record
+                .owner_epoch
+                .checked_add(1)
+                .ok_or_else(state::recovery_required)?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
+                params![record.id, epoch, now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            let reacquired = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            Ok(RemoteReservationOutcome::Reserved(token(
+                self,
+                id,
+                &reacquired,
+            )))
+        })
+    }
+
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn prepare_synchronization_identity_confirmation(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::IdentityConfirmationIntent,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_identity_confirmation(tx, &record, intent)
+        })
+    }
+
+    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    pub(super) fn prepare_synchronization_resolution_attempt(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::ResolutionAttemptIntent,
+        paths: &[state::ResolutionPathIntent],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_attempt(tx, &record, intent, paths)
+        })
+    }
+
+    #[allow(dead_code)] // Task 4 supplies observed owned-path writes.
+    pub(super) fn begin_synchronization_resolution_path_effects(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::begin_resolution_path_effects(tx, &record, attempt)
+        })
+    }
+
+    #[allow(dead_code)] // Task 4 observes each guarded path after its write.
+    pub(super) fn observe_synchronization_resolution_path_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        ordinal: u32,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_resolution_path_effect(tx, &record, attempt, ordinal)
+        })
+    }
+
+    #[allow(dead_code)] // Task 4 records the detached two-parent candidate before ref movement.
+    pub(super) fn prepare_synchronization_resolution_candidate(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        candidate_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_candidate(tx, &record, attempt, candidate_oid)
+        })
+    }
+
+    #[allow(dead_code)] // Task 4 writes completion only after re-observing ref/tree state.
+    pub(super) fn observe_synchronization_resolution_checkpoint(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        checkpoint_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_resolution_checkpoint(
+                tx,
+                &record,
+                attempt,
+                checkpoint_oid,
+                observed_tree_oid,
+            )
+        })
+    }
+
+    #[allow(dead_code)] // Task 3 applies only caller-confirmed identity under the lease.
+    pub(super) fn begin_synchronization_identity_confirmation_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        confirmation: OperationId,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::begin_identity_confirmation_effect(tx, &record, confirmation)
+        })
+    }
+
+    #[allow(dead_code)] // Task 3 records the observed configuration result after its effect.
+    pub(super) fn observe_synchronization_identity_confirmation_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        confirmation: OperationId,
+        applied_configuration_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_identity_confirmation_effect(
+                tx,
+                &record,
+                confirmation,
+                applied_configuration_digest,
+            )
+        })
+    }
+
     pub(crate) fn checkpoint_synchronization(
         &self,
         root: &Path,
@@ -815,6 +1061,9 @@ impl RepositoryService {
             }
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            if state::has_pending_conflict(tx, id)? {
+                return Err(state::recovery_required());
             }
             crate::repository::recovery::require_no_pending_local(tx, id)?;
             if record.generation != state::generation(tx, id)?

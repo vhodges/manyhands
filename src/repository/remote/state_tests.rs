@@ -747,6 +747,125 @@ fn partial_sync_schema_does_not_discard_durable_candidate() {
 }
 
 #[test]
+fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent() {
+    let (data, root, service) = fixture();
+    let operation_id = crate::repository::OperationId::new();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan());
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            operation_id,
+            &target,
+            RemoteOperationPriority::Manual,
+            123,
+        )?;
+        tx.execute(
+            "UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',expected_oid=?2,local_oid=?3,primary_tracking_oid=?2,push_oid=?3,push_advertised_oid=?3,authoritative_kind='published',authoritative_oid=?3,index_pending=1 WHERE operation_ulid=?1",
+            params![operation_id.to_string(), ADVERTISED, TRACKING],
+        )
+        .map_err(|_| recovery_required())?;
+        Ok(())
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;").unwrap();
+    drop(connection);
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    for table in [
+        "remote_integration_steps",
+        "remote_identity_confirmations",
+        "remote_resolution_attempts",
+        "remote_resolution_paths",
+    ] {
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0)
+                )
+                .unwrap(),
+            "missing {table}"
+        );
+    }
+    assert_eq!(
+        connection.query_row("SELECT authoritative_kind,index_pending FROM remote_operation_records WHERE operation_ulid=?1", [operation_id.to_string()], |row| Ok((row.get::<_, String>(0)?,row.get::<_, i64>(1)?))).unwrap(),
+        ("published".to_owned(), 1)
+    );
+    drop(connection);
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let transaction = connection.transaction().unwrap();
+    migrate(&transaction).unwrap();
+    transaction.commit().unwrap();
+    assert!(
+        matches!(reopened.reserve_remote_operation(root.path(), operation_id, &target).unwrap(), super::super::reservation::RemoteReservationOutcome::Replay(record) if record.index_pending())
+    );
+}
+
+#[test]
+fn partial_task2_evidence_schema_and_orphan_rows_fail_closed() {
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_resolution_paths;")
+        .unwrap();
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let transaction = connection.transaction().unwrap();
+    assert!(migrate(&transaction).is_err());
+    transaction.rollback().unwrap();
+
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,phase) VALUES(999,0,0,0,'primary','1111111111111111111111111111111111111111','2222222222222222222222222222222222222222','3333333333333333333333333333333333333333',zeroblob(32),'prepared')").unwrap();
+    drop(connection);
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert!(audit_registry(&mut connection).is_err());
+}
+
+#[test]
+fn task2_evidence_schema_has_no_content_or_transport_columns_and_wal_stays_redacted() {
+    let (data, root, service) = fixture();
+    let registry = data.path().join(REGISTRY_FILE);
+    let connection = Connection::open(&registry).unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL; SELECT count(*) FROM repositories;")
+        .unwrap();
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    assert_eq!(generation, 1);
+    let schema: String = connection.prepare("SELECT group_concat(sql, '\n') FROM sqlite_master WHERE name IN ('remote_integration_steps','remote_identity_confirmations','remote_resolution_attempts','remote_resolution_paths')").unwrap().query_row([], |row| row.get(0)).unwrap();
+    for forbidden in ["body", "credential", "endpoint", "server", "path TEXT"] {
+        assert!(
+            !schema.to_ascii_lowercase().contains(forbidden),
+            "persisted forbidden column {forbidden}"
+        );
+    }
+    let backup = data.path().join("task2-backup.sqlite3");
+    connection
+        .execute("VACUUM INTO ?1", [backup.to_str().unwrap()])
+        .unwrap();
+    for entry in std::fs::read_dir(data.path()).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        for sentinel in [
+            b"PRIVATE_BODY_SENTINEL".as_slice(),
+            b"PRIVATE_CREDENTIAL_SENTINEL".as_slice(),
+            b"PRIVATE_ENDPOINT_SENTINEL".as_slice(),
+        ] {
+            assert!(
+                !bytes
+                    .windows(sentinel.len())
+                    .any(|window| window == sentinel)
+            );
+        }
+    }
+}
+
+#[test]
 fn idempotent_sync_migration_does_not_scan_retained_operation_history() {
     let (data, _root, _service) = fixture();
     let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();

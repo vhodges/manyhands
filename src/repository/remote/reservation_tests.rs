@@ -644,6 +644,207 @@ fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteRe
 }
 
 #[test]
+fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition() {
+    use super::super::merge::IntegrationStage;
+    let (data, root, service) = fixture();
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    let owner = sync_owner(&service, root.path());
+    let intent = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: IntegrationStage::Primary,
+        local_oid: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        incoming_oid: git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap(),
+        baseline_tree_oid: git2::Oid::from_str("3333333333333333333333333333333333333333").unwrap(),
+        baseline_index_digest: [7; 32],
+    };
+    service
+        .prepare_synchronization_integration(root.path(), &owner, &intent)
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
+        .unwrap();
+    let conflict = [9; 32];
+    service
+        .release_synchronization_conflict(root.path(), &owner, 0, conflict)
+        .unwrap();
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        other
+            .reserve_remote_operation(root.path(), OperationId::new(), &sync_target())
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert!(
+        service
+            .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+            .is_err()
+    );
+    assert!(
+        other
+            .reacquire_synchronization_conflict(
+                root.path(),
+                owner.operation_id(),
+                &sync_target(),
+                0,
+                [8; 32]
+            )
+            .is_err()
+    );
+    let reacquired = match other
+        .reacquire_synchronization_conflict(
+            root.path(),
+            owner.operation_id(),
+            &sync_target(),
+            0,
+            conflict,
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
+            .is_err()
+    );
+    let attempt = state::ResolutionAttemptIntent {
+        attempt_id: OperationId::new(),
+        step_ordinal: 0,
+        observation_digest: conflict,
+        input_digest: [3; 32],
+        identity_confirmation_id: None,
+    };
+    let path = state::ResolutionPathIntent {
+        ordinal: 0,
+        path_digest: [1; 32],
+        expected_digest: [2; 32],
+        result_digest: [3; 32],
+        base_blob_oid: None,
+        local_blob_oid: None,
+        incoming_blob_oid: None,
+        mode: 33188,
+    };
+    other
+        .prepare_synchronization_resolution_attempt(
+            root.path(),
+            &reacquired,
+            &attempt,
+            &[path.clone()],
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_resolution_attempt(
+            root.path(),
+            &reacquired,
+            &attempt,
+            &[path.clone()],
+        )
+        .unwrap();
+    let mismatched = state::ResolutionAttemptIntent {
+        input_digest: [4; 32],
+        ..attempt
+    };
+    assert!(
+        other
+            .prepare_synchronization_resolution_attempt(
+                root.path(),
+                &reacquired,
+                &mismatched,
+                &[path]
+            )
+            .is_err()
+    );
+    let confirmation = state::IdentityConfirmationIntent {
+        confirmation_id: OperationId::new(),
+        input_digest: [4; 32],
+        configuration_digest: [5; 32],
+    };
+    other
+        .prepare_synchronization_identity_confirmation(root.path(), &reacquired, &confirmation)
+        .unwrap();
+    other
+        .begin_synchronization_identity_confirmation_effect(
+            root.path(),
+            &reacquired,
+            confirmation.confirmation_id,
+        )
+        .unwrap();
+    other
+        .observe_synchronization_identity_confirmation_effect(
+            root.path(),
+            &reacquired,
+            confirmation.confirmation_id,
+            [6; 32],
+        )
+        .unwrap();
+    other
+        .begin_synchronization_resolution_path_effects(root.path(), &reacquired, attempt.attempt_id)
+        .unwrap();
+    other
+        .observe_synchronization_resolution_path_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            0,
+        )
+        .unwrap();
+    let checkpoint = git2::Oid::from_str("4444444444444444444444444444444444444444").unwrap();
+    let tree = git2::Oid::from_str("5555555555555555555555555555555555555555").unwrap();
+    other
+        .prepare_synchronization_resolution_candidate(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+        )
+        .unwrap();
+    other
+        .observe_synchronization_resolution_checkpoint(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+            tree,
+        )
+        .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "applied"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_paths WHERE applied=1",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT phase FROM remote_identity_confirmations",
+                [],
+                |row| { row.get::<_, String>(0) }
+            )
+            .unwrap(),
+        "applied"
+    );
+}
+
+#[test]
 fn sync_ambiguous_push_restart_is_reconciliation_not_a_fresh_push() {
     let (data, root, service) = fixture();
     let owner = sync_owner(&service, root.path());
