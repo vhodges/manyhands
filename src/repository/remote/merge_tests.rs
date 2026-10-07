@@ -425,7 +425,7 @@ fn merge_commits_is_index_only_but_merge_preserves_real_conflict_state_until_cle
     let mut worktree_options = git2::WorktreeAddOptions::new();
     worktree_options.reference(Some(&reference));
     repository
-        .worktree("linked-worktree", &linked_path, Some(&mut worktree_options))
+        .worktree("linked-worktree", &linked_path, Some(&worktree_options))
         .unwrap();
     drop(reference);
     let mut linked = Repository::open(&linked_path).unwrap();
