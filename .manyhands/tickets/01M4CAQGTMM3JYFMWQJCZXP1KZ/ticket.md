@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M4CAQGTMM3JYFMWQJCZXP1KZ"
 title: "Replan Wave 03 into a foundation and parallel CLI and desktop tracks"
 type: "task"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -60,8 +60,8 @@ The product owner approved the revised documents, including the consequences
 below and the MVP architecture RFC amendment, and asked for the status flip
 and a commit. The product owner also approved `zorite-editor` as the editor;
 the Wave document and RFC register record that selection and leave its
-source-preservation gap open for resolution before D3 planning. Merge to main
-and ticket closure are not yet authorized.
+source-preservation gap open for resolution before D3 planning; the ruling
+below then settled it.
 
 ## Editor byte-change ruling (2026-10-07)
 
@@ -73,7 +73,14 @@ bullet; the canonical RFC, RFC register row W3-01, the Wave document and the
 feasibility record are aligned. The amendment's bounds were written by the
 agent from that ruling: normalization is not a user edit, so opening and a
 no-change save still write nothing; only layout-only rewrites are accepted;
-metadata, the CLI and the headless library are unaffected.
+metadata, the CLI and the headless library are unaffected. The product owner
+confirmed those bounds, specifically that a no-change save writes nothing.
+
+## Closure (2026-10-07)
+
+The product owner authorized closing this ticket on its branch and merging to
+local main. Both closure conditions are met by that merge. No push, worktree
+removal, Cycle ticket, Cycle document or code is authorized or created.
 
 ## Consequences approved with the replan
 
