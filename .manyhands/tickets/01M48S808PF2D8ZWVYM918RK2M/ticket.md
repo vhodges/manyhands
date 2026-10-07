@@ -169,6 +169,13 @@ mode-specific/frame timing or separate attribution to release versus host fix.
 records limits; remaining source/native/API/production gates unchanged. Ticket
 is review-ready/lifecycle-open, not closed, merged or published.
 
+The remaining planned basic native edit/undo/redo/status smoke was subsequently
+performed in fresh scratch launches3507533/3508562. User confirms editor and
+dirty state updated correctly. [Smoke evidence](../../../docs/research/wave-03-editor-feasibility.md#native-editundoredo-smoke-2026-10-07)
+records counter/source/process provenance and limits; no new code, exact per-key
+native proof, full native suite or product ruling. Bounded exploration work is
+ready for approval/delivery; closure/publication remains separately authorized.
+
 ## Exit Boundary
 
 Exploration completion requires review of reproducible, pinned evidence and an

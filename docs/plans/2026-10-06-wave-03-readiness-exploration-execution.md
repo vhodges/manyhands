@@ -256,7 +256,7 @@ this task does not substitute for final-main API audit.
 | --- | --- | --- |
 | P1 | One serialized owner: edit-only draft update guard/hooks, optional counters, pure regressions/report; final Devenv gates and release build | complete e1fc6cb..fee2439; tested/committed tree94c833c; all gates/release passed |
 | P2 | Fresh independent exact-task review; preserve notify-only undo/redo and cheap fallback honesty | reviewer132b8cc2: no issues, performance-host READY / OK with notes |
-| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | complete manual observation: user "It felt fine"; relaunch3501399,14 counter snapshots/doc, zero additional owned readbacks/draft updates; not timing/native-suite acceptance |
+| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | complete manual observation: user happy with scrolling;14 snapshots/doc, zero extra owned readbacks/drafts; later native edit/undo/redo+dirty smoke confirmed, not timing/full-native-suite acceptance |
 
 Scrolling/caret/focus/blink must not copy/update drafts or cause extra host notify.
 Changed covers many edits, but undo/redo only notify; supported hooks or a cheap
@@ -309,6 +309,18 @@ Host notify totals, not an attribution to scroll. No per-frame/rendered-p95 or
 native edit/undo/IME/table acceptance follows. Release+host fixes changed together,
 so no isolated causal claim. P1/P2/P3 bounded work delivered; ticket returns to
 review-ready/lifecycle-open, remaining product/native/API gates unchanged.
+
+Remaining planned native edit/undo/redo check then explicitly authorized by user.
+Owned release launches3507533 and relaunch3508562, reviewed binary unchanged;
+user confirms editor and dirty state updating correctly. Frozen observed logs
+and native-edit-observation.json under scroll-performance evidence. First Wave03
+snapshots1→2→5→6 owned/draft with multiple edit hooks; latest two snapshots
+identical owned/draft7, Changed2/hooks1. Counters show mutation observation, not
+isolated per-key coalescing or body fidelity; visible transitions are user proof.
+Both exit0/no signal, no parent termination; no native automation/body captures.
+Basic native history/status smoke now complete; final implementation source and
+review/gate proofs unchangedfee2439. Remaining full native/production gates still
+unverified, closure/publication requires explicit authorization/approval.
 
 ## Task state
 

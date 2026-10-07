@@ -715,3 +715,31 @@ performance**; keyboard/caret-follow/PageUp/PageDown integration was discussed
 but explicitly not requested in this demo. Pinned bindings already include
 arrows/Home/End; actual viewport-follow/page-navigation acceptance remains
 unverified. Remaining native/production obligations above stay unchanged.
+
+### Native edit/undo/redo smoke (2026-10-07)
+
+User authorized the remaining manual check on the reviewed optimized scratch
+example. Controller presented instructions before launch, then launched through
+Devenv with diagnostics only: PID3507533 and requested relaunch3508562. Requested
+Wave03 Source protocol: baseline counters, type X, counters, Ctrl-Z, counters,
+Ctrl-Shift-Z, counters; expect visible text and clean/dirty to track mutations.
+User confirms **"yes, the editor and dirty state were updating correctly"**.
+This supplies positive native basic edit/history/status smoke evidence, not a
+full native input suite. No original writes or body captures were requested.
+
+Frozen observed-stdout.log/observed-stderr.log in ignored
+`target/readiness-evidence/running-spike/scroll-performance/` subdirectories
+`edit-undo-redo-1791336784152/` and `edit-check-relaunch-1791336915581/`, with
+native-edit-observation.json. First session has four Wave03 snapshots:
+owned_readbacks/draft_changes1→2→5→6, Changed0→1→1→1, hooks0→0→3→4. Latest session
+two snapshots are identical: notifications10/checks13, Changed2/hooks1,
+owned_readbacks/draft_changes7 and Host notify7; neither logs an error, both
+processes exit0/no signal. These snapshots include multiple actions between
+prints, not an isolated one-update-per-key or duplicate-signal native proof.
+User confirms the visible behavior; counters corroborate mutation observation,
+not action identity/ordering or exact candidate bytes. Policy regression/source
+review remains the independent duplicate-signal proof.
+
+Bounded planned smoke now observed; no code changed afterfee2439 or fresh Rust
+suite needed. IME/paste/menu/table/resource/platform/large-document/p95/fidelity
+obligations remain unverified as before. No product/closure/publication ruling.
