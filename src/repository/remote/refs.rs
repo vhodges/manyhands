@@ -1,5 +1,8 @@
 use std::{fmt, str::FromStr};
 
+use git2::Oid;
+
+use super::{RemotePublicationEvidence, SynchronizationTarget};
 use crate::{canonical::ItemId, repository::AuthoringKind};
 
 const HEADS_PREFIX: &str = "refs/heads/";
@@ -79,6 +82,27 @@ impl RemoteRefPlan {
 
     pub fn fetch_refspecs(&self) -> [&str; 3] {
         self.fetch_refspecs.each_ref().map(String::as_str)
+    }
+
+    pub fn primary_fetch_refspec(&self) -> String {
+        format!("+{}:{}", self.primary.remote_ref, self.primary.tracking_ref)
+    }
+
+    pub fn context_fetch_refspec(&self, kind: AuthoringKind, item_id: &ItemId) -> [String; 2] {
+        let context = self.context(kind, item_id);
+        [
+            self.primary_fetch_refspec(),
+            format!("+{}:{}", context.remote_ref, context.tracking_ref),
+        ]
+    }
+
+    pub fn primary_push_refspec(&self) -> String {
+        format!("{}:{}", self.primary.remote_ref, self.primary.remote_ref)
+    }
+
+    pub fn context_push_refspec(&self, kind: AuthoringKind, item_id: &ItemId) -> String {
+        let context = self.context(kind, item_id);
+        format!("{}:{}", context.remote_ref, context.remote_ref)
     }
 
     pub fn context(&self, kind: AuthoringKind, item_id: &ItemId) -> RemoteRefTarget {
@@ -197,3 +221,87 @@ fn is_valid_git_short_name(value: &str) -> bool {
             !component.is_empty() && !component.starts_with('.') && !component.ends_with(".lock")
         })
 }
+
+// Kept internal: orchestration consumes the pure plan, never a public caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CleanIntegrationPlan {
+    pub final_oid: Oid,
+    pub local_update: bool,
+    /// Fetch-side planning only; publication still requires independent
+    /// Push-direction observation and verification.
+    pub push_needed: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CleanIntegrationError<E> {
+    PrimaryMissing,
+    RemoteContextDeleted,
+    HistoryUnknown,
+    MergeRequired,
+    Ancestry(E),
+}
+
+/// Tracking OIDs must describe the complete current Fetch advertisement, not
+/// stale tracking refs for an absent remote branch. `is_ancestor(a, b)` asks
+/// whether a is an ancestor of b; equal OIDs need no query. No mutation occurs.
+pub(super) fn plan_clean_integration<E>(
+    target: &SynchronizationTarget,
+    local_oid: Oid,
+    primary_tracking_oid: Option<Oid>,
+    context_tracking_oid: Option<Oid>,
+    publication_evidence: RemotePublicationEvidence,
+    mut is_ancestor: impl FnMut(Oid, Oid) -> Result<bool, E>,
+) -> Result<CleanIntegrationPlan, CleanIntegrationError<E>> {
+    let primary = primary_tracking_oid.ok_or(CleanIntegrationError::PrimaryMissing)?;
+    let (final_oid, remote_oid) = match target {
+        SynchronizationTarget::Primary => (
+            clean_descendant(local_oid, primary, &mut is_ancestor)?,
+            Some(primary),
+        ),
+        SynchronizationTarget::Context { .. } => {
+            let candidate = match context_tracking_oid {
+                Some(remote) => clean_descendant(local_oid, remote, &mut is_ancestor)?,
+                None => match publication_evidence {
+                    RemotePublicationEvidence::NeverPublished => local_oid,
+                    RemotePublicationEvidence::ObservedPublished => {
+                        return Err(CleanIntegrationError::RemoteContextDeleted);
+                    }
+                    RemotePublicationEvidence::HistoryUnknown => {
+                        return Err(CleanIntegrationError::HistoryUnknown);
+                    }
+                },
+            };
+            // Only return a plan after both context and primary relations pass.
+            (
+                clean_descendant(candidate, primary, &mut is_ancestor)?,
+                context_tracking_oid,
+            )
+        }
+    };
+    Ok(CleanIntegrationPlan {
+        final_oid,
+        local_update: final_oid != local_oid,
+        push_needed: remote_oid != Some(final_oid),
+    })
+}
+
+fn clean_descendant<E>(
+    local: Oid,
+    remote: Oid,
+    is_ancestor: &mut impl FnMut(Oid, Oid) -> Result<bool, E>,
+) -> Result<Oid, CleanIntegrationError<E>> {
+    if local == remote {
+        return Ok(local);
+    }
+    if is_ancestor(local, remote).map_err(CleanIntegrationError::Ancestry)? {
+        return Ok(remote);
+    }
+    if is_ancestor(remote, local).map_err(CleanIntegrationError::Ancestry)? {
+        return Ok(local);
+    }
+    Err(CleanIntegrationError::MergeRequired)
+}
+
+#[cfg(test)]
+#[path = "refs_tests.rs"]
+mod tests;

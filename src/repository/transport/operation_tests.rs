@@ -32,6 +32,16 @@ pub(crate) enum Checkpoint {
     Prepared,
     ProviderReturned,
     Authenticated,
+    Reconnected,
+    TrackingDownloaded,
+    BeforeTrackingWrite,
+    TrackingWritten,
+    /// Client attempt boundary, not receive-side transaction evidence.
+    ExactPushStarted,
+    /// Fault seam between the caller's snapshot check and scoped preparation.
+    ActionSnapshotChecked,
+    /// Successful fresh receive-pack list on the independently resolved Push endpoint.
+    PushAdvertisementObserved,
 }
 type Hook = Box<dyn FnMut(Checkpoint)>;
 thread_local! { static HOOK: RefCell<Option<Hook>> = RefCell::new(None); }

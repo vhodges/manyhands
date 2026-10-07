@@ -227,12 +227,35 @@ pub(super) fn require_no_pending_local(
     Ok(())
 }
 
+/// Tagged synchronization-local identity cannot share an ID with any remote row.
+/// The collision check belongs in the insertion transaction, not prior inspection.
+pub(super) fn begin_or_reconcile_local_synchronization(
+    connection: &mut Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+) -> Result<RecoveryRecord, RepositoryError> {
+    begin_or_reconcile(connection, root, operation, operation_id, target, true)
+}
+
 pub(super) fn begin_or_reconcile_operation(
     connection: &mut Connection,
     root: &Path,
     operation: RepositoryOperation,
     operation_id: OperationId,
     target: &str,
+) -> Result<RecoveryRecord, RepositoryError> {
+    begin_or_reconcile(connection, root, operation, operation_id, target, false)
+}
+
+fn begin_or_reconcile(
+    connection: &mut Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+    tagged_local_binding: bool,
 ) -> Result<RecoveryRecord, RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let action = action_name(operation);
@@ -242,8 +265,20 @@ pub(super) fn begin_or_reconcile_operation(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    if tagged_local_binding {
+        let remote_id: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)",
+                [&requested],
+                |row| row.get(0),
+            )
+            .map_err(|_| super::remote::state::recovery_required())?;
+        if remote_id {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
     let remote_active: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting'))",
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling'))",
         [root_path], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if remote_active {
         return Err(super::remote::state::recovery_required());
@@ -267,6 +302,15 @@ pub(super) fn begin_or_reconcile_operation(
         .map_err(RepositoryError::sqlite)?;
     if let Some((_, existing_root, existing_action, existing_target, _, _)) = &existing {
         if existing_root != root_path {
+            return Err(mismatch(operation, root));
+        }
+        // Tagged callers supply the complete typed identity + full Git OID.
+        // Equality validates the whole frozen matcher, not refresh's aliases.
+        if tagged_local_binding
+            && (action != "refresh"
+                || existing_action != action
+                || existing_target.as_deref() != Some(target))
+        {
             return Err(mismatch(operation, root));
         }
         if !(same_lifecycle_action(existing_action, action)
@@ -298,16 +342,23 @@ pub(super) fn begin_or_reconcile_operation(
     if !pending.is_empty() {
         let mut matching = None;
         for (id, existing_id, existing_action, existing_target) in pending {
-            if existing_id.as_deref() == Some(&requested)
-                && (same_lifecycle_action(&existing_action, action)
-                    || action == "refresh" && existing_action != "refresh")
-                && (action == "refresh" || existing_target.as_deref() == Some(target))
-                || existing_id.is_none()
-                    && matches!(
-                        (existing_action.as_str(), action),
-                        ("refresh", "refresh") | ("rebuild", "rebuild")
-                    )
-            {
+            let compatible = if tagged_local_binding {
+                existing_id.as_deref() == Some(&requested)
+                    && action == "refresh"
+                    && existing_action == action
+                    && existing_target.as_deref() == Some(target)
+            } else {
+                existing_id.as_deref() == Some(&requested)
+                    && (same_lifecycle_action(&existing_action, action)
+                        || action == "refresh" && existing_action != "refresh")
+                    && (action == "refresh" || existing_target.as_deref() == Some(target))
+                    || existing_id.is_none()
+                        && matches!(
+                            (existing_action.as_str(), action),
+                            ("refresh", "refresh") | ("rebuild", "rebuild")
+                        )
+            };
+            if compatible {
                 matching = Some(id);
             } else {
                 return Err(recovery_required(operation, root));

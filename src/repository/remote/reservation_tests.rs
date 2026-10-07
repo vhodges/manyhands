@@ -588,3 +588,941 @@ fn acknowledged_yield_after_batch_commit_replays_completed_evidence() {
             .is_none()
     );
 }
+
+fn sync_target() -> RemoteOperationTarget {
+    RemoteOperationTarget::for_primary_synchronization(&plan())
+}
+fn sync_owner(service: &RepositoryService, root: &Path) -> RemoteReservation {
+    match service
+        .reserve_remote_operation(root, OperationId::new(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    }
+}
+fn sync_evidence() -> state::SynchronizationEvidence {
+    state::SynchronizationEvidence {
+        expected_oid: Some(
+            git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        ),
+        local_oid: Some(git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap()),
+        tracking_oid: Some(
+            git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        ),
+        primary_tracking_oid: Some(
+            git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        ),
+        push_oid: Some(git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap()),
+        push_advertised_oid: None,
+    }
+}
+fn sync_fetch(service: &RepositoryService, root: &Path, owner: &RemoteReservation) {
+    service
+        .checkpoint_synchronization(
+            root,
+            owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(service, root, owner, &plan(), &[observation()], 123).unwrap();
+}
+fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteReservation) {
+    sync_fetch(service, root, owner);
+    service
+        .checkpoint_synchronization(
+            root,
+            owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &sync_evidence(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn sync_ambiguous_push_restart_is_reconciliation_not_a_fresh_push() {
+    let (data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+        .unwrap();
+    service
+        .finish_remote_operation(
+            root.path(),
+            &owner,
+            RemoteOutcomeCategory::TransportUnavailable,
+        )
+        .unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let restarted = match reopened
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    let record = reopened
+        .active_remote_operation(root.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.phase(), RemoteOperationPhase::Reconciling);
+    assert_eq!(
+        record.sync_checkpoint(),
+        Some(state::SynchronizationCheckpoint::PushPrepared)
+    );
+    assert_eq!(record.sync_evidence().push_oid, sync_evidence().push_oid);
+    assert!(
+        reopened
+            .checkpoint_synchronization(
+                root.path(),
+                &restarted,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &sync_evidence()
+            )
+            .is_err()
+    );
+    reopened
+        .remote_safe_point(
+            root.path(),
+            &restarted,
+            RemoteOperationSafePoint::BeforeFetch,
+        )
+        .unwrap();
+    commit_observation_batch(&reopened, root.path(), &restarted, &plan(), &[], 124).unwrap();
+    assert!(
+        reopened
+            .checkpoint_synchronization(
+                root.path(),
+                &restarted,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &sync_evidence()
+            )
+            .is_err()
+    );
+    let candidate = sync_evidence().push_oid.unwrap();
+    assert!(
+        reopened
+            .reconcile_synchronization(
+                root.path(),
+                &restarted,
+                candidate,
+                candidate,
+                Some(sync_evidence().expected_oid.unwrap()),
+                false
+            )
+            .is_err()
+    );
+    assert!(
+        reopened
+            .reconcile_synchronization(
+                root.path(),
+                &restarted,
+                candidate,
+                sync_evidence().expected_oid.unwrap(),
+                Some(candidate),
+                false
+            )
+            .is_err()
+    );
+    assert!(
+        service
+            .reconcile_synchronization(
+                root.path(),
+                &owner,
+                candidate,
+                candidate,
+                Some(candidate),
+                false
+            )
+            .is_err()
+    );
+    reopened
+        .reconcile_synchronization(
+            root.path(),
+            &restarted,
+            candidate,
+            candidate,
+            Some(candidate),
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        reopened
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap()
+            .sync_checkpoint(),
+        Some(state::SynchronizationCheckpoint::PushVerified)
+    );
+    assert!(
+        reopened
+            .checkpoint_synchronization(
+                root.path(),
+                &restarted,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &sync_evidence()
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn sync_authoritative_replay_is_exact_and_index_only_even_after_cancel() {
+    let (_data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    let mut evidence = sync_evidence();
+    evidence.push_advertised_oid = evidence.push_oid;
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    let outcome = state::SynchronizationAuthority::Published(evidence.push_oid.unwrap());
+    service
+        .classify_synchronization(root.path(), &owner, outcome)
+        .unwrap();
+    service
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert!(
+        matches!(service.restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target()).unwrap(), RemoteReservationOutcome::Replay(record) if record.authority()==Some(outcome) && record.index_pending())
+    );
+    assert!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                owner.operation_id(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .is_err()
+    );
+    service
+        .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())
+        .unwrap();
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(), owner.operation_id(), &sync_target()).unwrap(), RemoteReservationOutcome::Replay(record) if record.authority()==Some(outcome) && !record.index_pending() && record.phase()==RemoteOperationPhase::Completed)
+    );
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn sync_every_checkpoint_database_fault_preserves_previous_boundary_and_candidate() {
+    use state::SynchronizationCheckpoint as C;
+    for checkpoint in [
+        C::FetchPrepared,
+        C::LocalPrepared,
+        C::LocalFastForwarded,
+        C::PushPrepared,
+        C::PushReturned,
+        C::PushVerified,
+    ] {
+        let (data, root, service) = fixture();
+        let owner = sync_owner(&service, root.path());
+        if checkpoint != C::FetchPrepared {
+            sync_fetch(&service, root.path(), &owner);
+        }
+        let mut evidence = if checkpoint == C::FetchPrepared {
+            state::SynchronizationEvidence::default()
+        } else {
+            sync_evidence()
+        };
+        if checkpoint == C::LocalFastForwarded {
+            service
+                .checkpoint_synchronization(root.path(), &owner, C::LocalPrepared, &evidence)
+                .unwrap();
+            service
+                .remote_safe_point(
+                    root.path(),
+                    &owner,
+                    RemoteOperationSafePoint::BeforeLocalUpdate,
+                )
+                .unwrap();
+        }
+        if matches!(checkpoint, C::PushReturned | C::PushVerified) {
+            service
+                .checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence)
+                .unwrap();
+            service
+                .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+                .unwrap();
+        }
+        if checkpoint == C::PushVerified {
+            evidence.push_advertised_oid = evidence.push_oid;
+        }
+        let before = service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection.execute_batch("CREATE TRIGGER sync_fault BEFORE UPDATE OF sync_checkpoint ON remote_operation_records BEGIN SELECT RAISE(ABORT,'HOSTILE_SERVER_TEXT'); END").unwrap();
+        let error = service
+            .checkpoint_synchronization(root.path(), &owner, checkpoint, &evidence)
+            .unwrap_err();
+        assert!(!format!("{error} {error:?}").contains("HOSTILE"));
+        let after = service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.sync_checkpoint(), before.sync_checkpoint());
+        assert_eq!(after.sync_evidence(), before.sync_evidence());
+        assert!(matches!(
+            service
+                .reserve_remote_operation(root.path(), OperationId::new(), &sync_target())
+                .unwrap(),
+            RemoteReservationOutcome::Busy
+        ));
+        connection.execute_batch("DROP TRIGGER sync_fault").unwrap();
+        service
+            .checkpoint_synchronization(root.path(), &owner, checkpoint, &evidence)
+            .unwrap();
+    }
+}
+
+#[test]
+fn sync_batch_and_discovery_faults_roll_back_atomically() {
+    let (data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_sync_batch BEFORE UPDATE OF sync_checkpoint ON remote_operation_records BEGIN SELECT RAISE(ABORT,'HOSTILE_SERVER_TEXT'); END").unwrap();
+    assert!(
+        commit_observation_batch(
+            &service,
+            root.path(),
+            &owner,
+            &plan(),
+            &[observation()],
+            123
+        )
+        .is_err()
+    );
+    assert!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+    connection
+        .execute_batch("DROP TRIGGER fail_sync_batch")
+        .unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &owner,
+        &plan(),
+        &[observation()],
+        123,
+    )
+    .unwrap();
+    let mut evidence = sync_evidence();
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &evidence,
+        )
+        .unwrap();
+    evidence.push_advertised_oid = evidence.push_oid;
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_authority BEFORE UPDATE OF authoritative_kind ON remote_operation_records BEGIN SELECT RAISE(ABORT,'HOSTILE_SERVER_TEXT'); END").unwrap();
+    let authority = state::SynchronizationAuthority::Published(evidence.push_oid.unwrap());
+    assert!(
+        service
+            .classify_synchronization(root.path(), &owner, authority)
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap()
+            .sync_checkpoint(),
+        Some(state::SynchronizationCheckpoint::PushVerified)
+    );
+    connection
+        .execute_batch("DROP TRIGGER fail_authority")
+        .unwrap();
+    service
+        .classify_synchronization(root.path(), &owner, authority)
+        .unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_index BEFORE UPDATE OF index_pending ON remote_operation_records BEGIN SELECT RAISE(ABORT,'HOSTILE_SERVER_TEXT'); END").unwrap();
+    assert!(
+        service
+            .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())
+            .is_err()
+    );
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(), owner.operation_id(), &sync_target()).unwrap(), RemoteReservationOutcome::Replay(record) if record.authority()==Some(authority) && record.index_pending())
+    );
+}
+
+#[test]
+fn sync_reconciled_ancestor_requires_explicit_restart_and_keeps_recorded_candidate() {
+    let (_data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.sync_checkpoint()==Some(state::SynchronizationCheckpoint::PushPrepared))
+    );
+    let restarted = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    service
+        .remote_safe_point(
+            root.path(),
+            &restarted,
+            RemoteOperationSafePoint::BeforeFetch,
+        )
+        .unwrap();
+    commit_observation_batch(&service, root.path(), &restarted, &plan(), &[], 124).unwrap();
+    let evidence = sync_evidence();
+    let candidate = evidence.push_oid.unwrap();
+    let ancestor = evidence.expected_oid.unwrap();
+    service
+        .reconcile_synchronization(
+            root.path(),
+            &restarted,
+            candidate,
+            candidate,
+            Some(ancestor),
+            true,
+        )
+        .unwrap();
+    let record = service
+        .active_remote_operation(root.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.sync_evidence().push_oid, Some(candidate));
+    assert_eq!(
+        record.sync_checkpoint(),
+        Some(state::SynchronizationCheckpoint::PushPrepared)
+    );
+    service
+        .remote_safe_point(
+            root.path(),
+            &restarted,
+            RemoteOperationSafePoint::BeforePush,
+        )
+        .unwrap();
+    assert!(
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+            .is_err()
+    );
+}
+
+#[test]
+fn sync_owner_target_root_generation_and_active_index_are_fenced() {
+    use state::SynchronizationCheckpoint as C;
+    let (data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let second = tempfile::tempdir().unwrap();
+    connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[second.path().to_str().unwrap()]).unwrap();
+    state::with_transaction(&service, second.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    assert!(
+        matches!(service.reserve_remote_operation(second.path(),owner.operation_id(),&sync_target()),Err(error) if error.kind==RepositoryErrorKind::OperationMismatch)
+    );
+    assert!(
+        service
+            .checkpoint_synchronization(second.path(), &owner, C::PushReturned, &sync_evidence())
+            .is_err()
+    );
+    assert!(
+        service
+            .restart_remote_synchronization(
+                root.path(),
+                owner.operation_id(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .is_err()
+    );
+    // Bypass API arbitration to prove the SQL index covers the new active phases.
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| state::insert_operation(
+            tx,
+            id,
+            OperationId::new(),
+            &sync_target(),
+            RemoteOperationPriority::Manual,
+            123
+        ))
+        .is_err()
+    );
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan()), true)
+    })
+    .unwrap();
+    assert!(
+        service
+            .checkpoint_synchronization(root.path(), &owner, C::PushReturned, &sync_evidence())
+            .is_err()
+    );
+    assert!(
+        service
+            .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+            .is_err()
+    );
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Interrupted && record.sync_evidence().push_oid==sync_evidence().push_oid)
+    );
+}
+
+#[test]
+fn sync_safe_point_failures_and_cancellation_never_erase_effect_evidence() {
+    use state::SynchronizationCheckpoint as C;
+    for point in [
+        RemoteOperationSafePoint::BeforeFetch,
+        RemoteOperationSafePoint::AfterFetch,
+        RemoteOperationSafePoint::BeforeLocalUpdate,
+        RemoteOperationSafePoint::AfterLocalUpdate,
+        RemoteOperationSafePoint::BeforePush,
+        RemoteOperationSafePoint::AfterPushReturn,
+        RemoteOperationSafePoint::AfterPushVerification,
+    ] {
+        let (data, root, service) = fixture();
+        let owner = sync_owner(&service, root.path());
+        if point == RemoteOperationSafePoint::BeforeFetch {
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    C::FetchPrepared,
+                    &state::SynchronizationEvidence::default(),
+                )
+                .unwrap();
+        } else {
+            sync_fetch(&service, root.path(), &owner);
+        }
+        let mut evidence = sync_evidence();
+        if matches!(
+            point,
+            RemoteOperationSafePoint::BeforeLocalUpdate
+                | RemoteOperationSafePoint::AfterLocalUpdate
+        ) {
+            service
+                .checkpoint_synchronization(root.path(), &owner, C::LocalPrepared, &evidence)
+                .unwrap();
+            if point == RemoteOperationSafePoint::AfterLocalUpdate {
+                service
+                    .remote_safe_point(
+                        root.path(),
+                        &owner,
+                        RemoteOperationSafePoint::BeforeLocalUpdate,
+                    )
+                    .unwrap();
+                service
+                    .checkpoint_synchronization(
+                        root.path(),
+                        &owner,
+                        C::LocalFastForwarded,
+                        &evidence,
+                    )
+                    .unwrap();
+            }
+        }
+        if matches!(
+            point,
+            RemoteOperationSafePoint::BeforePush
+                | RemoteOperationSafePoint::AfterPushReturn
+                | RemoteOperationSafePoint::AfterPushVerification
+        ) {
+            service
+                .checkpoint_synchronization(root.path(), &owner, C::PushPrepared, &evidence)
+                .unwrap();
+            if point == RemoteOperationSafePoint::AfterPushReturn {
+                service
+                    .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+                    .unwrap();
+                service
+                    .checkpoint_synchronization(root.path(), &owner, C::PushReturned, &evidence)
+                    .unwrap();
+            }
+            if point == RemoteOperationSafePoint::AfterPushVerification {
+                evidence.push_advertised_oid = evidence.push_oid;
+                service
+                    .checkpoint_synchronization(root.path(), &owner, C::PushVerified, &evidence)
+                    .unwrap();
+            }
+        }
+        let before = service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap();
+        service
+            .cancel_remote_operation(root.path(), owner.operation_id())
+            .unwrap();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection.execute_batch("CREATE TRIGGER fault_sync_safe BEFORE UPDATE OF completed_step ON remote_operation_records BEGIN SELECT RAISE(ABORT,'HOSTILE_SERVER_TEXT'); END").unwrap();
+        assert!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .is_err()
+        );
+        let after = service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap();
+        assert!(after.cancel_requested());
+        assert_eq!(after.sync_checkpoint(), before.sync_checkpoint());
+        assert_eq!(after.sync_evidence(), before.sync_evidence());
+        connection
+            .execute_batch("DROP TRIGGER fault_sync_safe")
+            .unwrap();
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .unwrap(),
+            RemoteSafePointOutcome::Cancelled
+        );
+        assert!(
+            matches!(service.restart_remote_synchronization(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Cancelled && record.sync_evidence()==before.sync_evidence())
+        );
+    }
+}
+
+#[test]
+fn sync_fetch_preserves_polling_policy_and_honors_cancel_atomically() {
+    let (data, root, service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("UPDATE remote_polling_state SET paused=1,enabled=0,automatic_backoff_seconds=300,latest_outcome='transport_unavailable'").unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    let owner = sync_owner(&service, root.path());
+    sync_fetch(&service, root.path(), &owner);
+    let after = service.remote_snapshot(root.path()).unwrap();
+    assert_eq!(before.polling(), after.polling());
+    assert_eq!(before.latest_outcome(), after.latest_outcome());
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::AfterFetch)
+        .unwrap();
+    service
+        .finish_remote_operation(
+            root.path(),
+            &owner,
+            RemoteOutcomeCategory::TransportUnavailable,
+        )
+        .unwrap();
+    let owner = sync_owner(&service, root.path());
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    service
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert_eq!(
+        commit_observation_batch(&service, root.path(), &owner, &plan(), &[], 124).unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert_eq!(service.remote_snapshot(root.path()).unwrap(), after);
+}
+
+#[test]
+fn sync_privacy_covers_live_wal_backup_rows_and_formatted_replay() {
+    let (data, root, service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL; BEGIN; SELECT count(*) FROM repositories;")
+        .unwrap();
+    let owner = sync_owner(&service, root.path());
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let sentinels = [
+        "HOSTILE_RAW_URL",
+        "HOSTILE_SERVER_TEXT",
+        "HOSTILE_CREDENTIAL",
+        "HOSTILE_KEY",
+        "HOSTILE_PASSPHRASE",
+        "HOSTILE_MARKDOWN",
+        "HOSTILE_WORKTREE_PATH",
+    ];
+    let observations: Vec<_> = sentinels
+        .iter()
+        .map(|sentinel| {
+            RemoteRefObservation::from_advertisement(
+                &plan(),
+                &format!("refs/heads/manyhands/ticket/{sentinel}"),
+                sync_evidence().local_oid.unwrap(),
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    commit_observation_batch(&service, root.path(), &owner, &plan(), &observations, 123).unwrap();
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &sync_evidence(),
+        )
+        .unwrap();
+    let formatted = format!(
+        "{:?} {:?} {:?}",
+        owner,
+        service
+            .reserve_remote_operation(root.path(), owner.operation_id(), &sync_target())
+            .unwrap(),
+        service.remote_snapshot(root.path()).unwrap()
+    );
+    let backup = data.path().join("sync-backup.sqlite3");
+    let backup_connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    backup_connection
+        .execute("VACUUM INTO ?1", [backup.to_str().unwrap()])
+        .unwrap();
+    assert!(data.path().join(format!("{REGISTRY_FILE}-wal")).is_file());
+    for entry in std::fs::read_dir(data.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(path).unwrap();
+        for sentinel in sentinels {
+            assert!(
+                !bytes
+                    .windows(sentinel.len())
+                    .any(|value| value == sentinel.as_bytes())
+            );
+            assert!(!formatted.contains(sentinel));
+        }
+    }
+}
+
+#[test]
+fn sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity() {
+    for refresh_state in ["created", "indexing", "failed", "completed"] {
+        let (data, root, service) = fixture();
+        let owner = sync_owner(&service, root.path());
+        sync_push_prepared(&service, root.path(), &owner);
+        let mut evidence = sync_evidence();
+        evidence.push_advertised_oid = evidence.push_oid;
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::PushVerified,
+                &evidence,
+            )
+            .unwrap();
+        let authority = state::SynchronizationAuthority::AlreadyCurrent(evidence.push_oid.unwrap());
+        service
+            .classify_synchronization(root.path(), &owner, authority)
+            .unwrap();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        connection.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'refresh','',?2,123 FROM repositories",params![owner.operation_id().to_string(),refresh_state]).unwrap();
+        assert!(
+            matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.authority()==Some(authority) && record.index_pending())
+        );
+        assert!(
+            matches!(service.restart_remote_synchronization(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.authority()==Some(authority))
+        );
+        assert!(
+            service
+                .active_remote_operation(root.path())
+                .unwrap()
+                .is_none()
+        );
+        for corruption in [
+            "action='close'",
+            "target='other'",
+            "target=NULL",
+            "root_path='other-root'",
+            "repository_id=NULL",
+        ] {
+            connection
+                .execute(
+                    &format!("UPDATE operation_records SET {corruption} WHERE operation_ulid=?1"),
+                    [owner.operation_id().to_string()],
+                )
+                .unwrap();
+            assert!(
+                matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()),Err(error) if error.kind==RepositoryErrorKind::OperationMismatch)
+            );
+            assert!(
+                service
+                    .restart_remote_synchronization(
+                        root.path(),
+                        owner.operation_id(),
+                        &sync_target()
+                    )
+                    .is_err()
+            );
+            assert!(
+                service
+                    .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())
+                    .is_err()
+            );
+            connection.execute("UPDATE operation_records SET action='refresh',target='',root_path=(SELECT root_path FROM repositories WHERE id=1),repository_id=1 WHERE operation_ulid=?1",[owner.operation_id().to_string()]).unwrap();
+        }
+        service
+            .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())
+            .unwrap();
+    }
+}
+
+#[test]
+fn sync_incomplete_action_cannot_coexist_with_a_same_id_local_refresh() {
+    let (data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'refresh','','completed',123 FROM repositories",[owner.operation_id().to_string()]).unwrap();
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()),Err(error) if error.kind==RepositoryErrorKind::OperationMismatch)
+    );
+    assert!(
+        matches!(service.restart_remote_synchronization(root.path(),owner.operation_id(),&sync_target()),Err(error) if error.kind==RepositoryErrorKind::OperationMismatch)
+    );
+}
+
+#[test]
+fn sync_context_authority_replay_rejects_a_different_context() {
+    let (_data, root, service) = fixture();
+    let target = RemoteOperationTarget::for_context(
+        &plan(),
+        RemoteOperationAction::SynchronizeContext,
+        crate::repository::AuthoringKind::Ticket,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    )
+    .unwrap();
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    sync_push_prepared(&service, root.path(), &owner);
+    let mut evidence = sync_evidence();
+    evidence.push_advertised_oid = evidence.push_oid;
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    let authority = state::SynchronizationAuthority::Published(evidence.push_oid.unwrap());
+    service
+        .classify_synchronization(root.path(), &owner, authority)
+        .unwrap();
+    let different = RemoteOperationTarget::for_context(
+        &plan(),
+        RemoteOperationAction::SynchronizeContext,
+        crate::repository::AuthoringKind::Document,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&different),Err(error) if error.kind==RepositoryErrorKind::OperationMismatch)
+    );
+    assert!(
+        service
+            .finish_synchronization_index(root.path(), owner.operation_id(), &different)
+            .is_err()
+    );
+    assert!(
+        matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&target).unwrap(),RemoteReservationOutcome::Replay(record) if record.authority()==Some(authority))
+    );
+    service
+        .finish_synchronization_index(root.path(), owner.operation_id(), &target)
+        .unwrap();
+}
+
+#[test]
+fn sync_terminal_slot_release_does_not_classify_or_authorize_a_new_action() {
+    let (_data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    sync_push_prepared(&service, root.path(), &owner);
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+        .unwrap();
+    service
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+            .unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert!(
+        matches!(service.restart_remote_synchronization(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Cancelled && record.sync_checkpoint()==Some(state::SynchronizationCheckpoint::PushPrepared) && record.sync_evidence().push_oid==sync_evidence().push_oid)
+    );
+    let new_owner = sync_owner(&service, root.path());
+    let record = service
+        .active_remote_operation(root.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.operation_id(), new_owner.operation_id());
+    assert_eq!(record.sync_checkpoint(), None);
+    assert_eq!(record.authority(), None);
+    assert!(
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &new_owner,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &sync_evidence()
+            )
+            .is_err()
+    );
+}

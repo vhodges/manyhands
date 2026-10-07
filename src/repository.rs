@@ -52,14 +52,16 @@ use recovery::{
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, RemoteContextSnapshot,
-    RemoteContextState, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
-    RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
-    RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
-    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
-    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
-    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteReservation,
-    RemoteReservationOutcome, RemoteSafePointOutcome, RemoteSnapshot,
+    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, PublishPendingReason,
+    RemoteContextSnapshot, RemoteContextState, RemoteObservationError, RemoteObservationOutcome,
+    RemoteOperationAction, RemoteOperationInspection, RemoteOperationPhase,
+    RemoteOperationPriority, RemoteOperationSafePoint, RemoteOperationTarget,
+    RemoteOperationTargetError, RemoteOutcomeCategory, RemotePollInvocation,
+    RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
+    RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
+    RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
+    RemoteSnapshot, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+    SynchronizationTarget, SynchronizeRemoteRequest,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -971,6 +973,16 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
     ) -> Result<RefreshOutcome, RepositoryError> {
+        self.refresh_repository_target(request, "")
+    }
+
+    // Only synchronization's validated local-only identity may use a nonempty
+    // refresh matcher. Ordinary public refresh requests retain their contract.
+    fn refresh_repository_target(
+        &self,
+        request: RefreshRepositoryRequest,
+        target: &str,
+    ) -> Result<RefreshOutcome, RepositoryError> {
         let root = &request.root;
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
@@ -979,7 +991,7 @@ impl RepositoryService {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
             let Some((_record, owner)) =
-                self.claim_refresh_indexing(&root, request.operation_id)?
+                self.claim_refresh_indexing(&root, request.operation_id, target)?
             else {
                 return Ok(RefreshOutcome::IndexPending { root });
             };
@@ -2794,6 +2806,7 @@ impl RepositoryService {
         &self,
         root: &Path,
         operation_id: OperationId,
+        target: &str,
     ) -> Result<Option<(RecoveryRecord, IndexOwner)>, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
@@ -2801,7 +2814,7 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let record =
-            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, "")
+            begin_or_reconcile_operation(&mut connection, root, operation, operation_id, target)
                 .map_err(|error| error.for_operation(operation, root))?;
         Ok(claim_indexing(
             &connection,
