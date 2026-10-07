@@ -19,6 +19,12 @@ id: "01M48Y44BK0XK7XJXSEYT78ZD8"
 > The complete Wave 02 integration gate is now required before G1 exits, not
 > before the first Wave 03 Cycle; each Cycle names its own Wave 02
 > dependencies. The findings and evidence below are otherwise unchanged.
+>
+> **Product ruling (2026-10-07).** The product owner selected `zorite-editor`
+> and accepted the byte changes of its load normalization. The
+> [desktop/editor RFC](../RFC/desktop-information-architecture-and-editor.md#editor-load-normalization-amended-2026-10-07)
+> is amended to bound that exception. The R3 finding below stands as a record
+> of what the pinned release does; it no longer blocks selection.
 
 ## Disposition and scope
 

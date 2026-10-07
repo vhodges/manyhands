@@ -63,6 +63,18 @@ the Wave document and RFC register record that selection and leave its
 source-preservation gap open for resolution before D3 planning. Merge to main
 and ticket closure are not yet authorized.
 
+## Editor byte-change ruling (2026-10-07)
+
+After the commit above, the product owner accepted the byte changes made by
+`zorite-editor`'s load normalization and asked for the RFC to be amended.
+The [desktop/editor RFC](../../../docs/RFC/desktop-information-architecture-and-editor.md#editor-load-normalization-amended-2026-10-07)
+gains an "Editor load normalization" subsection and an updated acceptance
+bullet; the canonical RFC, RFC register row W3-01, the Wave document and the
+feasibility record are aligned. The amendment's bounds were written by the
+agent from that ruling: normalization is not a user edit, so opening and a
+no-change save still write nothing; only layout-only rewrites are accepted;
+metadata, the CLI and the headless library are unaffected.
+
 ## Consequences approved with the replan
 
 These follow from the decisions and were settled while writing:

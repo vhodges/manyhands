@@ -45,7 +45,11 @@ approved on 2026-10-05, applies that preservation contract to rich-text and
 source modes. Viewing, switching modes and no-change saves preserve original
 source. Rich-text editing retains unsupported constructs and untouched source;
 it does not silently reserialize or simplify an entire document. Actual metadata
-edits preserve unknown values even when YAML formatting changes.
+edits preserve unknown values even when YAML formatting changes. As amended on
+2026-10-07, a desktop save after an actual edit may also write the selected
+editor's recorded, meaning-preserving load normalization of the body; the
+desktop/editor RFC bounds that exception. It does not apply to the CLI or the
+headless library.
 
 Browsing and repair MUST NOT silently change identity. Adoption of marker-only
 content explicitly previews any generated ID; existing valid IDs remain stable.

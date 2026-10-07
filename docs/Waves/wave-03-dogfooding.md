@@ -140,12 +140,13 @@ work can proceed while native access is arranged:
    fidelity, undo, tables, IME and focus, plus remaining native checks. The
    product owner selected `zorite-editor` on 2026-10-07, so the selection is
    made. The [feasibility record](../research/wave-03-editor-feasibility.md)
-   found that its load normalization changes source bytes, which the desktop
-   RFC's untouched-source requirement does not allow. Selection does not
-   decide that: before D3 implementation planning, either the preservation
-   gap is closed in the integration or the owning RFC is amended. This
-   deadline is on the desktop track only; it does not gate the foundation,
-   the CLI track, D1 or D2.
+   found that its load normalization changes source bytes. The product owner
+   accepted those byte changes on 2026-10-07, and the desktop/editor RFC is
+   amended to bound the exception: normalization is not a user edit, a
+   no-change save still writes nothing, and content is never dropped. D3
+   planning records the pinned release's normalizations and the remaining
+   native checks. This item is on the desktop track only; it does not gate
+   the foundation, the CLI track, D1 or D2.
 5. Before D6 implementation, runtime readiness reconciles the final
    Wave 02 transport startup and cancellation contract. Preserve initialization before GPUI/worker threads;
    measure blocked DNS/connect/SSH/teardown behavior and define responsive
@@ -538,9 +539,9 @@ stale or vanished targets remain recoverable and never silently overwritten.
 **Purpose:** Deliver the selected editor experience with trustworthy local saves.
 
 **Additional prerequisite:** `zorite-editor` is the selected editor (product
-owner, 2026-10-07). Its source-preservation gap, recorded in the feasibility
-record, is resolved or ruled on before this Cycle's detailed
-design/implementation plan is approved.
+owner, 2026-10-07), with its load normalization accepted under the amended
+desktop/editor RFC. This Cycle's design records the pinned release and its
+exact normalizations before the implementation plan is approved.
 
 **In scope:** Integrate the chosen native editor through GPUI Kit, shared draft/
 undo state across rich/source modes, metadata controls, item create/edit/save,
@@ -553,7 +554,9 @@ formatting. Expose unsaved/local checkpoint/index-pending states accurately.
 remote resource execution, comment publication, promotion/closure or auto-save
 to Git. A mode switch or no-change save creates no checkpoint.
 
-**Exit evidence:** Golden rich/source round-trips, untouched-byte preservation,
+**Exit evidence:** Golden rich/source round-trips, untouched-byte preservation
+outside the recorded load normalization, a normalized-on-load item that is
+not dirty and writes nothing on a no-change save,
 unknown YAML values, CRLF/Unicode, tables/unsupported blocks, undo/IME/focus,
 draft persistence errors, stale edits made by a second library-level actor and
 old async completions. Native offline edit/checkpoint journey succeeds; valid
@@ -732,7 +735,7 @@ claim these implementation checks.
 | Risk | Control and owner |
 | --- | --- |
 | Wave 02 changes while this Wave is planned | Rebase/audit at the implementation boundary; retain its authoritative transport/operation behavior. Technical Lead owns readiness. |
-| Editor feature claims do not establish compatible, lossless embedding | `zorite-editor` is selected and pinned; resolve its load-normalization preservation gap before D3 planning, and verify one GPUI graph, native input and golden source fixtures in D3. |
+| Editor feature claims do not establish compatible, lossless embedding | `zorite-editor` is selected and pinned; its load normalization is accepted and bounded by the amended desktop/editor RFC; D3 records the pinned normalizations as golden fixtures, proves a normalized-on-load item is not dirty, and verifies one GPUI graph and native input. A pin change re-reviews its normalizations. |
 | API gaps become UI-specific filesystem/SQL/Git shortcuts | Assign additions to the headless library in the owning early Cycle and test both consumers through it. |
 | A stale confirmation or ambiguous retry mutates a different target | Exact observations and request identity, no blind replay after cache loss, real interruption tests in F2 and every consumer. |
 | Unsaved text disappears after poll, CLI cleanup or an old async result | Draft/base preservation, generation checks and explicit recovery; no automatic overwrite or context recreation. |
@@ -759,10 +762,11 @@ including the track form added to the MVP architecture RFC, on ticket
 `01M4CAQGTMM3JYFMWQJCZXP1KZ`.
 
 On the same date the product owner approved `zorite-editor` as the editor.
-That settles the candidate. It is not a ruling on source-byte preservation or
-an RFC change, and it does not complete the native evidence D3 and G1 owe.
+The product owner also accepted the byte changes its load normalization makes;
+the desktop/editor and canonical RFCs are amended accordingly. Neither
+decision completes the native evidence D3 and G1 owe.
 
-The editor's preservation gap, the refreshed API audit, native tester/machine
+The refreshed API audit, native tester/machine
 assignments and implementation-baseline evidence remain open; none is implied by design
 approval. The product owner confirmed that early beta testers have Windows and
 Mac machines. Continue Linux-first work, then arrange the required native
