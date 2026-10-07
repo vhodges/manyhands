@@ -59,6 +59,15 @@ Cycle 05 source is on current main; its historical local evidence is not a fresh
 Cycle 06 baseline. CI is manual-only; actual native evidence remains pending.
 Cycle 05's native deferral does not automatically authorize a Cycle 06 deferral.
 
+## Task 1 checkpoint
+
+Task 1 backend/API characterization is committed at
+`6f65a79c9a0be0f52b5891d5a9b098b6f2ed3682`. The locked mempack isolation
+stop gate passed in a real local fixture; focused merge and ref tests passed.
+The ticket remains open. Task 2 has not started; native five-target behavior
+and all orchestration/recovery work remain pending. See the Task 1 comment and
+execution ledger for exact commands, isolation observations and residual gaps.
+
 ## Entry Gate
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
