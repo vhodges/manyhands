@@ -1727,3 +1727,17 @@ All src/tests/manifests/locks/toolchain/CI still equal testedd84ad implementatio
 local789/static/CLI and qualified desktop evidence remain current. Documentation
 of this owner exception is the only new file-content change. No existing open PR
 was found for this exact branch. Ticket stays open; PR creation/verification next.
+
+## Publication receipt — 2026-10-07T00:02:14Z
+
+Normal non-force, no-tag push81fecfe..5669c077f7de1702ed88858b62ee371074c024b8
+succeeded. Created https://github.com/vhodges/manyhands/pull/12 and independently
+verified OPEN, non-draft, base main, exact intended ticket branch and published
+head5669c077f7de1702ed88858b62ee371074c024b8. This receipt is evidence-only and
+will be pushed normally to the same PR. Tested/reviewed implementation unchanged.
+
+Owner-approved publication is complete. Native CI intentionally deferred for
+release-era follow-up, NOT a passing native acceptance claim. No workflow was
+enabled/dispatched/inspected/repaired. No PR merge, ticket closure or cleanup;
+ticket remains open and worktree retained. Local789/static/CLI/qualified desktop
+and independent whole-Cycle review are the accepted evidence for this PR.
