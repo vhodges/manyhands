@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DD"
 title: "Wave 02 Cycle 05: Clean Deliberate Synchronization"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "02"
