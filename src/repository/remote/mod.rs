@@ -1,3 +1,4 @@
+mod merge;
 mod observation;
 mod refs;
 mod sync;
