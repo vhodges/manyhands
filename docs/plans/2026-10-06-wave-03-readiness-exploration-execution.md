@@ -254,15 +254,49 @@ this task does not substitute for final-main API audit.
 
 | Step | Owner/scope | State |
 | --- | --- | --- |
-| P1 | One serialized owner: edit-only draft update guard/hooks, optional counters, pure regressions/report; final Devenv gates and release build | dispatching after checkpoint |
-| P2 | Fresh independent exact-task review; preserve notify-only undo/redo and cheap fallback honesty | pending P1 |
-| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | pending reviewed P1/P2; no competing Cargo work |
+| P1 | One serialized owner: edit-only draft update guard/hooks, optional counters, pure regressions/report; final Devenv gates and release build | complete e1fc6cb..fee2439; tested/committed tree94c833c; all gates/release passed |
+| P2 | Fresh independent exact-task review; preserve notify-only undo/redo and cheap fallback honesty | reviewer132b8cc2: no issues, performance-host READY / OK with notes |
+| P3 | Controller-owned release launch, same-doc Rich/Source user comparison and explicit counters | running owned release PID/group3493901, diagnostics opt-in; awaiting user's comparison, no competing Cargo |
 
 Scrolling/caret/focus/blink must not copy/update drafts or cause extra host notify.
 Changed covers many edits, but undo/redo only notify; supported hooks or a cheap
 borrowed comparison fallback are necessary, explicitly measured, no lost edits.
 Diagnostics default off, aggregate only on request, no per-frame logging/timers.
 No SDK/dependency/core/production/policy/lifecycle scope expansion.
+
+P1 worker54245563 committed only five owned files atfee2439ad7b9953f661cce4d072e87b696a25246;
+final staged/committed tree94c833c5050d5f4a753998cebcad03497faf22fc. Generic
+observation remains because undo/redo only notify, but borrowed equality precedes
+owned readback; unchanged hints never copy/replace draft/notify Host. Non-edit
+hints skip getter, cached status avoids body comparisons in render. Inactive
+edits route correctly without active redraw. Counts are aggregate on explicit
+Ctrl-Alt-D only, no timers/per-frame logging or automatic snapshots.
+
+Fresh Devenv gates/CLI passed:614 standard including9doctests/9S1, SSH15/35/31/103
+separate,9 focused pure example tests (six new policy simulations, not native).
+Full suite724s, release482s; no failures or interrupted commands. The late
+stall concern was prolonged handoff preparation after build; source was already
+committed/clean. Attempted guidance found child already complete; no steer or
+cancellation delivered. Workflow43f48e0c bound worker/reviewer outputs under
+scroll-performance/{handoff,review}.md. Fresh reviewer132b8cc2 inspected exact
+newdiff/integration/evidence, no commands/native manipulation; no issues,
+READY / OK with notes for comparison, not production/publishing/lifecycle.
+
+Controller verified release SHA256
+`ee170dd61cce2538468e784cc1d47887aa614ddfb7385ea8656af0b36c99efaa`, clean fee2439
+checkout and launched built binary through Devenv with --diagnostics,
+unsetting ZORITE_WHEEL_DEBUG. Owned isolated PID/group3493901. Evidence:
+`target/readiness-evidence/running-spike/scroll-performance/release-launch-1791335631182/`.
+Actual release executable observed alive, five initial statuses emitted; no
+initial capture requested. Initial originals/header/body policy remains; do
+not infer native callback/performance acceptance from these startup results.
+
+User is asked for same-Wave03 Rich/Source scroll-only intervals, Ctrl-Alt-D
+before/after each interval, excluding mode/select/capture actions. Incremental
+owned readbacks/draft changes/Host notify should be zero for unchanged scroll;
+borrowed checks may rise, not zero GPUI work or measured frames/p95. Actual
+counters/user feedback remain pending. Do not restart/automate/stop user's app.
+Rust remains exactlyfee2439; further checkpoint is docs-only, no redundant gates.
 
 ## Task state
 
