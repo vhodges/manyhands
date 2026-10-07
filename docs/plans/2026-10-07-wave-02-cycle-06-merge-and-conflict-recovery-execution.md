@@ -189,6 +189,40 @@ pending and must be collected through separately authorized manual CI execution;
 Cycle 05's deferral does not apply. Task 1 may proceed subject to the approved
 mempack-isolation stop condition.
 
+## Task 1 — locked merge backend characterization — 2026-10-07
+
+Checkpoint commit `6f65a79c9a0be0f52b5891d5a9b098b6f2ed3682` adds private
+`remote::merge` graph, eligibility, redaction, resolution-request and optional
+caller-confirmed-identity seams. No synchronization/network orchestration,
+state migration, UI/CLI grammar, dependency or Devenv change was made.
+
+Focused local commands passed through Devenv:
+
+- `cargo fmt --check` (exit 0);
+- `cargo clippy --locked --lib -- -D warnings` (exit 0);
+- `cargo test --locked --lib repository::remote::merge` (exit 0; 9 tests); and
+- `cargo test --locked --lib repository::remote::refs` (exit 0; 9 tests).
+
+The mempack hard-stop characterization passed on locked git2 0.20.4/libgit2
+1.9.7: a separately opened worker handle with
+`add_new_mempack_backend(1000)` produced a same-file clean-merge blob while
+object-directory names, destination index, HEAD/ref, worktree bytes and a
+separately opened destination handle remained unchanged. The generated blob
+was unavailable through that other handle until an explicit destination ODB
+import; that import preserved the exact OID. Resetting the mempack made the
+unimported object unavailable through the worker, and recomputation restored
+its same OID. This proves the required preparation boundary on this Linux
+fixture; no disk-ODB fallback was used.
+
+Real local fixtures also characterize index-only `merge_commits`, actual
+`merge` conflict index stages/markers/MERGE_HEAD cleanup with unchanged HEAD,
+two-parent clean trees, safe checkout preservation for tracked/untracked/
+ignored/symlink/file-directory collisions, and linked-worktree index/merge
+metadata isolation. Native five-target evidence, actual orchestration,
+persistence/replay, canonical parsing and public resolution behavior remain
+unimplemented and unverified future tasks; this local result is not a native
+platform claim.
+
 ## Next lifecycle checkpoints
 
 1. Completed 2026-10-07: owner approved Cycle, design and implementation plan.
