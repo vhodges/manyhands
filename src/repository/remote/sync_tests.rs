@@ -1,4 +1,5 @@
 use super::*;
+use crate::repository::remote::reservation::commit_observation_batch;
 use crate::repository::{EnableRepositoryRequest, FailurePoint, REGISTRY_FILE};
 use std::fs;
 struct NoPrompt;
@@ -165,6 +166,384 @@ fn foreign_merge_rebase_and_cherry_pick_metadata_are_refused_without_adoption() 
         fs::remove_file(repo.path().join(metadata)).unwrap();
     }
     assert!(local_target(root.path(), "main", &SynchronizationTarget::Primary).is_ok());
+}
+
+#[test]
+fn candidate_head_restart_observes_the_recorded_merge_without_another_ref_transition() {
+    let (root, _data, service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)
+    })
+    .unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    fs::write(root.path().join("local.txt"), b"local\n").unwrap();
+    let local = commit_all(&repo);
+    repo.set_head_detached(base).unwrap();
+    repo.checkout_tree(&repo.find_object(base, None).unwrap(), None)
+        .unwrap();
+    fs::write(root.path().join("incoming.txt"), b"incoming\n").unwrap();
+    let incoming = commit_all(&repo);
+    repo.set_head("refs/heads/main").unwrap();
+    repo.reference("refs/heads/main", local, true, "fixture")
+        .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let tree = repo.find_commit(local).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let candidate = repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[
+                &repo.find_commit(local).unwrap(),
+                &repo.find_commit(incoming).unwrap(),
+            ],
+        )
+        .unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("reservation"),
+    };
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &owner,
+        &plan,
+        std::slice::from_ref(&observation),
+        1,
+    )
+    .unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: tree.id(),
+                baseline_index_digest: index_digest(tree.id()),
+            },
+        )
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    fast_forward(&repo, "refs/heads/main", local, candidate).unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+    let index = fs::read(repo.path().join("index")).unwrap();
+    let worktree = fs::read(root.path().join("local.txt")).unwrap();
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("restart"),
+    };
+    let mut resume_evidence = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap()
+    .sync_evidence;
+    let pending = reconcile_pending_candidate(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+        &resumed,
+        &mut resume_evidence,
+    )
+    .unwrap()
+    .expect("candidate evidence");
+    assert_eq!(pending.oid, candidate);
+    // The outer envelope remains reconciling until a fresh Fetch batch commits.
+    service
+        .remote_safe_point(root.path(), &resumed, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(&service, root.path(), &resumed, &plan, &[observation], 2).unwrap();
+    finalize_reconciled_candidate(&service, root.path(), &resumed, pending, &resume_evidence)
+        .unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(head));
+    assert_eq!(fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(fs::read(root.path().join("local.txt")).unwrap(), worktree);
+    let commit = repo.find_commit(candidate).unwrap();
+    assert_eq!(
+        [commit.parent_id(0).unwrap(), commit.parent_id(1).unwrap()],
+        [local, incoming]
+    );
+    let record = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        record.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+    assert!(!record.reconciliation_required);
+}
+
+#[test]
+fn candidate_third_head_restart_preserves_applying_evidence() {
+    let (root, _data, service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)
+    })
+    .unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    fs::write(root.path().join("local.txt"), b"local\n").unwrap();
+    let local = commit_all(&repo);
+    repo.set_head_detached(base).unwrap();
+    repo.checkout_tree(&repo.find_object(base, None).unwrap(), None)
+        .unwrap();
+    fs::write(root.path().join("incoming.txt"), b"incoming\n").unwrap();
+    let incoming = commit_all(&repo);
+    repo.set_head("refs/heads/main").unwrap();
+    repo.reference("refs/heads/main", local, true, "fixture")
+        .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let tree = repo.find_commit(local).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let candidate = repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[
+                &repo.find_commit(local).unwrap(),
+                &repo.find_commit(incoming).unwrap(),
+            ],
+        )
+        .unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("reservation"),
+    };
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+    commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: tree.id(),
+                baseline_index_digest: index_digest(tree.id()),
+            },
+        )
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    let third = base;
+    repo.reference("refs/heads/main", third, true, "third head")
+        .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let head = repo.head().unwrap().target();
+    let index = fs::read(repo.path().join("index")).unwrap();
+    let worktree = fs::read(root.path().join("fixture.txt")).unwrap();
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("restart"),
+    };
+    let before = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    let mut resume_evidence = before.sync_evidence.clone();
+    assert!(matches!(
+        reconcile_pending_candidate(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &resumed,
+            &mut resume_evidence
+        ),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(repo.head().unwrap().target(), head);
+    assert_eq!(fs::read(repo.path().join("index")).unwrap(), index);
+    assert_eq!(fs::read(root.path().join("fixture.txt")).unwrap(), worktree);
+    let after = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(after.sync_checkpoint, before.sync_checkpoint);
+    assert_eq!(after.sync_evidence, before.sync_evidence);
+    assert!(after.reconciliation_required);
+}
+
+#[test]
+fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation() {
+    for mutate_configuration in [true, false] {
+        let (root, _data, service) = fixture();
+        let repo = git2::Repository::open(root.path()).unwrap();
+        repo.remote("origin", "ssh://example.invalid/one.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), false)
+        })
+        .unwrap();
+        let base = repo.head().unwrap().target().unwrap();
+        let local = child(&repo, base, b"local\n");
+        let incoming = child(&repo, base, b"incoming\n");
+        repo.reference("refs/heads/main", local, true, "fixture")
+            .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        repo.reference(
+            plan.primary().tracking_ref(),
+            incoming,
+            true,
+            "fixture tracking",
+        )
+        .unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let owner = match service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            _ => panic!("reservation"),
+        };
+        let evidence = state::SynchronizationEvidence {
+            expected_oid: Some(local),
+            local_oid: Some(local),
+            tracking_oid: Some(incoming),
+            primary_tracking_oid: Some(incoming),
+            ..state::SynchronizationEvidence::default()
+        };
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::FetchPrepared,
+                &evidence,
+            )
+            .unwrap();
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observation =
+            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None)
+                .unwrap();
+        commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        let hook_root = root.path().to_owned();
+        let tracking = plan.primary().tracking_ref().to_owned();
+        let hook = super::super::observation_tests::install_hook(move |point| {
+            if point != RemoteOperationSafePoint::BeforeLocalMutation {
+                return;
+            }
+            let repository = git2::Repository::open(&hook_root).unwrap();
+            if mutate_configuration {
+                repository
+                    .remote_set_url("origin", "ssh://example.invalid/two.git")
+                    .unwrap();
+            } else {
+                repository
+                    .reference(&tracking, local, true, "tracking race")
+                    .unwrap();
+            }
+        });
+        let request = request(root.path());
+        let result = integrate_divergence(
+            &service,
+            DivergenceInputs {
+                root: root.path(),
+                primary_branch: "main",
+                target: &SynchronizationTarget::Primary,
+                request: &request,
+                owner: &owner,
+                plan: &plan,
+                configuration: &configuration,
+                selected: plan.primary(),
+                primary_tracking: Some(incoming),
+                selected_tracking: Some(incoming),
+                context: None,
+                primary: incoming,
+            },
+        );
+        assert!(
+            matches!(result, Err(SynchronizationError::ExternalChange)),
+            "{result:?}"
+        );
+        drop(hook);
+        assert_eq!(repo.head().unwrap().target(), Some(local));
+        assert_eq!(repo.refname_to_id("refs/heads/main").unwrap(), local);
+    }
 }
 
 #[test]

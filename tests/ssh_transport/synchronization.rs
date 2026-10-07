@@ -644,10 +644,10 @@ fn missing_remote_primary() -> Result<(), FixtureError> {
     Ok(())
 }
 fn service_divergence_preservation() -> Result<(), FixtureError> {
-    // Remote-context divergence and virtual-primary divergence after a valid
-    // prospective context FF must both fail before any local branch update.
+    // Remote-context divergence and virtual-primary divergence compose ordered
+    // two-parent integrations and publish the resulting target ref.
     for virtual_primary in [false, true] {
-        let (case, context) = context_fixture()?;
+        let (case, _context) = context_fixture()?;
         let (mut session, _) = session(vec![]);
         fixed(
             case.service
@@ -663,23 +663,30 @@ fn service_divergence_preservation() -> Result<(), FixtureError> {
             b"remote context\n",
         )?;
         fixed(server.reference(CONTEXT_REF, remote, true, "fixture"))?;
-        if virtual_primary {
+        let primary = if virtual_primary {
             let primary = child_commit(&server, base, "primary-remote.txt", b"primary diverged\n")?;
             fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
-        }
-        let before = target_state(&case.root, &context.worktree)?;
-        assert!(matches!(
+            Some(primary)
+        } else {
+            None
+        };
+        fixed(
             case.service
                 .synchronize_remote(context_request(&case)?, &mut session),
-            Err(SynchronizationError::MergeRequired { .. })
-        ));
-        assert_eq!(target_state(&case.root, &context.worktree)?, before);
+        )?;
         let repo = fixed(git2::Repository::open(&case.root))?;
-        assert_eq!(fixed(repo.refname_to_id(CONTEXT_REF))?, local);
+        let merged = fixed(repo.refname_to_id(CONTEXT_REF))?;
+        let commit = fixed(repo.find_commit(merged))?;
+        assert_eq!(commit.parent_count(), 2);
         assert_eq!(
-            fixed(repo.refname_to_id(&format!("refs/remotes/origin/manyhands/ticket/{ITEM}")))?,
-            remote
+            [fixed(commit.parent_id(0))?, fixed(commit.parent_id(1))?],
+            if let Some(primary) = primary {
+                [remote, primary]
+            } else {
+                [local, remote]
+            }
         );
+        assert_eq!(fixed(server.refname_to_id(CONTEXT_REF))?, merged);
     }
     let case = prepare()?;
     publish_primary(&case)?;
@@ -691,15 +698,21 @@ fn service_divergence_preservation() -> Result<(), FixtureError> {
         Some(git2::build::CheckoutBuilder::new().safe()),
     ))?;
     fixed(repository.reference("refs/heads/main", local, true, "fixture"))?;
-    remote_advance(&case)?;
-    let before = target_state(&case.root, &case.root)?;
+    let remote = remote_advance(&case)?;
     let (mut session, _) = session(vec![]);
-    assert!(matches!(
+    fixed(
         case.service
             .synchronize_remote(request(&case), &mut session),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(target_state(&case.root, &case.root)?, before);
+    )?;
+    let merged = fixed(repository.refname_to_id("refs/heads/main"))?;
+    let commit = fixed(repository.find_commit(merged))?;
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(
+        [fixed(commit.parent_id(0))?, fixed(commit.parent_id(1))?],
+        [local, remote]
+    );
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, merged);
     Ok(())
 }
 fn cancel_after_fetch() -> Result<(), FixtureError> {
