@@ -1,0 +1,64 @@
+{
+  "code": "ok",
+  "command": "key list",
+  "data": {
+    "complete": true,
+    "items": [
+      {
+        "fingerprint": "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk",
+        "id": "<imported-key-id>",
+        "label": "Imported key",
+        "ownership": "imported",
+        "private_key_path": "<key-files>/imported",
+        "private_source_state": "available",
+        "public_key_path": "<key-files>/imported.pub",
+        "public_metadata_state": "available",
+        "selected": false
+      },
+      {
+        "fingerprint": "<generated-fingerprint>",
+        "id": "<generated-key-id>",
+        "label": "Generated key",
+        "ownership": "generated",
+        "private_key_path": "<generated-private-key>",
+        "private_source_state": "available",
+        "public_key_path": "<generated-public-key>",
+        "public_metadata_state": "available",
+        "selected": true
+      },
+      {
+        "fingerprint": null,
+        "id": "<third-key-id>",
+        "label": "Key without a public file",
+        "ownership": "imported",
+        "private_key_path": "<key-files>/lone",
+        "private_source_state": "available",
+        "public_key_path": null,
+        "public_metadata_state": "not_provided",
+        "selected": false
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

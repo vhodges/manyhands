@@ -85,9 +85,178 @@ pub(super) struct ObservedItem {
     pub(super) project: Option<String>,
     pub(super) team: Option<String>,
     pub(super) closed_at: Option<OffsetDateTime>,
+    pub(super) closed_by: Option<String>,
+    pub(super) unknown_metadata: UnknownMetadata,
+    /// A ticket's short code, parent and dependencies, and which of their
+    /// values were ignored. Empty for a document.
+    pub(super) relationships: canonical::TicketRelationships,
     pub(super) comments: Vec<ObservedCommentThread>,
     pub(super) activity_at: OffsetDateTime,
     pub(super) activity_source: super::DiscoveryActivitySource,
+}
+
+/// The front matter keys of an item that Manyhands does not define, as JSON.
+///
+/// `values` holds every key that is a string, in key order at every depth.
+/// A YAML value JSON cannot express is `null` there: a mapping with a key
+/// that is not a string, a tagged value, a number that is not finite, and a
+/// sequence or mapping nested more than `MAX_UNKNOWN_METADATA_DEPTH` deep. A
+/// top-level key that is not a string cannot be a JSON key and is left out.
+/// `not_representable` says that at least one of those happened, since a
+/// `null` or an absent key alone cannot.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct UnknownMetadata {
+    pub(super) values: serde_json::Map<String, serde_json::Value>,
+    pub(super) not_representable: bool,
+}
+
+impl UnknownMetadata {
+    const VALUES: &'static str = "values";
+    const NOT_REPRESENTABLE: &'static str = "not_representable";
+
+    pub(super) fn from_yaml(unknown: &serde_yaml::Mapping) -> Self {
+        let mut not_representable = false;
+        let values = match yaml_mapping_to_json(unknown, &mut not_representable, 0) {
+            serde_json::Value::Object(values) => values,
+            _ => serde_json::Map::new(),
+        };
+        Self {
+            values,
+            not_representable,
+        }
+    }
+
+    /// A ticket's, without the relationship keys: those are read as fields
+    /// of their own and are not unknown to Manyhands.
+    pub(super) fn from_ticket(ticket: &canonical::Ticket) -> Self {
+        let mut unknown = ticket.unknown.clone();
+        for key in canonical::RELATIONSHIP_KEYS {
+            unknown.remove(key);
+        }
+        Self::from_yaml(&unknown)
+    }
+
+    /// The text of the index column: one JSON object holding both fields.
+    pub(super) fn to_stored(&self) -> String {
+        let mut stored = serde_json::Map::new();
+        stored.insert(
+            Self::NOT_REPRESENTABLE.to_owned(),
+            self.not_representable.into(),
+        );
+        stored.insert(Self::VALUES.to_owned(), self.values.clone().into());
+        serde_json::Value::Object(stored).to_string()
+    }
+
+    /// Reads the column back, or `None` when it does not hold what
+    /// `to_stored` writes.
+    pub(super) fn from_stored(stored: &str) -> Option<Self> {
+        let serde_json::Value::Object(mut stored) = serde_json::from_str(stored).ok()? else {
+            return None;
+        };
+        let serde_json::Value::Object(values) = stored.remove(Self::VALUES)? else {
+            return None;
+        };
+        let not_representable = stored.remove(Self::NOT_REPRESENTABLE)?.as_bool()?;
+        stored.is_empty().then_some(Self {
+            values,
+            not_representable,
+        })
+    }
+}
+
+/// How deep a sequence or mapping may be nested in an item's unknown
+/// metadata, counting a top-level key's own value as 1. One nested deeper is
+/// `null` and flagged.
+///
+/// YAML front matter is read up to 128 containers deep, while the stored
+/// JSON text reads back only to its parser's own limit, which the two
+/// objects the column wraps the values in count against. This is well under
+/// both, so whatever is stored reads back.
+pub(super) const MAX_UNKNOWN_METADATA_DEPTH: usize = 64;
+
+/// `value` as JSON, or `null` with `not_representable` set where it has no
+/// JSON form. `depth` is how deep `value` is nested if it is a sequence or
+/// a mapping, counting itself.
+fn yaml_to_json(
+    value: &serde_yaml::Value,
+    not_representable: &mut bool,
+    depth: usize,
+) -> serde_json::Value {
+    if depth > MAX_UNKNOWN_METADATA_DEPTH
+        && matches!(
+            value,
+            serde_yaml::Value::Sequence(_) | serde_yaml::Value::Mapping(_)
+        )
+    {
+        *not_representable = true;
+        return serde_json::Value::Null;
+    }
+    match value {
+        serde_yaml::Value::Null => serde_json::Value::Null,
+        serde_yaml::Value::Bool(value) => (*value).into(),
+        serde_yaml::Value::String(value) => value.as_str().into(),
+        serde_yaml::Value::Number(number) => {
+            let json = match (number.as_i64(), number.as_u64(), number.as_f64()) {
+                (Some(integer), _, _) => Some(integer.into()),
+                (None, Some(integer), _) => Some(integer.into()),
+                // `None` for a number that is not finite.
+                (None, None, Some(float)) => serde_json::Number::from_f64(float),
+                (None, None, None) => None,
+            };
+            json.map(serde_json::Value::Number).unwrap_or_else(|| {
+                *not_representable = true;
+                serde_json::Value::Null
+            })
+        }
+        serde_yaml::Value::Sequence(values) => values
+            .iter()
+            .map(|value| yaml_to_json(value, not_representable, depth + 1))
+            .collect(),
+        serde_yaml::Value::Mapping(mapping) => {
+            yaml_mapping_to_json(mapping, not_representable, depth)
+        }
+        serde_yaml::Value::Tagged(_) => {
+            *not_representable = true;
+            serde_json::Value::Null
+        }
+    }
+}
+
+/// A YAML mapping as a JSON object with its keys in order. A key that is
+/// not a string makes a nested mapping `null`; at the top level, where the
+/// result must stay an object, that one key is left out instead. `depth` is
+/// how deep the mapping is nested, and 0 for the top level.
+fn yaml_mapping_to_json(
+    mapping: &serde_yaml::Mapping,
+    not_representable: &mut bool,
+    depth: usize,
+) -> serde_json::Value {
+    let mut entries = Vec::with_capacity(mapping.len());
+    for (key, value) in mapping {
+        match key.as_str() {
+            Some(key) => entries.push((key, value)),
+            None => {
+                *not_representable = true;
+                if depth > 0 {
+                    return serde_json::Value::Null;
+                }
+            }
+        }
+    }
+    // Inserted in key order, so the object is ordered whether or not
+    // `serde_json` keeps insertion order.
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    serde_json::Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_owned(),
+                    yaml_to_json(value, not_representable, depth + 1),
+                )
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -353,6 +522,9 @@ fn observe_items(
                     None,
                     None,
                     None,
+                    None,
+                    UnknownMetadata::from_yaml(&document.unknown),
+                    canonical::TicketRelationships::default(),
                 )),
                 canonical::CanonicalItem::Ticket(ticket) if ticket.id == *id => Some((
                     AuthoringKind::Ticket,
@@ -362,6 +534,9 @@ fn observe_items(
                     ticket.project.clone(),
                     ticket.team.clone(),
                     ticket.closed_at,
+                    ticket.closed_by.clone(),
+                    UnknownMetadata::from_ticket(ticket),
+                    canonical::ticket_relationships(ticket),
                 )),
                 _ => None,
             })?;
@@ -395,6 +570,9 @@ fn observe_items(
                 project: metadata.4,
                 team: metadata.5,
                 closed_at: metadata.6,
+                closed_by: metadata.7,
+                unknown_metadata: metadata.8,
+                relationships: metadata.9,
                 comments,
                 activity_at,
                 activity_source,
@@ -1384,7 +1562,130 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
+    migrate_item_read_schema(connection)?;
     super::recovery::migrate_operation_records(connection)
+}
+
+/// The columns the item reads need: who closed a ticket, an item's unknown
+/// front matter, when a registration was last refreshed, and a ticket's
+/// short code.
+const ITEM_READ_COLUMNS: [(&str, &str, &str); 4] = [
+    ("discovered_items", "closed_by", "TEXT"),
+    ("discovered_items", "unknown_metadata", "TEXT"),
+    ("repositories", "refreshed_at", "INTEGER"),
+    ("discovered_items", "slug", "TEXT"),
+];
+
+/// The tables and indexes the relationship reads need, each by its kind and
+/// name in `sqlite_master` and the statement that creates it, in an order
+/// in which they can be created once the columns are there.
+///
+/// An edge is one `deps` entry or the `parent` of the ticket whose row it
+/// belongs to; `target_id` is the item ID the file names, whether or not
+/// the index holds that item. An item problem is a relationship value that
+/// was ignored; `detail` is the item ID it is about, or NULL, and never
+/// text from the file. Both go when their item row goes, and an item row
+/// goes when its context is replaced, so neither outlives nor precedes the
+/// items of a context.
+const ITEM_READ_OBJECTS: [(&str, &str, &str); 4] = [
+    (
+        "table",
+        "item_edges",
+        "CREATE TABLE item_edges (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('deps', 'parent')),
+            UNIQUE (item_id, target_id, kind)
+        )",
+    ),
+    (
+        "table",
+        "item_problems",
+        "CREATE TABLE item_problems (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            code TEXT NOT NULL,
+            detail TEXT
+        )",
+    ),
+    (
+        "index",
+        "discovered_items_slug",
+        "CREATE INDEX discovered_items_slug ON discovered_items(slug)",
+    ),
+    (
+        "index",
+        "item_problems_item_id_idx",
+        "CREATE INDEX item_problems_item_id_idx ON item_problems(item_id)",
+    ),
+];
+
+/// Adds the item read columns, tables and indexes to an index that lacks
+/// them.
+///
+/// Rows stored before a column or table existed hold nothing in it, so an
+/// index that gains one here is marked as needing a refresh for every
+/// registration: it then reports itself stale instead of reporting, say,
+/// that no ticket has unknown metadata or a dependency.
+///
+/// An index that already has them all is only read, so opening it takes no
+/// write lock. One that lacks any is migrated in a transaction that takes
+/// the write lock before it looks again: of two processes that open an old
+/// index at once, the second waits for the first, then finds everything
+/// there and adds nothing.
+fn migrate_item_read_schema(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if missing_item_read_schema(connection)?.is_empty() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    let missing = missing_item_read_schema(&transaction)?;
+    for statement in &missing {
+        transaction
+            .execute_batch(statement)
+            .map_err(RepositoryError::sqlite)?;
+    }
+    if !missing.is_empty() {
+        transaction
+            .execute("UPDATE repositories SET refresh_required = 1", [])
+            .map_err(RepositoryError::sqlite)?;
+    }
+    transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// The statements that add what the index lacks, in the order to run them:
+/// the columns first, since an index is created on one of them.
+fn missing_item_read_schema(connection: &Connection) -> Result<Vec<String>, RepositoryError> {
+    let mut missing = Vec::new();
+    for (table, column, definition) in ITEM_READ_COLUMNS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                [table, column],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ));
+        }
+    }
+    for (kind, name, statement) in ITEM_READ_OBJECTS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push(statement.to_owned());
+        }
+    }
+    Ok(missing)
 }
 
 #[cfg(test)]
@@ -1401,6 +1702,286 @@ mod tests {
         canonical,
         repository::{DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
     };
+
+    fn column_names(connection: &Connection, table: &str) -> Vec<String> {
+        connection
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .unwrap()
+            .query_map([table], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn object_count(connection: &Connection, kind: &str, name: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    const ITEM_READ_ADDITIONS: usize = ITEM_READ_COLUMNS.len() + ITEM_READ_OBJECTS.len();
+
+    /// An index file from before the item read columns, tables and
+    /// indexes, with one registration that needs no refresh.
+    fn index_without_item_read_schema(directory: &Path) -> std::path::PathBuf {
+        let path = directory.join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO repositories (root_path, enabled_at, accessibility, refresh_required)
+                 VALUES ('/repository', 1, 'accessible', 0)",
+                [],
+            )
+            .unwrap();
+        // An index goes before the table or the column it is on.
+        for (kind, name, _) in ITEM_READ_OBJECTS.iter().rev() {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            connection
+                .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                .unwrap();
+        }
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            ITEM_READ_ADDITIONS
+        );
+        path
+    }
+
+    fn assert_item_read_schema_once_and_marked(path: &Path) {
+        let connection = open_registry(path, &mut |_| {}).unwrap();
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        let marked: bool = connection
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(marked);
+    }
+
+    // Two processes migrating one old index: the other holds the write lock
+    // and has added one column when this one, which saw everything missing,
+    // asks for it.
+    #[test]
+    fn a_migration_waits_for_one_in_progress_and_adds_only_what_is_still_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_schema(directory.path());
+        let first = open_registry(&path, &mut |_| {}).unwrap();
+        first
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;",
+            )
+            .unwrap();
+
+        let second = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                assert_eq!(
+                    missing_item_read_schema(&connection).unwrap().len(),
+                    ITEM_READ_ADDITIONS
+                );
+                migrate_item_read_schema(&mut connection).map_err(|error| format!("{error:?}"))
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!second.is_finished(), "the second migration did not wait");
+        first.execute_batch("COMMIT").unwrap();
+
+        second.join().unwrap().unwrap();
+        assert_item_read_schema_once_and_marked(&path);
+    }
+
+    #[test]
+    fn migrations_started_together_all_succeed() {
+        for _ in 0..8 {
+            let directory = tempfile::tempdir().unwrap();
+            let path = index_without_item_read_schema(directory.path());
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let migrations: Vec<_> = (0..4)
+                .map(|_| {
+                    let (path, barrier) = (path.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                        barrier.wait();
+                        migrate_item_read_schema(&mut connection)
+                            .map_err(|error| format!("{error:?}"))
+                    })
+                })
+                .collect();
+
+            for migration in migrations {
+                migration.join().unwrap().unwrap();
+            }
+            assert_item_read_schema_once_and_marked(&path);
+        }
+    }
+
+    #[test]
+    fn migrate_item_read_schema_takes_no_write_lock_on_an_up_to_date_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut holder = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut holder).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        // Another writer would wait the whole busy timeout and then fail.
+        let started = std::time::Instant::now();
+
+        migrate_item_read_schema(&mut connection).unwrap();
+
+        assert!(started.elapsed() < REGISTRY_BUSY_TIMEOUT / 2);
+        // The lock really is held: a writer is refused. It need not wait
+        // the whole timeout to show that.
+        connection
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
+        assert!(
+            connection
+                .execute_batch("BEGIN IMMEDIATE")
+                .is_err_and(
+                    |error| error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+                )
+        );
+    }
+
+    #[test]
+    fn migrating_twice_adds_each_item_read_column_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+        let once = (
+            column_names(&connection, "discovered_items"),
+            column_names(&connection, "repositories"),
+        );
+        migrate_registry(&mut connection).unwrap();
+
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
+        assert_eq!(
+            (
+                column_names(&connection, "discovered_items"),
+                column_names(&connection, "repositories"),
+            ),
+            once
+        );
+    }
+
+    // An index written when the item read columns existed and the
+    // relationship column, tables and indexes did not.
+    #[test]
+    fn an_index_from_before_relationships_gains_only_what_it_lacks_and_is_marked() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_schema(directory.path());
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;
+                 ALTER TABLE discovered_items ADD COLUMN unknown_metadata TEXT;
+                 ALTER TABLE repositories ADD COLUMN refreshed_at INTEGER;
+                 UPDATE repositories SET refreshed_at = 7;",
+            )
+            .unwrap();
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            1 + ITEM_READ_OBJECTS.len()
+        );
+
+        migrate_item_read_schema(&mut connection).unwrap();
+
+        assert!(missing_item_read_schema(&connection).unwrap().is_empty());
+        drop(connection);
+        assert_item_read_schema_once_and_marked(&path);
+        // What the index already held is kept.
+        let refreshed_at: i64 = open_registry(&path, &mut |_| {})
+            .unwrap()
+            .query_row("SELECT refreshed_at FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(refreshed_at, 7);
+    }
+
+    #[test]
+    fn edges_and_item_problems_go_with_their_item_and_reject_what_is_not_one() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO discovered_items
+                    (id, context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+                 VALUES (1, 1, 'A', 'ticket', 'p', 'T', 0, 'git');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'parent');
+                 INSERT INTO item_problems (item_id, code) VALUES (1, 'invalid-slug');",
+            )
+            .unwrap();
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+
+        for rejected in [
+            // The same edge twice, a kind that is not one, and an item row
+            // that does not exist.
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'C', 'related')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (2, 'C', 'deps')",
+            "INSERT INTO item_problems (item_id, code) VALUES (2, 'invalid-slug')",
+        ] {
+            assert!(connection.execute(rejected, []).is_err(), "{rejected}");
+        }
+        assert_eq!(count(&connection, "item_edges"), 2);
+
+        // Replacing a context is deleting it: its items, and with them
+        // their edges and problems, go in that one statement.
+        connection.execute("DELETE FROM contexts", []).unwrap();
+        assert_eq!(count(&connection, "discovered_items"), 0);
+        assert_eq!(count(&connection, "item_edges"), 0);
+        assert_eq!(count(&connection, "item_problems"), 0);
+    }
 
     fn repository_on_main() -> (tempfile::TempDir, Repository) {
         let directory = tempfile::tempdir().unwrap();

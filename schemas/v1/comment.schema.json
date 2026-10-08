@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 comment",
+  "description": "A nonconforming entry has a null id, parent_id, author, created_at and body, and a depth of 0. A root comment has a depth of 0 and a reply one more than its parent's.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "item_id",
+    "parent_id",
+    "author",
+    "created_at",
+    "body",
+    "path",
+    "unknown_metadata",
+    "problems",
+    "depth"
+  ],
+  "properties": {
+    "id": {
+      "type": ["string", "null"]
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "parent_id": {
+      "type": ["string", "null"]
+    },
+    "author": {
+      "type": ["string", "null"]
+    },
+    "created_at": {
+      "type": ["string", "null"]
+    },
+    "body": {
+      "type": ["string", "null"]
+    },
+    "path": {
+      "type": "string"
+    },
+    "unknown_metadata": {
+      "description": "Front matter keys Manyhands does not define. Any JSON value may appear under a key.",
+      "type": "object"
+    },
+    "problems": {
+      "type": "array",
+      "items": {
+        "$ref": "problem.schema.json"
+      }
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

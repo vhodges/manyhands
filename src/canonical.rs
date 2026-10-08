@@ -117,6 +117,171 @@ pub struct Ticket {
     pub unknown: Mapping,
 }
 
+/// The optional ticket front matter keys that relate one ticket to others
+/// and give it a short code. They are not fields of `Ticket`: they stay in
+/// `Ticket::unknown`, where the serializer keeps them as it keeps any key it
+/// does not define, and `ticket_relationships` reads them from there.
+pub const RELATIONSHIP_KEYS: [&str; 3] = ["slug", "parent", "deps"];
+
+/// Why a relationship value was ignored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelationshipProblemCode {
+    /// `deps` is not a sequence, or a `deps` entry or `parent` is not a
+    /// string.
+    WrongType,
+    /// A `deps` entry or `parent` is a string that is not an item ID.
+    InvalidId,
+    /// A `deps` entry or `parent` names the ticket itself.
+    SelfReference,
+    /// A `deps` entry repeats an earlier one.
+    DuplicateDependency,
+    /// `slug` is not a string that follows the short code grammar.
+    InvalidSlug,
+}
+
+impl RelationshipProblemCode {
+    pub const ALL: [Self; 5] = [
+        Self::WrongType,
+        Self::InvalidId,
+        Self::SelfReference,
+        Self::DuplicateDependency,
+        Self::InvalidSlug,
+    ];
+}
+
+/// One ignored relationship value. `detail` is the item ID the problem is
+/// about, when the value was one; it is never text taken from the file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelationshipProblem {
+    pub code: RelationshipProblemCode,
+    pub detail: Option<ItemId>,
+}
+
+/// A ticket's `slug`, `parent` and `deps`, as far as they are valid.
+///
+/// `deps` is in the file's order, each ID once. A value that is not valid
+/// is left out of its field and listed in `problems`, in the order slug,
+/// parent, then each `deps` entry; none of them makes the ticket
+/// nonconforming. Whether a target exists, and whether it is a ticket,
+/// cannot be known from one file and is not checked here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TicketRelationships {
+    pub slug: Option<String>,
+    pub parent: Option<ItemId>,
+    pub deps: Vec<ItemId>,
+    pub problems: Vec<RelationshipProblem>,
+}
+
+/// Reads the relationship keys from `ticket.unknown`, which is left as it
+/// is.
+///
+/// A key whose value is YAML null is read as an absent key. A short code
+/// written with uppercase letters is read in lowercase; the file keeps its
+/// own spelling.
+///
+/// A short code must be a YAML string. One a plain scalar would read as
+/// another type has to be quoted when it is written: `1e-12345` unquoted is
+/// a number, and is reported as an invalid slug.
+pub fn ticket_relationships(ticket: &Ticket) -> TicketRelationships {
+    let mut view = TicketRelationships::default();
+    let mut ignore = |code, detail| view.problems.push(RelationshipProblem { code, detail });
+    let value = |key: &str| ticket.unknown.get(key).filter(|value| !value.is_null());
+
+    let slug = value("slug").and_then(|value| {
+        let slug = value.as_str().and_then(normalized_slug);
+        if slug.is_none() {
+            ignore(RelationshipProblemCode::InvalidSlug, None);
+        }
+        slug
+    });
+    let parent = value("parent").and_then(|value| match relationship_target(&ticket.id, value) {
+        Ok(parent) => Some(parent),
+        Err((code, detail)) => {
+            ignore(code, detail);
+            None
+        }
+    });
+    let mut deps = Vec::new();
+    match value("deps") {
+        None => {}
+        Some(Value::Sequence(entries)) => {
+            for entry in entries {
+                match relationship_target(&ticket.id, entry) {
+                    Ok(dependency) if deps.contains(&dependency) => ignore(
+                        RelationshipProblemCode::DuplicateDependency,
+                        Some(dependency),
+                    ),
+                    Ok(dependency) => deps.push(dependency),
+                    Err((code, detail)) => ignore(code, detail),
+                }
+            }
+        }
+        Some(_) => ignore(RelationshipProblemCode::WrongType, None),
+    }
+
+    view.slug = slug;
+    view.parent = parent;
+    view.deps = deps;
+    view
+}
+
+/// The other ticket a `parent` value or a `deps` entry names, or why it
+/// names none.
+fn relationship_target(
+    ticket: &ItemId,
+    value: &Value,
+) -> Result<ItemId, (RelationshipProblemCode, Option<ItemId>)> {
+    let text = value
+        .as_str()
+        .ok_or((RelationshipProblemCode::WrongType, None))?;
+    let target: ItemId = text
+        .parse()
+        .map_err(|_| (RelationshipProblemCode::InvalidId, None))?;
+    if target == *ticket {
+        return Err((RelationshipProblemCode::SelfReference, Some(target)));
+    }
+    Ok(target)
+}
+
+/// Whether `value` is a short code: an optional prefix of one to eight
+/// lowercase letters or digits, initials of two or three, and a code of
+/// five to eight lowercase Crockford Base32 characters, joined by hyphens.
+///
+/// Only the lowercase spelling is one: it is how a short code is stored
+/// and displayed. `normalized_slug` gives it for a code written in any
+/// case.
+pub fn is_valid_slug(value: &str) -> bool {
+    const CROCKFORD_BASE32_LOWERCASE: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    let alphanumeric = |part: &str, lengths: std::ops::RangeInclusive<usize>| {
+        lengths.contains(&part.len())
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    let parts: Vec<&str> = value.split('-').collect();
+    let (prefix, initials, code) = match parts.as_slice() {
+        [initials, code] => (None, initials, code),
+        [prefix, initials, code] => (Some(prefix), initials, code),
+        _ => return false,
+    };
+    prefix.is_none_or(|prefix| alphanumeric(prefix, 1..=8))
+        && alphanumeric(initials, 2..=3)
+        && (5..=8).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| CROCKFORD_BASE32_LOWERCASE.contains(&byte))
+}
+
+/// `value` in lowercase when that is a short code, so that a code is
+/// matched without regard to the case it was written in. Only ASCII
+/// letters change case; everything else about the grammar is as strict as
+/// `is_valid_slug`.
+pub fn normalized_slug(value: &str) -> Option<String> {
+    let slug = value.to_ascii_lowercase();
+    is_valid_slug(&slug).then_some(slug)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: ItemId,
@@ -552,6 +717,19 @@ fn classify_canonical_path(path: &Path) -> Result<CanonicalPath, ValidationProbl
             "path is not a canonical document, ticket, or comment location",
         )),
     }
+}
+
+/// The kind of item a repository-relative path can hold, by the path alone:
+/// `docs/**/*.md`, `.manyhands/tickets/<id>/ticket.md` or
+/// `.manyhands/comments/<item id>/<id>.md`. Any other path, and any path
+/// that is absolute, empty or has a `.`, `..` or empty component, is
+/// `InvalidPath`. Nothing is read.
+pub fn item_path_kind(path: &Path) -> Result<ItemKind, ValidationProblem> {
+    Ok(match classify_canonical_path(path)? {
+        CanonicalPath::Document => ItemKind::Document,
+        CanonicalPath::Ticket(_) => ItemKind::Ticket,
+        CanonicalPath::Comment { .. } => ItemKind::Comment,
+    })
 }
 
 fn has_invalid_raw_path_segments(path: &str) -> bool {

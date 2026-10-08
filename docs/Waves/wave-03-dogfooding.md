@@ -337,14 +337,21 @@ through, so neither front end scrapes SQLite, Git or the filesystem itself.
 error and recovery-action taxonomy; redaction; and versioned, serializable
 JSON v1 DTOs for every read. Read services cover repository/identity/remote/
 key/host inspection, public-key text, document/ticket/comment reads,
-operation/conflict inspection, index/poll status and ID generation. Ticket
+operation inspection, index/poll status and ID generation. Conflict
+inspection is not in F1: no conflict record exists before Wave 02 Cycle 06,
+so whichever of C4 or D5 is planned first lands that read as a shared-library
+change under track rule 5 (product owner, 2026-10-07). Ticket
 lists carry the approved lifecycle closure filter, independent of status text.
 Ticket DTOs carry `slug`, `parent`, `deps`, readiness and relationship
 problems. Read services cover the ticket relationship queries: ready, blocked,
 dependencies in both directions, children, cycles, plan, critical path and
 find by short code, over index edge records rebuilt from canonical files.
 Fill narrow missing read APIs and report stale/malformed state honestly; reads
-do not perform implicit refresh or network contact.
+do not perform implicit refresh or network contact. Reads list what the index
+holds and never list a directory or scan; the indexer picks up new files, and
+a short delay before a new file appears is accepted (product owner,
+2026-10-08). Comment reads return one flat, ordered list with each entry's
+depth, and report a comment's `created_by` as its author without writing it.
 
 **Out of scope:** Command parsing, human output, exit codes and help; desktop
 views; canonical/config/key writes; network attempts; request replay; polling
@@ -380,6 +387,9 @@ Ticket create and save accept `deps` and `parent`, write them in canonical
 form and reject a cycle before any write. Create generates the short code;
 add the explicit short-code assign operation, repository-local initials and
 the optional repository prefix.
+Comment creation writes the comment's optional `created_by` field from the
+confirmed Git identity, as the canonical schema RFC defines; F1 only reads it
+(product owner, 2026-10-08).
 
 **Out of scope:** New Git lifecycle algorithms, CLI verbs, terminal secret
 interaction, desktop confirmations and background scheduling. Promotion and
@@ -703,11 +713,14 @@ a claim those public APIs exist.
 | Repository inventory, full canonical reads, malformed DTOs, public-key/host inspection, closure filter | F1 | Read-only library APIs; no front-end SQLite scraping or implicit fetch. |
 | Request digest, creation observations, consent, progress/cancel and replay | F2 | Wrap actual domain operations; preserve Git authority and existing leases. |
 | Ticket relationship fields, cycle rejection, short-code generation and graph reads | F1 (reads), F2 (writes) | Index edge records rebuilt from canonical files; ULID remains the only identity and mutation selector. |
+| Comment author (`created_by`) | F1 (reads), F2 (writes) | Written once at comment creation from the confirmed Git identity; never derived from Git history. |
 | Missing identity during create/enable and public identity configuration | F2 | Explicit confirmed local persistence, including a not-yet-created root. |
 | Configured-host approval | F2 | Scoped transport verification; no publication or remote-ref refresh. |
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
 | Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. |
+| Conflict inspection read | First of C4 or D5, as a shared-library change | Read-only over the Wave 02 Cycle 06 conflict record; same DTO and redaction rules as F1. |
+| One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
 | Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |
@@ -807,6 +820,13 @@ remaining the canonical identity. PRD v0.6 and the
 [ticket relationships and short codes RFC](../RFC/ticket-relationships-and-short-codes.md) define them. The product
 owner approved that RFC and this Wave's allocation of it on 2026-10-07, on
 ticket `01M4CGDANTBDR4T8AGFZP8ZGP7`.
+
+On 2026-10-08 the product owner authorized amendments on the F1 ticket,
+`01M4CC0VMQ7R15A7M9SPN3KB67`, to bring this Wave and the CLI, relationships
+and index RFCs into agreement with rulings made while implementing F1. In
+this document they add writing the comment `created_by` field to F2, and
+state that reads list what the index holds and that comments are read as a
+flat list.
 
 The refreshed API audit, native tester/machine
 assignments and implementation-baseline evidence remain open; none is implied by design

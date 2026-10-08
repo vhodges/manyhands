@@ -484,7 +484,7 @@ fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
         _ => Err(error(KeyMaterialErrorKind::RegistryUnavailable)),
     }
 }
-pub(super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
+pub(in super::super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
     match kind {
         KeyMaterialErrorKind::RegistryUnavailable => "registry-unavailable",
         KeyMaterialErrorKind::SourceMissing => "source-missing",

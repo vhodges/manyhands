@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 SSH host pin",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "port", "algorithm", "fingerprint", "reapproval_required"],
+  "properties": {
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "algorithm": {
+      "type": "string"
+    },
+    "fingerprint": {
+      "type": "string"
+    },
+    "reapproval_required": {
+      "type": "boolean"
+    }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 stored operation",
+  "description": "One operation as its store last recorded it. state and completed_step are the store's own lower_snake_case names. completed is the last state, and an operation can be completed and still be listed with a next_action: a remote synchronization whose index hand-off is pending, or a key generation that has since lost its files. worktree is an absolute path and is set only for a local operation; key_id only for a key-material operation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation_id",
+    "family",
+    "owner",
+    "action",
+    "state",
+    "completed_step",
+    "next_action",
+    "item_id",
+    "key_id",
+    "worktree",
+    "updated_at",
+    "failure_code"
+  ],
+  "properties": {
+    "operation_id": {
+      "type": ["string", "null"]
+    },
+    "family": {
+      "type": "string",
+      "enum": ["local", "remote", "key_material"]
+    },
+    "owner": {
+      "type": "string",
+      "enum": ["repository", "application"]
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "create_and_enable",
+        "enable",
+        "remove_registration",
+        "add_remote",
+        "remove_remote",
+        "set_publication_remote",
+        "refresh",
+        "rebuild",
+        "prepare_context",
+        "save_document",
+        "save_ticket",
+        "submit_comment",
+        "poll",
+        "synchronize_context",
+        "synchronize_primary",
+        "promote",
+        "close",
+        "generate_key",
+        "delete_key"
+      ]
+    },
+    "state": {
+      "type": "string"
+    },
+    "completed_step": {
+      "type": ["string", "null"]
+    },
+    "next_action": {
+      "type": ["string", "null"],
+      "enum": [
+        "resume",
+        "retry_generation",
+        "review_deletion_again",
+        "inspect_retained_files",
+        null
+      ]
+    },
+    "item_id": {
+      "type": ["string", "null"]
+    },
+    "key_id": {
+      "type": ["string", "null"]
+    },
+    "worktree": {
+      "type": ["string", "null"]
+    },
+    "updated_at": {
+      "type": ["string", "null"]
+    },
+    "failure_code": {
+      "type": ["string", "null"],
+      "enum": [
+        "registry_unavailable",
+        "source_missing",
+        "source_changed",
+        "ownership_unverified",
+        "invalid_generated_key",
+        "protection_unavailable",
+        "unsafe_path",
+        "storage_unavailable",
+        "configuration_required",
+        "selected_key_unavailable",
+        "unlock_required",
+        "host_approval_required",
+        "transport_unavailable",
+        "protocol_rejected",
+        "cancelled",
+        "repository_unavailable",
+        "unknown_failure",
+        null
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 commit identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "email", "source"],
+  "properties": {
+    "name": {
+      "type": ["string", "null"]
+    },
+    "email": {
+      "type": ["string", "null"]
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "repository",
+        "global",
+        "xdg",
+        "system",
+        "program_data",
+        "application",
+        "none"
+      ]
+    }
+  }
+}

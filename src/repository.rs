@@ -28,6 +28,7 @@ use crate::canonical;
 mod coordination;
 mod discovery;
 pub mod keys;
+mod read;
 mod recovery;
 mod remote;
 pub mod transport;
@@ -46,6 +47,7 @@ pub use keys::{
     SharedKeyOwnership, SharedKeyRegistration, SharedKeySelectionOutcome,
     UnregisterSharedKeyOutcome,
 };
+pub use read::*;
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
     claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
@@ -703,6 +705,7 @@ pub enum RepositoryOperation {
     RefreshRepository,
     RebuildRepository,
     RepositorySnapshot,
+    Read,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1035,6 +1038,10 @@ impl RepositoryService {
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
+        // Taken before anything is observed: what this refresh stores can be
+        // no newer than this, so a file changed while it runs reads as
+        // changed since.
+        let observed_from = OffsetDateTime::now_utc().unix_timestamp();
         let before = observe_root(repository, &root);
         if let Err(error) =
             self.check_failure(FailurePoint::AfterContextObservation, operation, &root)
@@ -1103,7 +1110,14 @@ impl RepositoryService {
                 context: Some(context),
             });
         }
-        reconcile_disappeared_contexts(&self.registry_path, repository_id, &before, owner, &root)?;
+        reconcile_disappeared_contexts(
+            &self.registry_path,
+            repository_id,
+            &before,
+            owner,
+            observed_from,
+            &root,
+        )?;
         let snapshot = self.repository_snapshot(&root)?;
         Ok(RefreshOutcome::Refreshed { snapshot })
     }
@@ -1124,6 +1138,8 @@ impl RepositoryService {
             begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id
         };
         let result = (|| {
+            // As in a refresh: the time before the first observation.
+            let observed_from = OffsetDateTime::now_utc().unix_timestamp();
             let observation = observe_root(&repository, &root);
             if let Some(hook) = self
                 .observation_hook
@@ -1148,7 +1164,13 @@ impl RepositoryService {
                 return read_repository_snapshot_from_registry(&self.registry_path, &root);
             }
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)?;
-            persist_rebuild_observation(&self.registry_path, operation_id, &root, &observation)?;
+            persist_rebuild_observation(
+                &self.registry_path,
+                operation_id,
+                &root,
+                &observation,
+                observed_from,
+            )?;
             set_rebuild_operation(&self.registry_path, operation_id, "completed", &root)?;
             read_repository_snapshot_from_registry(&self.registry_path, &root)
         })();
@@ -1522,7 +1544,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(SaveOutcome::IdentityRequired { context });
@@ -1898,7 +1920,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(SaveOutcome::IdentityRequired { context });
@@ -2321,7 +2343,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(CommentSubmissionOutcome::IdentityRequired { context });
@@ -3307,7 +3329,7 @@ impl RepositoryService {
         let local_config = repository
             .config()
             .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
-        let Some(identity) = resolve_identity(&local_config, &local_config, &root, operation)?
+        let Some((identity, _)) = resolve_identity(&local_config, &local_config, &root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
             return Err(RepositoryError::new(
@@ -3841,7 +3863,7 @@ impl RepositoryService {
                     &root,
                     RepositoryOperation::Enable,
                 )?;
-                let Some(identity) = resolve_identity(
+                let Some((identity, _)) = resolve_identity(
                     &local_config,
                     &effective_config,
                     &root,
@@ -3998,11 +4020,55 @@ impl RepositoryService {
         selected: &Path,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<RepositoryInspection, RepositoryError> {
+        self.inspect_with_head_policy(
+            selected,
+            identity_config,
+            false,
+            ConfigurationReader::Unguarded,
+        )
+    }
+
+    /// `inspect` for a read: a detached HEAD is reported as no head branch
+    /// instead of being refused, and the configuration is taken through
+    /// the guarded reader. Everything else is as `inspect` has it.
+    fn inspect_reporting_detached_head(
+        &self,
+        root: &Path,
+    ) -> Result<RepositoryInspection, RepositoryError> {
+        self.inspect_with_head_policy(
+            root,
+            &mut RepositoryIdentityConfig,
+            true,
+            ConfigurationReader::Guarded,
+        )
+    }
+
+    fn inspect_with_head_policy(
+        &self,
+        selected: &Path,
+        identity_config: &mut impl IdentityConfigProvider,
+        report_detached_head: bool,
+        configuration_reader: ConfigurationReader,
+    ) -> Result<RepositoryInspection, RepositoryError> {
         self.require_index_available(RepositoryOperation::Inspect, Some(selected))?;
         let (repository, root) = canonical_repository_root(selected, RepositoryOperation::Inspect)?;
-        let head_branch = checked_out_branch(&repository, &root, RepositoryOperation::Inspect)?;
+        let head_branch = match checked_out_branch(&repository, &root, RepositoryOperation::Inspect)
+        {
+            Ok(branch) => Some(branch),
+            Err(error)
+                if report_detached_head && error.kind == RepositoryErrorKind::DetachedHead =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
         let local_branches = local_branches(&repository, &root)?;
-        let configuration = read_configuration(&root)?;
+        let configuration = match configuration_reader {
+            ConfigurationReader::Guarded => {
+                read_configuration_guarded(&root, RepositoryOperation::Inspect)?
+            }
+            ConfigurationReader::Unguarded => read_configuration(&root)?,
+        };
         let local_config = repository.config().map_err(|error| {
             RepositoryError::git(RepositoryOperation::Inspect, Some(root.clone()), error)
         })?;
@@ -4024,7 +4090,7 @@ impl RepositoryService {
 
         Ok(RepositoryInspection {
             root,
-            head_branch: Some(head_branch),
+            head_branch,
             local_branches,
             configuration,
             identity,
@@ -4376,6 +4442,7 @@ fn persist_rebuild_observation(
     operation_id: i64,
     root: &Path,
     observation: &RootObservation,
+    observed_from: i64,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
@@ -4417,10 +4484,13 @@ fn persist_rebuild_observation(
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     persist_observation(&transaction, repository_id, observation, root)
         .map_err(|error| error.for_operation(operation, root))?;
+    // The observation is stored and the index is current: this statement
+    // says so, in the transaction that stores it, and records the time
+    // from which the observation was made.
     transaction
         .execute(
-            "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1",
-            [repository_id],
+            "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1",
+            params![repository_id, observed_from],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
@@ -4771,6 +4841,7 @@ fn reconcile_disappeared_contexts(
     repository_id: i64,
     observation: &RootObservation,
     owner: IndexOwner,
+    observed_from: i64,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
@@ -4826,7 +4897,11 @@ fn reconcile_disappeared_contexts(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1", [repository_id]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    // Every context is stored and the refresh is about to be recorded as
+    // completed: this statement clears the stale mark, in that same
+    // transaction, and records the time from which the refresh observed.
+    // A refresh that fails or must be retried never reaches it.
+    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     if !transition_indexing(&transaction, owner, "completed", None)
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
@@ -4984,16 +5059,12 @@ fn persist_context(
     let context_id = transaction.last_insert_rowid();
     for item in observed.items {
         transaction.execute(
-            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source)],
+            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source, closed_by, unknown_metadata, slug) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source), item.closed_by, item.unknown_metadata.to_stored(), item.relationships.slug],
         ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-        persist_comments(
-            transaction,
-            transaction.last_insert_rowid(),
-            &item.comments,
-            None,
-            root,
-        )?;
+        let item_row = transaction.last_insert_rowid();
+        persist_relationships(transaction, item_row, &item.relationships, root)?;
+        persist_comments(transaction, item_row, &item.comments, None, root)?;
     }
     let observed_at = OffsetDateTime::now_utc().unix_timestamp();
     for problem in observed.problems {
@@ -5022,6 +5093,53 @@ fn persist_context(
     }
     for problem in observed.validation_problems {
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, problem.path.to_str(), validation_code_name(problem.code.clone()), problem.message, observed_at])
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    }
+    Ok(())
+}
+
+/// Stores a ticket's edges and its ignored relationship values under the
+/// item row just inserted for it, in that row's transaction.
+///
+/// Nothing is deleted here: the rows of an item's earlier observation went
+/// with that item row when its context was deleted to be replaced. An edge
+/// is stored whether or not the index holds its target; what it resolves
+/// to is decided when it is read.
+fn persist_relationships(
+    transaction: &rusqlite::Transaction<'_>,
+    item_row: i64,
+    relationships: &canonical::TicketRelationships,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RefreshRepository;
+    let edges = relationships
+        .parent
+        .iter()
+        .map(|parent| (parent, "parent"))
+        .chain(
+            relationships
+                .deps
+                .iter()
+                .map(|dependency| (dependency, "deps")),
+        );
+    for (target, kind) in edges {
+        transaction
+            .execute(
+                "INSERT INTO item_edges (item_id, target_id, kind) VALUES (?1, ?2, ?3)",
+                params![item_row, target.to_string(), kind],
+            )
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    }
+    for problem in &relationships.problems {
+        transaction
+            .execute(
+                "INSERT INTO item_problems (item_id, code, detail) VALUES (?1, ?2, ?3)",
+                params![
+                    item_row,
+                    relationship_problem_code_name(problem.code),
+                    problem.detail.as_ref().map(ToString::to_string)
+                ],
+            )
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
     Ok(())
@@ -5067,6 +5185,17 @@ fn activity_source_name(source: DiscoveryActivitySource) -> &'static str {
         DiscoveryActivitySource::UncommittedFilesystem => "filesystem",
     }
 }
+/// The code string the index stores for an ignored relationship value.
+fn relationship_problem_code_name(code: canonical::RelationshipProblemCode) -> &'static str {
+    match code {
+        canonical::RelationshipProblemCode::WrongType => "relationship-wrong-type",
+        canonical::RelationshipProblemCode::InvalidId => "relationship-invalid-id",
+        canonical::RelationshipProblemCode::SelfReference => "relationship-self-reference",
+        canonical::RelationshipProblemCode::DuplicateDependency => "duplicate-dependency",
+        canonical::RelationshipProblemCode::InvalidSlug => "invalid-slug",
+    }
+}
+
 fn validation_code_name(code: canonical::ValidationCode) -> &'static str {
     match code {
         canonical::ValidationCode::InvalidPath => "invalid-path",
@@ -5933,6 +6062,139 @@ fn owned_parent_directory(
         directory = unsafe { std::fs::File::from_raw_fd(fd) };
     }
     Ok(directory)
+}
+
+/// What reading one file for a read service found.
+enum GuardedFile {
+    Found {
+        bytes: Vec<u8>,
+        /// From the opened file itself, where the platform says.
+        modified: Option<SystemTime>,
+    },
+    /// Nothing is at the path.
+    Missing,
+    /// Something is there that is not a regular file reached through real
+    /// directories: a symbolic link, a directory, a pipe, a device.
+    NotAFile,
+}
+
+/// Reads `root/relative` for a read service, following no symbolic link
+/// below `root` and never waiting on what it opens.
+///
+/// This is the read-only sibling of `owned_file_bytes`: it creates nothing,
+/// runs no test hook, and tells its outcomes apart. Each directory is opened
+/// through the one before it without following links, and so is the file,
+/// which is opened non-blocking so that a pipe cannot hold the read. The
+/// file's type and modification time come from the descriptor that was
+/// opened, not from a second look at the path.
+///
+/// A missing component, or one whose name is too long to exist, is
+/// `Missing`. A component that is a symbolic link or not a directory, and a
+/// file that is a link, a socket or otherwise not a regular file, is
+/// `NotAFile`. Every other failure, such as a file or directory this user
+/// may not open, is the error itself.
+#[cfg(unix)]
+fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
+    // Without a bound nothing is too large.
+    guarded_file_within(root, relative, None).map(|file| file.unwrap_or(GuardedFile::NotAFile))
+}
+
+/// `guarded_file`, reading at most `limit` bytes when there is one: `None`
+/// for a regular file that holds more, of which nothing is returned.
+#[cfg(unix)]
+fn guarded_file_within(
+    root: &Path,
+    relative: &Path,
+    limit: Option<u64>,
+) -> std::io::Result<Option<GuardedFile>> {
+    use std::io::{Error, ErrorKind};
+
+    fn name(text: &std::ffi::OsStr) -> std::io::Result<CString> {
+        CString::new(text.as_bytes()).map_err(|_| Error::from(ErrorKind::InvalidInput))
+    }
+    fn opened(descriptor: libc::c_int) -> std::io::Result<std::fs::File> {
+        if descriptor < 0 {
+            Err(Error::last_os_error())
+        } else {
+            Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+        }
+    }
+    /// `None` for a failure that is not about what is at the path.
+    fn absent(error: &Error) -> Option<GuardedFile> {
+        match error.raw_os_error() {
+            // A name too long to exist names nothing.
+            Some(libc::ENOENT | libc::ENAMETOOLONG) => Some(GuardedFile::Missing),
+            // A symbolic link is ELOOP, or EMLINK on some systems; a socket
+            // is ENXIO.
+            Some(libc::ELOOP | libc::EMLINK | libc::ENOTDIR | libc::ENXIO) => {
+                Some(GuardedFile::NotAFile)
+            }
+            // macOS refuses to open a socket with this instead. Elsewhere
+            // the code keeps its own meaning and is the error itself.
+            #[cfg(target_vendor = "apple")]
+            Some(libc::EOPNOTSUPP) => Some(GuardedFile::NotAFile),
+            _ => None,
+        }
+    }
+
+    let directory_flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let root_name = name(root.as_os_str())?;
+    let mut directory = opened(unsafe { libc::open(root_name.as_ptr(), directory_flags) })?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(Error::from(ErrorKind::InvalidInput));
+        };
+        let component = name(component)?;
+        let is_file = components.peek().is_none();
+        let flags = if is_file {
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC
+        } else {
+            directory_flags
+        };
+        let mut next = loop {
+            let next =
+                opened(unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) });
+            match next {
+                Ok(next) => break next,
+                // Interrupted before anything was opened: ask again.
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => return absent(&error).map(Some).ok_or(error),
+            }
+        };
+        if !is_file {
+            directory = next;
+            continue;
+        }
+        let metadata = next.metadata()?;
+        if !metadata.is_file() {
+            return Ok(Some(GuardedFile::NotAFile));
+        }
+        let mut bytes = Vec::new();
+        match limit {
+            None => {
+                next.read_to_end(&mut bytes)?;
+            }
+            Some(limit) => {
+                if metadata.len() > limit {
+                    return Ok(None);
+                }
+                // One byte past the bound shows a file that grew since.
+                (&mut next)
+                    .take(limit.saturating_add(1))
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() as u64 > limit {
+                    return Ok(None);
+                }
+            }
+        }
+        return Ok(Some(GuardedFile::Found {
+            bytes,
+            modified: metadata.modified().ok(),
+        }));
+    }
+    // An empty path names the root, which is not a file.
+    Ok(Some(GuardedFile::NotAFile))
 }
 
 #[cfg(unix)]
@@ -7416,6 +7678,113 @@ fn read_configuration_for(
     })
 }
 
+/// How an inspection reads the repository's configuration file.
+#[derive(Clone, Copy)]
+enum ConfigurationReader {
+    /// As a read service does: `read_configuration_guarded`.
+    Guarded,
+    /// As enablement and the other changes do: `read_configuration`.
+    Unguarded,
+}
+
+/// The most configuration a read takes. A configuration holds a few short
+/// keys; no other bound on it exists to agree with.
+const MAX_READ_CONFIGURATION_BYTES: u64 = 64 * 1024;
+
+/// The configuration as a read service reports it, read through the guarded
+/// reader: no symbolic link is followed, nothing is waited on, and at most
+/// `MAX_READ_CONFIGURATION_BYTES` are taken.
+///
+/// A configuration that is reached through a link, is not a regular file,
+/// is larger than the bound or is not UTF-8 is invalid, the state the
+/// indexer stores for a configuration it will not read. Nothing at the path
+/// is `Missing`. A file or directory that cannot be opened is
+/// `InaccessibleRepository`.
+fn read_configuration_guarded(
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<ConfigurationInspection, RepositoryError> {
+    let unsafe_configuration = || {
+        ConfigurationInspection::Invalid(canonical::ValidationProblem {
+            path: PathBuf::from(canonical::CONFIG_PATH),
+            code: canonical::ValidationCode::MalformedConfiguration,
+            message: "the repository configuration is not a readable regular file".to_owned(),
+        })
+    };
+    let bytes = match guarded_configuration_file(root) {
+        Ok(Some(GuardedFile::Found { bytes, .. })) => bytes,
+        Ok(Some(GuardedFile::Missing)) => return Ok(ConfigurationInspection::Missing),
+        Ok(Some(GuardedFile::NotAFile) | None) => return Ok(unsafe_configuration()),
+        Err(error) => {
+            return Err(RepositoryError::with_source(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::InaccessibleRepository,
+                error,
+            ));
+        }
+    };
+    let Ok(source) = String::from_utf8(bytes) else {
+        return Ok(unsafe_configuration());
+    };
+    Ok(match canonical::parse_repository_config(&source) {
+        Ok(config) => ConfigurationInspection::Valid(config),
+        Err(problem) => ConfigurationInspection::Invalid(problem),
+    })
+}
+
+#[cfg(unix)]
+fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
+    guarded_file_within(
+        root,
+        Path::new(canonical::CONFIG_PATH),
+        Some(MAX_READ_CONFIGURATION_BYTES),
+    )
+}
+
+// Weaker than the Unix reader, and never compiled or executed here: it
+// checks the path and then uses it, as the indexer's own configuration
+// observation does. Making it sound is a native obligation.
+#[cfg(not(unix))]
+fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
+    use std::io::ErrorKind;
+
+    let path = root.join(canonical::CONFIG_PATH);
+    for (checked, is_file) in [(root.join(".manyhands"), false), (path.clone(), true)] {
+        match std::fs::symlink_metadata(&checked) {
+            Ok(metadata) if is_file && metadata.file_type().is_file() => {
+                if metadata.len() > MAX_READ_CONFIGURATION_BYTES {
+                    return Ok(None);
+                }
+            }
+            Ok(metadata) if !is_file && metadata.file_type().is_dir() => {}
+            Ok(_) => return Ok(Some(GuardedFile::NotAFile)),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(Some(GuardedFile::Missing));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut bytes = Vec::new();
+    match std::fs::File::open(&path) {
+        Ok(file) => {
+            file.take(MAX_READ_CONFIGURATION_BYTES.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(Some(GuardedFile::Missing));
+        }
+        Err(error) => return Err(error),
+    }
+    if bytes.len() as u64 > MAX_READ_CONFIGURATION_BYTES {
+        return Ok(None);
+    }
+    Ok(Some(GuardedFile::Found {
+        bytes,
+        modified: None,
+    }))
+}
+
 fn canonical_configuration(
     primary_branch: &str,
     root: &Path,
@@ -8012,11 +8381,11 @@ fn resolve_identity(
     effective_config: &Config,
     root: &Path,
     operation: RepositoryOperation,
-) -> Result<Option<CommitIdentity>, RepositoryError> {
+) -> Result<Option<(CommitIdentity, ConfigLevel)>, RepositoryError> {
     if let Some(identity) =
         complete_identity_at_level(local_config, ConfigLevel::Local, root, operation)?
     {
-        return Ok(Some(identity));
+        return Ok(Some((identity, ConfigLevel::Local)));
     }
     for level in [
         ConfigLevel::Global,
@@ -8028,7 +8397,7 @@ fn resolve_identity(
         if let Some(identity) =
             complete_identity_at_level(effective_config, level, root, operation)?
         {
-            return Ok(Some(identity));
+            return Ok(Some((identity, level)));
         }
     }
     Ok(None)
@@ -8685,10 +9054,11 @@ mod tests {
                 RepositoryOperation::Inspect,
             )
             .unwrap()
-            .map(|identity| (identity.name, identity.email)),
+            .map(|(identity, level)| (identity.name, identity.email, level)),
             Some((
                 "Global Name".to_owned(),
-                "global@example.invalid".to_owned()
+                "global@example.invalid".to_owned(),
+                ConfigLevel::Global
             ))
         );
     }

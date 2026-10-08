@@ -226,10 +226,18 @@ must reconcile Git/canonical state; cache loss that prevents safe replay returns
 recovery-required rather than silently repeating an effect. These records do
 not replace the repository lease or make SQLite authoritative.
 
-Item discovery also records each ticket's short code and readiness, and the
-index holds relationship edge records, as defined by the
+Item discovery also records each ticket's short code, and the index holds
+relationship edge records and the relationship problems found in each
+ticket's own file, as defined by the
 [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#index).
-They are rebuilt from canonical files on refresh and rebuild.
+They are rebuilt from canonical files on refresh and rebuild. Readiness, and
+whether an edge's target resolves, are not stored: they are computed from the
+stored edges when read (amended 2026-10-08).
+
+Reads list what the index holds (product owner, 2026-10-08). A read never
+lists a directory or scans for files. The indexer is what picks up a new
+file, so a document, ticket or comment added since the last refresh is not
+listed, and not reported, until the next one. That short delay is accepted.
 
 ## Wave 1 Acceptance
 

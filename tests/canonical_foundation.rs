@@ -3,9 +3,10 @@ mod support;
 use std::{fs, path::PathBuf, str::FromStr};
 
 use manyhands::canonical::{
-    CONFIG_PATH, CanonicalItem, ItemId, RepositoryConfig, ValidationCode, ordered_comment_threads,
-    parse_item, parse_repository_config, serialize_item, serialize_repository_config,
-    validate_context,
+    CONFIG_PATH, CanonicalItem, ItemId, RELATIONSHIP_KEYS, RelationshipProblem,
+    RelationshipProblemCode, RepositoryConfig, Ticket, TicketRelationships, ValidationCode,
+    is_valid_slug, normalized_slug, ordered_comment_threads, parse_item, parse_repository_config,
+    serialize_item, serialize_repository_config, ticket_relationships, validate_context,
 };
 use std::path::Path;
 
@@ -1106,4 +1107,363 @@ fn problem_paths(
         .filter(|problem| problem.code == code)
         .map(|problem| problem.path.clone())
         .collect()
+}
+
+// ---------------------------------------------------------------------
+// Ticket relationships: `slug`, `parent` and `deps`.
+// ---------------------------------------------------------------------
+
+const RELATED_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const RELATED_PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+const RELATED_FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+const RELATED_SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
+
+fn parsed_ticket(source: &str) -> Ticket {
+    match parse_item(Path::new(&ticket_path(RELATED_TICKET)), source).unwrap() {
+        CanonicalItem::Ticket(ticket) => ticket,
+        other => panic!("not a ticket: {other:?}"),
+    }
+}
+
+/// A ticket whose front matter ends with `extra`: lines that each end in a
+/// newline.
+fn related_ticket(extra: &str) -> Ticket {
+    parsed_ticket(&format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {RELATED_TICKET}\n\
+         title: Related\ntype: task\nstatus: open\n{extra}---\nBody.\n"
+    ))
+}
+
+fn related(extra: &str) -> TicketRelationships {
+    ticket_relationships(&related_ticket(extra))
+}
+
+fn id(text: &str) -> ItemId {
+    text.parse().unwrap()
+}
+
+fn relationship_problem(
+    code: RelationshipProblemCode,
+    detail: Option<&str>,
+) -> RelationshipProblem {
+    RelationshipProblem {
+        code,
+        detail: detail.map(id),
+    }
+}
+
+#[test]
+fn a_ticket_without_relationship_fields_has_an_empty_view() {
+    assert_eq!(related(""), TicketRelationships::default());
+    assert_eq!(related("deps: []\n"), TicketRelationships::default());
+}
+
+#[test]
+fn the_view_reads_valid_fields_in_block_and_flow_form() {
+    let expected = TicketRelationships {
+        slug: Some("mh-vh-k9x2b".to_owned()),
+        parent: Some(id(RELATED_PARENT)),
+        // In the file's order, which need not be sorted.
+        deps: vec![id(RELATED_SECOND), id(RELATED_FIRST)],
+        problems: Vec::new(),
+    };
+
+    let block = related(&format!(
+        "slug: mh-vh-k9x2b\nparent: \"{RELATED_PARENT}\"\ndeps:\n  - \"{RELATED_SECOND}\"\n  - \"{RELATED_FIRST}\"\n"
+    ));
+    let flow = related(&format!(
+        "slug: \"mh-vh-k9x2b\"\nparent: {RELATED_PARENT}\ndeps: [{RELATED_SECOND}, \"{RELATED_FIRST}\"]\n"
+    ));
+
+    assert_eq!(block, expected);
+    assert_eq!(flow, expected);
+}
+
+#[test]
+fn the_relationship_keys_stay_in_the_unknown_mapping() {
+    let ticket = related_ticket(&format!(
+        "slug: mh-vh-k9x2b\nparent: {RELATED_PARENT}\ndeps: [{RELATED_FIRST}]\nother: kept\n"
+    ));
+
+    for key in ["slug", "parent", "deps", "other"] {
+        assert!(ticket.unknown.contains_key(key), "{key}");
+    }
+    assert_eq!(RELATIONSHIP_KEYS, ["slug", "parent", "deps"]);
+}
+
+#[test]
+fn slugs_follow_the_grammar() {
+    for valid in [
+        "vh-k9x2b",
+        "mh-vh-k9x2b",
+        "a-12-00000",
+        "abcdefgh-abc-zzzzzzzz",
+        "mh-vh-0123456z",
+        "1-22-abcde",
+    ] {
+        assert!(is_valid_slug(valid), "{valid}");
+    }
+    for invalid in [
+        "",
+        "k9x2b",
+        "v-k9x2b",
+        "vhvh-k9x2b",
+        "vh-k9x2",
+        "vh-k9x2b0000",
+        "mh-vh-k9x2b-extra",
+        "abcdefghi-vh-k9x2b",
+        "-vh-k9x2b",
+        "vh--k9x2b",
+        "vh-k9x2b-",
+        // Crockford Base32 has no i, l, o or u.
+        "vh-k9i2b",
+        "vh-k9l2b",
+        "vh-k9o2b",
+        "vh-k9u2b",
+        // Lowercase only: a slug is stored the way it is displayed.
+        "VH-K9X2B",
+        "mh-Vh-k9x2b",
+        "vh-k9x2B",
+        "vh_k9x2b",
+        "vh-k9x2b\n",
+        " vh-k9x2b",
+        "vé-k9x2b",
+    ] {
+        assert!(!is_valid_slug(invalid), "{invalid:?}");
+    }
+}
+
+#[test]
+fn a_malformed_slug_is_ignored_and_reported() {
+    for extra in [
+        "slug: Not-A-Slug\n",
+        "slug: 12\n",
+        "slug: [vh-k9x2b]\n",
+        // Unquoted, YAML reads these as a number and a boolean.
+        "slug: 1e-12345\n",
+        "slug: true\n",
+        "slug: \"\"\n",
+        "slug: VH-K9I2B\n",
+        "slug: \" vh-k9x2b\"\n",
+    ] {
+        assert_eq!(
+            related(extra),
+            TicketRelationships {
+                problems: vec![relationship_problem(
+                    RelationshipProblemCode::InvalidSlug,
+                    None
+                )],
+                ..Default::default()
+            },
+            "{extra:?}"
+        );
+    }
+}
+
+#[test]
+fn a_short_code_written_in_uppercase_is_read_in_lowercase() {
+    for written in ["MH-VH-K9X2B", "Mh-vH-k9X2b", "\"1E-12345\""] {
+        let ticket = related_ticket(&format!("slug: {written}\n"));
+        let view = ticket_relationships(&ticket);
+
+        assert_eq!(
+            view.slug.as_deref(),
+            Some(written.trim_matches('"').to_lowercase().as_str())
+        );
+        assert!(view.problems.is_empty(), "{written}");
+        // The file's own spelling is what a save writes back.
+        let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+        assert!(
+            serialized.contains(written.trim_matches('"')),
+            "{serialized}"
+        );
+    }
+    assert_eq!(
+        normalized_slug("MH-VH-K9X2B").as_deref(),
+        Some("mh-vh-k9x2b")
+    );
+    assert_eq!(normalized_slug("vh-k9x2b").as_deref(), Some("vh-k9x2b"));
+    for invalid in ["VH-K9I2B", "VH_K9X2B", "VÉ-K9X2B", "", "K9X2B"] {
+        assert_eq!(normalized_slug(invalid), None, "{invalid:?}");
+    }
+}
+
+#[test]
+fn a_key_with_a_null_value_is_read_as_absent() {
+    for extra in [
+        "slug: ~\n",
+        "slug:\n",
+        "slug: null\n",
+        "parent: ~\n",
+        "parent:\n",
+        "deps: ~\n",
+        "deps:\n",
+        "slug:\nparent:\ndeps:\n",
+    ] {
+        assert_eq!(related(extra), TicketRelationships::default(), "{extra:?}");
+    }
+    // A null entry of a list is not an absent list.
+    assert_eq!(
+        related("deps: [~]\n").problems,
+        [relationship_problem(
+            RelationshipProblemCode::WrongType,
+            None
+        )]
+    );
+}
+
+#[test]
+fn a_value_of_the_wrong_type_is_ignored_and_reported() {
+    let wrong_type = || relationship_problem(RelationshipProblemCode::WrongType, None);
+    for extra in [
+        format!("deps: {RELATED_FIRST}\n"),
+        "deps: 7\n".to_owned(),
+        format!("deps:\n  first: {RELATED_FIRST}\n"),
+        "parent: 7\n".to_owned(),
+        format!("parent: [{RELATED_PARENT}]\n"),
+    ] {
+        assert_eq!(
+            related(&extra),
+            TicketRelationships {
+                problems: vec![wrong_type()],
+                ..Default::default()
+            },
+            "{extra:?}"
+        );
+    }
+
+    // One bad entry does not cost the list its good ones.
+    assert_eq!(
+        related(&format!(
+            "deps: [{RELATED_FIRST}, 7, [{RELATED_PARENT}], {RELATED_SECOND}, ~]\n"
+        )),
+        TicketRelationships {
+            deps: vec![id(RELATED_FIRST), id(RELATED_SECOND)],
+            problems: vec![wrong_type(), wrong_type(), wrong_type()],
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn a_value_that_is_not_an_item_id_is_ignored_and_reported() {
+    let invalid_id = || relationship_problem(RelationshipProblemCode::InvalidId, None);
+    let lowercase = RELATED_FIRST.to_lowercase();
+
+    assert_eq!(
+        related(&format!(
+            "parent: mh-vh-k9x2b\ndeps: [{lowercase}, {RELATED_FIRST}, \"\", {RELATED_FIRST}X]\n"
+        )),
+        TicketRelationships {
+            deps: vec![id(RELATED_FIRST)],
+            problems: vec![invalid_id(), invalid_id(), invalid_id(), invalid_id()],
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn a_reference_to_the_ticket_itself_is_ignored_and_reported() {
+    let itself =
+        || relationship_problem(RelationshipProblemCode::SelfReference, Some(RELATED_TICKET));
+
+    assert_eq!(
+        related(&format!(
+            "parent: {RELATED_TICKET}\ndeps: [{RELATED_TICKET}, {RELATED_FIRST}]\n"
+        )),
+        TicketRelationships {
+            deps: vec![id(RELATED_FIRST)],
+            problems: vec![itself(), itself()],
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn a_repeated_dependency_is_kept_once_and_reported() {
+    let duplicate =
+        |id| relationship_problem(RelationshipProblemCode::DuplicateDependency, Some(id));
+
+    assert_eq!(
+        related(&format!(
+            "parent: {RELATED_FIRST}\ndeps: [{RELATED_SECOND}, {RELATED_FIRST}, {RELATED_SECOND}, {RELATED_SECOND}]\n"
+        )),
+        TicketRelationships {
+            // A parent may also be a dependency.
+            parent: Some(id(RELATED_FIRST)),
+            deps: vec![id(RELATED_SECOND), id(RELATED_FIRST)],
+            problems: vec![duplicate(RELATED_SECOND), duplicate(RELATED_SECOND)],
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn every_kind_of_invalid_value_is_reported_while_the_valid_ones_are_kept() {
+    let view = related(&format!(
+        "slug: nope\nparent: {RELATED_TICKET}\ndeps: [{RELATED_FIRST}, {RELATED_FIRST}, x, 1]\n"
+    ));
+
+    assert_eq!(view.slug, None);
+    assert_eq!(view.parent, None);
+    assert_eq!(view.deps, [id(RELATED_FIRST)]);
+    let mut codes: Vec<_> = view.problems.iter().map(|problem| problem.code).collect();
+    codes.sort_by_key(|code| {
+        RelationshipProblemCode::ALL
+            .iter()
+            .position(|all| all == code)
+    });
+    assert_eq!(codes, RelationshipProblemCode::ALL);
+}
+
+#[test]
+fn relationship_fields_keep_their_values_through_serialization() {
+    let mut ticket = related_ticket(&format!(
+        "slug: mh-vh-k9x2b\nparent: {RELATED_PARENT}\ndeps: [{RELATED_SECOND}, {RELATED_FIRST}]\nother: kept\n"
+    ));
+    let before = ticket_relationships(&ticket);
+    assert_eq!(before.deps.len(), 2);
+    assert!(before.problems.is_empty());
+    ticket.title = "Renamed".to_owned();
+
+    let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+
+    let reparsed = parsed_ticket(&serialized);
+    assert_eq!(ticket_relationships(&reparsed), before);
+    assert_eq!(reparsed.title, "Renamed");
+    // Each key is written once.
+    for key in ["slug:", "parent:", "deps:", "other:"] {
+        assert_eq!(
+            serialized
+                .lines()
+                .filter(|line| line.starts_with(key))
+                .count(),
+            1,
+            "{key} in {serialized}"
+        );
+    }
+    // In the serializer's own form the file comes back byte for byte.
+    assert_eq!(
+        serialize_item(&CanonicalItem::Ticket(reparsed)).unwrap(),
+        serialized
+    );
+
+    // Invalid values are kept in the file too: nothing is repaired.
+    let invalid = related_ticket("slug: Not-A-Slug\ndeps: 7\nparent: [x]\n");
+    let unknown = invalid.unknown.clone();
+    let serialized = serialize_item(&CanonicalItem::Ticket(invalid)).unwrap();
+    assert_eq!(parsed_ticket(&serialized).unknown, unknown);
+}
+
+#[test]
+fn a_document_keeps_the_relationship_keys_as_ordinary_unknown_metadata() {
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {RELATED_TICKET}\ntitle: D\nslug: mh-vh-k9x2b\ndeps: [{RELATED_FIRST}]\n---\n"
+    );
+    let CanonicalItem::Document(document) = parse_item(Path::new("docs/d.md"), &source).unwrap()
+    else {
+        panic!("not a document");
+    };
+    assert!(document.unknown.contains_key("slug"));
+    assert!(document.unknown.contains_key("deps"));
 }

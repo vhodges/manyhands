@@ -1,0 +1,93 @@
+{
+  "code": "ok",
+  "command": "ticket deps",
+  "data": {
+    "complete": true,
+    "dependencies": [
+      {
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
+        "repeated": false,
+        "slug": null,
+        "state": "open",
+        "title": "F",
+        "truncated": false
+      },
+      {
+        "depth": 2,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+        "repeated": true,
+        "slug": null,
+        "state": "open",
+        "title": "E",
+        "truncated": false
+      }
+    ],
+    "dependents": [
+      {
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
+        "repeated": false,
+        "slug": null,
+        "state": "open",
+        "title": "F",
+        "truncated": false
+      },
+      {
+        "depth": 2,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+        "repeated": true,
+        "slug": null,
+        "state": "open",
+        "title": "E",
+        "truncated": false
+      },
+      {
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR6",
+        "repeated": false,
+        "slug": null,
+        "state": "open",
+        "title": "G",
+        "truncated": false
+      }
+    ],
+    "depth": 2,
+    "direction": "both",
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "ticket": {
+      "depth": 0,
+      "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+      "repeated": false,
+      "slug": null,
+      "state": "open",
+      "title": "E",
+      "truncated": false
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

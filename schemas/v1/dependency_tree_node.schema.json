@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 line of a dependency tree",
+  "description": "A line belongs under the nearest line before it whose depth is one less. A repeated line has its edges shown on another line for the same ID; a truncated one has edges the depth limit kept out.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "state", "slug", "title", "depth", "repeated", "truncated"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["open", "closed", "unresolved"]
+    },
+    "slug": {
+      "type": ["string", "null"]
+    },
+    "title": {
+      "type": ["string", "null"]
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "repeated": {
+      "type": "boolean"
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  }
+}

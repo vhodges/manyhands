@@ -202,6 +202,18 @@ Replies include `parent_id` with another comment ULID for the same `item_id`.
 `created_at` is an RFC 3339 UTC timestamp set when the comment is created and
 never rewritten. The Markdown body is the comment content.
 
+A comment may also carry the optional field below, as amended on 2026-10-07:
+
+```yaml
+created_by: "Vince Hodges <vhodges@gmail.com>"
+```
+
+`created_by` is the confirmed Git identity that created the comment, in the
+same form as a ticket's `closed_by`. It is set when the comment is created and
+never rewritten. It is optional: a comment without it is conforming, and its
+author is reported as unknown. Manyhands does not derive an author from Git
+history.
+
 Comments form a tree of arbitrary depth. Root comments sort by `created_at`,
 then `id`; direct replies use the same ordering beneath their parent. A missing
 parent, cross-item parent, cyclic parent relationship, duplicate ID, or invalid

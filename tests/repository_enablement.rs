@@ -541,6 +541,8 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "contexts",
             "discovered_comments",
             "discovered_items",
+            "item_edges",
+            "item_problems",
             "key_material_operations",
             "operation_record_contexts",
             "operation_records",
@@ -566,6 +568,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             ("accessibility".to_owned(), "TEXT".to_owned(), 1, 0),
             ("config_blob_oid".to_owned(), "TEXT".to_owned(), 0, 0),
             ("refresh_required".to_owned(), "INTEGER".to_owned(), 1, 0),
+            ("refreshed_at".to_owned(), "INTEGER".to_owned(), 0, 0),
         ]
     );
     assert!(root_path_is_unique);
