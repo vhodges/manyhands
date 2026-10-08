@@ -32,6 +32,17 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: F1, F2 and C1–C3.
 
+## From F1 Planning (2026-10-07)
+
+Conflict inspection was deferred out of F1, because no conflict record exists
+before Wave 02 Cycle 06. Whichever of C4 or D5 is planned first lands that
+read in the headless library as a shared-library change under track rule 5,
+with the same DTO and redaction rules as the F1 reads.
+
+Decided by the product owner on 2026-10-07 during F1 planning; the
+RFC and Wave amendments are on the F1 branch
+(`manyhands/ticket/01M4CC0VMQ7R15A7M9SPN3KB67`) and reach main when it merges.
+
 ## Exit Evidence
 
 Real two-clone SSH tests cover comment publish success/failure,
