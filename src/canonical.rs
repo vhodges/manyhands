@@ -174,31 +174,35 @@ pub struct TicketRelationships {
 
 /// Reads the relationship keys from `ticket.unknown`, which is left as it
 /// is.
+///
+/// A key whose value is YAML null is read as an absent key. A short code
+/// written with uppercase letters is read in lowercase; the file keeps its
+/// own spelling.
+///
+/// A short code must be a YAML string. One a plain scalar would read as
+/// another type has to be quoted when it is written: `1e-12345` unquoted is
+/// a number, and is reported as an invalid slug.
 pub fn ticket_relationships(ticket: &Ticket) -> TicketRelationships {
     let mut view = TicketRelationships::default();
     let mut ignore = |code, detail| view.problems.push(RelationshipProblem { code, detail });
+    let value = |key: &str| ticket.unknown.get(key).filter(|value| !value.is_null());
 
-    let slug = match ticket.unknown.get("slug") {
-        None => None,
-        Some(value) => {
-            let slug = value.as_str().filter(|slug| is_valid_slug(slug));
-            if slug.is_none() {
-                ignore(RelationshipProblemCode::InvalidSlug, None);
-            }
-            slug.map(str::to_owned)
+    let slug = value("slug").and_then(|value| {
+        let slug = value.as_str().and_then(normalized_slug);
+        if slug.is_none() {
+            ignore(RelationshipProblemCode::InvalidSlug, None);
         }
-    };
-    let parent = ticket.unknown.get("parent").and_then(|value| {
-        match relationship_target(&ticket.id, value) {
-            Ok(parent) => Some(parent),
-            Err((code, detail)) => {
-                ignore(code, detail);
-                None
-            }
+        slug
+    });
+    let parent = value("parent").and_then(|value| match relationship_target(&ticket.id, value) {
+        Ok(parent) => Some(parent),
+        Err((code, detail)) => {
+            ignore(code, detail);
+            None
         }
     });
     let mut deps = Vec::new();
-    match ticket.unknown.get("deps") {
+    match value("deps") {
         None => {}
         Some(Value::Sequence(entries)) => {
             for entry in entries {
@@ -243,8 +247,9 @@ fn relationship_target(
 /// lowercase letters or digits, initials of two or three, and a code of
 /// five to eight lowercase Crockford Base32 characters, joined by hyphens.
 ///
-/// Only the lowercase spelling is one. A short code is matched without
-/// regard to case when it is looked up, and stored as it is displayed.
+/// Only the lowercase spelling is one: it is how a short code is stored
+/// and displayed. `normalized_slug` gives it for a code written in any
+/// case.
 pub fn is_valid_slug(value: &str) -> bool {
     const CROCKFORD_BASE32_LOWERCASE: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
@@ -266,6 +271,15 @@ pub fn is_valid_slug(value: &str) -> bool {
         && code
             .bytes()
             .all(|byte| CROCKFORD_BASE32_LOWERCASE.contains(&byte))
+}
+
+/// `value` in lowercase when that is a short code, so that a code is
+/// matched without regard to the case it was written in. Only ASCII
+/// letters change case; everything else about the grammar is as strict as
+/// `is_valid_slug`.
+pub fn normalized_slug(value: &str) -> Option<String> {
+    let slug = value.to_ascii_lowercase();
+    is_valid_slug(&slug).then_some(slug)
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -5,8 +5,8 @@ use std::{fs, path::PathBuf, str::FromStr};
 use manyhands::canonical::{
     CONFIG_PATH, CanonicalItem, ItemId, RELATIONSHIP_KEYS, RelationshipProblem,
     RelationshipProblemCode, RepositoryConfig, Ticket, TicketRelationships, ValidationCode,
-    is_valid_slug, ordered_comment_threads, parse_item, parse_repository_config, serialize_item,
-    serialize_repository_config, ticket_relationships, validate_context,
+    is_valid_slug, normalized_slug, ordered_comment_threads, parse_item, parse_repository_config,
+    serialize_item, serialize_repository_config, ticket_relationships, validate_context,
 };
 use std::path::Path;
 
@@ -1239,8 +1239,12 @@ fn a_malformed_slug_is_ignored_and_reported() {
         "slug: Not-A-Slug\n",
         "slug: 12\n",
         "slug: [vh-k9x2b]\n",
-        "slug: ~\n",
-        "slug:\n",
+        // Unquoted, YAML reads these as a number and a boolean.
+        "slug: 1e-12345\n",
+        "slug: true\n",
+        "slug: \"\"\n",
+        "slug: VH-K9I2B\n",
+        "slug: \" vh-k9x2b\"\n",
     ] {
         assert_eq!(
             related(extra),
@@ -1257,15 +1261,65 @@ fn a_malformed_slug_is_ignored_and_reported() {
 }
 
 #[test]
+fn a_short_code_written_in_uppercase_is_read_in_lowercase() {
+    for written in ["MH-VH-K9X2B", "Mh-vH-k9X2b", "\"1E-12345\""] {
+        let ticket = related_ticket(&format!("slug: {written}\n"));
+        let view = ticket_relationships(&ticket);
+
+        assert_eq!(
+            view.slug.as_deref(),
+            Some(written.trim_matches('"').to_lowercase().as_str())
+        );
+        assert!(view.problems.is_empty(), "{written}");
+        // The file's own spelling is what a save writes back.
+        let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+        assert!(
+            serialized.contains(written.trim_matches('"')),
+            "{serialized}"
+        );
+    }
+    assert_eq!(
+        normalized_slug("MH-VH-K9X2B").as_deref(),
+        Some("mh-vh-k9x2b")
+    );
+    assert_eq!(normalized_slug("vh-k9x2b").as_deref(), Some("vh-k9x2b"));
+    for invalid in ["VH-K9I2B", "VH_K9X2B", "VÉ-K9X2B", "", "K9X2B"] {
+        assert_eq!(normalized_slug(invalid), None, "{invalid:?}");
+    }
+}
+
+#[test]
+fn a_key_with_a_null_value_is_read_as_absent() {
+    for extra in [
+        "slug: ~\n",
+        "slug:\n",
+        "slug: null\n",
+        "parent: ~\n",
+        "parent:\n",
+        "deps: ~\n",
+        "deps:\n",
+        "slug:\nparent:\ndeps:\n",
+    ] {
+        assert_eq!(related(extra), TicketRelationships::default(), "{extra:?}");
+    }
+    // A null entry of a list is not an absent list.
+    assert_eq!(
+        related("deps: [~]\n").problems,
+        [relationship_problem(
+            RelationshipProblemCode::WrongType,
+            None
+        )]
+    );
+}
+
+#[test]
 fn a_value_of_the_wrong_type_is_ignored_and_reported() {
     let wrong_type = || relationship_problem(RelationshipProblemCode::WrongType, None);
     for extra in [
         format!("deps: {RELATED_FIRST}\n"),
         "deps: 7\n".to_owned(),
-        "deps: ~\n".to_owned(),
         format!("deps:\n  first: {RELATED_FIRST}\n"),
         "parent: 7\n".to_owned(),
-        "parent: ~\n".to_owned(),
         format!("parent: [{RELATED_PARENT}]\n"),
     ] {
         assert_eq!(
