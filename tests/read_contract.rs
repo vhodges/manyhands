@@ -438,10 +438,11 @@ fn every_published_schema_uses_only_the_checked_keywords() {
 }
 
 /// The only objects the contract leaves open, by file and location: the
-/// envelope's `data`, which each DTO schema describes; an item's
-/// `unknown_metadata`, whose keys are the file's own; and a recovery
-/// action's `arguments`, which each action defines.
-const OPEN_OBJECTS: [(&str, &str); 3] = [
+/// envelope's `data`, which each DTO schema describes; an item's and a
+/// comment's `unknown_metadata`, whose keys are the file's own; and a
+/// recovery action's `arguments`, which each action defines.
+const OPEN_OBJECTS: [(&str, &str); 4] = [
+    ("comment.schema.json", "/properties/unknown_metadata"),
     ("envelope.schema.json", "/properties/data"),
     ("item.schema.json", "/properties/unknown_metadata"),
     ("recovery_action.schema.json", "/properties/arguments"),
@@ -1102,6 +1103,83 @@ fn an_item_whose_file_is_gone_matches_the_failure_golden() {
             sentinels: &[enabled.data_directory.path().to_str().unwrap()],
         },
         &error.to_envelope::<Value>("document show"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn comment_list_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let root = &fixture.root;
+    items::write_comment(
+        root,
+        items::TICKET_A,
+        items::COMMENT_A,
+        None,
+        "2026-09-30T12:35:00Z",
+        "created_by: Ada Lovelace <ada@example.invalid>\nreviewed: true\n",
+    );
+    items::write_comment(
+        root,
+        items::TICKET_A,
+        items::COMMENT_B,
+        Some(items::COMMENT_A),
+        "2026-09-30T12:36:00Z",
+        "",
+    );
+    items::write_comment(
+        root,
+        items::TICKET_A,
+        items::COMMENT_C,
+        None,
+        "2026-09-30T12:37:00Z",
+        "",
+    );
+    // Not a comment: the parser's message repeats the sentinel, and the
+    // index stores that message.
+    items::write(
+        root,
+        &items::comment_path(items::TICKET_A, items::COMMENT_D),
+        &format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
+             {PARSER_SENTINEL}: 1\n{PARSER_SENTINEL}: 2\n---\n{PARSER_SENTINEL}\n"
+        ),
+    );
+    items::refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = enabled
+        .service
+        .list_comments(&repo, &items::item_id(items::TICKET_A))
+        .unwrap();
+    let envelope = Envelope::read_success(
+        "comment list",
+        item_scope(&repo, items::TICKET_A),
+        list.clone(),
+    );
+
+    assert_eq!(list.items.len(), 3);
+    assert_eq!(list.items[0].replies.len(), 1);
+    assert_eq!(list.items[2].id, None);
+    let mut placeholders = vec![(repo.root().to_str().unwrap(), "<repository>")];
+    if let Some(refreshed_at) = &list.index.refreshed_at {
+        placeholders.push((refreshed_at, "<refreshed-at>"));
+    }
+    if let Some(head_oid) = &list.context.head_oid {
+        placeholders.push((head_oid, "<head-oid>"));
+    }
+    golden::assert_contract(
+        &ContractCase {
+            name: "comment_list",
+            data_schema: Some("comment_list.schema.json"),
+            placeholders: &placeholders,
+            sentinels: &[
+                PARSER_SENTINEL,
+                "created_by",
+                enabled.data_directory.path().to_str().unwrap(),
+            ],
+        },
+        &envelope,
     );
     assert_git_transport_uninitialized();
 }

@@ -293,3 +293,48 @@ pub fn contract_repository() -> (TestRepository, EnabledRepository) {
     refresh_completely(&enabled.service, root);
     (fixture, enabled)
 }
+
+pub const COMMENT_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE0";
+pub const COMMENT_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
+pub const COMMENT_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE2";
+pub const COMMENT_D: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE3";
+pub const COMMENT_E: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE4";
+
+pub fn comment_path(item: &str, id: &str) -> String {
+    format!(".manyhands/comments/{item}/{id}.md")
+}
+
+/// A comment's source. `created_at` is an RFC 3339 time; `extra` is front
+/// matter lines, each ending in a newline, placed after the required
+/// fields.
+pub fn comment_source(
+    item: &str,
+    id: &str,
+    parent: Option<&str>,
+    created_at: &str,
+    extra: &str,
+) -> String {
+    let parent = parent
+        .map(|parent| format!("parent_id: {parent}\n"))
+        .unwrap_or_default();
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {id}\nitem_id: {item}\n\
+         {parent}created_at: {created_at}\n{extra}---\nBody of {id}.\n"
+    )
+}
+
+/// Writes a comment on `item` under `root`, which is a context's worktree.
+pub fn write_comment(
+    root: &Path,
+    item: &str,
+    id: &str,
+    parent: Option<&str>,
+    created_at: &str,
+    extra: &str,
+) -> PathBuf {
+    write(
+        root,
+        &comment_path(item, id),
+        &comment_source(item, id, parent, created_at, extra),
+    )
+}

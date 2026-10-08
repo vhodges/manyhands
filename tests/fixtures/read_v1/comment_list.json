@@ -1,0 +1,98 @@
+{
+  "code": "ok",
+  "command": "comment list",
+  "data": {
+    "complete": true,
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "items": [
+      {
+        "author": "Ada Lovelace <ada@example.invalid>",
+        "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE0.\n",
+        "created_at": "2026-09-30T12:35:00Z",
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FE0",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "parent_id": null,
+        "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE0.md",
+        "problems": [],
+        "replies": [
+          {
+            "author": null,
+            "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE1.\n",
+            "created_at": "2026-09-30T12:36:00Z",
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FE1",
+            "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+            "parent_id": "01ARZ3NDEKTSV4RRFFQ69G5FE0",
+            "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE1.md",
+            "problems": [],
+            "replies": [],
+            "unknown_metadata": {}
+          }
+        ],
+        "unknown_metadata": {
+          "reviewed": true
+        }
+      },
+      {
+        "author": null,
+        "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE2.\n",
+        "created_at": "2026-09-30T12:37:00Z",
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FE2",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "parent_id": null,
+        "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE2.md",
+        "problems": [],
+        "replies": [],
+        "unknown_metadata": {}
+      },
+      {
+        "author": null,
+        "body": null,
+        "created_at": null,
+        "id": null,
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "parent_id": null,
+        "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE3.md",
+        "problems": [
+          {
+            "code": "malformed_front_matter",
+            "guidance": "Correct the YAML front matter.",
+            "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE3.md"
+          }
+        ],
+        "replies": [],
+        "unknown_metadata": {}
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

@@ -475,7 +475,7 @@ fn identity_and_remotes_of_a_resolved_repository_need_no_session() {
 
 /// A repository with every kind of thing an item read meets: a primary
 /// document and ticket, an item worktree with its own document, and a file
-/// that is not an item.
+/// that is not an item; and comments on both documents.
 fn repository_with_items() -> (support::TestRepository, support::EnabledRepository) {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
@@ -501,12 +501,45 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
         "docs/marker.md",
         "---\nmanyhands_managed: true\n---\n",
     );
+    // Comments in the primary copy, a reply and a file that is not a comment
+    // among them, and one in the item worktree.
+    let created_at = "2026-09-30T12:00:00Z";
+    items::write_comment(
+        root,
+        items::DOCUMENT_A,
+        items::COMMENT_A,
+        None,
+        created_at,
+        "created_by: Ada Lovelace <ada@example.invalid>\n",
+    );
+    items::write_comment(
+        root,
+        items::DOCUMENT_A,
+        items::COMMENT_B,
+        Some(items::COMMENT_A),
+        created_at,
+        "",
+    );
+    items::write(
+        root,
+        &items::comment_path(items::DOCUMENT_A, items::COMMENT_C),
+        "no front matter\n",
+    );
+    items::write_comment(
+        &root.join(".manyhands/worktrees").join(items::DOCUMENT_B),
+        items::DOCUMENT_B,
+        items::COMMENT_D,
+        None,
+        created_at,
+        "",
+    );
     items::refresh_completely(&enabled.service, root);
     (fixture, enabled)
 }
 
-/// Every item read, with inputs that succeed and inputs that fail. Returns
-/// the outcome of each, in order: success, or the code it failed with.
+/// Every item and comment read, with inputs that succeed and inputs that
+/// fail. Returns the outcome of each, in order: success, or the code it
+/// failed with.
 fn every_item_read(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -573,6 +606,26 @@ fn every_item_read(
         ),
         outcome(
             service
+                .list_comments(repo, &items::item_id(items::DOCUMENT_A))
+                .map(|list| assert_eq!(list.items.len(), 2)),
+        ),
+        outcome(
+            service
+                .list_comments(repo, &items::item_id(items::DOCUMENT_B))
+                .map(|list| assert_eq!(list.items.len(), 1)),
+        ),
+        outcome(
+            service
+                .list_comments(repo, &items::item_id(items::TICKET_A))
+                .map(|list| assert!(list.items.is_empty())),
+        ),
+        outcome(
+            service
+                .list_comments(repo, &items::item_id(items::DOCUMENT_C))
+                .map(drop),
+        ),
+        outcome(
+            service
                 .show_path(repo, None, path("../outside.md"))
                 .map(drop),
         ),
@@ -605,6 +658,10 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
             Ok(()),
             Ok(()),
             Err(ResultCode::PathNotFound),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::ItemNotFound),
             Err(ResultCode::InvalidPath),
         ]
     );
