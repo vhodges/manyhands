@@ -30,6 +30,12 @@ without force. Manual native run is dispatched on a9593a0:
 https://github.com/vhodges/manyhands/actions/runs/37788386532
 Next inspect/fix its actual results. Pending jobs do not accept Task 4.
 
+Run 1 failed Windows build, a macOS secondary fixture and Linux unborn creation
+cases. Reviewed regression-first fixes are pushed as d108e73 (see ledger for
+root causes and isolated/default/full-suite evidence). Current second native run:
+https://github.com/vhodges/manyhands/actions/runs/37795672482
+Next inspect this exact d108e73 matrix; Task 4 remains unaccepted while pending.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.

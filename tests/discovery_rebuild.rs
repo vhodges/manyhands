@@ -20,6 +20,42 @@ use time::OffsetDateTime;
 
 mod support;
 
+fn symlink_file(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+fn symlink_dir(target: impl AsRef<Path>, link: impl AsRef<Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+}
+
+fn repository_with_symlinked_parent() -> (tempfile::TempDir, support::TestRepository) {
+    let mut fixture = support::born_repository();
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("parent-alias");
+    symlink_dir(
+        fixture.root.parent().unwrap().canonicalize().unwrap(),
+        &parent,
+    )
+    .unwrap();
+    fixture.root = parent.join(fixture.root.file_name().unwrap());
+    assert_ne!(fixture.root, fixture.root.canonicalize().unwrap());
+    (directory, fixture)
+}
+
 #[test]
 fn cache_lease_child() {
     let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
@@ -608,6 +644,17 @@ fn discovery_public_types_hold_metadata_only() {
 #[test]
 fn snapshot_reads_a_registered_cache_without_mutating_available_state() {
     let fixture = support::born_repository();
+    assert_registered_cache_is_nonmutating(&fixture);
+}
+
+#[test]
+fn snapshot_registered_cache_with_symlink_parent_is_nonmutating() {
+    let (_parent, fixture) = repository_with_symlinked_parent();
+    assert_registered_cache_is_nonmutating(&fixture);
+}
+
+fn assert_registered_cache_is_nonmutating(fixture: &support::TestRepository) {
+    let root = fixture.root.canonicalize().unwrap();
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     service
@@ -615,7 +662,7 @@ fn snapshot_reads_a_registered_cache_without_mutating_available_state() {
             connection.execute(
                 "INSERT INTO repositories (root_path, enabled_at, accessibility, config_blob_oid, refresh_required)
                  VALUES (?1, 1, 'accessible', NULL, 0)",
-                [fixture.root.to_str().unwrap()],
+                [root.to_str().unwrap()],
             )
             .unwrap();
         })
@@ -626,13 +673,13 @@ fn snapshot_reads_a_registered_cache_without_mutating_available_state() {
         .unwrap();
     drop(connection);
     fs::File::create(data.path().join("manyhands.sqlite3.recovery.lock")).unwrap();
-    let before = available_state(&fixture, data.path());
+    let before = available_state(fixture, data.path());
 
     let snapshot = service.repository_snapshot(&fixture.root).unwrap();
 
-    assert_eq!(snapshot.root, fixture.root);
+    assert_eq!(snapshot.root, root);
     assert_eq!(snapshot.configuration, SnapshotConfiguration::Missing);
-    assert_eq!(available_state(&fixture, data.path()), before);
+    assert_eq!(available_state(fixture, data.path()), before);
 }
 
 #[test]
@@ -1050,7 +1097,7 @@ fn no_mutation_corrupt_rebuild_preserves_root_and_linked_worktree_state() {
 #[test]
 fn no_mutation_invalid_source_observation_preserves_root_and_linked_worktree_state() {
     let (fixture, enabled) = repository_with_primary_and_context_content();
-    std::os::unix::fs::symlink("missing.md", fixture.root.join("docs/inaccessible.md")).unwrap();
+    symlink_file("missing.md", fixture.root.join("docs/inaccessible.md")).unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
     enabled
@@ -1155,7 +1202,7 @@ fn fixture_snapshot_detects_head_and_symlink_target_changes_without_following_li
 
     let link = fixture.root.join("docs/link.md");
     fs::create_dir_all(link.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink("first-target.md", &link).unwrap();
+    symlink_file("first-target.md", &link).unwrap();
     let first_link = support::repository_and_worktree_snapshot(&fixture);
     assert!(matches!(
         first_link.root.files.get(Path::new("docs/link.md")),
@@ -1163,7 +1210,7 @@ fn fixture_snapshot_detects_head_and_symlink_target_changes_without_following_li
     ));
 
     fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink("second-target.md", &link).unwrap();
+    symlink_file("second-target.md", &link).unwrap();
     let second_link = support::repository_and_worktree_snapshot(&fixture);
 
     assert_ne!(second_link, first_link);
@@ -1402,7 +1449,18 @@ fn refresh_removes_rows_for_a_stably_disappeared_active_worktree() {
 #[test]
 fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
     let fixture = support::born_repository();
-    let enabled = support::enabled_repository(&fixture);
+    assert_active_worktree_race_preserves_rows(&fixture);
+}
+
+#[test]
+fn refresh_active_worktree_race_with_symlink_parent_preserves_rows() {
+    let (_parent, fixture) = repository_with_symlinked_parent();
+    assert_active_worktree_race_preserves_rows(&fixture);
+}
+
+fn assert_active_worktree_race_preserves_rows(fixture: &support::TestRepository) {
+    let root = fixture.root.canonicalize().unwrap();
+    let enabled = support::enabled_repository(fixture);
     let mut index = fixture.repository.index().unwrap();
     index.add_path(Path::new(".manyhands/config.toml")).unwrap();
     index.write().unwrap();
@@ -1463,9 +1521,7 @@ fn refresh_active_worktree_race_keeps_prior_active_rows_and_updates_root() {
     };
     assert_eq!(
         context,
-        fixture
-            .root
-            .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV")
     );
     let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
     assert!(
@@ -1787,6 +1843,18 @@ fn refresh_records_only_a_valid_configuration_committed_blob_oid() {
 
 #[test]
 fn snapshot_rejects_corrupt_cached_metadata() {
+    let fixture = support::born_repository();
+    assert_corrupt_cached_metadata_is_rejected(&fixture);
+}
+
+#[test]
+fn snapshot_corrupt_cached_metadata_with_symlink_parent_is_rejected() {
+    let (_parent, fixture) = repository_with_symlinked_parent();
+    assert_corrupt_cached_metadata_is_rejected(&fixture);
+}
+
+fn assert_corrupt_cached_metadata_is_rejected(fixture: &support::TestRepository) {
+    let root = fixture.root.canonicalize().unwrap();
     for corruption in [
         "item-id",
         "path",
@@ -1807,7 +1875,6 @@ fn snapshot_rejects_corrupt_cached_metadata() {
         "active-path-id-mismatch",
         "global-duplicate-id",
     ] {
-        let fixture = support::born_repository();
         let data = tempfile::tempdir().unwrap();
         let service = RepositoryService::open_at(data.path()).unwrap();
         service
@@ -1815,14 +1882,14 @@ fn snapshot_rejects_corrupt_cached_metadata() {
                 connection.execute(
                     "INSERT INTO repositories (root_path, enabled_at, accessibility, config_blob_oid, refresh_required)
                      VALUES (?1, 1, 'accessible', NULL, 0)",
-                    [fixture.root.to_str().unwrap()],
+                    [root.to_str().unwrap()],
                 )
                 .unwrap();
                 let repository_id = connection.last_insert_rowid();
                 connection.execute(
                     "INSERT INTO contexts (repository_id, kind, branch, worktree_path, head_oid)
                      VALUES (?1, 'primary', 'main', ?2, ?3)",
-                    params![repository_id, fixture.root.to_str().unwrap(), "0123456789012345678901234567890123456789"],
+                    params![repository_id, root.to_str().unwrap(), "0123456789012345678901234567890123456789"],
                 )
                 .unwrap();
                 let context_id = connection.last_insert_rowid();
@@ -1863,15 +1930,15 @@ fn snapshot_rejects_corrupt_cached_metadata() {
                     ).unwrap(),
                     "active-branch-kind-mismatch" => connection.execute(
                         "UPDATE contexts SET kind = 'active', branch = 'manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV', item_id = ?1, worktree_path = ?2",
-                        params![support::document_id().to_string(), fixture.root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV").to_str().unwrap()],
+                        params![support::document_id().to_string(), root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV").to_str().unwrap()],
                     ).unwrap(),
                     "active-branch-id-mismatch" => connection.execute(
                         "UPDATE contexts SET kind = 'active', branch = 'manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAW', item_id = ?1, worktree_path = ?2",
-                        params![support::document_id().to_string(), fixture.root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV").to_str().unwrap()],
+                        params![support::document_id().to_string(), root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV").to_str().unwrap()],
                     ).unwrap(),
                     "active-path-id-mismatch" => connection.execute(
                         "UPDATE contexts SET kind = 'active', branch = 'manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAV', item_id = ?1, worktree_path = ?2",
-                        params![support::document_id().to_string(), fixture.root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW").to_str().unwrap()],
+                        params![support::document_id().to_string(), root.join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW").to_str().unwrap()],
                     ).unwrap(),
                     "global-duplicate-id" => connection.execute(
                         "INSERT INTO discovered_comments (item_id, comment_id, canonical_path, created_at)
@@ -1941,7 +2008,7 @@ fn snapshot_resolves_equivalent_and_symlinked_root_paths() {
         .unwrap();
     let alias_parent = tempfile::tempdir().unwrap();
     let alias = alias_parent.path().join("repository-alias");
-    std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
+    symlink_dir(&fixture.root, &alias).unwrap();
 
     assert!(
         enabled
@@ -2288,9 +2355,24 @@ fn corrupt_rebuild_resumes_without_replacing_diagnostics_twice() {
 fn root_scoped_incomplete_rebuild_does_not_block_other_root_discovery() {
     let first = support::born_repository();
     let second = support::born_repository();
+    assert_incomplete_rebuild_is_root_scoped(&first, &second);
+}
+
+#[test]
+fn root_scoped_incomplete_rebuild_with_symlink_parent_preserves_other_root() {
+    let (_first_parent, first) = repository_with_symlinked_parent();
+    let (_second_parent, second) = repository_with_symlinked_parent();
+    assert_incomplete_rebuild_is_root_scoped(&first, &second);
+}
+
+fn assert_incomplete_rebuild_is_root_scoped(
+    first: &support::TestRepository,
+    second: &support::TestRepository,
+) {
+    let first_root = first.root.canonicalize().unwrap();
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
-    for fixture in [&first, &second] {
+    for fixture in [first, second] {
         service
             .enable(manyhands::repository::EnableRepositoryRequest {
                 root: fixture.root.clone(),
@@ -2307,7 +2389,7 @@ fn root_scoped_incomplete_rebuild_does_not_block_other_root_discovery() {
                     "CREATE TRIGGER fail_first_rebuild BEFORE INSERT ON contexts
                      WHEN NEW.worktree_path = '{}'
                      BEGIN SELECT RAISE(ABORT, 'first rebuild failure'); END;",
-                    first.root.to_str().unwrap()
+                    first_root.to_str().unwrap().replace('\'', "''")
                 ))
                 .unwrap();
         })
@@ -3036,14 +3118,30 @@ fn migration_is_idempotent() {
 
 #[test]
 fn remove_registration_cascades_only_its_derived_rows() {
-    let data = tempfile::tempdir().unwrap();
     let first = support::born_repository();
     let second = support::born_repository();
+    assert_registration_cascade_is_root_scoped(&first, &second);
+}
+
+#[test]
+fn remove_registration_with_symlink_parent_cascades_only_its_rows() {
+    let (_first_parent, first) = repository_with_symlinked_parent();
+    let (_second_parent, second) = repository_with_symlinked_parent();
+    assert_registration_cascade_is_root_scoped(&first, &second);
+}
+
+fn assert_registration_cascade_is_root_scoped(
+    first: &support::TestRepository,
+    second: &support::TestRepository,
+) {
+    let first_root = first.root.canonicalize().unwrap();
+    let second_root = second.root.canonicalize().unwrap();
+    let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
 
     service
         .with_registry_connection_for_testing(|connection| {
-            for root in [&first.root, &second.root] {
+            for root in [&first_root, &second_root] {
                 connection
                     .execute(
                         "INSERT INTO repositories (
@@ -3058,7 +3156,7 @@ fn remove_registration_cascades_only_its_derived_rows() {
                 connection.execute("INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, activity_at, activity_source) VALUES (?1, ?2, 'document', 'docs/item.md', 'Item', 1, 'git')", params![repository_id, format!("item-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO discovered_comments (item_id, comment_id, canonical_path, created_at) VALUES (?1, ?2, 'comments/item.md', 1)", params![repository_id, format!("comment-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO problems (repository_id, code, guidance, observed_at) VALUES (?1, 'problem', 'repair', 1)", [repository_id]).unwrap();
-                connection.execute("INSERT INTO operation_records (repository_id, root_path, action, state, observed_at) VALUES (?1, ?2, 'refresh', 'completed', 1)", params![repository_id, if repository_id == 1 { first.root.to_str().unwrap() } else { second.root.to_str().unwrap() }]).unwrap();
+                connection.execute("INSERT INTO operation_records (repository_id, root_path, action, state, observed_at) VALUES (?1, ?2, 'refresh', 'completed', 1)", params![repository_id, if repository_id == 1 { first_root.to_str().unwrap() } else { second_root.to_str().unwrap() }]).unwrap();
             }
         })
         .unwrap();
