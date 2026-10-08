@@ -23,13 +23,16 @@ use crate::{
 };
 
 mod admin;
+mod credentials;
 mod dto;
 mod resolve;
 
 pub use dto::{
-    Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
-    IdentitySource, IndexState, IndexStateDto, NewIdDto, ProblemDto, RemoteDto, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
+    Accessibility, ConfigurationDto, ConfigurationState, HostPinDto, HostPinListDto,
+    IdentityAvailability, IdentityDto, IdentitySource, IndexState, IndexStateDto, KeyDto,
+    KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto, ProblemDto,
+    PublicKeyDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
+    RepositorySummaryDto,
 };
 pub use resolve::ResolvedRepository;
 

@@ -16,7 +16,10 @@ pub use session::{
 pub(crate) mod storage;
 pub use storage::KeyStore;
 
-pub(super) use registry::migrate_material_schema;
+pub(super) use registry::{
+    StoredSharedKeysError, bounded_public_key_contents, migrate_material_schema,
+    openssh_public_key_fingerprint, stored_shared_key_registrations,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SharedKeyId(ulid::Ulid);

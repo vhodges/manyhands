@@ -158,3 +158,88 @@ pub struct RemoteDto {
     pub publication_eligible: bool,
     pub selected_for_publication: bool,
 }
+
+contract_enum!(
+    /// Who created a key's files: the user, or Manyhands.
+    KeyOwnership {
+        Imported => "imported",
+        Generated => "generated",
+    }
+);
+
+contract_enum!(
+    /// What the private key file was when it was last observed. No read
+    /// observes it again.
+    KeyPrivateSourceState {
+        Available => "available",
+        Missing => "missing",
+        Unavailable => "unavailable",
+    }
+);
+
+contract_enum!(
+    /// Whether the registration has a public key file, and whether a
+    /// fingerprint could be read from it when it was registered.
+    KeyPublicMetadataState {
+        NotProvided => "not_provided",
+        Available => "available",
+        Unavailable => "unavailable",
+    }
+);
+
+/// Registrations in the order they were registered.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeyListDto {
+    pub items: Vec<KeyDto>,
+    pub complete: bool,
+}
+
+/// One key registration, as the index stores it. Nothing here is read from
+/// a key file: the states and the fingerprint are those recorded when the
+/// key was registered or generated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeyDto {
+    pub id: String,
+    pub label: String,
+    pub ownership: KeyOwnership,
+    pub selected: bool,
+    /// Set exactly when `public_metadata_state` is `available`.
+    pub fingerprint: Option<String>,
+    pub private_source_state: KeyPrivateSourceState,
+    pub public_metadata_state: KeyPublicMetadataState,
+    pub private_key_path: String,
+    pub public_key_path: Option<String>,
+}
+
+/// The public key now in a registration's public key file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PublicKeyDto {
+    pub id: String,
+    /// The file's one line of OpenSSH public key text, without its line
+    /// ending.
+    pub public_key: String,
+    /// Computed from `public_key`, not taken from the registration.
+    pub fingerprint: String,
+    /// Whether `fingerprint` equals the registration's stored fingerprint.
+    /// `false` when the registration stores none.
+    pub matches_registration: bool,
+}
+
+/// Host pins ordered by host, then port.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostPinListDto {
+    pub items: Vec<HostPinDto>,
+    pub complete: bool,
+}
+
+/// One pinned host key. `reapproval_required` is the application-wide
+/// marker left when the pin registry was lost, so it is the same for every
+/// pin of one read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostPinDto {
+    pub host: String,
+    pub port: u16,
+    pub algorithm: String,
+    pub sha256: String,
+    pub reapproval_required: bool,
+}

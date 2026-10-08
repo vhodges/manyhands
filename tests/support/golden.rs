@@ -23,9 +23,17 @@ pub const ENVELOPE_SCHEMA: &str = "envelope.schema.json";
 /// refused, and a fixture file with no entry fails `tests/read_contract.rs`,
 /// so the directory holds exactly the envelopes some test still produces.
 pub const CASES: &[&str] = &[
+    "failure_authority_not_found",
     "failure_index_unavailable",
+    "failure_key_not_found",
     "failure_not_repository_root",
+    "failure_public_key_unavailable",
+    "host_inspect",
+    "host_list",
     "id_new",
+    "key_list",
+    "key_public",
+    "key_show",
     "remote_list",
     "repo_identity",
     "repo_inspect",

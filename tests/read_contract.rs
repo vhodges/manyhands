@@ -8,7 +8,8 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        ProblemDto, RepositoryService,
+        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, ProblemDto, RepositoryService,
+        SharedKeyId, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect, Outcome,
@@ -17,6 +18,7 @@ use manyhands::{
 };
 use serde_json::{Value, json};
 use support::{
+    credentials::{self, SECRET_SENTINELS},
     golden::{self, ContractCase},
     schema,
 };
@@ -711,6 +713,25 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "source",
             IdentitySource::ALL.map(IdentitySource::as_str).to_vec(),
         ),
+        (
+            "key.schema.json",
+            "ownership",
+            KeyOwnership::ALL.map(KeyOwnership::as_str).to_vec(),
+        ),
+        (
+            "key.schema.json",
+            "private_source_state",
+            KeyPrivateSourceState::ALL
+                .map(KeyPrivateSourceState::as_str)
+                .to_vec(),
+        ),
+        (
+            "key.schema.json",
+            "public_metadata_state",
+            KeyPublicMetadataState::ALL
+                .map(KeyPublicMetadataState::as_str)
+                .to_vec(),
+        ),
     ]
 }
 
@@ -976,6 +997,243 @@ fn a_path_inside_a_repository_matches_the_failure_golden() {
             sentinels: &["nested"],
         },
         &error.to_envelope::<Value>("remote list"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// The placeholders for what differs between runs in a key envelope: the
+/// generated IDs, the generated key's fingerprint, and where the files are.
+fn key_placeholders(keys: &credentials::RegisteredKeys) -> Vec<(String, &'static str)> {
+    let text = |path: &Path| path.to_str().unwrap().to_owned();
+    vec![
+        (keys.imported.id.to_string(), "<imported-key-id>"),
+        (keys.generated.id.to_string(), "<generated-key-id>"),
+        (keys.without_public.id.to_string(), "<third-key-id>"),
+        (
+            keys.generated.public_key_fingerprint.clone().unwrap(),
+            "<generated-fingerprint>",
+        ),
+        (
+            text(&keys.generated.private_key_path),
+            "<generated-private-key>",
+        ),
+        (
+            text(keys.generated.public_key_path.as_ref().unwrap()),
+            "<generated-public-key>",
+        ),
+        (
+            text(keys.imported.private_key_path.parent().unwrap()),
+            "<key-files>",
+        ),
+    ]
+}
+
+fn assert_key_contract(
+    name: &str,
+    data_schema: Option<&str>,
+    keys: &credentials::RegisteredKeys,
+    extra: &[(&str, &str)],
+    envelope: &impl serde::Serialize,
+) {
+    let placeholders = key_placeholders(keys);
+    let mut placeholders: Vec<(&str, &str)> = placeholders
+        .iter()
+        .map(|(value, placeholder)| (value.as_str(), *placeholder))
+        .collect();
+    placeholders.extend_from_slice(extra);
+    golden::assert_contract(
+        &ContractCase {
+            name,
+            data_schema,
+            placeholders: &placeholders,
+            sentinels: &SECRET_SENTINELS,
+        },
+        envelope,
+    );
+}
+
+/// A service with the three fixture registrations. The secrets the scan
+/// looks for really are in the registered files.
+fn service_with_keys() -> (
+    tempfile::TempDir,
+    RepositoryService,
+    credentials::RegisteredKeys,
+) {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let keys = credentials::register_keys(&service);
+    let imported = fs::read_to_string(&keys.imported.private_key_path).unwrap();
+    assert!(imported.contains(credentials::PRIVATE_KEY_SENTINEL));
+    assert!(imported.contains(credentials::PRIVATE_FIXTURE_PASSPHRASE_SENTINEL));
+    let generated = fs::read_to_string(&keys.generated.private_key_path).unwrap();
+    assert!(generated.contains("PRIVATE KEY"));
+    (data, service, keys)
+}
+
+#[test]
+fn key_list_matches_its_schema_and_golden() {
+    let (_data, service, keys) = service_with_keys();
+
+    let list = service.list_keys().unwrap();
+    let envelope = Envelope::read_success("key list", Scope::default(), list);
+
+    assert_key_contract(
+        "key_list",
+        Some("key_list.schema.json"),
+        &keys,
+        &[],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn key_show_matches_its_schema_and_golden() {
+    let (_data, service, keys) = service_with_keys();
+
+    let key = service.show_key(keys.generated.id).unwrap();
+    let envelope = Envelope::read_success("key show", Scope::default(), key);
+
+    assert_key_contract("key_show", Some("key.schema.json"), &keys, &[], &envelope);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn key_public_matches_its_schema_and_golden() {
+    let (_data, service, keys) = service_with_keys();
+
+    let public_key = service.public_key_text(keys.imported.id).unwrap();
+    let envelope = Envelope::read_success("key public", Scope::default(), public_key);
+
+    assert_key_contract(
+        "key_public",
+        Some("public_key.schema.json"),
+        &keys,
+        &[],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn key_failures_match_their_goldens() {
+    let (_data, service, keys) = service_with_keys();
+
+    let not_found = service.show_key(SharedKeyId::new()).unwrap_err();
+    let unavailable = service.public_key_text(keys.without_public.id).unwrap_err();
+
+    assert_eq!(not_found.code(), ResultCode::KeyNotFound);
+    assert_eq!(unavailable.code(), ResultCode::PublicKeyUnavailable);
+    assert_key_contract(
+        "failure_key_not_found",
+        None,
+        &keys,
+        &[],
+        &not_found.to_envelope::<Value>("key show"),
+    );
+    assert_key_contract(
+        "failure_public_key_unavailable",
+        None,
+        &keys,
+        &[],
+        &unavailable.to_envelope::<Value>("key public"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// Two pins of one host and one of another, stored out of order, under the
+/// reapproval marker.
+fn service_with_host_pins() -> (tempfile::TempDir, RepositoryService) {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    for (host, port, algorithm, sha256) in [
+        (
+            "git.example.invalid",
+            2222,
+            "ssh-rsa",
+            credentials::OTHER_FINGERPRINT,
+        ),
+        (
+            "git.example.invalid",
+            22,
+            "ssh-ed25519",
+            credentials::PUBLIC_FIXTURE_FINGERPRINT,
+        ),
+        (
+            "2001:db8::1",
+            22,
+            "ecdsa-sha2-nistp256",
+            credentials::OTHER_FINGERPRINT,
+        ),
+    ] {
+        credentials::pin_host(data.path(), host, port, algorithm, sha256);
+    }
+    credentials::require_host_reapproval(data.path());
+    (data, service)
+}
+
+fn assert_host_contract(
+    name: &str,
+    data_schema: Option<&str>,
+    data: &tempfile::TempDir,
+    envelope: &impl serde::Serialize,
+) {
+    golden::assert_contract(
+        &ContractCase {
+            name,
+            data_schema,
+            placeholders: &[],
+            // The data directory is not the caller's business.
+            sentinels: &[data.path().to_str().unwrap()],
+        },
+        envelope,
+    );
+}
+
+#[test]
+fn host_list_matches_its_schema_and_golden() {
+    let (data, service) = service_with_host_pins();
+
+    let list = service.list_host_pins().unwrap();
+    let envelope = Envelope::read_success("host list", Scope::default(), list);
+
+    assert_host_contract(
+        "host_list",
+        Some("host_pin_list.schema.json"),
+        &data,
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn host_inspect_matches_its_schema_and_golden() {
+    let (data, service) = service_with_host_pins();
+    let authority = |host: &str, port| SshAuthority {
+        host: host.to_owned(),
+        port,
+    };
+
+    let pin = service
+        .inspect_host(&authority("GIT.example.invalid", 2222))
+        .unwrap();
+    let envelope = Envelope::read_success("host inspect", Scope::default(), pin);
+    let not_found = service
+        .inspect_host(&authority("git.example.invalid", 2022))
+        .unwrap_err();
+
+    assert_host_contract(
+        "host_inspect",
+        Some("host_pin.schema.json"),
+        &data,
+        &envelope,
+    );
+    assert_eq!(not_found.code(), ResultCode::AuthorityNotFound);
+    assert_host_contract(
+        "failure_authority_not_found",
+        None,
+        &data,
+        &not_found.to_envelope::<Value>("host inspect"),
     );
     assert_git_transport_uninitialized();
 }

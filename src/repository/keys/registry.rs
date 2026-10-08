@@ -390,16 +390,26 @@ fn public_key_metadata(path: Option<&Path>) -> (Option<String>, PublicKeyMetadat
     let Ok(contents) = std::str::from_utf8(&contents) else {
         return (None, PublicKeyMetadataState::Unavailable);
     };
-    match ssh_key::PublicKey::from_openssh(contents) {
-        Ok(public_key) => (
-            Some(public_key.fingerprint(Default::default()).to_string()),
+    match openssh_public_key_fingerprint(contents) {
+        Some(fingerprint) => (
+            Some(fingerprint),
             PublicKeyMetadataState::FingerprintAvailable,
         ),
-        Err(_) => (None, PublicKeyMetadataState::Unavailable),
+        None => (None, PublicKeyMetadataState::Unavailable),
     }
 }
 
-fn bounded_public_key_contents(path: &Path) -> Option<Vec<u8>> {
+/// The fingerprint a registration stores for OpenSSH public key text, or
+/// `None` when the text is not such a key.
+pub(in super::super) fn openssh_public_key_fingerprint(contents: &str) -> Option<String> {
+    ssh_key::PublicKey::from_openssh(contents)
+        .ok()
+        .map(|public_key| public_key.fingerprint(Default::default()).to_string())
+}
+
+/// The bytes of a regular file of at most 16 KiB, or `None`. Opening never
+/// blocks, and nothing is written.
+pub(in super::super) fn bounded_public_key_contents(path: &Path) -> Option<Vec<u8>> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -447,6 +457,32 @@ pub(super) fn read_shared_key_registrations(
     operation: RepositoryOperation,
     data_directory: &Path,
 ) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
+    stored_shared_key_registrations(connection, operation, data_directory).map_err(|error| {
+        match error {
+            StoredSharedKeysError::Sqlite(_) => {
+                shared_key_registry_unavailable(operation, data_directory)
+            }
+            StoredSharedKeysError::InvalidMetadata(error) => error,
+        }
+    })
+}
+
+/// Why the stored registrations could not be returned.
+pub(in super::super) enum StoredSharedKeysError {
+    Sqlite(rusqlite::Error),
+    /// A row holds a value no registration can have.
+    InvalidMetadata(RepositoryError),
+}
+
+/// Every registration in the order it was registered, read through
+/// `connection` and nothing else: no lock is taken, no key file is opened
+/// and nothing is written. A failure to read is reported before an invalid
+/// row is.
+pub(in super::super) fn stored_shared_key_registrations(
+    connection: &rusqlite::Connection,
+    operation: RepositoryOperation,
+    data_directory: &Path,
+) -> Result<Vec<SharedKeyRegistration>, StoredSharedKeysError> {
     let rows = connection
         .prepare(
             "SELECT id, label, ownership, private_key_path, public_key_path,
@@ -470,9 +506,12 @@ pub(super) fn read_shared_key_registrations(
                 })?
                 .collect::<Result<Vec<_>, _>>()
         })
-        .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
+        .map_err(StoredSharedKeysError::Sqlite)?;
     rows.into_iter()
-        .map(|row| shared_key_registration_from_row(row, operation, data_directory))
+        .map(|row| {
+            shared_key_registration_from_row(row, operation, data_directory)
+                .map_err(StoredSharedKeysError::InvalidMetadata)
+        })
         .collect()
 }
 

@@ -11,10 +11,11 @@ use std::{
 
 use manyhands::{
     canonical::ItemId,
-    repository::{LeaseKind, RepositoryService},
+    repository::{LeaseKind, RepositoryService, SharedKeyId, transport::SshAuthority},
     results::{Outcome, ResultCode},
 };
 use serde_json::Value;
+use support::credentials;
 
 mod support;
 
@@ -79,6 +80,21 @@ fn index_file_bytes(enabled: &support::EnabledRepository) -> Vec<(PathBuf, Vec<u
     files
 }
 
+/// Pins one host in the index and returns its authority.
+fn pinned_authority(enabled: &support::EnabledRepository) -> SshAuthority {
+    credentials::pin_host(
+        enabled.data_directory.path(),
+        "pinned.example",
+        22,
+        "ssh-ed25519",
+        credentials::PUBLIC_FIXTURE_FINGERPRINT,
+    );
+    SshAuthority {
+        host: "pinned.example".to_owned(),
+        port: 22,
+    }
+}
+
 fn registered_repositories(service: &RepositoryService) -> i64 {
     service
         .read_session_for_testing(|connection| {
@@ -118,8 +134,16 @@ fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
         .repository
         .worktree("linked", &linked, None)
         .unwrap();
+    let keys = credentials::register_keys(&enabled.service);
+    let pinned = pinned_authority(&enabled);
+    credentials::require_host_reapproval(enabled.data_directory.path());
+    // The first read after a writer has closed recreates SQLite's empty
+    // journal files; the snapshot is of the index as a read finds it.
+    assert_eq!(registered_repositories(&enabled.service), 1);
     let before = support::repository_and_worktree_snapshot(&fixture);
     let index_before = index_file_bytes(&enabled);
+    let key_files_before = credentials::key_file_states(&keys.key_files());
+    assert_eq!(key_files_before.len(), 5);
 
     assert_eq!(registered_repositories(&enabled.service), 1);
     let _ = enabled.service.new_item_id();
@@ -148,8 +172,48 @@ fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
             .len(),
         1
     );
+    assert_eq!(enabled.service.list_keys().unwrap().items.len(), 3);
+    for registration in [&keys.imported, &keys.generated, &keys.without_public] {
+        enabled.service.show_key(registration.id).unwrap();
+    }
+    enabled.service.public_key_text(keys.imported.id).unwrap();
+    enabled.service.public_key_text(keys.generated.id).unwrap();
+    enabled
+        .service
+        .public_key_text(keys.without_public.id)
+        .unwrap_err();
+    enabled.service.show_key(SharedKeyId::new()).unwrap_err();
+    assert_eq!(enabled.service.list_host_pins().unwrap().items.len(), 1);
+    assert!(
+        enabled
+            .service
+            .inspect_host(&pinned)
+            .unwrap()
+            .reapproval_required
+    );
+    enabled
+        .service
+        .inspect_host(&SshAuthority {
+            host: "unpinned.example".to_owned(),
+            port: 22,
+        })
+        .unwrap_err();
 
     assert!(index_before == index_file_bytes(&enabled));
+    assert_eq!(
+        credentials::key_file_states(&keys.key_files()),
+        key_files_before
+    );
+    assert_eq!(
+        fs::read(
+            enabled
+                .data_directory
+                .path()
+                .join("ssh-host-trust-reapproval-required")
+        )
+        .unwrap(),
+        b"manyhands SSH host trust reapproval required v1\n"
+    );
 
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
     assert_git_transport_uninitialized();
@@ -159,6 +223,8 @@ fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
 fn read_session_is_busy_while_another_process_holds_the_exclusive_lock() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    let keys = credentials::register_keys(&enabled.service);
+    let pinned = pinned_authority(&enabled);
     let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheWrite);
 
     let started = Instant::now();
@@ -195,11 +261,29 @@ fn read_session_is_busy_while_another_process_holds_the_exclusive_lock() {
         assert_eq!(error.scope.repository.as_deref(), repository);
         assert!(error.recovery.is_empty());
     }
+    // The credential reads are application-wide and name no repository.
+    let busy = [
+        enabled.service.list_keys().unwrap_err(),
+        enabled.service.show_key(keys.imported.id).unwrap_err(),
+        enabled
+            .service
+            .public_key_text(keys.imported.id)
+            .unwrap_err(),
+        enabled.service.list_host_pins().unwrap_err(),
+        enabled.service.inspect_host(&pinned).unwrap_err(),
+    ];
+    for error in &busy {
+        assert_eq!(error.code(), ResultCode::Busy);
+        assert_eq!(error.scope.repository, None);
+        assert!(error.recovery.is_empty());
+    }
     assert!(started.elapsed() < NOT_BLOCKED);
 
     // The lock, not the index, was the obstacle.
     holder.release();
     assert_eq!(registered_repositories(&enabled.service), 1);
+    assert_eq!(enabled.service.list_keys().unwrap().items.len(), 3);
+    assert_eq!(enabled.service.list_host_pins().unwrap().items.len(), 1);
     assert_git_transport_uninitialized();
 }
 
@@ -207,10 +291,17 @@ fn read_session_is_busy_while_another_process_holds_the_exclusive_lock() {
 fn read_session_succeeds_while_another_process_holds_the_shared_lock() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    let keys = credentials::register_keys(&enabled.service);
+    let pinned = pinned_authority(&enabled);
     let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheRead);
 
     let started = Instant::now();
     assert_eq!(registered_repositories(&enabled.service), 1);
+    assert_eq!(enabled.service.list_keys().unwrap().items.len(), 3);
+    enabled.service.show_key(keys.generated.id).unwrap();
+    enabled.service.public_key_text(keys.generated.id).unwrap();
+    assert_eq!(enabled.service.list_host_pins().unwrap().items.len(), 1);
+    enabled.service.inspect_host(&pinned).unwrap();
     assert!(started.elapsed() < NOT_BLOCKED);
 
     holder.release();
