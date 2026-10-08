@@ -1,0 +1,512 @@
+use std::{
+    collections::BTreeSet,
+    path::{MAIN_SEPARATOR, Path, PathBuf},
+};
+
+use serde_json::{Value, json};
+use time::{Duration, OffsetDateTime, UtcOffset};
+
+use super::{
+    CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
+    IntegrationEffect, Outcome, PublicationEffect, REDACTED, RecoveryAction, ResultCode,
+    SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string, object_id_string, redact_url,
+    relative_path_string, timestamp_string,
+};
+
+const ENVELOPE_FIELDS: [&str; 11] = [
+    "schema_version",
+    "command",
+    "request_id",
+    "operation_id",
+    "outcome",
+    "code",
+    "message",
+    "scope",
+    "effects",
+    "data",
+    "recovery",
+];
+
+/// The design's result-code table, in its order.
+const DESIGN_CODES: [(&str, Option<FailureClass>); 17] = [
+    ("ok", None),
+    ("invalid_path", Some(FailureClass::Input)),
+    ("not_repository", Some(FailureClass::Input)),
+    ("not_repository_root", Some(FailureClass::Input)),
+    ("bare_repository", Some(FailureClass::Input)),
+    ("repository_not_registered", Some(FailureClass::Blocked)),
+    ("repository_inaccessible", Some(FailureClass::Blocked)),
+    ("invalid_id", Some(FailureClass::Input)),
+    ("item_not_found", Some(FailureClass::Input)),
+    ("path_not_found", Some(FailureClass::Input)),
+    ("key_not_found", Some(FailureClass::Input)),
+    ("public_key_unavailable", Some(FailureClass::Blocked)),
+    ("authority_not_found", Some(FailureClass::Input)),
+    ("operation_not_found", Some(FailureClass::Input)),
+    ("index_unavailable", Some(FailureClass::Blocked)),
+    ("busy", Some(FailureClass::Transient)),
+    ("internal_error", Some(FailureClass::Internal)),
+];
+
+fn keys(value: &Value) -> Vec<&str> {
+    value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+fn sorted(mut names: Vec<&str>) -> Vec<&str> {
+    names.sort_unstable();
+    names
+}
+
+#[test]
+fn result_codes_match_the_design_table_exactly() {
+    let actual: Vec<_> = ResultCode::ALL
+        .iter()
+        .map(|code| (code.as_str(), code.failure_class()))
+        .collect();
+    assert_eq!(actual, DESIGN_CODES);
+}
+
+#[test]
+fn result_codes_have_unique_snake_case_strings_and_fixed_messages() {
+    let mut strings = BTreeSet::new();
+    let mut messages = BTreeSet::new();
+    for code in ResultCode::ALL {
+        let string = code.as_str();
+        assert!(strings.insert(string), "{string} is repeated");
+        assert!(!string.is_empty());
+        assert!(
+            string
+                .split('_')
+                .all(|word| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_lowercase())),
+            "{string} is not lower_snake_case"
+        );
+
+        let message = code.message();
+        assert!(!message.trim().is_empty(), "{string} has no message");
+        assert!(messages.insert(message), "{string} shares a message");
+        assert_eq!(serde_json::to_value(code).unwrap(), json!(string));
+    }
+}
+
+#[test]
+fn result_code_outcomes_follow_the_failure_class() {
+    for code in ResultCode::ALL {
+        let expected = match code.failure_class() {
+            None => Outcome::Success,
+            Some(FailureClass::Blocked) => Outcome::Blocked,
+            Some(FailureClass::Input | FailureClass::Transient | FailureClass::Internal) => {
+                Outcome::Error
+            }
+            Some(class) => panic!("{} has unexpected class {class:?}", code.as_str()),
+        };
+        assert_eq!(code.outcome(), expected, "{}", code.as_str());
+    }
+}
+
+#[test]
+fn outcomes_and_effects_serialize_as_the_rfc_strings() {
+    let outcomes = [
+        (Outcome::Success, "success"),
+        (Outcome::Noop, "noop"),
+        (Outcome::Partial, "partial"),
+        (Outcome::Blocked, "blocked"),
+        (Outcome::Cancelled, "cancelled"),
+        (Outcome::Error, "error"),
+    ];
+    for (outcome, expected) in outcomes {
+        assert_eq!(outcome.as_str(), expected);
+        assert_eq!(serde_json::to_value(outcome).unwrap(), json!(expected));
+    }
+
+    macro_rules! assert_strings {
+        ($($value:expr => $expected:literal),+ $(,)?) => {$(
+            assert_eq!($value.as_str(), $expected);
+            assert_eq!(serde_json::to_value($value).unwrap(), json!($expected));
+        )+};
+    }
+    assert_strings! {
+        WriteEffect::NotRequested => "not_requested",
+        WriteEffect::Unchanged => "unchanged",
+        WriteEffect::Written => "written",
+        CheckpointEffect::NotRequested => "not_requested",
+        CheckpointEffect::Unchanged => "unchanged",
+        CheckpointEffect::Committed => "committed",
+        CheckpointEffect::Pending => "pending",
+        DiscoveryEffect::NotRequested => "not_requested",
+        DiscoveryEffect::Current => "current",
+        DiscoveryEffect::Pending => "pending",
+        PublicationEffect::NotRequested => "not_requested",
+        PublicationEffect::Published => "published",
+        PublicationEffect::Current => "current",
+        PublicationEffect::Pending => "pending",
+        IntegrationEffect::NotRequested => "not_requested",
+        IntegrationEffect::Complete => "complete",
+        IntegrationEffect::Pending => "pending",
+        CleanupEffect::NotRequested => "not_requested",
+        CleanupEffect::Complete => "complete",
+        CleanupEffect::Pending => "pending",
+    }
+}
+
+#[test]
+fn effects_not_requested_serializes_the_seven_rfc_fields() {
+    assert_eq!(
+        serde_json::to_value(Effects::not_requested()).unwrap(),
+        json!({
+            "write": "not_requested",
+            "checkpoint": "not_requested",
+            "discovery": "not_requested",
+            "publication": "not_requested",
+            "integration": "not_requested",
+            "cleanup": "not_requested",
+            "commit_oid": null,
+        })
+    );
+}
+
+#[test]
+fn read_success_serializes_every_field_with_nulls_for_absent_values() {
+    let envelope = Envelope::read_success("item list", Scope::default(), json!({"items": []}));
+    let value = serde_json::to_value(&envelope).unwrap();
+
+    assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
+    assert_eq!(SCHEMA_VERSION, 1);
+    assert_eq!(
+        value,
+        json!({
+            "schema_version": 1,
+            "command": "item list",
+            "request_id": null,
+            "operation_id": null,
+            "outcome": "success",
+            "code": "ok",
+            "message": ResultCode::Ok.message(),
+            "scope": {
+                "repository": null,
+                "item_id": null,
+                "branch": null,
+                "worktree": null,
+                "remote": null,
+            },
+            "effects": serde_json::to_value(Effects::not_requested()).unwrap(),
+            "data": {"items": []},
+            "recovery": [],
+        })
+    );
+}
+
+#[test]
+fn envelope_fields_serialize_in_the_rfc_order() {
+    let envelope = Envelope::<Value>::failure(
+        "item show",
+        Scope::default(),
+        ResultCode::InternalError,
+        Vec::new(),
+    );
+    let text = serde_json::to_string(&envelope).unwrap();
+    let positions: Vec<_> = ENVELOPE_FIELDS
+        .iter()
+        .map(|field| text.find(&format!("\"{field}\":")).unwrap())
+        .collect();
+    assert!(positions.is_sorted(), "{text}");
+}
+
+#[test]
+fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
+    let scope = Scope {
+        repository: Some("/projects/example".to_owned()),
+        item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        branch: Some("manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        worktree: None,
+        remote: Some("origin".to_owned()),
+    };
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("repository".to_owned(), json!("/projects/example"));
+    let recovery = vec![
+        RecoveryAction {
+            action: "index.rebuild".to_owned(),
+            operation_id: None,
+            arguments,
+        },
+        RecoveryAction {
+            action: "operation.resume".to_owned(),
+            operation_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".to_owned()),
+            arguments: serde_json::Map::new(),
+        },
+    ];
+
+    let envelope =
+        Envelope::<Value>::failure("item show", scope, ResultCode::IndexUnavailable, recovery);
+    let value = serde_json::to_value(&envelope).unwrap();
+
+    assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
+    assert_eq!(
+        value,
+        json!({
+            "schema_version": 1,
+            "command": "item show",
+            "request_id": null,
+            "operation_id": null,
+            "outcome": "blocked",
+            "code": "index_unavailable",
+            "message": ResultCode::IndexUnavailable.message(),
+            "scope": {
+                "repository": "/projects/example",
+                "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "worktree": null,
+                "remote": "origin",
+            },
+            "effects": serde_json::to_value(Effects::not_requested()).unwrap(),
+            "data": null,
+            "recovery": [
+                {
+                    "action": "index.rebuild",
+                    "operation_id": null,
+                    "arguments": {"repository": "/projects/example"},
+                },
+                {
+                    "action": "operation.resume",
+                    "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+                    "arguments": {},
+                },
+            ],
+        })
+    );
+
+    for code in ResultCode::ALL {
+        let envelope = Envelope::<Value>::failure("item show", Scope::default(), code, Vec::new());
+        assert_eq!(envelope.outcome, code.outcome());
+        assert_eq!(envelope.message, code.message());
+        let value = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
+        assert_eq!(value["data"], Value::Null);
+    }
+}
+
+#[test]
+fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
+    let cases = [
+        // Password removed, SSH user kept.
+        (
+            "ssh://git:hunter2@example.com/team/repo.git",
+            "ssh://git@example.com/team/repo.git",
+        ),
+        (
+            "ssh://git@example.com:2222/team/repo.git",
+            "ssh://git@example.com:2222/team/repo.git",
+        ),
+        (
+            "SSH://git:hunter2@[::1]:2222/repo.git",
+            "SSH://git@[::1]:2222/repo.git",
+        ),
+        (
+            "ssh://example.com/team/repo.git",
+            "ssh://example.com/team/repo.git",
+        ),
+        // HTTP user-info removed whole.
+        (
+            "https://alice:hunter2@example.com/team/repo.git",
+            "https://example.com/team/repo.git",
+        ),
+        (
+            "https://token@example.com/team/repo.git",
+            "https://example.com/team/repo.git",
+        ),
+        (
+            "http://alice:p@ss@example.com:8080/repo",
+            "http://example.com:8080/repo",
+        ),
+        (
+            "https://example.com/team/repo.git",
+            "https://example.com/team/repo.git",
+        ),
+        ("https://alice:hunter2@example.com", "https://example.com"),
+        // Query and fragment removed.
+        (
+            "https://example.com/repo.git?access_token=hunter2#hunter2",
+            "https://example.com/repo.git",
+        ),
+        (
+            "ssh://git@example.com/repo.git#hunter2?hunter2",
+            "ssh://git@example.com/repo.git",
+        ),
+        ("https://example.com?token=hunter2", "https://example.com"),
+        // A user name is kept only where it is known not to be a secret.
+        (
+            "ftp://alice:hunter2@example.com/repo",
+            "ftp://example.com/repo",
+        ),
+        ("file:///srv/git/repo.git", "file:///srv/git/repo.git"),
+        // The scp-like form is kept as written.
+        (
+            "git@example.com:team/repo.git",
+            "git@example.com:team/repo.git",
+        ),
+        ("example.com:team/repo.git", "example.com:team/repo.git"),
+        // Local paths are unchanged.
+        ("/srv/git/repo.git", "/srv/git/repo.git"),
+        ("../sibling/repo.git", "../sibling/repo.git"),
+        ("repo with spaces", "repo with spaces"),
+        (
+            r"C:\Users\alice@example\repo",
+            r"C:\Users\alice@example\repo",
+        ),
+        ("C:/Users/alice@example/repo", "C:/Users/alice@example/repo"),
+        ("/srv/a@b:c/repo?x#y", "/srv/a@b:c/repo?x#y"),
+        // Unparseable input is replaced whole.
+        ("https://alice:hunter2@/repo", REDACTED),
+        ("https:///repo", REDACTED),
+        ("://alice:hunter2@example.com/repo", REDACTED),
+        ("1https://alice:hunter2@example.com/repo", REDACTED),
+        ("https://alice:hunter2 @example.com/repo", REDACTED),
+        ("https://alice:hunter2\n@example.com/repo", REDACTED),
+        ("https://alice:hunter2/more@example.com/repo", REDACTED),
+        ("https://example.com:hunter2/repo", REDACTED),
+        ("https://[::1/repo", REDACTED),
+        ("ssh://:hunter2@example.com/repo", REDACTED),
+        ("alice:hunter2@example.com:team/repo.git", REDACTED),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(redact_url(input), expected, "{input}");
+    }
+    assert_eq!(REDACTED, "[redacted]");
+}
+
+#[test]
+fn redact_url_never_returns_the_secret() {
+    let inputs = [
+        "ssh://git:hunter2@example.com/team/repo.git",
+        "https://alice:hunter2@example.com/team/repo.git",
+        "https://hunter2@example.com/team/repo.git",
+        "https://example.com/repo.git?token=hunter2",
+        "https://example.com/repo.git#hunter2",
+        "https://alice:hunter2/x@example.com/repo.git",
+        "https://alice:hunter2@example.com:hunter2/repo.git",
+        "weird+scheme://alice:hunter2@example.com/repo.git",
+        "alice:hunter2@example.com:team/repo.git",
+    ];
+    for input in inputs {
+        let redacted = redact_url(input);
+        assert!(!redacted.contains("hunter2"), "{input} became {redacted}");
+        assert_eq!(redact_url(&redacted), redacted, "{input} is not stable");
+    }
+}
+
+#[test]
+fn timestamps_serialize_as_rfc3339_utc_to_the_second() {
+    let instant = OffsetDateTime::from_unix_timestamp(1_780_000_000).unwrap();
+    assert_eq!(
+        timestamp_string(instant).as_deref(),
+        Some("2026-05-28T20:26:40Z")
+    );
+    assert_eq!(
+        timestamp_string(instant + Duration::nanoseconds(999_999_999)).as_deref(),
+        Some("2026-05-28T20:26:40Z")
+    );
+    let offset = UtcOffset::from_hms(-7, 0, 0).unwrap();
+    assert_eq!(
+        timestamp_string(instant.to_offset(offset)).as_deref(),
+        Some("2026-05-28T20:26:40Z")
+    );
+    assert_eq!(
+        timestamp_string(OffsetDateTime::UNIX_EPOCH).as_deref(),
+        Some("1970-01-01T00:00:00Z")
+    );
+    // RFC 3339 has no year before 0000.
+    let before_year_zero = OffsetDateTime::from_unix_timestamp(-62_200_000_000).unwrap();
+    assert_eq!(timestamp_string(before_year_zero), None);
+}
+
+#[test]
+fn object_ids_serialize_as_full_lowercase_hex() {
+    let hex = "0123456789abcdef0123456789abcdef01234567";
+    let oid = git2::Oid::from_str(hex).unwrap();
+    assert_eq!(object_id_string(oid), hex);
+    assert_eq!(
+        serde_json::to_value(object_id_string(oid)).unwrap(),
+        json!(hex)
+    );
+}
+
+#[test]
+fn relative_paths_serialize_with_forward_slashes() {
+    let platform = format!(".manyhands{MAIN_SEPARATOR}tickets{MAIN_SEPARATOR}one.md");
+    assert_eq!(
+        relative_path_string(Path::new(&platform)).as_deref(),
+        Some(".manyhands/tickets/one.md")
+    );
+    let joined: PathBuf = ["docs", "plans", "a b.md"].iter().collect();
+    assert_eq!(
+        relative_path_string(&joined).as_deref(),
+        Some("docs/plans/a b.md")
+    );
+    assert_eq!(
+        relative_path_string(Path::new("./docs/./one.md")).as_deref(),
+        Some("docs/one.md")
+    );
+    assert_eq!(
+        relative_path_string(Path::new("one.md")).as_deref(),
+        Some("one.md")
+    );
+    assert_eq!(relative_path_string(Path::new("")).as_deref(), Some(""));
+
+    // Not repository-relative: there is no honest string for these.
+    assert_eq!(relative_path_string(Path::new("../outside.md")), None);
+    assert_eq!(
+        relative_path_string(Path::new("docs/../../outside.md")),
+        None
+    );
+    let absolute = std::env::temp_dir();
+    assert!(absolute.is_absolute());
+    assert_eq!(relative_path_string(&absolute), None);
+}
+
+#[test]
+fn absolute_paths_serialize_as_the_platform_reports_them() {
+    let absolute = std::env::temp_dir().join("many hands").join("repo");
+    assert_eq!(
+        absolute_path_string(&absolute).as_deref(),
+        Some(absolute.to_str().unwrap())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_paths_serialize_as_null() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    let name = OsStr::from_bytes(b"caf\xe9.md");
+    let relative = Path::new("docs").join(name);
+    let absolute = Path::new("/srv").join(name);
+
+    assert_eq!(relative_path_string(&relative), None);
+    assert_eq!(absolute_path_string(&absolute), None);
+    assert_eq!(
+        serde_json::to_value(relative_path_string(&relative)).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        serde_json::to_value(absolute_path_string(&absolute)).unwrap(),
+        Value::Null
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn non_utf8_paths_serialize_as_null() {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+
+    // An unpaired surrogate is a valid Windows file name and not valid UTF-8.
+    let name = OsString::from_wide(&[0x0063, 0xD800, 0x002E, 0x006D, 0x0064]);
+    let relative = Path::new("docs").join(&name);
+    let absolute = Path::new(r"C:\srv").join(&name);
+
+    assert_eq!(relative_path_string(&relative), None);
+    assert_eq!(absolute_path_string(&absolute), None);
+}
