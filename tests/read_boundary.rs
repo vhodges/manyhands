@@ -571,7 +571,11 @@ fn every_item_read(
                 .show_path(repo, None, path("docs/absent.md"))
                 .map(drop),
         ),
-        outcome(service.show_path(repo, None, path("../outside.md")).map(drop)),
+        outcome(
+            service
+                .show_path(repo, None, path("../outside.md"))
+                .map(drop),
+        ),
     ]
 }
 

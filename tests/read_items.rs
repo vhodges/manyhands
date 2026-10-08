@@ -2030,11 +2030,7 @@ fn show_path_reads_only_canonical_item_paths() {
 
     // A canonical path with nothing at it, or under a directory that is
     // not there.
-    for path in [
-        "docs/absent.md",
-        "docs/absent/b.md",
-        &ticket_path(TICKET_B),
-    ] {
+    for path in ["docs/absent.md", "docs/absent/b.md", &ticket_path(TICKET_B)] {
         let error = show(path).unwrap_err();
         assert_eq!(error.code(), ResultCode::PathNotFound, "{path:?}");
         assert_eq!(recovery(&error), json!([]));
@@ -2559,11 +2555,7 @@ fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
     let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
-    write(
-        root,
-        "docs/sub/b.md",
-        &document_source(DOCUMENT_B, "B", ""),
-    );
+    write(root, "docs/sub/b.md", &document_source(DOCUMENT_B, "B", ""));
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
     let directory = root.join("docs/sub");
@@ -2572,10 +2564,7 @@ fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
     };
     let assert_inaccessible = |id: &str, path: &str| {
         for error in [
-            enabled
-                .service
-                .show_item(&repo, &item_id(id))
-                .unwrap_err(),
+            enabled.service.show_item(&repo, &item_id(id)).unwrap_err(),
             enabled
                 .service
                 .show_path(&repo, None, Path::new(path))
@@ -2695,7 +2684,11 @@ fn refreshed_at_is_the_time_a_refresh_or_rebuild_began_observing() {
 fn a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
-    write(root, "docs/shared.md", &document_source(DOCUMENT_C, "C", ""));
+    write(
+        root,
+        "docs/shared.md",
+        &document_source(DOCUMENT_C, "C", ""),
+    );
     commit(&fixture, &["docs/shared.md"], 1_000);
     create_document_context(&enabled.service, root, DOCUMENT_A, "docs/active.md");
     let marker = write(root, MARKER_PATH, "---\nmanyhands_managed: true\n---\n");
@@ -2717,7 +2710,10 @@ fn a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds
     // effective one: the index is right about each of them.
     assert_eq!(state(None, MARKER_PATH), IndexState::Current);
     assert_eq!(state(None, "docs/two.md"), IndexState::Current);
-    assert_eq!(state(Some(&worktree), "docs/shared.md"), IndexState::Current);
+    assert_eq!(
+        state(Some(&worktree), "docs/shared.md"),
+        IndexState::Current
+    );
 
     for file in [&marker, &duplicate, &copy] {
         set_modified_later(file);

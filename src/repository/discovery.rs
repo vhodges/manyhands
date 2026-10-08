@@ -1721,8 +1721,9 @@ mod tests {
         assert!(
             connection
                 .execute_batch("BEGIN IMMEDIATE")
-                .is_err_and(|error| error.sqlite_error_code()
-                    == Some(rusqlite::ErrorCode::DatabaseBusy))
+                .is_err_and(
+                    |error| error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+                )
         );
     }
 

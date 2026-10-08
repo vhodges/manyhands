@@ -22,9 +22,7 @@ use super::{
 };
 use crate::{
     canonical::{self, ItemId},
-    repository::{
-        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
-    },
+    repository::{GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
     results::{ProblemCode, ResultCode, absolute_path_string, timestamp_string},
 };
 

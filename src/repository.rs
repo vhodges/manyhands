@@ -6059,9 +6059,8 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
         } else {
             directory_flags
         };
-        let next = opened(unsafe {
-            libc::openat(directory.as_raw_fd(), component.as_ptr(), flags)
-        });
+        let next =
+            opened(unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) });
         let mut next = match next {
             Ok(next) => next,
             Err(error) => return absent(&error).ok_or(error),
