@@ -2534,3 +2534,179 @@ fn the_recovery_check_refuses_an_unregistered_argument() {
     }
     assert_git_transport_uninitialized();
 }
+
+/// Checks a failure of a read against its golden. `root` is replaced by
+/// `<repository>` wherever the envelope names it.
+fn assert_failure_contract(
+    name: &str,
+    command: &str,
+    error: &manyhands::repository::ReadError,
+    root: Option<&Path>,
+    sentinels: &[&str],
+) {
+    let root = root.map(|root| root.to_str().unwrap().to_owned());
+    let placeholders: Vec<(&str, &str)> = root
+        .iter()
+        .map(|root| (root.as_str(), "<repository>"))
+        .collect();
+    golden::assert_contract(
+        &ContractCase {
+            name,
+            data_schema: None,
+            placeholders: &placeholders,
+            sentinels,
+        },
+        &error.to_envelope::<Value>(command),
+    );
+}
+
+#[test]
+fn an_unregistered_repository_matches_the_failure_golden() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let root = fs::canonicalize(&fixture.root).unwrap();
+
+    let error = service.resolve_repository(&fixture.root).unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::RepositoryNotRegistered);
+    assert_failure_contract(
+        "failure_repository_not_registered",
+        "ticket list",
+        &error,
+        Some(&root),
+        &[data.path().to_str().unwrap()],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_directory_that_is_no_repository_matches_the_failure_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let plain = tempfile::tempdir().unwrap();
+    let selected = fs::canonicalize(plain.path()).unwrap();
+
+    let error = enabled
+        .service
+        .resolve_repository(plain.path())
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::NotRepository);
+    assert_failure_contract(
+        "failure_not_repository",
+        "ticket list",
+        &error,
+        None,
+        // Where no repository is, the result names none.
+        &[
+            selected.to_str().unwrap(),
+            enabled.data_directory.path().to_str().unwrap(),
+        ],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_bare_repository_matches_the_failure_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let bare = support::bare_repository();
+    let git_directory = fs::canonicalize(&bare.root).unwrap();
+
+    let error = enabled.service.resolve_repository(&bare.root).unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::BareRepository);
+    assert_failure_contract(
+        "failure_bare_repository",
+        "ticket list",
+        &error,
+        Some(&git_directory),
+        &[enabled.data_directory.path().to_str().unwrap()],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_registered_root_that_is_gone_matches_the_failure_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    drop(fixture);
+
+    let error = enabled.service.repository_identity(&repo).unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
+    assert_failure_contract(
+        "failure_repository_inaccessible",
+        "repo identity",
+        &error,
+        Some(repo.root()),
+        &[enabled.data_directory.path().to_str().unwrap()],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_id_that_is_not_one_matches_the_failure_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    // A read takes a parsed ID, so the front end that parses what it was
+    // given is where this failure is made.
+    let given = "01ARZ3NDEKTSV4RRFFQ69G5FA";
+    assert!(given.parse::<ItemId>().is_err());
+
+    let error = manyhands::repository::ReadError::invalid_id().with_scope(repo.scope());
+
+    assert_eq!(error.code(), ResultCode::InvalidId);
+    assert_failure_contract(
+        "failure_invalid_id",
+        "ticket show",
+        &error,
+        Some(repo.root()),
+        &[given],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_path_that_cannot_name_a_resource_matches_the_failure_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let error = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/../outside.md"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_failure_contract(
+        "failure_invalid_path",
+        "document show",
+        &error,
+        Some(repo.root()),
+        &["outside.md"],
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_path_with_nothing_at_it_matches_the_failure_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let error = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/absent.md"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::PathNotFound);
+    assert_failure_contract(
+        "failure_path_not_found",
+        "document show",
+        &error,
+        Some(repo.root()),
+        &["absent.md"],
+    );
+    assert_git_transport_uninitialized();
+}

@@ -928,3 +928,28 @@ fn status_reads_are_busy_under_the_exclusive_lock_and_succeed_under_the_shared_o
 fn no_read_test_initializes_the_git_transport() {
     assert_git_transport_uninitialized();
 }
+
+#[test]
+fn a_read_under_the_exclusive_lock_matches_the_failure_golden() {
+    use support::golden::{self, ContractCase};
+
+    let (fixture, enabled) = repository_with_items();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheWrite);
+
+    let error = enabled.service.list_documents(&repo).unwrap_err();
+    holder.release();
+
+    assert_eq!(error.code(), ResultCode::Busy);
+    golden::assert_contract(
+        &ContractCase {
+            name: "failure_busy",
+            data_schema: None,
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            // The data directory and the lock are not the caller's business.
+            sentinels: &[enabled.data_directory.path().to_str().unwrap(), "lock"],
+        },
+        &error.to_envelope::<Value>("document list"),
+    );
+    assert_git_transport_uninitialized();
+}
