@@ -1,8 +1,10 @@
 //! The versioned result contract shared by the Manyhands front ends.
 //!
 //! These types serialize; domain types do not. Field names, enumeration
-//! strings and result codes are the published JSON v1 contract, so each
-//! string is written out here instead of being derived from a Rust name.
+//! strings and result codes are the published JSON v1 contract. Enumeration
+//! strings and result codes are written out here instead of being derived
+//! from a Rust name. Field names are derived from the struct fields and are
+//! pinned by the exact-JSON tests.
 
 use std::path::{Component, Path};
 
@@ -122,6 +124,7 @@ impl<T> Envelope<T> {
         code: ResultCode,
         recovery: Vec<RecoveryAction>,
     ) -> Self {
+        debug_assert!(code != ResultCode::Ok, "a failure cannot carry the ok code");
         Self::read(command.into(), scope, code, None, recovery)
     }
 
@@ -200,119 +203,80 @@ pub enum FailureClass {
     Cancelled,
 }
 
-/// A stable result code. `as_str` is the contract; the variant name is not.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ResultCode {
-    Ok,
-    InvalidPath,
-    NotRepository,
-    NotRepositoryRoot,
-    BareRepository,
-    RepositoryNotRegistered,
-    RepositoryInaccessible,
-    InvalidId,
-    ItemNotFound,
-    PathNotFound,
-    KeyNotFound,
-    PublicKeyUnavailable,
-    AuthorityNotFound,
-    OperationNotFound,
-    IndexUnavailable,
-    Busy,
-    InternalError,
+/// Defines `ResultCode` from one list, so a code cannot be added without its
+/// string, class and message, or be left out of `ALL`.
+macro_rules! result_codes {
+    ($($variant:ident => $string:literal, $class:expr, $message:literal;)+) => {
+        /// A stable result code. `as_str` is the contract; the variant name is not.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum ResultCode {
+            $($variant),+
+        }
+
+        impl ResultCode {
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $string),+
+                }
+            }
+
+            /// The fixed English explanation. It never carries backend text.
+            pub const fn message(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $message),+
+                }
+            }
+
+            /// `None` only for `ok`.
+            pub const fn failure_class(self) -> Option<FailureClass> {
+                match self {
+                    $(Self::$variant => $class),+
+                }
+            }
+        }
+    };
+}
+
+result_codes! {
+    Ok => "ok", None,
+        "The request completed.";
+    InvalidPath => "invalid_path", Some(FailureClass::Input),
+        "That path cannot be used as a target.";
+    NotRepository => "not_repository", Some(FailureClass::Input),
+        "No Git repository exists at that path.";
+    NotRepositoryRoot => "not_repository_root", Some(FailureClass::Input),
+        "That path is inside a repository but is not its root or a linked worktree root.";
+    BareRepository => "bare_repository", Some(FailureClass::Input),
+        "The repository has no working tree.";
+    RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),
+        "The repository is not enabled in Manyhands.";
+    RepositoryInaccessible => "repository_inaccessible", Some(FailureClass::Blocked),
+        "The registered repository root cannot be read.";
+    InvalidId => "invalid_id", Some(FailureClass::Input),
+        "That ID is not a canonical ULID.";
+    ItemNotFound => "item_not_found", Some(FailureClass::Input),
+        "No item has that ID.";
+    PathNotFound => "path_not_found", Some(FailureClass::Input),
+        "No canonical resource exists at that path.";
+    KeyNotFound => "key_not_found", Some(FailureClass::Input),
+        "No key registration has that ID.";
+    PublicKeyUnavailable => "public_key_unavailable", Some(FailureClass::Blocked),
+        "The key registration has no readable public key.";
+    AuthorityNotFound => "authority_not_found", Some(FailureClass::Input),
+        "No host pin exists for that authority.";
+    OperationNotFound => "operation_not_found", Some(FailureClass::Input),
+        "No operation has that ID.";
+    IndexUnavailable => "index_unavailable", Some(FailureClass::Blocked),
+        "The index is degraded and must be rebuilt.";
+    Busy => "busy", Some(FailureClass::Transient),
+        "The repository is busy; try again.";
+    InternalError => "internal_error", Some(FailureClass::Internal),
+        "An internal error occurred.";
 }
 
 impl ResultCode {
-    pub const ALL: [Self; 17] = [
-        Self::Ok,
-        Self::InvalidPath,
-        Self::NotRepository,
-        Self::NotRepositoryRoot,
-        Self::BareRepository,
-        Self::RepositoryNotRegistered,
-        Self::RepositoryInaccessible,
-        Self::InvalidId,
-        Self::ItemNotFound,
-        Self::PathNotFound,
-        Self::KeyNotFound,
-        Self::PublicKeyUnavailable,
-        Self::AuthorityNotFound,
-        Self::OperationNotFound,
-        Self::IndexUnavailable,
-        Self::Busy,
-        Self::InternalError,
-    ];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::InvalidPath => "invalid_path",
-            Self::NotRepository => "not_repository",
-            Self::NotRepositoryRoot => "not_repository_root",
-            Self::BareRepository => "bare_repository",
-            Self::RepositoryNotRegistered => "repository_not_registered",
-            Self::RepositoryInaccessible => "repository_inaccessible",
-            Self::InvalidId => "invalid_id",
-            Self::ItemNotFound => "item_not_found",
-            Self::PathNotFound => "path_not_found",
-            Self::KeyNotFound => "key_not_found",
-            Self::PublicKeyUnavailable => "public_key_unavailable",
-            Self::AuthorityNotFound => "authority_not_found",
-            Self::OperationNotFound => "operation_not_found",
-            Self::IndexUnavailable => "index_unavailable",
-            Self::Busy => "busy",
-            Self::InternalError => "internal_error",
-        }
-    }
-
-    /// The fixed English explanation. It never carries backend text.
-    pub const fn message(self) -> &'static str {
-        match self {
-            Self::Ok => "The request completed.",
-            Self::InvalidPath => "The path cannot be used as a target.",
-            Self::NotRepository => "There is no Git repository at the path.",
-            Self::NotRepositoryRoot => {
-                "The path is inside a repository but is not its root or a linked worktree root."
-            }
-            Self::BareRepository => "The repository has no working tree.",
-            Self::RepositoryNotRegistered => "The repository is not enabled in Manyhands.",
-            Self::RepositoryInaccessible => "The registered repository root cannot be read.",
-            Self::InvalidId => "The ID is not a canonical ULID.",
-            Self::ItemNotFound => "No item with that ID was found.",
-            Self::PathNotFound => "There is no canonical resource at that path.",
-            Self::KeyNotFound => "No key registration has that ID.",
-            Self::PublicKeyUnavailable => "The key registration has no readable public key.",
-            Self::AuthorityNotFound => "No pin exists for that authority.",
-            Self::OperationNotFound => "No operation has that ID.",
-            Self::IndexUnavailable => "The index is degraded and must be rebuilt.",
-            Self::Busy => "The repository is busy; try again.",
-            Self::InternalError => "An internal error occurred.",
-        }
-    }
-
-    /// `None` only for `ok`.
-    pub const fn failure_class(self) -> Option<FailureClass> {
-        match self {
-            Self::Ok => None,
-            Self::InvalidPath
-            | Self::NotRepository
-            | Self::NotRepositoryRoot
-            | Self::BareRepository
-            | Self::InvalidId
-            | Self::ItemNotFound
-            | Self::PathNotFound
-            | Self::KeyNotFound
-            | Self::AuthorityNotFound
-            | Self::OperationNotFound => Some(FailureClass::Input),
-            Self::RepositoryNotRegistered
-            | Self::RepositoryInaccessible
-            | Self::PublicKeyUnavailable
-            | Self::IndexUnavailable => Some(FailureClass::Blocked),
-            Self::Busy => Some(FailureClass::Transient),
-            Self::InternalError => Some(FailureClass::Internal),
-        }
-    }
-
     /// The outcome an envelope carrying this code reports.
     pub const fn outcome(self) -> Outcome {
         match self.failure_class() {
@@ -335,14 +299,16 @@ impl Serialize for ResultCode {
 
 /// Removes what may be a credential from a remote URL.
 ///
-/// A `scheme://` URL loses its password, query and fragment. Its user name
-/// is kept only for `ssh`, where `git@` is not a secret. The scp-like form
-/// and local paths are returned as written. Input that cannot be parsed
-/// becomes `REDACTED` whole.
+/// A network `scheme://` URL loses its password, query and fragment. Its
+/// user name is kept only for `ssh`, where `git@` is not a secret. The
+/// scp-like form, `file:///` URLs and local paths are returned as written.
+/// Input that cannot be parsed, or that may still hold a credential,
+/// becomes `REDACTED` whole: a wrongly redacted location is acceptable and
+/// a surviving secret is not.
 pub fn redact_url(url: &str) -> String {
     let redacted = match url.split_once("://") {
         Some((scheme, rest)) => redact_scheme_url(scheme, rest),
-        None if has_scp_like_password(url) => None,
+        None if has_schemeless_credential(url) => None,
         None => Some(url.to_owned()),
     };
     redacted.unwrap_or_else(|| REDACTED.to_owned())
@@ -352,24 +318,34 @@ fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
     let mut scheme_bytes = scheme.bytes();
     if !scheme_bytes.next()?.is_ascii_alphabetic()
         || !scheme_bytes.all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte))
-        || rest
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return None;
+    }
+    // Without an authority a file URL is a local location, so `?` and `#`
+    // are path text.
+    if scheme.eq_ignore_ascii_case("file") && rest.starts_with('/') {
+        return Some(format!("{scheme}://{rest}"));
+    }
+    if rest
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
     {
         return None;
     }
 
-    let rest = rest.find(['?', '#']).map_or(rest, |end| &rest[..end]);
-    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let (authority, remainder) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
     let (user_info, host_port) = match authority.rsplit_once('@') {
         Some((user_info, host_port)) => (Some(user_info), host_port),
         None => (None, authority),
     };
-    let is_local_file =
-        scheme.eq_ignore_ascii_case("file") && user_info.is_none() && host_port.is_empty();
-    if !is_local_file && !is_host_port(host_port) {
+    // An `@` after an authority without user-info means a credential held an
+    // unescaped `/`, `?` or `#` and what was parsed as the host is part of it.
+    if (user_info.is_none() && remainder.contains('@')) || !is_host_port(host_port) {
         return None;
     }
+    let path = remainder
+        .find(['?', '#'])
+        .map_or(remainder, |end| &remainder[..end]);
 
     let user = if scheme.eq_ignore_ascii_case("ssh") {
         user_info.map(|user_info| {
@@ -387,40 +363,62 @@ fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
     }
 }
 
-/// Accepts `host`, `host:port` and `[address]:port` with a numeric port, so a
-/// password cut short by an unescaped `/` is not mistaken for a host.
+/// Accepts `host`, `host:port` and `[address]:port`, with a host of ASCII
+/// letters, digits, `.`, `_` and `-` and a numeric port, so that part of a
+/// credential is not mistaken for a host.
 fn is_host_port(host_port: &str) -> bool {
-    let (host, port) = if let Some(bracketed) = host_port.strip_prefix('[') {
+    let (host, port, is_address) = if let Some(bracketed) = host_port.strip_prefix('[') {
         match bracketed.split_once(']') {
-            Some((address, "")) => (address, None),
+            Some((address, "")) => (address, None, true),
             Some((address, after)) => match after.strip_prefix(':') {
-                Some(port) => (address, Some(port)),
+                Some(port) => (address, Some(port), true),
                 None => return false,
             },
             None => return false,
         }
     } else {
         match host_port.split_once(':') {
-            Some((host, port)) => (host, Some(port)),
-            None => (host_port, None),
+            Some((host, port)) => (host, Some(port), false),
+            None => (host_port, None, false),
         }
     };
-    !host.is_empty() && port.is_none_or(|port| port.bytes().all(|byte| byte.is_ascii_digit()))
+    let is_host_byte = |byte: u8| {
+        if is_address {
+            byte.is_ascii_hexdigit() || b":.".contains(&byte)
+        } else {
+            byte.is_ascii_alphanumeric() || b"._-".contains(&byte)
+        }
+    };
+    !host.is_empty()
+        && host.bytes().all(is_host_byte)
+        && port.is_none_or(|port| port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-/// Recognizes `user:password@host:path`, which is not a valid scp-like
-/// remote but is what a mistyped credential looks like.
-fn has_scp_like_password(url: &str) -> bool {
-    let Some((host, path)) = url.split_once(':') else {
-        return false;
+/// Recognizes a credential in a location that has no `scheme://`: a URL
+/// that lost its scheme or a slash, such as `//user:password@host/path` or
+/// `https:/user:password@host/path`, and `user:password@host:path`, which
+/// is not a valid scp-like remote.
+fn has_schemeless_credential(url: &str) -> bool {
+    let after = if url.starts_with("//") {
+        url
+    } else {
+        let Some((before, after)) = url.split_once(':') else {
+            return false;
+        };
+        // A separator before the colon is a local path, and so is a drive
+        // letter followed by one.
+        let is_drive = before.len() == 1
+            && before.bytes().all(|byte| byte.is_ascii_alphabetic())
+            && after.starts_with(['/', '\\']);
+        if is_drive || before.contains(['/', '\\']) {
+            return false;
+        }
+        after
     };
-    // A slash before the colon is a local path; one letter is a Windows drive.
-    if host.len() <= 1 || host.contains(['/', '\\', '@']) {
-        return false;
-    }
-    path.split('/')
-        .next()
-        .is_some_and(|first| first.contains('@'))
+    after
+        .split(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .is_some_and(|segment| segment.contains('@'))
 }
 
 /// RFC 3339 in UTC with second precision, or `None` for an instant RFC 3339
@@ -441,8 +439,8 @@ pub fn object_id_string(oid: git2::Oid) -> String {
 /// A repository-relative path with forward slashes on every platform.
 ///
 /// `None` when the path is not valid UTF-8, which is never lossily
-/// converted, or when it is not relative to the repository: absolute, or
-/// reaching outside through `..`.
+/// converted, or when it does not name something inside the repository:
+/// empty, absolute, or reaching outside through `..`.
 pub fn relative_path_string(path: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -452,7 +450,7 @@ pub fn relative_path_string(path: &Path) -> Option<String> {
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
         }
     }
-    Some(parts.join("/"))
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// An absolute path as the platform reports it, or `None` when it is not

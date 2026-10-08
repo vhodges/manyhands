@@ -72,6 +72,31 @@ fn result_codes_match_the_design_table_exactly() {
 }
 
 #[test]
+fn result_code_messages_are_fixed() {
+    let expected = [
+        "The request completed.",
+        "That path cannot be used as a target.",
+        "No Git repository exists at that path.",
+        "That path is inside a repository but is not its root or a linked worktree root.",
+        "The repository has no working tree.",
+        "The repository is not enabled in Manyhands.",
+        "The registered repository root cannot be read.",
+        "That ID is not a canonical ULID.",
+        "No item has that ID.",
+        "No canonical resource exists at that path.",
+        "No key registration has that ID.",
+        "The key registration has no readable public key.",
+        "No host pin exists for that authority.",
+        "No operation has that ID.",
+        "The index is degraded and must be rebuilt.",
+        "The repository is busy; try again.",
+        "An internal error occurred.",
+    ];
+    let actual: Vec<_> = ResultCode::ALL.iter().map(|code| code.message()).collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn result_codes_have_unique_snake_case_strings_and_fixed_messages() {
     let mut strings = BTreeSet::new();
     let mut messages = BTreeSet::new();
@@ -280,6 +305,9 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
     );
 
     for code in ResultCode::ALL {
+        if code == ResultCode::Ok {
+            continue;
+        }
         let envelope = Envelope::<Value>::failure("item show", Scope::default(), code, Vec::new());
         assert_eq!(envelope.outcome, code.outcome());
         assert_eq!(envelope.message, code.message());
@@ -287,6 +315,13 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
         assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
         assert_eq!(value["data"], Value::Null);
     }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a failure cannot carry the ok code")]
+fn failure_rejects_the_ok_code() {
+    let _ = Envelope::<Value>::failure("item show", Scope::default(), ResultCode::Ok, Vec::new());
 }
 
 #[test]
@@ -343,6 +378,23 @@ fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
             "ftp://example.com/repo",
         ),
         ("file:///srv/git/repo.git", "file:///srv/git/repo.git"),
+        // A file URL is a local location, so its `#` and `?` are path text.
+        ("file:///srv/repo#1", "file:///srv/repo#1"),
+        ("file:///srv/a@b/repo?x", "file:///srv/a@b/repo?x"),
+        ("ssh://git@host:22/p", "ssh://git@host:22/p"),
+        (
+            "ssh://git@example.com/team/repo@v2",
+            "ssh://git@example.com/team/repo@v2",
+        ),
+        ("git@host:path", "git@host:path"),
+        (
+            "git@example.com:team/repo@v2",
+            "git@example.com:team/repo@v2",
+        ),
+        (r"C:\path", r"C:\path"),
+        ("C:/path", "C:/path"),
+        ("//server/share/repo", "//server/share/repo"),
+        ("relative/dir:with/colon@x", "relative/dir:with/colon@x"),
         // The scp-like form is kept as written.
         (
             "git@example.com:team/repo.git",
@@ -371,6 +423,25 @@ fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
         ("https://[::1/repo", REDACTED),
         ("ssh://:hunter2@example.com/repo", REDACTED),
         ("alice:hunter2@example.com:team/repo.git", REDACTED),
+        // No user-info was found, yet an `@` follows: the authority was cut
+        // short by a character a credential should have escaped.
+        ("https://hunter2/more@example.com/repo", REDACTED),
+        ("https://alice:123/x@example.com/repo", REDACTED),
+        ("https://alice:12345#abc@example.com/repo", REDACTED),
+        ("https://alice:12345?abc@example.com/repo", REDACTED),
+        ("https://exa$mple.com/repo", REDACTED),
+        ("https://[not-an-address]/repo", REDACTED),
+        // A file URL with an authority is treated as a network URL.
+        (
+            "file://alice:hunter2@example.com/repo",
+            "file://example.com/repo",
+        ),
+        // Scheme-less forms that still carry a credential.
+        ("a:hunter2@example.com:repo", REDACTED),
+        ("c:hunter2@host/repo", REDACTED),
+        ("https:/alice:hunter2@example.com/repo", REDACTED),
+        ("//alice:hunter2@example.com/repo", REDACTED),
+        ("alice@corp.com:hunter2@example.com:repo", REDACTED),
     ];
     for (input, expected) in cases {
         assert_eq!(redact_url(input), expected, "{input}");
@@ -390,6 +461,17 @@ fn redact_url_never_returns_the_secret() {
         "https://alice:hunter2@example.com:hunter2/repo.git",
         "weird+scheme://alice:hunter2@example.com/repo.git",
         "alice:hunter2@example.com:team/repo.git",
+        "https://hunter2/more@example.com/repo",
+        "https://alice:123/hunter2@example.com/repo",
+        "https://alice:12345#hunter2@example.com/repo",
+        "https://hunter2:12345#abc@example.com/repo",
+        "https://alice:hunter2?abc@example.com/repo",
+        "file://alice:hunter2@example.com/repo",
+        "a:hunter2@example.com:repo",
+        "c:hunter2@host/repo",
+        "https:/alice:hunter2@example.com/repo",
+        "//alice:hunter2@example.com/repo",
+        "alice@corp.com:hunter2@example.com:repo",
     ];
     for input in inputs {
         let redacted = redact_url(input);
@@ -454,7 +536,11 @@ fn relative_paths_serialize_with_forward_slashes() {
         relative_path_string(Path::new("one.md")).as_deref(),
         Some("one.md")
     );
-    assert_eq!(relative_path_string(Path::new("")).as_deref(), Some(""));
+
+    // An empty relative path names nothing.
+    assert_eq!(relative_path_string(Path::new("")), None);
+    assert_eq!(relative_path_string(Path::new(".")), None);
+    assert_eq!(relative_path_string(Path::new("./")), None);
 
     // Not repository-relative: there is no honest string for these.
     assert_eq!(relative_path_string(Path::new("../outside.md")), None);
