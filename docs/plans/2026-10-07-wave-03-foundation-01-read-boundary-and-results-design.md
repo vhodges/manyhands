@@ -412,11 +412,17 @@ length-prefixed. It is opaque to callers.
 pub fn list_comments(&self, repo: &ResolvedRepository, item: &ItemId) -> Result<CommentListDto, ReadError>;
 ```
 
-The read takes the item's effective context, reads the files under
-`.manyhands/comments/<item>/`, parses each, and orders them with the existing
-`canonical::ordered_comment_threads`. `CommentDto` is `id`, `item_id`,
-`parent_id`, `author`, `created_at`, `body`, `path`, `problems` and
-`replies`.
+The read takes the item's effective context, reads the comment files the
+index names under `.manyhands/comments/<item>/` (its comment rows and its
+stored problems there), parses each, and orders them with the existing
+`canonical::ordered_comment_threads`. It does not list the directory: by
+product-owner decision of 2026-10-08, reads list what the index holds and the
+indexer is what picks up new files, so a comment added since the last refresh
+appears after the next one. Problems that only a whole-context validation can
+find (a duplicate ID, a parent in another item) are taken from what the
+refresh stored. `CommentDto` is `id`, `item_id`, `parent_id`, `author`,
+`created_at`, `body`, `path`, `unknown_metadata`, `problems` and `replies`.
+`CommentListDto` adds `complete`, `context` and `index`, once for the list.
 
 `author` is the comment's `created_by` front-matter value when present, and
 null otherwise. Under Cycle decision 4 that field joins the comment schema and

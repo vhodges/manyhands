@@ -96,13 +96,14 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 4: complete; review accepted with fixes, range `9fbe74d..a04acb3`.
 - Task 5: complete; two independent reviews accepted with fixes, range
   `dffa110..bcbe2e6`; full gate passed at `bcbe2e6`.
-- Tasks 6–10: pending.
+- Task 6: complete; review accepted with fixes, range `a65fb40..540a2a1`.
+- Tasks 7–10: pending.
 
 ## Resume here — 2026-10-08
 
-Task 5 is complete at `bcbe2e6` and the full gate passed there. Next: Task 6
-(comment reads, `read/comments.rs`, using `created_by`, no Git history walk),
-by a fresh implementer, then an independent review.
+Tasks 5 and 6 are complete. The full gate last passed at `bcbe2e6` (Task 5);
+Task 6 has focused runs only. Next: Task 7 (status and operation reads,
+`read/status.rs`), by a fresh implementer, then an independent review.
 
 All cargo runs are local through Devenv. A same-day trial of running cargo on
 remote sprites was abandoned by the product owner: both sprites lost their
@@ -181,6 +182,57 @@ Accepted limits:
   of waiting.
 - The tests added with the two rounds of review fixes were written with their
   fixes and have only been run passing.
+
+## Task 6 rulings — 2026-10-08
+
+- **Product-owner decision: reads list what the index holds.** The front ends
+  list what is in the index (file contents aside) and the indexer is what
+  picks up new files; a short delay is acceptable. So `list_comments` reads
+  the comment files the index names and does not list the directory, and a
+  comment added since the last refresh is not listed, and not reported, until
+  the next one. The design's comment paragraph is amended to say so. Item
+  lists already behave this way. A reviewer's suggestion to flag `stale` from
+  the comment directory's modification time was declined on this basis.
+- **File set.** The `discovered_comments` rows of the chosen item row, plus
+  stored problem rows in the same context whose path is a plain file directly
+  inside `.manyhands/comments/<item>/`. A comment row with any other path is
+  `internal_error`.
+- **What is revalidated.** The item file and those comment files, together.
+  Problems only a whole-context validation finds (`duplicate_id`,
+  `cross_item_parent`) are taken from the stored problem rows while the file
+  is not newer than `refreshed_at`. Such a stored finding can be outdated by a
+  change to another item's file until the next refresh.
+- **Nonconforming entry:** null `id`, `parent_id`, `author`, `created_at` and
+  `body`; `item_id` is the item it is filed under; `path` and problem codes
+  set. Comments that parse but are `missing_parent`, `cross_item_parent`,
+  `comment_cycle`, `duplicate_id` or `missing_comment_item` are entries of
+  this kind. No read returns a malformed comment's source; `show_path` refuses
+  comment paths.
+- **`author`** is read from the file's `created_by` each time; there is no
+  index column. An invalid value (not a string, empty, or containing NUL)
+  gives a null author and an `invalid_field` problem; the comment keeps its
+  ID and the key is not left in `unknown_metadata`.
+- **`CommentDto.unknown_metadata`** exists, as for items. `context`, `index`
+  and `complete` are on the list, once.
+- **Failures.** An indexed comment that cannot be opened fails the list as
+  `repository_inaccessible`. A path the index holds only as an unreadable
+  source, and that still cannot be opened, is a `source_unreadable` entry. A
+  link, non-regular file or non-UTF-8 file is a `source_unreadable` entry. A
+  file that is gone is left out and the index is `stale`.
+- **`complete`** is false when the index holds a source problem exactly at the
+  item's comment directory or at `.manyhands/comments`.
+- **`stale`** when any comment file or the item file is newer than
+  `refreshed_at`, an indexed path is missing, a problem path is no longer a
+  file, the valid comments differ from the stored rows, or the item is held in
+  more than one row.
+- **The item file takes part.** If it no longer parses, every comment is
+  `missing_comment_item` and the index is `stale`; if it now holds another ID
+  the read is `item_not_found`.
+- `tests/read_comments.rs` is a new test target for the Task 10 workflow list.
+
+Accepted limits: thread depth recurses, bounded only by the refresh's
+1,024-entry cap on a comment directory; comment files are read whole under the
+shared lock; `complete: false` is tested only for the symbolic-link causes.
 
 ## Decisions and rulings
 
@@ -495,3 +547,33 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
   in stages; the first read tests failed only against a skeleton and were then
   checked by eight mutations; four test groups were not mutation-checked; the
   review-fix tests were only run passing.
+
+### Task 6 — comment reads, range `a65fb40..540a2a1`
+
+- `958d7ea` implementation, with `effective_copy` extracted from `show_item`
+  so both reads choose the same copy; `5b617dc` tests, golden, contract and
+  boundary additions; `540a2a1` review fixes.
+- No index, migration or write-path change.
+- Independent review of `a65fb40..5b617dc`: accept with fixes, no blocker. One
+  major finding (context-wide problems not reproduced, so a duplicate comment
+  came back conforming and the index read `stale` indefinitely) and five minor
+  ones. It found no way to read outside the item's comment directory and
+  judged the `effective_copy` extraction behavior-identical. All addressed in
+  `540a2a1` except the directory-time `stale` signal, declined by the
+  product-owner decision above.
+- `540a2a1` was not independently re-reviewed.
+- Controller rerun at `540a2a1`, through Devenv on Linux: `read_comments` 19,
+  `read_contract` 37, `read_boundary` 15, `read_items` 48,
+  `discovery_rebuild` 67 passed, 0 failed; `cargo fmt --check` exit 0; no
+  `unsafe` under `src/repository/read/`. The library tests ran in the same
+  pass but the controller did not capture their result line.
+- Implementer at `540a2a1`: `cargo test --locked --lib` 224 passed; clippy
+  with warnings denied over all targets and features exit 0; `read_comments`
+  with `--nocapture` printed no `SKIPPED` line. At `5b617dc`:
+  `local_authoring` 112 passed and `cargo check --all-features --locked`
+  exit 0.
+- Not run for this task: the full suite.
+- Test-first, as reported: the 13 first tests failed against a skeleton; six
+  mutations were tried, five caught and one fixed with a new assertion; five
+  review-fix tests were seen failing against the old code; three were only
+  run passing.
