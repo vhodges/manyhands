@@ -50,6 +50,13 @@ https://github.com/vhodges/manyhands/actions/runs/37837512832
 This is the current run to inspect. Native FileRenameInfoEx behavior and APFS
 authoring cases remain pending until actual results; Task 4 stays unaccepted.
 
+Run 4 verifies Windows native rename primitives and most resolution cases,
+with both Linux jobs green. Remaining hook identity/own-authoring and Mac
+foundation fixes are independently reviewed and fully locally verified.
+Published current source 7b897cf; fifth native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37846555078
+Inspect this current exact-source gate before Task 4 acceptance or Task 5.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.

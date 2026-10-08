@@ -1364,3 +1364,48 @@ CLI and one complete long-budget all-feature run pass (766 unit/integration test
 must confirm the remaining callbacks and authoring/foundation cases; Task 4 is
 not yet accepted. The log did not print both Windows hook keys, so root spelling
 cause is source/regression evidence, not a claim of a logged native key-pair dump.
+
+Published that reviewed fix as 7b897cf7fc2e9784ca8addf8e3646b36c2f33970 through
+normal push; fifth complete native matrix is manually dispatched:
+https://github.com/vhodges/manyhands/actions/runs/37846555078
+This is the current exact-source gate. Task 4 remains unaccepted while pending.
+
+### Native run 5: core cases pass; remaining fixture observations reconciled — 2026-10-08
+
+Run 37846555078 fully passed both Linux jobs. Original Windows callback and
+post-resolution authoring failures are resolved; two newly added metadata fixtures
+failed before exercising the production guard, and Windows x86 also hit a pin-
+approval loser expectation. macOS progressed through authoring/foundation and
+stopped at the SSH noncolliding control's receiver-ledger equality (observation
+2011). Logs: /tmp/opencode/cycle06-native-37846555078-failures.log.
+
+Worker `ses_ee281dd1bffe0lqErPRgT3X7QO` confirmed pinned libgit2 worktree metadata
+parsing scans '/' while fixture display paths used backslashes. Test-only Git
+path encoding preserves Windows drive/UNC roots and Unix literal backslashes;
+positive physical/noncanonical attestations and four negative parser-location/
+exact-error/Git-preservation checks remain. Production guard is unchanged.
+
+Read-only diagnosis then writer `ses_ee281dd0affeiwyy7VDDSitMTH` proved receiver
+publication occurs after successful fixture push return. A gated authentic fixture
+reproduced the failing early ledger baseline with no actual synchronization write.
+Successful changing setup/peer pushes now wait for exact accepted post-cursor
+receipts (ref, old/new OIDs) before returning. Condvar/gate cases cover delayed and
+duplicate publication, no-op and rejection, retaining unchanged-ledger/ref/index/
+ignored-byte assertions and privacy-harness isolation. No arbitrary sleep was added.
+
+The Windows approval failure was zero HostTrustChanged losers, not zero winners.
+Forced 400ms fsync reproduced legitimate bounded cache-lease RegistryUnavailable
+before CAS. Tests still require exactly one original success; after both joins,
+unchanged original winner intent succeeds idempotently and loser returns exact
+HostTrustChanged, with one surviving winning pin across reopen. Held-guard coverage
+proves refusal/release reconciliation; production trust/deadlines are unchanged.
+
+Quality reviewer `ses_ee2564b63ffeFBrNrsu54zLVO2` found a controller failure could
+detach the worker owning the SSH fixture. Scoped threads now cancel the hold before
+joining on error/unwind and release before success join; two authentic teardown
+controls failed before and pass after, proving fixture roots removed before return.
+Spec `ses_ee258ebf5ffeB1B5R336jKaToz` and quality re-review approve the full bounded
+five-file test/helper diff. Before cleanup-only amendment, complete Devenv full
+verification passed 970 tests/cases including 194 SSH; final amended synchronization
+47 SSH cases and required static checks pass. No unaffected broad rerun or production
+workaround. Exact next native matrix must confirm these corrections; Task 4 pending.

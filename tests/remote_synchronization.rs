@@ -67,6 +67,26 @@ const CASES: &[ssh_harness::Case] = &[
     ("ignored_context_noncolliding_control", || {
         ignored_noncolliding(true)
     }),
+    ("fixture_push_waits_for_receiver_receipt", || {
+        fixture_push_waits_for_receiver_receipt(false)
+    }),
+    ("fixture_push_waits_for_duplicate_receiver_receipt", || {
+        fixture_push_waits_for_receiver_receipt(true)
+    }),
+    ("fixture_receiver_controller_timeout_joins_worker", || {
+        fixture_receiver_controller_cleanup(false)
+    }),
+    ("fixture_receiver_controller_unwind_joins_worker", || {
+        fixture_receiver_controller_cleanup(true)
+    }),
+    (
+        "fixture_noop_push_needs_no_receiver_update",
+        fixture_noop_push,
+    ),
+    (
+        "fixture_rejected_push_is_not_a_success_receipt",
+        fixture_rejected_push,
+    ),
     (
         "synchronization_raw_capture_privacy",
         synchronization_raw_capture_privacy,
@@ -221,10 +241,36 @@ fn push_peer(
     fixture: &SshRemoteFixture,
     reference: &str,
 ) -> Result<(), FixtureError> {
+    // Snapshot the receiver and cursor before sending, not after report-status.
+    // This helper supports one ordinary ref update, never a forced/multi-ref push.
+    let before = fixture.receive_updates().len();
+    let receiver = fixed(git2::Repository::open_bare(fixture.repository_path()))?;
+    let old = match receiver.refname_to_id(reference) {
+        Ok(oid) => oid,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => git2::Oid::zero(),
+        Err(_) => return Err(FixtureError),
+    };
+    let new = fixed(repo.refname_to_id(reference))?;
+    if old == new {
+        // The owned receiver already has this OID. libgit2 can still send an
+        // old==new command, whose audit is not an accepted ref update. Avoid
+        // creating that late no-op record or waiting for nonexistent success.
+        return Ok(());
+    }
     let mut remote = fixed(repo.remote_anonymous(&fixture.url()))?;
     let mut options = git2::PushOptions::new();
     options.remote_callbacks(callbacks(fixture));
-    fixed(remote.push(&[&format!("{reference}:{reference}")], Some(&mut options)))
+    fixed(remote.push(&[&format!("{reference}:{reference}")], Some(&mut options)))?;
+    fixture.fixture_push_transport_returned()?;
+    fixture.wait_for_receive_update(
+        before,
+        &ReceiveUpdate {
+            reference: reference.into(),
+            old_oid: old,
+            new_oid: new,
+            accepted: true,
+        },
+    )
 }
 fn commit(
     repo: &git2::Repository,
@@ -2009,5 +2055,179 @@ fn ignored_noncolliding(context: bool) -> Result<(), FixtureError> {
     );
     assert!(fixed(std::fs::read(workdir.join("safety-control")))? == BODY.as_bytes());
     assert_eq!(w.server.receive_updates(), updates);
+    Ok(())
+}
+
+fn fixture_push_waits_for_receiver_receipt(duplicate: bool) -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let reference = "refs/heads/main";
+    persistent_ignore(&repo)?;
+    fixed(std::fs::write(
+        w.root.join("safety-control"),
+        BODY.as_bytes(),
+    ))?;
+    let before = w.server.receive_updates();
+    let old = if duplicate {
+        // Re-send the same old/new pair as the setup push. Its earlier receipt
+        // must not satisfy the new push's wait.
+        let old = w.server.commit_id();
+        fixed(
+            w.bare()?
+                .reference(reference, old, true, "owned duplicate receipt"),
+        )?;
+        old
+    } else {
+        fixed(repo.refname_to_id(reference))?
+    };
+    let (w, next) = fixture_push_with_audit_controller(w, old, duplicate, || Ok(()))?;
+    let updates = w.server.receive_updates();
+    assert!(updates.len() == before.len() + 1, "exactly one new receipt");
+    assert!(
+        updates.last()
+            == Some(&ReceiveUpdate {
+                reference: reference.into(),
+                old_oid: old,
+                new_oid: next,
+                accepted: true,
+            }),
+        "exact accepted receiver receipt"
+    );
+    outcome(
+        fixed(w.sync(w.primary()))?,
+        false,
+        SynchronizationTarget::Primary,
+        next,
+    );
+    assert_eq!(fixed(repo.refname_to_id(reference))?, next);
+    assert_eq!(
+        fixed(fixed(repo.index())?.write_tree())?,
+        fixed(repo.find_commit(next))?.tree_id()
+    );
+    assert!(fixed(std::fs::read(w.root.join("safety-control")))? == BODY.as_bytes());
+    assert_eq!(w.server.receive_updates(), updates);
+    Ok(())
+}
+
+fn fixture_push_with_audit_controller(
+    w: World,
+    old: git2::Oid,
+    duplicate: bool,
+    after_held: impl FnOnce() -> Result<(), FixtureError>,
+) -> Result<(World, git2::Oid), FixtureError> {
+    use std::{sync::mpsc, time::Duration};
+    let reference = "refs/heads/main";
+    let (events, progress) = mpsc::channel();
+    std::thread::scope(|scope| {
+        // Keep the hold inside the scope closure: every error and unwind drops it
+        // before scope auto-joins the worker. A cancelled controller must not detach
+        // the World owner or join while its receipt publication is still held.
+        let hold = w.server.hold_receive_audit(events.clone())?;
+        let worker = scope.spawn(move || {
+            let result = if duplicate {
+                push_peer(&w.peer, &w.server, reference)
+                    .and_then(|()| fixed(w.peer.refname_to_id(reference)))
+            } else {
+                incoming_owned_paths(&w, old, reference, false)
+            };
+            let _ = events.send(ReceiveAuditEvent::HelperReturned);
+            (w, result)
+        });
+        let mut held = false;
+        let mut transport_returned = false;
+        let mut receipt_waiting = false;
+        while !(held && transport_returned && receipt_waiting) {
+            match fixed(progress.recv_timeout(Duration::from_secs(10)))? {
+                ReceiveAuditEvent::PublicationHeld => held = true,
+                ReceiveAuditEvent::TransportReturned => transport_returned = true,
+                ReceiveAuditEvent::ReceiptWaiting => receipt_waiting = true,
+                ReceiveAuditEvent::HelperReturned => {
+                    panic!("fixture push returned before receiver receipt publication")
+                }
+            }
+        }
+        // No timing sleep: the real report-status returned, the ref effect is proven,
+        // and the helper acknowledged waiting for evidence still held by this gate.
+        after_held()?;
+        hold.release()?;
+        let (w, next) = fixed(worker.join())?;
+        Ok((w, next?))
+    })
+}
+
+fn fixture_receiver_controller_cleanup(unwind: bool) -> Result<(), FixtureError> {
+    use std::{panic::AssertUnwindSafe, sync::mpsc, time::Duration};
+    let w = World::new()?;
+    let old = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let roots = [
+        w.directory.path().to_path_buf(),
+        w.server.root().to_path_buf(),
+    ];
+    let reached = std::sync::atomic::AtomicBool::new(false);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        fixture_push_with_audit_controller(w, old, false, || {
+            reached.store(true, Ordering::SeqCst);
+            if unwind {
+                panic!("forced receiver audit controller unwind");
+            }
+            // A live sender with no message makes this controller timeout exact;
+            // it does not change the transport or receipt-wait deadlines.
+            let (_sender, receiver) = mpsc::channel::<()>();
+            fixed(receiver.recv_timeout(Duration::ZERO))
+        })
+    }));
+    assert!(reached.load(Ordering::SeqCst), "publication gate reached");
+    assert!(
+        if unwind {
+            result.is_err()
+        } else {
+            matches!(result, Ok(Err(FixtureError)))
+        },
+        "forced controller failure observed"
+    );
+    assert!(
+        roots.iter().all(|root| !root.exists()),
+        "worker joined and fixture teardown finished before controller exit"
+    );
+    Ok(())
+}
+
+fn fixture_noop_push() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let before = w.server.receive_updates();
+    let oid = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    outcome(
+        fixed(w.sync(w.primary()))?,
+        false,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    assert_eq!(w.server.receive_updates(), before);
+    Ok(())
+}
+
+fn fixture_rejected_push() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let reference = "refs/heads/main";
+    let before = w.server.receive_updates().len();
+    let old = fixed(w.bare()?.refname_to_id(reference))?;
+    let new = advance(&w.peer, reference, "owned-rejected-update")?;
+    w.server.reject_primary_updates(true)?;
+    assert!(
+        push_peer(&w.peer, &w.server, reference).is_err(),
+        "receiver rejection is not helper success"
+    );
+    w.server.wait_for_receive_update(
+        before,
+        &ReceiveUpdate {
+            reference: reference.into(),
+            old_oid: old,
+            new_oid: new,
+            accepted: false,
+        },
+    )?;
+    assert_eq!(fixed(w.bare()?.refname_to_id(reference))?, old);
+    assert!(w.server.receive_updates().len() == before + 1);
     Ok(())
 }
