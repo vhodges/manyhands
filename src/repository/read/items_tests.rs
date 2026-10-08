@@ -187,7 +187,15 @@ fn a_plain_relative_path_has_only_normal_components_outside_the_worktrees() {
 #[test]
 fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
     let sentinel = "SENTINEL-2b6f";
-    let parse = |bytes: &[u8]| parse_file(bytes.to_vec(), "docs/a.md", &context("/r"), &index());
+    let parse = |bytes: &[u8]| {
+        parse_file(
+            bytes.to_vec(),
+            "docs/a.md",
+            &context("/r"),
+            &index(),
+            &Targets::of(&[]),
+        )
+    };
 
     let ParsedFile::Nonconforming { code, source } = parse(&[0xff, 0xfe]) else {
         panic!("bytes that are not UTF-8 are not an item");
@@ -223,6 +231,7 @@ fn nonconforming_entries_need_a_conformity_code_at_an_item_path_with_no_item() {
         closed_at: None,
         closed_by: None,
         unknown: UnknownMetadata::default(),
+        relationships: Relationships::default(),
         activity_at: 0,
         change_source: ChangeSource::GitCommit,
     };
@@ -314,6 +323,7 @@ fn ticket_filters_compare_whole_values_and_closure_reads_only_closed_at() {
         closed_at,
         closed_by: None,
         unknown: UnknownMetadata::default(),
+        relationships: Relationships::default(),
         activity_at: 0,
         change_source: ChangeSource::GitCommit,
     };
@@ -344,4 +354,151 @@ fn ticket_filters_compare_whole_values_and_closure_reads_only_closed_at() {
         };
         assert_eq!(filter.matches(&is_closed), matches, "{status:?}");
     }
+}
+
+const SELF: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA0";
+const OPEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA1";
+const CLOSED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA2";
+const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA3";
+const ABSENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA4";
+
+fn stored(id: &str, kind: ItemDtoKind, closed_at: Option<i64>) -> StoredItem {
+    StoredItem {
+        row_id: 0,
+        context: context("/r"),
+        id: id.to_owned(),
+        kind,
+        path: "p".to_owned(),
+        title: "T".to_owned(),
+        ticket_type: None,
+        status: None,
+        project: None,
+        team: None,
+        closed_at,
+        closed_by: None,
+        unknown: UnknownMetadata::default(),
+        relationships: Relationships::default(),
+        activity_at: 0,
+        change_source: ChangeSource::GitCommit,
+    }
+}
+
+#[test]
+fn a_dependency_says_what_its_target_is_and_a_document_is_not_one() {
+    let rows = [
+        // A status that says closed closes nothing.
+        StoredItem {
+            status: Some("closed".to_owned()),
+            ..stored(OPEN, ItemDtoKind::Ticket, None)
+        },
+        stored(CLOSED, ItemDtoKind::Ticket, Some(1)),
+        stored(DOCUMENT, ItemDtoKind::Document, None),
+    ];
+    let targets = Targets::of(&rows.iter().collect::<Vec<_>>());
+    let ticket = StoredItem {
+        relationships: Relationships {
+            slug: Some("mh-vh-k9x2b".to_owned()),
+            parent: Some(ABSENT.to_owned()),
+            deps: [ABSENT, DOCUMENT, CLOSED, OPEN].map(str::to_owned).to_vec(),
+            problems: vec![
+                ProblemCode::RelationshipWrongType,
+                ProblemCode::InvalidSlug,
+                ProblemCode::RelationshipWrongType,
+            ],
+        },
+        unknown: UnknownMetadata {
+            not_representable: true,
+            ..Default::default()
+        },
+        ..stored(SELF, ItemDtoKind::Ticket, None)
+    };
+
+    let dto = stored_item_dto(&ticket, &targets, &index());
+
+    assert_eq!(dto.slug.as_deref(), Some("mh-vh-k9x2b"));
+    // A parent no context holds is still the parent.
+    assert_eq!(dto.parent.as_deref(), Some(ABSENT));
+    // In the file's order, without the document.
+    assert_eq!(
+        dto.deps,
+        [
+            (ABSENT, DependencyState::Unresolved),
+            (CLOSED, DependencyState::Closed),
+            (OPEN, DependencyState::Open),
+        ]
+        .map(|(id, state)| DependencyDto {
+            id: id.to_owned(),
+            state
+        })
+    );
+    assert_eq!(dto.readiness, None);
+    // The item's own problems first, each relationship problem once.
+    assert_eq!(
+        dto.problems,
+        [
+            ProblemCode::MetadataNotRepresentable,
+            ProblemCode::RelationshipWrongType,
+            ProblemCode::InvalidSlug,
+            ProblemCode::RelationshipNotATicket,
+        ]
+        .map(|code| problem(code, "p"))
+    );
+
+    let child_of_a_document = StoredItem {
+        relationships: Relationships {
+            parent: Some(DOCUMENT.to_owned()),
+            ..Default::default()
+        },
+        ..stored(SELF, ItemDtoKind::Ticket, None)
+    };
+    let dto = stored_item_dto(&child_of_a_document, &targets, &index());
+    assert_eq!(dto.parent, None);
+    assert_eq!(
+        dto.problems,
+        [problem(ProblemCode::RelationshipNotATicket, "p")]
+    );
+}
+
+#[test]
+fn the_slug_filter_matches_the_whole_short_code_without_regard_to_case() {
+    let with_slug = StoredItem {
+        relationships: Relationships {
+            slug: Some("mh-vh-k9x2b".to_owned()),
+            ..Default::default()
+        },
+        ..stored(SELF, ItemDtoKind::Ticket, None)
+    };
+    let without = stored(OPEN, ItemDtoKind::Ticket, None);
+    let by_slug = |slug: &str| TicketFilter {
+        slug: Some(slug.to_owned()),
+        ..Default::default()
+    };
+
+    for (slug, matches) in [
+        ("mh-vh-k9x2b", true),
+        ("MH-VH-K9X2B", true),
+        ("Mh-vH-k9X2b", true),
+        ("vh-k9x2b", false),
+        ("mh-vh-k9x2", false),
+        ("k9x2b", false),
+        ("", false),
+    ] {
+        assert_eq!(by_slug(slug).matches(&with_slug), matches, "{slug:?}");
+        assert!(!by_slug(slug).matches(&without), "{slug:?}");
+    }
+    assert!(TicketFilter::default().matches(&without));
+}
+
+#[test]
+fn each_relationship_problem_is_stored_under_its_registry_string() {
+    let codes = canonical::RelationshipProblemCode::ALL.map(|code| {
+        let registered = ProblemCode::from(code);
+        assert_eq!(
+            registered.stored(),
+            Some(crate::repository::relationship_problem_code_name(code)),
+            "{code:?}"
+        );
+        registered
+    });
+    assert_eq!(codes, RELATIONSHIP_PROBLEMS);
 }

@@ -348,13 +348,23 @@ pub struct ItemDto {
     pub team: Option<String>,
     /// Null for a document and for a nonconforming entry.
     pub closure: Option<ClosureDto>,
+    /// A ticket's short code, in lowercase. Null when it has none, and when
+    /// its `slug` is not one, which `problems` reports. It is a label to
+    /// search by and never identifies a ticket.
     pub slug: Option<String>,
+    /// The ID of a ticket's parent, whether or not any context holds that
+    /// ticket. Null when it has none, and when its `parent` was ignored:
+    /// `problems` says why.
     pub parent: Option<String>,
+    /// A ticket's dependencies in its file's order, each once. An entry
+    /// that was ignored is not here, and `problems` says why.
     pub deps: Vec<DependencyDto>,
+    /// Null: readiness is not computed yet.
     pub readiness: Option<ReadinessDto>,
     /// Front matter keys Manyhands does not define, in key order at every
-    /// depth. A value JSON cannot express is null and is reported in
-    /// `problems` as `metadata_not_representable`.
+    /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
+    /// are not here. A value JSON cannot express is null and is reported
+    /// in `problems` as `metadata_not_representable`.
     pub unknown_metadata: serde_json::Map<String, serde_json::Value>,
     pub body: Option<String>,
     /// The file as it is on disk. Null when it is not valid UTF-8.
@@ -384,6 +394,9 @@ pub struct ClosureDto {
     pub closed_by: Option<String>,
 }
 
+/// `state` is what `id` names among the items the index holds when it is
+/// read: an open ticket, a closed one, or nothing in any context it has
+/// seen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DependencyDto {
     pub id: String,

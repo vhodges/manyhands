@@ -389,6 +389,18 @@ impl From<&canonical::ValidationCode> for ProblemCode {
     }
 }
 
+impl From<canonical::RelationshipProblemCode> for ProblemCode {
+    fn from(code: canonical::RelationshipProblemCode) -> Self {
+        match code {
+            canonical::RelationshipProblemCode::WrongType => Self::RelationshipWrongType,
+            canonical::RelationshipProblemCode::InvalidId => Self::RelationshipInvalidId,
+            canonical::RelationshipProblemCode::SelfReference => Self::RelationshipSelfReference,
+            canonical::RelationshipProblemCode::DuplicateDependency => Self::DuplicateDependency,
+            canonical::RelationshipProblemCode::InvalidSlug => Self::InvalidSlug,
+        }
+    }
+}
+
 impl RepositoryService {
     /// Runs `read` against the index without being able to change it.
     ///

@@ -462,8 +462,8 @@ fn all_tickets(
         .unwrap()
 }
 
-/// What every list entry leaves out, and what no entry has before the
-/// relationship fields are read.
+/// What every list entry leaves out, and what an item whose file has no
+/// relationship fields has.
 fn assert_list_form(item: &ItemDto) {
     assert_eq!(item.body, None, "{item:?}");
     assert_eq!(item.source, None, "{item:?}");
@@ -754,14 +754,21 @@ fn ticket_filters_match_exactly_and_closure_follows_lifecycle_metadata() {
             },
             vec![],
         ),
-        // Not applied until the relationship fields are read.
+        // Not applied until readiness is read.
         (
             TicketFilter {
-                slug: text("anything"),
                 readiness: Some(ReadinessFilter::Blocked),
                 ..Default::default()
             },
             vec![TICKET_A, TICKET_B, TICKET_C],
+        ),
+        // None of these tickets has a short code.
+        (
+            TicketFilter {
+                slug: text("mh-vh-k9x2b"),
+                ..Default::default()
+            },
+            vec![],
         ),
     ] {
         assert_eq!(listed(filter.clone()), expected, "{filter:?}");
@@ -3038,4 +3045,957 @@ fn a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds
     assert_eq!(state(None, "docs/two.md"), IndexState::Stale);
     assert_eq!(state(Some(&worktree), "docs/shared.md"), IndexState::Stale);
     assert_git_transport_uninitialized();
+}
+
+// ---------------------------------------------------------------------
+// Ticket relationships: the short code, the parent and the dependencies.
+// ---------------------------------------------------------------------
+
+use manyhands::{
+    canonical::{CanonicalItem, TicketRelationships, parse_item, ticket_relationships},
+    repository::{
+        AuthoringKind, AuthoringTarget, ContextIntent, DependencyDto, DependencyState,
+        ExpectedPathObservation, SaveOutcome, SaveTicketRequest, TicketDraft,
+    },
+};
+
+/// An ID no fixture gives to an item.
+const ABSENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZZ";
+const SLUG: &str = "mh-vh-k9x2b";
+
+/// Three tickets and a document:
+///
+/// - A has a short code, B as its parent, and C, B and an absent ticket as
+///   its dependencies, written in flow form, beside an unknown key;
+/// - B is closed and relates to nothing;
+/// - C has one valid dependency, on A, and one of each invalid value;
+/// - the document carries the same keys, which mean nothing on a document.
+fn write_related_items(root: &Path) -> Vec<PathBuf> {
+    vec![
+        write(
+            root,
+            &ticket_path(TICKET_A),
+            &ticket_source(
+                TICKET_A,
+                "A",
+                &format!(
+                    "slug: {SLUG}\nparent: {TICKET_B}\n\
+                     deps: [{TICKET_C}, \"{TICKET_B}\", {ABSENT}]\nother: kept\n"
+                ),
+            ),
+        ),
+        write(
+            root,
+            &ticket_path(TICKET_B),
+            &ticket_source(TICKET_B, "B", CLOSURE),
+        ),
+        write(
+            root,
+            &ticket_path(TICKET_C),
+            &ticket_source(
+                TICKET_C,
+                "C",
+                &format!(
+                    "slug: Not-A-Slug\nparent: {TICKET_C}\n\
+                     deps: [{TICKET_A}, {TICKET_A}, not-an-id, 7]\n"
+                ),
+            ),
+        ),
+        write(
+            root,
+            "docs/a.md",
+            &document_source(
+                DOCUMENT_A,
+                "Document",
+                &format!("slug: {SLUG}\ndeps: [{TICKET_A}]\n"),
+            ),
+        ),
+    ]
+}
+
+/// What the index stores of relationships, by item ID so that two indexes
+/// can be compared: `(item, slug)` for every item, `(item, target, kind)`
+/// for every edge and `(item, code, detail)` for every item problem, each
+/// in the order it was stored.
+#[derive(Debug, PartialEq)]
+struct StoredRelationships {
+    slugs: Vec<(String, Option<String>)>,
+    edges: Vec<(String, String, String)>,
+    problems: Vec<(String, String, Option<String>)>,
+}
+
+fn stored_relationships(data_directory: &Path) -> StoredRelationships {
+    let connection = index(data_directory);
+    let slugs = connection
+        .prepare("SELECT item_id, slug FROM discovered_items ORDER BY item_id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let edges = connection
+        .prepare(
+            "SELECT items.item_id, edges.target_id, edges.kind
+               FROM item_edges AS edges JOIN discovered_items AS items ON items.id = edges.item_id
+              ORDER BY items.item_id, edges.id",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let problems = connection
+        .prepare(
+            "SELECT items.item_id, problems.code, problems.detail
+               FROM item_problems AS problems
+               JOIN discovered_items AS items ON items.id = problems.item_id
+              ORDER BY items.item_id, problems.id",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    StoredRelationships {
+        slugs,
+        edges,
+        problems,
+    }
+}
+
+/// Rows of `table` whose item row is gone.
+fn orphans(data_directory: &Path, table: &str) -> i64 {
+    index(data_directory)
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM {table}
+                  WHERE item_id NOT IN (SELECT id FROM discovered_items)"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn expected_related_items() -> StoredRelationships {
+    let text = |value: &str| value.to_owned();
+    StoredRelationships {
+        slugs: vec![
+            (text(TICKET_A), Some(text(SLUG))),
+            (text(TICKET_B), None),
+            // A value that is not a short code is not stored as one.
+            (text(TICKET_C), None),
+            (text(DOCUMENT_A), None),
+        ],
+        edges: vec![
+            (text(TICKET_A), text(TICKET_B), text("parent")),
+            (text(TICKET_A), text(TICKET_C), text("deps")),
+            (text(TICKET_A), text(TICKET_B), text("deps")),
+            // Stored though no context holds its target.
+            (text(TICKET_A), text(ABSENT), text("deps")),
+            (text(TICKET_C), text(TICKET_A), text("deps")),
+        ],
+        problems: vec![
+            (text(TICKET_C), text("invalid-slug"), None),
+            (
+                text(TICKET_C),
+                text("relationship-self-reference"),
+                Some(text(TICKET_C)),
+            ),
+            (
+                text(TICKET_C),
+                text("duplicate-dependency"),
+                Some(text(TICKET_A)),
+            ),
+            (text(TICKET_C), text("relationship-invalid-id"), None),
+            (text(TICKET_C), text("relationship-wrong-type"), None),
+        ],
+    }
+}
+
+#[test]
+fn refresh_stores_short_codes_edges_and_relationship_problems_and_rebuild_stores_the_same() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write_related_items(root);
+
+    refresh_completely(&enabled.service, root);
+
+    let data = enabled.data_directory.path();
+    let refreshed = stored_relationships(data);
+    assert_eq!(refreshed, expected_related_items());
+    // An ignored relationship value is not a problem with the file: the
+    // problems that make nonconforming entries hold none of them.
+    let file_problems: i64 = index(data)
+        .query_row("SELECT COUNT(*) FROM problems", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(file_problems, 0);
+    // The keys are fields of a ticket and unknown keys of a document.
+    let unknown = stored_item_columns(data);
+    let unknown_of = |id: &str| {
+        unknown
+            .iter()
+            .find(|(item, _, _)| item == id)
+            .and_then(|(_, _, unknown)| unknown.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        unknown_of(TICKET_A),
+        r#"{"not_representable":false,"values":{"other":"kept"}}"#
+    );
+    assert_eq!(
+        unknown_of(TICKET_C),
+        r#"{"not_representable":false,"values":{}}"#
+    );
+    assert_eq!(
+        unknown_of(DOCUMENT_A),
+        format!(
+            r#"{{"not_representable":false,"values":{{"deps":["{TICKET_A}"],"slug":"{SLUG}"}}}}"#
+        )
+    );
+
+    // Refreshing again replaces every row and leaves none behind.
+    refresh_completely(&enabled.service, root);
+    assert_eq!(stored_relationships(data), refreshed);
+    // So does a rebuild, in this index and in one that held nothing.
+    rebuild(&enabled.service, root);
+    assert_eq!(stored_relationships(data), refreshed);
+    let empty = tempfile::tempdir().unwrap();
+    rebuild(&RepositoryService::open_at(empty.path()).unwrap(), root);
+    assert_eq!(stored_relationships(empty.path()), refreshed);
+    for directory in [data, empty.path()] {
+        assert_eq!(orphans(directory, "item_edges"), 0);
+        assert_eq!(orphans(directory, "item_problems"), 0);
+    }
+    assert_git_transport_uninitialized();
+}
+
+fn dependency(id: &str, state: DependencyState) -> DependencyDto {
+    DependencyDto {
+        id: id.to_owned(),
+        state,
+    }
+}
+
+fn ticket<'a>(list: &'a ItemListDto, id: &str) -> &'a ItemDto {
+    list.items
+        .iter()
+        .find(|item| item.id.as_deref() == Some(id))
+        .unwrap()
+}
+
+#[test]
+fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_metadata() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let files = write_related_items(root);
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let tickets = all_tickets(&enabled.service, &repo);
+    let documents = enabled.service.list_documents(&repo).unwrap();
+
+    // Three tickets and no nonconforming entry: an ignored relationship
+    // value does not make a file nonconforming.
+    assert_eq!(tickets.items.len(), 3);
+    assert_eq!(tickets.index.state, IndexState::Current);
+    let a = ticket(&tickets, TICKET_A);
+    assert_eq!(a.slug.as_deref(), Some(SLUG));
+    assert_eq!(a.parent.as_deref(), Some(TICKET_B));
+    assert_eq!(
+        a.deps,
+        [
+            dependency(TICKET_C, DependencyState::Open),
+            dependency(TICKET_B, DependencyState::Closed),
+            dependency(ABSENT, DependencyState::Unresolved),
+        ]
+    );
+    assert_eq!(a.readiness, None);
+    assert_eq!(
+        Value::Object(a.unknown_metadata.clone()),
+        json!({"other": "kept"})
+    );
+    assert_eq!(codes(a), []);
+    let b = ticket(&tickets, TICKET_B);
+    assert_eq!((&b.slug, &b.parent, b.deps.len()), (&None, &None, 0));
+    let c = ticket(&tickets, TICKET_C);
+    assert_eq!((&c.slug, &c.parent), (&None, &None));
+    assert_eq!(c.deps, [dependency(TICKET_A, DependencyState::Open)]);
+    assert!(c.unknown_metadata.is_empty());
+    assert_eq!(
+        codes(c),
+        [
+            ProblemCode::InvalidSlug,
+            ProblemCode::RelationshipSelfReference,
+            ProblemCode::DuplicateDependency,
+            ProblemCode::RelationshipInvalidId,
+            ProblemCode::RelationshipWrongType,
+        ]
+    );
+    for problem in &c.problems {
+        assert_eq!(problem.path.as_deref(), Some(c.path.as_str()));
+    }
+    // On a document the keys are unknown metadata and nothing more.
+    let document = &documents.items[0];
+    assert_eq!(
+        (&document.slug, &document.parent, document.deps.len()),
+        (&None, &None, 0)
+    );
+    assert_eq!(
+        Value::Object(document.unknown_metadata.clone()),
+        json!({"deps": [TICKET_A], "slug": SLUG})
+    );
+    assert_eq!(codes(document), []);
+
+    // A complete read gives the same fields from the file, and the index,
+    // which stored the same, is current.
+    for listed in &tickets.items {
+        let shown = enabled
+            .service
+            .show_item(&repo, &item_id(listed.id.as_deref().unwrap()))
+            .unwrap();
+        assert_eq!(shown.index.state, IndexState::Current, "{listed:?}");
+        assert_eq!(
+            (&shown.slug, &shown.parent, &shown.deps, &shown.problems),
+            (&listed.slug, &listed.parent, &listed.deps, &listed.problems)
+        );
+        assert_eq!(shown.unknown_metadata, listed.unknown_metadata);
+        let by_path = enabled
+            .service
+            .show_path(&repo, None, Path::new(&listed.path))
+            .unwrap();
+        assert_eq!(by_path.index.state, IndexState::Current);
+        assert_eq!(
+            (&by_path.slug, &by_path.parent, &by_path.deps),
+            (&listed.slug, &listed.parent, &listed.deps)
+        );
+    }
+    // The file still holds the keys, as the source shows.
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    assert!(shown.source.unwrap().contains(&format!("slug: {SLUG}\n")));
+
+    // The short code filter matches the whole code without regard to case.
+    let by_slug = |slug: &str| {
+        let list = enabled
+            .service
+            .list_tickets(
+                &repo,
+                &TicketFilter {
+                    slug: Some(slug.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        list.items
+            .iter()
+            .map(|item| item.id.clone().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by_slug(SLUG), [TICKET_A]);
+    assert_eq!(by_slug(&SLUG.to_uppercase()), [TICKET_A]);
+    assert!(by_slug("mh-vh-k9x2").is_empty());
+    assert!(by_slug("Not-A-Slug").is_empty());
+
+    // The lists read no item file: with none left they are what they were.
+    for file in &files {
+        fs::remove_file(file).unwrap();
+    }
+    assert!(all_tickets(&enabled.service, &repo) == tickets);
+    assert!(enabled.service.list_documents(&repo).unwrap() == documents);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_dependency_on_a_document_is_left_out_and_reported_when_read() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "D", ""));
+    write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(
+            TICKET_A,
+            "A",
+            &format!("parent: {DOCUMENT_A}\ndeps: [{DOCUMENT_A}, {TICKET_B}]\n"),
+        ),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    // Whether a target is a ticket is not known from one file, so the
+    // edges are stored and the index holds no problem for them.
+    let stored = stored_relationships(enabled.data_directory.path());
+    assert_eq!(stored.edges.len(), 3);
+    assert!(stored.problems.is_empty());
+    let listed = all_tickets(&enabled.service, &repo);
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    for item in [&listed.items[0], &shown] {
+        assert_eq!(item.parent, None);
+        assert_eq!(
+            item.deps,
+            [dependency(TICKET_B, DependencyState::Unresolved)]
+        );
+        assert_eq!(codes(item), [ProblemCode::RelationshipNotATicket]);
+        assert_eq!(item.index.state, IndexState::Current);
+    }
+
+    // What an edge resolves to is decided when it is read: the ticket it
+    // waited for arrives, closed, and this ticket's file is not touched.
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(TICKET_B, "B", CLOSURE),
+    );
+    refresh_completely(&enabled.service, root);
+    let listed = all_tickets(&enabled.service, &repo);
+    assert_eq!(
+        ticket(&listed, TICKET_A).deps,
+        [dependency(TICKET_B, DependencyState::Closed)]
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn removing_a_dependency_and_refreshing_removes_its_edge() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let files = write_related_items(root);
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let data = enabled.data_directory.path();
+
+    // A loses its parent, its short code and all but one dependency; C
+    // loses every invalid value.
+    fs::write(
+        &files[0],
+        ticket_source(TICKET_A, "A", &format!("deps:\n  - {TICKET_B}\n")),
+    )
+    .unwrap();
+    fs::write(&files[2], ticket_source(TICKET_C, "C", "")).unwrap();
+
+    // Until the index is refreshed a complete read gives the file's and
+    // says the index is behind; the list gives what the index holds.
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    assert_eq!(shown.index.state, IndexState::Stale);
+    assert_eq!((&shown.slug, &shown.parent), (&None, &None));
+    assert_eq!(shown.deps, [dependency(TICKET_B, DependencyState::Closed)]);
+    let listed = all_tickets(&enabled.service, &repo);
+    assert_eq!(ticket(&listed, TICKET_A).deps.len(), 3);
+
+    refresh_completely(&enabled.service, root);
+
+    let text = |value: &str| value.to_owned();
+    let stored = stored_relationships(data);
+    assert_eq!(
+        stored.edges,
+        [(text(TICKET_A), text(TICKET_B), text("deps"))]
+    );
+    assert!(stored.problems.is_empty());
+    assert!(stored.slugs.iter().all(|(_, slug)| slug.is_none()));
+    assert_eq!(orphans(data, "item_edges"), 0);
+    assert_eq!(orphans(data, "item_problems"), 0);
+    let listed = all_tickets(&enabled.service, &repo);
+    let a = ticket(&listed, TICKET_A);
+    assert_eq!(a.deps, [dependency(TICKET_B, DependencyState::Closed)]);
+    assert_eq!((&a.slug, &a.parent), (&None, &None));
+    assert_eq!(codes(ticket(&listed, TICKET_C)), []);
+
+    // An item that is gone takes its edges with it.
+    fs::remove_dir_all(files[0].parent().unwrap()).unwrap();
+    refresh_completely(&enabled.service, root);
+    assert!(stored_relationships(data).edges.is_empty());
+    assert_eq!(orphans(data, "item_edges"), 0);
+    assert_git_transport_uninitialized();
+}
+
+const RELATIONSHIP_OBJECTS: [(&str, &str); 4] = [
+    ("index", "item_problems_item_id_idx"),
+    ("index", "discovered_items_slug"),
+    ("table", "item_problems"),
+    ("table", "item_edges"),
+];
+
+fn schema_objects(connection: &Connection) -> Vec<(String, String)> {
+    connection
+        .prepare("SELECT type, name FROM sqlite_master")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Makes the index what a build from before relationships left: the same
+/// rows, without the short code column, the edges and the item problems.
+fn remove_relationship_schema(data_directory: &Path) {
+    let connection = index(data_directory);
+    for (kind, name) in RELATIONSHIP_OBJECTS {
+        connection
+            .execute_batch(&format!("DROP {kind} {name}"))
+            .unwrap();
+    }
+    connection
+        .execute_batch("ALTER TABLE discovered_items DROP COLUMN slug")
+        .unwrap();
+    assert!(!columns(&connection, "discovered_items").contains(&"slug".to_owned()));
+    let objects = schema_objects(&connection);
+    for (kind, name) in RELATIONSHIP_OBJECTS {
+        assert!(!objects.contains(&(kind.to_owned(), name.to_owned())));
+    }
+}
+
+#[test]
+fn an_index_from_before_relationships_gains_them_is_marked_and_reads_as_stale() {
+    let first = support::born_repository();
+    let second = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    {
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        for fixture in [&first, &second] {
+            service
+                .enable(support::enable_request(&fixture.root))
+                .unwrap();
+            write_related_items(&fixture.root);
+            refresh_completely(&service, &fixture.root);
+        }
+    }
+    assert_eq!(refresh_required(data.path()), [false, false]);
+    let refreshed_before = refreshed_at(data.path());
+    remove_relationship_schema(data.path());
+
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    let connection = index(data.path());
+    assert!(columns(&connection, "discovered_items").contains(&"slug".to_owned()));
+    let objects = schema_objects(&connection);
+    for (kind, name) in RELATIONSHIP_OBJECTS {
+        assert!(
+            objects.contains(&(kind.to_owned(), name.to_owned())),
+            "{kind} {name}"
+        );
+    }
+    drop(connection);
+    // Every registration is marked, and what the index held is kept.
+    assert_eq!(refresh_required(data.path()), [true, true]);
+    assert_eq!(refreshed_at(data.path()), refreshed_before);
+    let stored = stored_relationships(data.path());
+    assert_eq!(stored.slugs.len(), 8);
+    assert!(stored.slugs.iter().all(|(_, slug)| slug.is_none()));
+    assert!(stored.edges.is_empty() && stored.problems.is_empty());
+
+    // The index holds no dependency for any ticket, and says it is behind
+    // instead of saying that no ticket has one.
+    let repo = service.resolve_repository(&first.root).unwrap();
+    let tickets = all_tickets(&service, &repo);
+    assert_eq!(tickets.index.state, IndexState::Stale);
+    assert_eq!(tickets.items.len(), 3);
+    for item in &tickets.items {
+        assert_eq!(item.index.state, IndexState::Stale);
+        assert_eq!(
+            (&item.slug, &item.parent, item.deps.len()),
+            (&None, &None, 0)
+        );
+    }
+    // A complete read uses the file, so it has what the index lacks.
+    let shown = service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+    assert_eq!(shown.index.state, IndexState::Stale);
+    assert_eq!(shown.slug.as_deref(), Some(SLUG));
+    assert_eq!(shown.deps.len(), 3);
+
+    // Migrating again changes nothing: the schema is the same, and a
+    // registration refreshed since is not marked a second time.
+    refresh_completely(&service, &first.root);
+    drop(service);
+    // In root order, which is not the order they were registered in.
+    let marked = refresh_required(data.path());
+    assert_eq!(marked.iter().filter(|marked| **marked).count(), 1);
+    let definitions = table_definitions(data.path());
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(table_definitions(data.path()), definitions);
+    assert_eq!(refresh_required(data.path()), marked);
+    // The refreshed registration has its relationships again.
+    let tickets = all_tickets(&service, &repo);
+    assert_eq!(tickets.index.state, IndexState::Current);
+    assert_eq!(ticket(&tickets, TICKET_A).slug.as_deref(), Some(SLUG));
+    assert_eq!(ticket(&tickets, TICKET_A).deps.len(), 3);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn processes_that_open_an_index_from_before_relationships_together_all_succeed() {
+    let (fixture, enabled) = enabled();
+    write_related_items(&fixture.root);
+    refresh_completely(&enabled.service, &fixture.root);
+    let support::EnabledRepository {
+        service,
+        data_directory,
+    } = enabled;
+    drop(service);
+    remove_relationship_schema(data_directory.path());
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let opens: Vec<_> = (0..4)
+        .map(|_| {
+            let (path, barrier) = (data_directory.path().to_owned(), barrier.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                RepositoryService::open_at(&path)
+                    .map(drop)
+                    .map_err(|error| error.kind)
+            })
+        })
+        .collect();
+    for open in opens {
+        open.join().unwrap().unwrap();
+    }
+
+    let connection = index(data_directory.path());
+    let objects = schema_objects(&connection);
+    for (kind, name) in RELATIONSHIP_OBJECTS {
+        assert_eq!(
+            objects
+                .iter()
+                .filter(|object| **object == (kind.to_owned(), name.to_owned()))
+                .count(),
+            1,
+            "{kind} {name}"
+        );
+    }
+    assert_eq!(
+        columns(&connection, "discovered_items")
+            .iter()
+            .filter(|column| column.as_str() == "slug")
+            .count(),
+        1
+    );
+    drop(connection);
+    assert_eq!(refresh_required(data_directory.path()), [true]);
+    assert_git_transport_uninitialized();
+}
+
+/// Creates the item worktree for a new ticket and saves it there.
+fn create_ticket_context(service: &RepositoryService, root: &Path, id: &str) -> PathBuf {
+    // As for a document: enabling leaves the configuration looking changed.
+    let repository = git2::Repository::open(root).unwrap();
+    let mut git_index = repository.index().unwrap();
+    git_index.read(true).unwrap();
+    git_index
+        .add_path(Path::new(".manyhands/config.toml"))
+        .unwrap();
+    git_index.write().unwrap();
+    save_ticket(service, root, id, ContextIntent::Create, "Created");
+    context_worktree(root, id).join(ticket_path(id))
+}
+
+/// Saves the ticket through the ordinary save, with the file as it is now
+/// as the expected observation.
+fn save_ticket(
+    service: &RepositoryService,
+    root: &Path,
+    id: &str,
+    intent: ContextIntent,
+    title: &str,
+) {
+    let file = root
+        .join(".manyhands/worktrees")
+        .join(id)
+        .join(ticket_path(id));
+    let outcome = service
+        .save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: root.to_owned(),
+                kind: AuthoringKind::Ticket,
+                item_id: item_id(id),
+                intent,
+                operation_id: support::new_operation_id(),
+            },
+            draft: TicketDraft {
+                title: title.to_owned(),
+                ticket_type: "task".to_owned(),
+                status: "open".to_owned(),
+                project: None,
+                team: None,
+                body: format!("Body of {title}.\n"),
+            },
+            expected_path: match fs::read(&file) {
+                Ok(bytes) => ExpectedPathObservation::from_bytes(&bytes),
+                Err(_) => ExpectedPathObservation::Missing,
+            },
+        })
+        .unwrap();
+    assert!(matches!(outcome, SaveOutcome::Saved { .. }));
+}
+
+fn relationships_in(file: &Path, id: &str) -> TicketRelationships {
+    let source = fs::read_to_string(file).unwrap();
+    match parse_item(Path::new(&ticket_path(id)), &source).unwrap() {
+        CanonicalItem::Ticket(ticket) => ticket_relationships(&ticket),
+        other => panic!("not a ticket: {other:?}"),
+    }
+}
+
+/// The front matter lines of the relationship keys, with the list entries
+/// under `deps`.
+fn relationship_lines(file: &Path) -> Vec<String> {
+    fs::read_to_string(file)
+        .unwrap()
+        .lines()
+        .filter(|line| {
+            ["slug:", "parent:", "deps:", "- "]
+                .iter()
+                .any(|start| line.starts_with(start))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let file = create_ticket_context(&enabled.service, root, TICKET_A);
+    // Written by hand, in flow form, between the fields the save writes.
+    let created = fs::read_to_string(&file).unwrap();
+    let by_hand = created.replacen(
+        "---\n",
+        &format!(
+            "---\nslug: {SLUG}\nparent: {TICKET_B}\ndeps: [{TICKET_C}, \"{TICKET_B}\"]\nother: kept\n"
+        ),
+        1,
+    );
+    assert_ne!(by_hand, created);
+    fs::write(&file, &by_hand).unwrap();
+    let before = relationships_in(&file, TICKET_A);
+    assert_eq!(before.slug.as_deref(), Some(SLUG));
+    assert_eq!(before.parent, Some(item_id(TICKET_B)));
+    assert_eq!(before.deps, [item_id(TICKET_C), item_id(TICKET_B)]);
+    assert!(before.problems.is_empty());
+
+    save_ticket(
+        &enabled.service,
+        root,
+        TICKET_A,
+        ContextIntent::Edit,
+        "Renamed",
+    );
+
+    let saved = fs::read_to_string(&file).unwrap();
+    assert!(saved.contains("title: Renamed\n"), "{saved}");
+    assert!(saved.contains("other: kept\n"), "{saved}");
+    // The same values, each key written once. The flow list became a block
+    // list: the serializer keeps values, not formatting.
+    assert_eq!(relationships_in(&file, TICKET_A), before);
+    let lines = relationship_lines(&file);
+    assert_eq!(
+        lines,
+        [
+            format!("slug: {SLUG}"),
+            format!("parent: {TICKET_B}"),
+            "deps:".to_owned(),
+            format!("- {TICKET_C}"),
+            format!("- {TICKET_B}"),
+        ]
+    );
+
+    // Saved again from that form, the fields come back byte for byte.
+    save_ticket(
+        &enabled.service,
+        root,
+        TICKET_A,
+        ContextIntent::Edit,
+        "Renamed again",
+    );
+    assert_eq!(relationship_lines(&file), lines);
+    assert_eq!(relationships_in(&file, TICKET_A), before);
+
+    // And the index, which each save refreshed, read them from that file.
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let listed = all_tickets(&enabled.service, &repo);
+    let a = ticket(&listed, TICKET_A);
+    assert_eq!(a.context.kind, ItemContextKind::Active);
+    assert_eq!(a.slug.as_deref(), Some(SLUG));
+    assert_eq!(a.parent.as_deref(), Some(TICKET_B));
+    assert_eq!(
+        a.deps,
+        [
+            dependency(TICKET_C, DependencyState::Unresolved),
+            dependency(TICKET_B, DependencyState::Unresolved),
+        ]
+    );
+    assert_eq!(
+        Value::Object(a.unknown_metadata.clone()),
+        json!({"other": "kept"})
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn edges_come_only_from_the_effective_copy_of_each_ticket() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let in_primary = write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(
+            TICKET_B,
+            "B",
+            &format!("slug: {SLUG}\ndeps: [{TICKET_C}]\n"),
+        ),
+    );
+    commit(&fixture, &[&ticket_path(TICKET_B)], 1_000);
+    let own = create_ticket_context(&enabled.service, root, TICKET_A);
+    let worktree = context_worktree(root, TICKET_A);
+    // A's worktree holds B as part of its checkout. That copy is edited
+    // there, where it is not B's effective copy.
+    let copy = worktree.join(ticket_path(TICKET_B));
+    assert!(copy.is_file());
+    fs::write(
+        &copy,
+        ticket_source(
+            TICKET_B,
+            "B",
+            &format!("slug: zz-zz-zzzzz\ndeps: [{ABSENT}]\n"),
+        ),
+    )
+    .unwrap();
+    // A's own copy, in its worktree, is its effective one.
+    fs::write(
+        &own,
+        ticket_source(
+            TICKET_A,
+            "A",
+            &format!("parent: {TICKET_B}\ndeps: [{TICKET_B}]\n"),
+        ),
+    )
+    .unwrap();
+
+    refresh_completely(&enabled.service, root);
+
+    let text = |value: &str| value.to_owned();
+    let expected = StoredRelationships {
+        slugs: vec![(text(TICKET_A), None), (text(TICKET_B), Some(text(SLUG)))],
+        edges: vec![
+            (text(TICKET_A), text(TICKET_B), text("parent")),
+            (text(TICKET_A), text(TICKET_B), text("deps")),
+            (text(TICKET_B), text(TICKET_C), text("deps")),
+        ],
+        problems: Vec::new(),
+    };
+    assert_eq!(
+        stored_relationships(enabled.data_directory.path()),
+        expected
+    );
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let listed = all_tickets(&enabled.service, &repo);
+    let a = ticket(&listed, TICKET_A);
+    assert_eq!(a.context.kind, ItemContextKind::Active);
+    assert_eq!(a.deps, [dependency(TICKET_B, DependencyState::Open)]);
+    let b = ticket(&listed, TICKET_B);
+    assert_eq!(b.context.kind, ItemContextKind::Primary);
+    assert_eq!(b.deps, [dependency(TICKET_C, DependencyState::Unresolved)]);
+
+    // A rebuild chooses the same copies.
+    rebuild(&enabled.service, root);
+    assert_eq!(
+        stored_relationships(enabled.data_directory.path()),
+        expected
+    );
+    // When B's own copy changes, its edges follow on the next refresh.
+    fs::write(&in_primary, ticket_source(TICKET_B, "B", "")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let stored = stored_relationships(enabled.data_directory.path());
+    assert_eq!(stored.edges.len(), 2);
+    assert!(stored.slugs.iter().all(|(_, slug)| slug.is_none()));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_stored_relationship_row_that_discovery_could_not_have_written_fails_the_read() {
+    let read = |change: &str| {
+        let (fixture, enabled) = enabled();
+        write_related_items(&fixture.root);
+        refresh_completely(&enabled.service, &fixture.root);
+        let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+        index(enabled.data_directory.path())
+            .execute_batch(change)
+            .unwrap();
+        let listed = enabled
+            .service
+            .list_tickets(&repo, &TicketFilter::default());
+        let shown = enabled.service.show_item(&repo, &item_id(TICKET_B));
+        assert_git_transport_uninitialized();
+        (listed, shown.map(|_| ()))
+    };
+    let item = |id: &str| format!("(SELECT id FROM discovered_items WHERE item_id = '{id}')");
+
+    assert!(read("").0.is_ok());
+    for change in [
+        // A short code the grammar does not allow, and one on a document.
+        format!("UPDATE discovered_items SET slug = 'Free text' WHERE item_id = '{TICKET_B}'"),
+        format!("UPDATE discovered_items SET slug = '{SLUG}' WHERE item_id = '{DOCUMENT_A}'"),
+        // A target that is not an item ID, and one that is the ticket.
+        format!(
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES ({}, 'free text', 'deps')",
+            item(TICKET_B)
+        ),
+        format!(
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES ({}, '{TICKET_B}', 'deps')",
+            item(TICKET_B)
+        ),
+        // A second parent, and an edge of a document.
+        format!(
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES ({}, '{TICKET_C}', 'parent')",
+            item(TICKET_A)
+        ),
+        format!(
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES ({}, '{TICKET_C}', 'deps')",
+            item(DOCUMENT_A)
+        ),
+        // A detail that is not an item ID, and a problem of a document.
+        format!(
+            "INSERT INTO item_problems (item_id, code, detail) VALUES ({}, 'invalid-slug', 'free text')",
+            item(TICKET_B)
+        ),
+        format!(
+            "INSERT INTO item_problems (item_id, code) VALUES ({}, 'invalid-slug')",
+            item(DOCUMENT_A)
+        ),
+    ] {
+        let (listed, shown) = read(&change);
+        assert_eq!(
+            listed.unwrap_err().code(),
+            ResultCode::InternalError,
+            "{change}"
+        );
+        assert_eq!(
+            shown.unwrap_err().code(),
+            ResultCode::InternalError,
+            "{change}"
+        );
+    }
+
+    // A code this build does not know as a relationship problem is not
+    // published: neither it nor a file problem's code stored here.
+    for code in ["future-code", "Free text.", "invalid-path"] {
+        let (listed, _) = read(&format!(
+            "INSERT INTO item_problems (item_id, code) VALUES ({}, '{code}')",
+            item(TICKET_B)
+        ));
+        let listed = listed.unwrap();
+        assert_eq!(
+            codes(ticket(&listed, TICKET_B)),
+            [ProblemCode::UnknownProblem]
+        );
+        assert!(!serde_json::to_string(&listed).unwrap().contains(code));
+    }
 }

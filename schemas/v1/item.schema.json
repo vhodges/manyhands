@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 document or ticket",
-  "description": "A nonconforming entry has a null id and null metadata. In a list, body, source and observation are null.",
+  "description": "A nonconforming entry has a null id and null metadata. In a list, body, source and observation are null. A ticket's slug, parent and deps are its own fields and are not repeated in unknown_metadata.",
   "type": "object",
   "additionalProperties": false,
   "required": [

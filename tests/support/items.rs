@@ -251,8 +251,13 @@ pub fn degraded_service(enabled: EnabledRepository) -> (tempfile::TempDir, Repos
     (data_directory, service)
 }
 
+/// An ID the contract fixture gives to no item.
+pub const TICKET_ABSENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCZ";
+
 /// The repository the contract fixtures are read from: two documents and
 /// two tickets, one of them closed, committed at fixed times and indexed.
+/// The open ticket has a short code, the closed one as its parent, and two
+/// dependencies: the closed ticket and a ticket no context holds.
 pub fn contract_repository() -> (TestRepository, EnabledRepository) {
     let fixture = super::born_repository();
     let enabled = super::enabled_repository(&fixture);
@@ -279,7 +284,10 @@ pub fn contract_repository() -> (TestRepository, EnabledRepository) {
         &ticket_source(
             TICKET_A,
             "Open ticket",
-            "project: manyhands\nteam: core\npriority: 2\nlabels: [one, two]\n",
+            &format!(
+                "project: manyhands\nteam: core\npriority: 2\nlabels: [one, two]\n\
+                 slug: mh-vh-k9x2b\nparent: {TICKET_B}\ndeps:\n  - {TICKET_B}\n  - {TICKET_ABSENT}\n"
+            ),
         ),
     );
     commit(&fixture, &[&open], COMMITTED_AT + 100);

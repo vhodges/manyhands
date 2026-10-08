@@ -16,9 +16,9 @@ use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use super::{
-    ChangeSource, ClosureDto, ClosureState, IndexState, IndexStateDto, ItemContextDto,
-    ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto, REFRESH_INDEX_ACTION,
-    ReadError, ResolvedRepository, index_state, root_action,
+    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
+    IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
+    REFRESH_INDEX_ACTION, ReadError, ResolvedRepository, index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
@@ -44,7 +44,9 @@ pub enum ReadinessFilter {
 
 /// Which tickets `list_tickets` returns. `status`, `ticket_type` and
 /// `project` each match the whole stored value, case-sensitively; an unset
-/// filter matches every ticket. The default matches all of them.
+/// filter matches every ticket. `slug` matches a ticket's whole short code
+/// without regard to ASCII case, and never a ticket that has none. The
+/// default matches all of them.
 ///
 /// A nonconforming entry has no metadata to match and is never removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -53,8 +55,6 @@ pub struct TicketFilter {
     pub ticket_type: Option<String>,
     pub project: Option<String>,
     pub closure: ClosureFilter,
-    /// Not applied yet. It takes effect when tickets' short codes are read
-    /// (Task 8); until then a list is the same whatever this holds.
     pub slug: Option<String>,
     /// Not applied yet. It takes effect with the relationship queries
     /// (Task 9); until then a list is the same whatever this holds.
@@ -76,6 +76,12 @@ impl TicketFilter {
                 ClosureFilter::Closed => item.closed_at.is_some(),
                 ClosureFilter::All => true,
             }
+            && self.slug.as_ref().is_none_or(|wanted| {
+                item.relationships
+                    .slug
+                    .as_ref()
+                    .is_some_and(|slug| slug.eq_ignore_ascii_case(wanted))
+            })
     }
 }
 
@@ -90,6 +96,15 @@ const CONFORMITY_PROBLEMS: [ProblemCode; 7] = [
     ProblemCode::KindPathMismatch,
     ProblemCode::InvalidPath,
     ProblemCode::DuplicateId,
+];
+
+/// The problems an ignored relationship value is stored as, per item.
+const RELATIONSHIP_PROBLEMS: [ProblemCode; 5] = [
+    ProblemCode::RelationshipWrongType,
+    ProblemCode::RelationshipInvalidId,
+    ProblemCode::RelationshipSelfReference,
+    ProblemCode::DuplicateDependency,
+    ProblemCode::InvalidSlug,
 ];
 
 /// Where item worktrees are, below the repository root.
@@ -149,8 +164,67 @@ pub(super) struct StoredItem {
     closed_at: Option<i64>,
     closed_by: Option<String>,
     unknown: UnknownMetadata,
+    relationships: Relationships,
     activity_at: i64,
     change_source: ChangeSource,
+}
+
+/// A ticket's short code, parent and dependencies as its file gives them,
+/// and the problems of the values that were ignored. Empty for a document.
+///
+/// `deps` is in the file's order. Nothing here says what a target is: that
+/// is decided against the items the index holds, each time it is read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Relationships {
+    slug: Option<String>,
+    parent: Option<String>,
+    deps: Vec<String>,
+    problems: Vec<ProblemCode>,
+}
+
+impl From<&canonical::TicketRelationships> for Relationships {
+    fn from(view: &canonical::TicketRelationships) -> Self {
+        Self {
+            slug: view.slug.clone(),
+            parent: view.parent.as_ref().map(ToString::to_string),
+            deps: view.deps.iter().map(ToString::to_string).collect(),
+            problems: view
+                .problems
+                .iter()
+                .map(|problem| ProblemCode::from(problem.code))
+                .collect(),
+        }
+    }
+}
+
+/// What an item ID names among the items the index holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    Document,
+    OpenTicket,
+    ClosedTicket,
+}
+
+/// Every item the index holds, by ID, as the target of a relationship. An
+/// ID that is not here is in no context the index has seen.
+pub(super) struct Targets<'a>(BTreeMap<&'a str, Target>);
+
+impl<'a> Targets<'a> {
+    /// `rows` holds one row for each item: its effective copy.
+    pub(super) fn of(rows: &[&'a StoredItem]) -> Self {
+        Self(
+            rows.iter()
+                .map(|row| {
+                    let target = match (row.kind, row.closed_at) {
+                        (ItemDtoKind::Document, _) => Target::Document,
+                        (ItemDtoKind::Ticket, None) => Target::OpenTicket,
+                        (ItemDtoKind::Ticket, Some(_)) => Target::ClosedTicket,
+                    };
+                    (row.id.as_str(), target)
+                })
+                .collect(),
+        )
+    }
 }
 
 /// A problem row that has both a path and a context.
@@ -258,7 +332,7 @@ pub(super) fn stored_items(
                 items.item_id, items.kind, items.canonical_path, items.title,
                 items.ticket_type, items.status, items.project, items.team,
                 items.closed_at, items.closed_by, items.unknown_metadata,
-                items.activity_at, items.activity_source, items.id
+                items.activity_at, items.activity_source, items.id, items.slug
            FROM discovered_items AS items
            JOIN contexts ON contexts.id = items.context_id
           WHERE contexts.repository_id = ?1
@@ -271,6 +345,15 @@ pub(super) fn stored_items(
         let kind: String = row.get(5)?;
         let unknown: Option<String> = row.get(14)?;
         let activity_source: String = row.get(16)?;
+        let kind = ItemDtoKind::from_stored(&kind).ok_or_else(invalid_stored_data)?;
+        // Only what the grammar allows is stored, and only for a ticket.
+        let slug: Option<String> = row.get(18)?;
+        if slug
+            .as_ref()
+            .is_some_and(|slug| kind != ItemDtoKind::Ticket || !canonical::is_valid_slug(slug))
+        {
+            return Err(invalid_stored_data());
+        }
         items.push(StoredItem {
             row_id: row.get(17)?,
             context: StoredContext {
@@ -280,7 +363,7 @@ pub(super) fn stored_items(
                 head_oid: row.get(3)?,
             },
             id: row.get(4)?,
-            kind: ItemDtoKind::from_stored(&kind).ok_or_else(invalid_stored_data)?,
+            kind,
             path: row.get(6)?,
             title: row.get(7)?,
             ticket_type: row.get(8)?,
@@ -298,11 +381,97 @@ pub(super) fn stored_items(
                 }
                 None => UnknownMetadata::default(),
             },
+            relationships: Relationships {
+                slug,
+                ..Default::default()
+            },
             activity_at: row.get(15)?,
             change_source: stored_change_source(&activity_source)?,
         });
     }
+    stored_relationships(connection, repo, &mut items)?;
     Ok(items)
+}
+
+/// The item stored in the row `row_id`, among `items` in row order.
+fn item_with_row(items: &mut [StoredItem], row_id: i64) -> Result<&mut StoredItem, ReadError> {
+    let position = items
+        .binary_search_by_key(&row_id, |item| item.row_id)
+        .map_err(|_| invalid_stored_data())?;
+    Ok(&mut items[position])
+}
+
+/// Adds to each of `items`, which are in row order, the edges and the
+/// relationship problems stored under its row.
+///
+/// A row is checked as it is read. An edge belongs to a ticket and names
+/// another item by a well-formed ID, a ticket has at most one parent, and a
+/// problem's detail is an item ID or nothing: discovery stores nothing
+/// else, so anything else fails the read. A problem code this build does
+/// not know as a relationship problem is `unknown_problem`.
+fn stored_relationships(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    items: &mut [StoredItem],
+) -> Result<(), ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT edges.item_id, edges.target_id, edges.kind
+           FROM item_edges AS edges
+           JOIN discovered_items AS items ON items.id = edges.item_id
+           JOIN contexts ON contexts.id = items.context_id
+          WHERE contexts.repository_id = ?1
+          ORDER BY edges.id ASC",
+    )?;
+    let mut rows = statement.query([repo.registration_id()])?;
+    while let Some(row) = rows.next()? {
+        let item = item_with_row(items, row.get(0)?)?;
+        let target: String = row.get(1)?;
+        let kind: String = row.get(2)?;
+        if item.kind != ItemDtoKind::Ticket
+            || target.parse::<ItemId>().is_err()
+            || target == item.id
+        {
+            return Err(invalid_stored_data());
+        }
+        match kind.as_str() {
+            "parent" if item.relationships.parent.is_none() => {
+                item.relationships.parent = Some(target);
+            }
+            "deps" if !item.relationships.deps.contains(&target) => {
+                item.relationships.deps.push(target);
+            }
+            _ => return Err(invalid_stored_data()),
+        }
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT problems.item_id, problems.code, problems.detail
+           FROM item_problems AS problems
+           JOIN discovered_items AS items ON items.id = problems.item_id
+           JOIN contexts ON contexts.id = items.context_id
+          WHERE contexts.repository_id = ?1
+          ORDER BY problems.id ASC",
+    )?;
+    let mut rows = statement.query([repo.registration_id()])?;
+    while let Some(row) = rows.next()? {
+        let item = item_with_row(items, row.get(0)?)?;
+        let code: String = row.get(1)?;
+        let detail: Option<String> = row.get(2)?;
+        if item.kind != ItemDtoKind::Ticket
+            || detail.is_some_and(|detail| detail.parse::<ItemId>().is_err())
+        {
+            return Err(invalid_stored_data());
+        }
+        let code = ProblemCode::from_stored(&code);
+        item.relationships
+            .problems
+            .push(if RELATIONSHIP_PROBLEMS.contains(&code) {
+                code
+            } else {
+                ProblemCode::UnknownProblem
+            });
+    }
+    Ok(())
 }
 
 /// Every stored problem that has a path and a context, in context, path,
@@ -403,10 +572,52 @@ pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<Pr
         .collect()
 }
 
+/// Fills in a ticket's `slug`, `parent` and `deps`, and adds the problems
+/// of its relationship values after the ones it already has.
+///
+/// Each dependency says what its target is among the items the index holds
+/// now: an open ticket, a closed one, or `unresolved` when no context holds
+/// it. A parent in no context is still the ticket's parent. A `deps` entry
+/// or a `parent` that names a document names no ticket: it is left out and
+/// reported. A problem the item already carries is not repeated.
+fn relate(dto: &mut ItemDto, relationships: &Relationships, targets: &Targets<'_>) {
+    let is_document = |id: &String| targets.0.get(id.as_str()) == Some(&Target::Document);
+    let mut codes = relationships.problems.clone();
+    dto.slug = relationships.slug.clone();
+    dto.parent = relationships.parent.clone().filter(|parent| {
+        if is_document(parent) {
+            codes.push(ProblemCode::RelationshipNotATicket);
+        }
+        !is_document(parent)
+    });
+    dto.deps = Vec::new();
+    for dependency in &relationships.deps {
+        let state = match targets.0.get(dependency.as_str()) {
+            Some(Target::Document) => {
+                codes.push(ProblemCode::RelationshipNotATicket);
+                continue;
+            }
+            Some(Target::OpenTicket) => DependencyState::Open,
+            Some(Target::ClosedTicket) => DependencyState::Closed,
+            None => DependencyState::Unresolved,
+        };
+        dto.deps.push(DependencyDto {
+            id: dependency.clone(),
+            state,
+        });
+    }
+    for code in codes {
+        let problem = problem(code, &dto.path);
+        if !dto.problems.contains(&problem) {
+            dto.problems.push(problem);
+        }
+    }
+}
+
 /// An item as the index stored it: the list form.
-fn stored_item_dto(item: &StoredItem, index: &IndexStateDto) -> ItemDto {
+fn stored_item_dto(item: &StoredItem, targets: &Targets<'_>, index: &IndexStateDto) -> ItemDto {
     let is_ticket = item.kind == ItemDtoKind::Ticket;
-    ItemDto {
+    let mut dto = ItemDto {
         id: Some(item.id.clone()),
         title: Some(item.title.clone()),
         ticket_type: item.ticket_type.clone(),
@@ -420,7 +631,9 @@ fn stored_item_dto(item: &StoredItem, index: &IndexStateDto) -> ItemDto {
         change_source: Some(item.change_source),
         problems: metadata_problems(&item.unknown, &item.path),
         ..bare_item(item.kind, &item.path, &item.context, Vec::new(), index)
-    }
+    };
+    relate(&mut dto, &item.relationships, targets);
+    dto
 }
 
 /// A parsed file as an item with no index row behind it. `None` for a
@@ -430,25 +643,26 @@ fn parsed_item_dto(
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
+    targets: &Targets<'_>,
 ) -> Option<ItemDto> {
     let (kind, id, title, unknown, body) = match &item {
         canonical::CanonicalItem::Document(document) => (
             ItemDtoKind::Document,
             &document.id,
             &document.title,
-            &document.unknown,
+            UnknownMetadata::from_yaml(&document.unknown),
             &document.body,
         ),
+        // The relationship keys are fields of their own, not unknown.
         canonical::CanonicalItem::Ticket(ticket) => (
             ItemDtoKind::Ticket,
             &ticket.id,
             &ticket.title,
-            &ticket.unknown,
+            UnknownMetadata::from_ticket(ticket),
             &ticket.body,
         ),
         canonical::CanonicalItem::Comment(_) => return None,
     };
-    let unknown = UnknownMetadata::from_yaml(unknown);
     let mut dto = ItemDto {
         id: Some(id.to_string()),
         title: Some(title.clone()),
@@ -458,6 +672,8 @@ fn parsed_item_dto(
         ..bare_item(kind, path, context, Vec::new(), index)
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
+        let relationships = Relationships::from(&canonical::ticket_relationships(&ticket));
+        relate(&mut dto, &relationships, targets);
         dto.closure = Some(closure(
             ticket.closed_at.and_then(timestamp_string),
             ticket.closed_by,
@@ -481,6 +697,9 @@ fn same_indexed_metadata(file: &ItemDto, stored: &ItemDto) -> bool {
         && file.project == stored.project
         && file.team == stored.team
         && file.closure == stored.closure
+        && file.slug == stored.slug
+        && file.parent == stored.parent
+        && file.deps == stored.deps
         && file.unknown_metadata == stored.unknown_metadata
         && file.problems == stored.problems
 }
@@ -699,6 +918,7 @@ fn parse_file(
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
+    targets: &Targets<'_>,
 ) -> ParsedFile {
     let Ok(source) = String::from_utf8(bytes) else {
         return ParsedFile::Nonconforming {
@@ -709,7 +929,7 @@ fn parse_file(
     // The problem's message can repeat the file's text; only its code is
     // kept.
     match canonical::parse_item(Path::new(path), &source) {
-        Ok(item) => match parsed_item_dto(item, path, context, index) {
+        Ok(item) => match parsed_item_dto(item, path, context, index, targets) {
             Some(dto) => ParsedFile::Item {
                 dto: Box::new(dto),
                 source,
@@ -902,6 +1122,7 @@ impl RepositoryService {
             let problems = stored_problems(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
+            let targets = Targets::of(&rows);
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
@@ -913,7 +1134,7 @@ impl RepositoryService {
                 ItemDtoKind::Document => {
                     let mut items: Vec<ItemDto> = listed
                         .into_iter()
-                        .map(|item| stored_item_dto(item, &index))
+                        .map(|item| stored_item_dto(item, &targets, &index))
                         .chain(nonconforming)
                         .collect();
                     // A nonconforming entry has no ID and sorts before an
@@ -938,7 +1159,7 @@ impl RepositoryService {
                     });
                     listed
                         .into_iter()
-                        .map(|item| stored_item_dto(item, &index))
+                        .map(|item| stored_item_dto(item, &targets, &index))
                         .chain(nonconforming)
                         .collect()
                 }
@@ -973,12 +1194,13 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
+            let targets = Targets::of(&effective_rows(repo, &stored).0);
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
-            let listed = stored_item_dto(row, &index);
-            let mut item = match parse_file(file.bytes, &row.path, &row.context, &index) {
+            let listed = stored_item_dto(row, &targets, &index);
+            let mut item = match parse_file(file.bytes, &row.path, &row.context, &index, &targets) {
                 ParsedFile::Item { dto, source } => {
                     // Another item is now where this one was.
                     if dto.id != listed.id || dto.kind != listed.kind {
@@ -1115,13 +1337,14 @@ impl RepositoryService {
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
+            let targets = Targets::of(&effective_rows(repo, &stored).0);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
-            let mut item = match parse_file(file.bytes, path, &context, &index) {
+            let mut item = match parse_file(file.bytes, path, &context, &index, &targets) {
                 ParsedFile::Item { dto, source } => {
                     let mut item = *dto;
-                    match row.map(|row| stored_item_dto(row, &index)) {
+                    match row.map(|row| stored_item_dto(row, &targets, &index)) {
                         Some(listed) if listed.id == item.id => {
                             if newer || !same_indexed_metadata(&item, &listed) {
                                 item.index = behind(&index);
