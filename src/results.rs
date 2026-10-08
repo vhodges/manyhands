@@ -399,6 +399,74 @@ impl Serialize for ProblemCode {
     }
 }
 
+/// Defines `OperationFailureCode` from one list: its contract string and the
+/// code string a key-material operation stores for it, if any.
+macro_rules! operation_failure_codes {
+    ($($variant:ident => $string:literal, $stored:expr;)+) => {
+        /// A stable code for why a stored operation did not complete.
+        /// `as_str` is the contract; the variant name is not.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum OperationFailureCode {
+            $($variant),+
+        }
+
+        impl OperationFailureCode {
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $string),+
+                }
+            }
+
+            /// The code string a key-material operation stores for this
+            /// failure, or `None` for a code no such operation stores.
+            pub const fn stored_key_material(self) -> Option<&'static str> {
+                match self {
+                    $(Self::$variant => $stored),+
+                }
+            }
+        }
+    };
+}
+
+operation_failure_codes! {
+    RegistryUnavailable => "registry_unavailable", Some("registry-unavailable");
+    SourceMissing => "source_missing", Some("source-missing");
+    SourceChanged => "source_changed", Some("source-changed");
+    OwnershipUnverified => "ownership_unverified", Some("ownership-unverified");
+    InvalidGeneratedKey => "invalid_generated_key", Some("invalid-generated-key");
+    ProtectionUnavailable => "protection_unavailable", Some("protection-unavailable");
+    UnsafePath => "unsafe_path", Some("unsafe-path");
+    StorageUnavailable => "storage_unavailable", Some("storage-unavailable");
+    ConfigurationRequired => "configuration_required", None;
+    SelectedKeyUnavailable => "selected_key_unavailable", None;
+    UnlockRequired => "unlock_required", None;
+    HostApprovalRequired => "host_approval_required", None;
+    TransportUnavailable => "transport_unavailable", None;
+    ProtocolRejected => "protocol_rejected", None;
+    Cancelled => "cancelled", None;
+    RepositoryUnavailable => "repository_unavailable", None;
+    UnknownFailure => "unknown_failure", None;
+}
+
+impl OperationFailureCode {
+    /// Maps a failure code stored with a key-material operation. A string
+    /// this build does not recognize becomes `unknown_failure`.
+    pub fn from_stored_key_material(stored: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|code| code.stored_key_material() == Some(stored))
+            .unwrap_or(Self::UnknownFailure)
+    }
+}
+
+impl Serialize for OperationFailureCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Removes what may be a credential from a remote URL.
 ///
 /// A network `scheme://` URL loses its password, query and fragment. Its

@@ -8,9 +8,9 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::{
     CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
-    IntegrationEffect, Outcome, ProblemCode, PublicationEffect, REDACTED, RecoveryAction,
-    ResultCode, SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string, object_id_string,
-    redact_url, relative_path_string, timestamp_string,
+    IntegrationEffect, OperationFailureCode, Outcome, ProblemCode, PublicationEffect, REDACTED,
+    RecoveryAction, ResultCode, SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string,
+    object_id_string, redact_url, relative_path_string, timestamp_string,
 };
 
 const ENVELOPE_FIELDS: [&str; 11] = [
@@ -431,6 +431,102 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
         ProblemCode::RetryRequired.guidance(),
         "The repository changed while it was being observed; refresh the index again."
     );
+}
+
+/// Every failure code a key-material operation stores, with its contract
+/// string.
+const STORED_KEY_MATERIAL_FAILURES: [(&str, &str); 8] = [
+    ("registry-unavailable", "registry_unavailable"),
+    ("source-missing", "source_missing"),
+    ("source-changed", "source_changed"),
+    ("ownership-unverified", "ownership_unverified"),
+    ("invalid-generated-key", "invalid_generated_key"),
+    ("protection-unavailable", "protection_unavailable"),
+    ("unsafe-path", "unsafe_path"),
+    ("storage-unavailable", "storage_unavailable"),
+];
+
+#[test]
+fn stored_key_material_failures_map_to_the_registry() {
+    for (stored, expected) in STORED_KEY_MATERIAL_FAILURES {
+        let code = OperationFailureCode::from_stored_key_material(stored);
+        assert_eq!(code.as_str(), expected, "{stored}");
+        assert_eq!(code.stored_key_material(), Some(stored));
+    }
+    let registered: BTreeSet<_> = OperationFailureCode::ALL
+        .into_iter()
+        .filter_map(OperationFailureCode::stored_key_material)
+        .collect();
+    assert_eq!(
+        registered,
+        STORED_KEY_MATERIAL_FAILURES
+            .iter()
+            .map(|(stored, _)| *stored)
+            .collect()
+    );
+}
+
+#[test]
+fn unrecognized_stored_failures_become_unknown_failure() {
+    // Neither a contract string nor a remote outcome is a stored
+    // key-material code, and backend text is not a code at all.
+    for stored in [
+        "",
+        "future-failure",
+        "source_missing",
+        "transport_unavailable",
+        "unknown_failure",
+        "No such file or directory (os error 2)",
+    ] {
+        assert_eq!(
+            OperationFailureCode::from_stored_key_material(stored),
+            OperationFailureCode::UnknownFailure,
+            "{stored:?}"
+        );
+    }
+}
+
+#[test]
+fn operation_failure_codes_have_unique_snake_case_strings() {
+    let names: Vec<_> = OperationFailureCode::ALL
+        .into_iter()
+        .map(OperationFailureCode::as_str)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "registry_unavailable",
+            "source_missing",
+            "source_changed",
+            "ownership_unverified",
+            "invalid_generated_key",
+            "protection_unavailable",
+            "unsafe_path",
+            "storage_unavailable",
+            "configuration_required",
+            "selected_key_unavailable",
+            "unlock_required",
+            "host_approval_required",
+            "transport_unavailable",
+            "protocol_rejected",
+            "cancelled",
+            "repository_unavailable",
+            "unknown_failure",
+        ]
+    );
+    assert_eq!(
+        names.iter().collect::<BTreeSet<_>>().len(),
+        OperationFailureCode::ALL.len()
+    );
+    for code in OperationFailureCode::ALL {
+        let name = code.as_str();
+        assert!(
+            name.bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "{name}"
+        );
+        assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
+    }
 }
 
 #[test]
