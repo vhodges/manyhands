@@ -6118,6 +6118,10 @@ fn guarded_file_within(
             Some(libc::ELOOP | libc::EMLINK | libc::ENOTDIR | libc::ENXIO) => {
                 Some(GuardedFile::NotAFile)
             }
+            // macOS refuses to open a socket with this instead. Elsewhere
+            // the code keeps its own meaning and is the error itself.
+            #[cfg(target_vendor = "apple")]
+            Some(libc::EOPNOTSUPP) => Some(GuardedFile::NotAFile),
             _ => None,
         }
     }
