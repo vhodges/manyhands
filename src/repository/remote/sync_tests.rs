@@ -3615,6 +3615,29 @@ fn absent_test_hook_root_keeps_its_exact_fallback_key() {
     );
 }
 
+fn registered_worktree_gitdir_text(worktree: &Path) -> String {
+    let gitdir = worktree.join(".git");
+    let text = gitdir.to_str().expect("fixture Git path must be UTF-8");
+    // libgit2 reads this field verbatim, then dirname scans only '/'. Encode
+    // Git metadata, not native path display; Unix backslashes are literal names.
+    #[cfg(windows)]
+    let text = {
+        use std::path::{Component, Prefix};
+        let text = match gitdir.components().next() {
+            // Match Git's ordinary drive/UNC presentation, so '..' remains
+            // meaningful without discarding the UNC server/share root.
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::VerbatimDisk(_) => text[4..].to_owned(),
+                Prefix::VerbatimUNC(_, _) => format!(r"\\{}", &text[8..]),
+                _ => text.to_owned(),
+            },
+            _ => text.to_owned(),
+        };
+        text.replace('\\', "/")
+    };
+    format!("{text}\n")
+}
+
 #[test]
 fn own_authoring_registered_path_spelling_is_not_another_worktree() {
     let (root, _data, service) = fixture();
@@ -3633,6 +3656,10 @@ fn own_authoring_registered_path_spelling_is_not_another_worktree() {
         ContextProvisionOutcome::IndexPending { context } => context,
     };
     let repository = git2::Repository::open(root.path()).unwrap();
+    // Exercise literal Unix backslashes through the real metadata parser too.
+    #[cfg(unix)]
+    let marker = root.path().join(r"registered\spelling");
+    #[cfg(not(unix))]
     let marker = root.path().join("registered-spelling");
     fs::create_dir(&marker).unwrap();
     // Existing, real directory components give libgit2 a noncanonical spelling
@@ -3647,7 +3674,7 @@ fn own_authoring_registered_path_spelling_is_not_another_worktree() {
             .join("worktrees")
             .join(item_id.to_string())
             .join("gitdir"),
-        format!("{}\n", registered.join(".git").display()),
+        registered_worktree_gitdir_text(&registered),
     )
     .unwrap();
     let metadata = repository.find_worktree(&item_id.to_string()).unwrap();
@@ -3696,7 +3723,7 @@ fn own_authoring_registered_symlink_alias_does_not_authorize_reuse() {
             .join("worktrees")
             .join(item_id.to_string())
             .join("gitdir"),
-        format!("{}\n", registered.join(".git").display()),
+        registered_worktree_gitdir_text(&registered),
     )
     .unwrap();
     let linked = git2::Repository::open(&context.worktree).unwrap();
@@ -3770,19 +3797,35 @@ fn own_authoring_registered_path_guard_refuses_different_and_unavailable_locatio
                 .join("worktrees")
                 .join(item_id.to_string())
                 .join("gitdir"),
-            format!("{}\n", registered.join(".git").display()),
+            registered_worktree_gitdir_text(&registered),
         )
         .unwrap();
+        // Attest the fixture before invoking the guard: it must describe the
+        // foreign/missing location, not a directory misparsed from native text.
+        let metadata = repository.find_worktree(&item_id.to_string()).unwrap();
+        if registered.exists() {
+            assert!(
+                metadata.path().canonicalize().unwrap() == registered.canonicalize().unwrap(),
+                "registered metadata names the intended physical fixture; case={case}"
+            );
+        } else {
+            assert!(
+                !metadata.path().exists(),
+                "registered metadata names a missing fixture; case={case}"
+            );
+        }
         let before = (
             repository.head().unwrap().target(),
             fs::read(repository.path().join("index")).unwrap(),
             other.head().unwrap().target(),
             fs::read(other.path().join("index")).unwrap(),
         );
+        let refused = service.prepare_context(target());
         assert!(
-            matches!(service.prepare_context(target()),
+            matches!(&refused,
             Err(error) if error.kind == RepositoryErrorKind::MismatchedAuthoringContext),
-            "different or unavailable registered/intended locations must refuse"
+            "different or unavailable registered/intended locations must refuse; case={case}; category={:?}",
+            refused.as_ref().err().map(|error| error.kind)
         );
         assert_eq!(
             (
