@@ -102,9 +102,15 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
   full gate at `de6f876` had one failing test that passes on every rerun (see
   the Task 8 evidence).
 - Task 9: complete; review accepted with fixes, range `b1449cc..2873ee2`.
-- Task 10: pending.
+- Task 10: complete; whole-Cycle review accepted with fixes, range
+  `5418203..8d05ab2`; full gate passed at `8d05ab2`. F1 is review-ready.
 
 ## Resume here — 2026-10-08
+
+All ten tasks are complete. The current state, the open questions for the
+product owner and the tickets to raise are under "Whole-Cycle review
+rulings", "Open obligations" and "Handoff" at the end of this ledger. The
+paragraph below is kept as the record of where the work stood before Task 10.
 
 Tasks 5 to 8 are complete. The full gate last passed cleanly at `bcbe2e6`
 (Task 5); at `de6f876` (Task 8) it passed except for one load-sensitive
@@ -847,3 +853,185 @@ from this work without asking.
   new goldens, the boundary additions and several review-fix assertions were
   only run passing. Unit tests run 100,000-deep chains and rings and a
   100,000-wide fan and assert results.
+
+## Whole-Cycle review rulings — 2026-10-08
+
+Three independent reviewers read `6346caa..5418203`, each with one lens: the
+read boundary, security and privacy; the published contract against the RFCs
+and the Cycle; and everything F1 changed outside `src/repository/read/` plus
+the fifteen fix commits that had not been re-read. None found a blocker. A
+fourth reviewer then read the fixes, `9be3ac1..3b219a9`. The design carries
+the resulting amendments in its last section.
+
+Fixed (`9d5ea88..8d05ab2`):
+
+- **Configuration read.** `inspect_repository` and `list_remotes_redacted`
+  read `.manyhands/config.toml` through the guarded reader with a 64 KiB cap.
+  Other callers are unchanged.
+- **Unknown metadata** is stored to at most 64 nesting levels. Before this, a
+  value nested about 126 deep was stored in a form that could not be read
+  back, and every item read of the repository failed. A stored column that is
+  not what a refresh writes remains `internal_error`.
+- **Resolution.** A linked worktree resolves only when its owner lists it.
+- **Redaction.** Remote-helper locations, locations with a control character,
+  and both locations of a remote with a helper configured are redacted. A
+  space alone is not. An IPv6 scp-like location is kept.
+- **`complete`** is false on item lists and relationship reads when a
+  directory was not fully read (see the design).
+- **Recovery actions** are a closed, published registry.
+- **Renames:** `OperationDto.owner` (was `scope`); `HostPinDto.fingerprint`
+  (was `sha256`).
+- **Removed:** problem code `path_not_utf8`, which no read could emit.
+- **Evidence:** goldens for `show_path` and eight more failure envelopes; a
+  cycle and shared short code put on the primary branch by two real merges; a
+  consistent `index_status` golden; three portability fixes in tests.
+- Smaller: order-preserving key removal; comment IDs looked up only for edge
+  targets; `EOPNOTSUPP` on Apple targets; an explicit configuration-reader
+  choice in inspection.
+
+Accepted limits and deferrals:
+
+- Five `_for_testing` hooks added by F1 are public and compiled into release
+  builds, three of them writers of host trust. No read reaches them. Gating
+  them belongs with the older hooks of the same pattern.
+- A non-Markdown symbolic link under `docs` makes the document list
+  permanently `complete: false`, because discovery stores the same problem
+  for it as for an unread directory. A single unreadable file or worktree
+  leaves `complete: true` and is not listed.
+- The configuration size cap applies to reads only; the indexer and the
+  write paths accept a larger file.
+- `RecoveryAction`'s fields are public, so "registered keys or none" is
+  enforced by construction and a debug assertion, not by the type.
+- The worktree ownership check is linear in the owner's worktrees.
+- `show_item`, `show_path`, `list_comments` and the relationship reads load
+  every item row, edge and item problem of the registration under the shared
+  lock.
+- A read can wait up to 5 s inside SQLite before returning `busy`; the 250 ms
+  bound covers the file lock only.
+- Envelope `scope.branch` and `scope.worktree` are never set by a read.
+- Names recorded as deliberate: `invalid_path` is both a result code and a
+  problem code; `repository_inaccessible` and `repository_unavailable`
+  coexist; `complete` means list completeness on lists and "not capped" on
+  reasons; `index_status` flattens the index state.
+- Deferred to later Cycles, none breaking: identity for a repository that is
+  not registered (C2, D1); unreadable files as list entries (D1); a mapping
+  from operation actions to commands (C4, C5); an observation for an absent
+  path (F2); `operation.resume` in the recovery registry (F2).
+- `8d05ab2` and the four commits before it were not independently reviewed.
+
+Open with the product owner at handoff:
+
+1. Whether the closed v1 schemas need a stated compatibility rule (the CLI
+   RFC calls additive fields and new codes non-breaking; the schemas reject
+   both).
+2. Whether comment replies stay nested or become a flat list with depth.
+3. Amendments to the Cycle document, the Wave document and three RFCs that
+   the rulings made inaccurate, including naming who writes `created_by`.
+
+### Task 10 — verify, review and handoff, range `5418203..8d05ab2`
+
+- `141b164` `show_path` golden; `43c457b` characterization test; `9be3ac1`
+  workflow test list; `9d5ea88..94ca77d` whole-Cycle review fixes; `3b219a9`
+  redaction narrowing; `147aa07..8d05ab2` fixes from the review of the fixes.
+- Workflow: the eight read targets are in the "Test headless credential and
+  platform contracts" step. Triggers are unchanged and nothing was dispatched.
+- Contract completeness: 37 schemas, all reachable; a golden for every read
+  in scope; 47 registered cases, held equal to the fixture directory by a
+  test. Four objects are open by registration: the envelope's `data`, the two
+  `unknown_metadata` objects and a recovery action's `arguments`.
+- Controller full gate at `8d05ab2`, through Devenv on Linux, each command
+  exit 0:
+  - `cargo check --all-features --locked`
+  - `cargo fmt --check`
+  - `cargo clippy --all-targets --all-features --locked -- -D warnings`
+  - `cargo test --all-features --locked --no-fail-fast`: 998 passed, 0
+    failed in the standard harness; 15, 35, 31 and 103 SSH cases passed.
+  - `cargo run --locked --bin manyhands-cli`
+  - `cargo test --locked --test read_boundary --test read_contract --test
+    read_relationships --test read_repository --test read_credentials --test
+    read_items --test read_comments --test read_status`, without the
+    `desktop` feature: 263 passed, 0 failed.
+- The same gate also passed at `3b219a9` (997 passed, 0 failed).
+  `concurrent_corrupt_rebuilds_replace_the_cache_once` passed in both runs.
+- Characterization (not a gate), debug build, one run, medians of 7:
+  refresh 4,631 ms; `list_tickets` 16.3 ms; `show_item` 15.1 ms;
+  `list_comments` 11.4 ms; `ticket_plan` 16.3 ms. Fixture: 800 tickets (80
+  closed), 200 documents, 350 dependency edges, 90 parent edges, 300 comments
+  on 100 tickets, two item worktrees. `tests/read_characterization.rs`,
+  ignored by default.
+- Native: not executed for the final head. One run at `a65fb40` is recorded
+  above. From reading the tests, the eight targets compile on Windows and
+  macOS. Expected to fail on Windows until the library side is addressed: a
+  stored problem path with native separators
+  (`only_a_conformity_problem_at_an_item_path_with_no_item_makes_an_entry`),
+  and two error mappings of the non-Unix reader
+  (`show_path_reads_only_canonical_item_paths`,
+  `a_path_with_a_nul_is_invalid_and_a_name_too_long_to_exist_is_not_found`).
+  Permission tests print a `SKIPPED` line and pass where permissions do not
+  bind, and the line is not visible without `--nocapture`.
+
+### Acceptance rows
+
+| Cycle row | Evidence | Status |
+| --- | --- | --- |
+| Target resolution | `tests/read_repository.rs`: root, linked worktree and item worktree resolve to one registration; unregistered, subdirectory, bare, missing and fabricated-worktree cases | Met |
+| Read services | `read_repository`, `read_credentials`, `read_items`, `read_comments`, `read_status`, `read_relationships`; ordering and `complete` asserted, including against a real over-cap directory | Met |
+| Nonconforming content | `read_items`: listed with null IDs and codes; read by exact path, including a ticket in a badly named directory | Met; an entry whose path is not plain relative is listed but cannot be shown |
+| Closure | `read_items`: `ticket_filters_match_exactly_and_closure_follows_lifecycle_metadata`, `a_status_that_says_closed_closes_nothing` | Met |
+| Effective copy | `read_items`: `an_item_in_two_other_item_worktrees_is_listed_once_from_primary` and the candidate-order tests | Met |
+| Stale and unavailable index | `read_items`: `empty_never_refreshed_stale_and_degraded_are_four_results_and_one_failure`; `index_status` reports `unavailable` as a state | Met |
+| Relationships | `read_relationships` (17 tests): all eight queries across primary and two item worktrees; unresolved dependency; cycle and duplicate short code merged onto primary by two real merges | Met |
+| No side effects | `read_boundary` (18 tests): byte-identical snapshots of canonical files, refs, worktrees, configuration, key files and the index around every read; transport uninitialized | Met |
+| Redaction | Sentinels in every contract case except `id_new` and `repo_identity`, which have nothing planted; `results_tests` | Met |
+| Published contract | `read_contract` (64 tests): closed-object lint, enumerations tied to the registries, byte-equal goldens | Met |
+| Front-end independence | The eight read targets pass without the `desktop` feature | Met on Linux |
+| Regression | Full gate at `8d05ab2` | Met |
+| Decision 5, tests join the workflow | `9be3ac1` | Met; not executed natively |
+
+### Open obligations
+
+- **Native execution** on Windows and macOS for the eight read targets, and
+  native path matching: the non-Unix file and configuration readers have been
+  compiled once and never run; stored problem paths use native separators;
+  Windows device paths; whether stored worktree paths and canonical paths
+  agree in case and prefix.
+- **Conflict inspection**: deferred to the first of C4 and D5.
+- **Polling fields**: `next_eligible_at` is always null; no outcome time or
+  history is stored.
+- **Empty folders** are not listed; F2.
+- **`created_by`** is read and nothing writes it; F2, not yet in the Wave
+  document's F2 scope.
+- **`operation.resume`** and any new result code enter the registries and
+  schemas with F2.
+
+### Handoff: defect and follow-up tickets to raise
+
+Not created. Filing them changes main, which is the product owner's to
+authorize.
+
+1. Nothing writes an `accessibility` other than `accessible`, so a deleted
+   registered repository lists as accessible.
+2. Refresh persists the root, each context and the cleanup in separate
+   transactions, so the index can hold an item twice or not at all.
+3. A committed, unchanged file in an item worktree is stored as
+   `uncommitted`.
+4. Index versioning: a schema version and a content version (see "Resume
+   here").
+5. Discovery caps that dogfooding will reach: one 1,024 counter covers the
+   primary comment directory listing and every comment file under it (this
+   branch holds 135); `.manyhands/tickets` counts each ticket twice, and past
+   1,024 entries no item worktree can be prepared (about 512 tickets).
+6. The indexer reads `.manyhands/config.toml` with a plain read: a FIFO there
+   hangs a refresh, and there is no size cap.
+7. `concurrent_corrupt_rebuilds_replace_the_cache_once` has almost no
+   headroom on its 250 ms lease wait.
+8. Gate every `_for_testing` hook out of release builds.
+9. `canonical::ticket_relationships` is quadratic in one ticket's dependency
+   count; `discovered_items_slug` is unused.
+10. Refresh at 1,000 items takes 4.6 s in a debug build; not investigated.
+
+### Handoff state
+
+F1 is review-ready at `8d05ab2` plus this record. The branch is pushed to
+origin and kept current. Not authorized and not done: pull request, merge,
+ticket closure, worktree cleanup, further workflow dispatch.

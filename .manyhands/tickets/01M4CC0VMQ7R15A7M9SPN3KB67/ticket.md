@@ -26,8 +26,9 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 - [x] Product owner decides the six open decisions in the Cycle document
   (2026-10-07, all as recommended).
 - [x] Product owner approves the Cycle, design and plan (2026-10-07).
-- [ ] Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G` (one effective copy per item) merged to main.
-- [ ] Implementation authorization (separate).
+- [x] Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G` (one effective copy per item) merged to main (`60b0324`, 2026-10-07).
+- [x] Implementation authorization (2026-10-07: implement by subagent-driven
+  development; local commits only. 2026-10-08: push of this ticket branch).
 
 Planning artifacts:
 [Cycle](../../../docs/Cycles/wave-03-foundation-01-read-boundary-and-results.md),
@@ -65,3 +66,33 @@ every read service, typed malformed rows, deterministic ordering and complete
 lists. Golden DTO schemas and redaction fixtures are published. An open ticket
 whose status text is `closed` is listed as lifecycle-open. No display or GPUI
 dependency, no canonical mutation and no resident process.
+
+## Review-Ready (2026-10-08)
+
+Implementation is complete at `8d05ab2` and the Cycle is ready for the
+product owner's review. The full gate passed there, every acceptance row is
+met on Linux, and the whole branch was independently reviewed. The
+[execution ledger](../../../docs/plans/2026-10-07-wave-03-foundation-01-read-boundary-and-results-execution.md)
+holds the rulings, the acceptance table and the evidence.
+
+Not authorized and not done: pull request, merge, ticket closure, worktree
+cleanup.
+
+## Open Obligations
+
+- Native execution on Windows and macOS for the eight read test targets, and
+  native path matching. The non-Unix file and configuration readers have been
+  compiled once and never run.
+- Conflict inspection: the first of C4 and D5.
+- Polling: `next_eligible_at` is always null; no outcome time or history.
+- Empty folders are not listed: F2.
+- `created_by` is read and nothing writes it: F2.
+- `operation.resume` and new result codes join the registries: F2.
+
+## Open With The Product Owner
+
+- A compatibility rule for the closed v1 schemas.
+- Nested or flat comment replies.
+- Amendments to the Cycle, Wave and RFC documents that the rulings made
+  inaccurate.
+- Ten defect and follow-up tickets listed in the ledger, not yet raised.

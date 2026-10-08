@@ -49,7 +49,7 @@ entry-gate item 3. "Exists" means a public function returns the data today.
 | Index status | `refresh_required` and the `IndexUnavailable` error. `IndexAvailability` is private; there is no last-refreshed time. | A status read and a refreshed-at time. |
 | Polling status | `remote_snapshot().polling()` and `latest_outcome()`. No timestamps or next eligible time in the public API. | DTO; missing values null. |
 | Operations | Three stores: `recovery_inspection` (pending local), `active_remote_operation` (first active remote row, opened read-write with an immediate transaction), `list_key_material_recovery` (exclusive lock). No show-by-ID. Only remote operations store created and updated times; local operations store one `observed_at` rewritten on each step; key-material operations store no time and no repository. | One read-only inventory and show-by-ID. |
-| Conflicts | No type, table or read. | Nothing; see Cycle decision 1. |
+| Conflicts | No type, table or read. | Nothing; see Cycle decision 2. |
 | New ID | `canonical::ItemId::generate`. | DTO only. |
 | Serialization | Nothing in `src/` derives `Serialize`. `serde_json` is not a direct dependency. `time` has no `serde` feature. | A separate DTO layer. |
 
@@ -475,7 +475,7 @@ computed from the text just read; `matches_registration` says whether it
 equals the stored one, so a replaced file is visible. No read here touches a private key file, takes the
 key-store lock, or can prompt.
 
-`HostPinDto` is `host`, `port`, `algorithm`, `sha256` and
+`HostPinDto` is `host`, `port`, `algorithm`, `fingerprint` and
 `reapproval_required`, the last from the existing marker file.
 
 ## Status Reads
@@ -502,7 +502,7 @@ resolution instead and never reaches this read.
 always null in this Cycle.
 
 `OperationDto` unifies the three stores: `operation_id`, `family` (`local`,
-`remote`, `key_material`), `scope` (`repository` or `application`),
+`remote`, `key_material`), `owner` (`repository` or `application`),
 `action`, `state`, `completed_step`, `next_action`, `item_id`, `key_id`,
 `worktree`, `updated_at` and `failure_code`.
 
@@ -775,3 +775,87 @@ developer aid; the checks never set it.
 
 Local evidence is Linux only. Windows and macOS execution is an open
 obligation, not a result, until the workflow is run.
+
+## Amendments After Whole-Cycle Review (2026-10-08)
+
+Three independent whole-branch reviews and one review of their fixes changed
+the following. Where this section and earlier text disagree, this section
+governs. The execution ledger records the rulings.
+
+Result model:
+
+- `ReadError.code` is private behind `code()`. There is no conversion from a
+  validation problem. A failure envelope is built with
+  `ReadError::to_envelope(command)` or `Envelope::failure`; there is no
+  `read_failure`.
+- Recovery actions are a closed registry, `RecoveryActionKind`:
+  `index.rebuild`, `index.refresh` and `repo.inspect`, each with the argument
+  key `root`. An action carries exactly its registered keys, or none when no
+  repository is known. The schema lists the actions. The CLI RFC's
+  `operation.resume` is not among them because no read emits it; F2 adds it.
+- No problem code `path_not_utf8` exists; no read could emit it. The sentence
+  in "Redaction" that names it is withdrawn.
+- `OperationDto.owner` replaces `scope`, and a host pin's `fingerprint`
+  replaces `sha256`, so one name has one meaning inside a response.
+
+Redaction:
+
+- A schemeless location in Git's remote-helper form
+  (`[A-Za-z0-9][A-Za-z0-9+.-]*::` at its start) or containing a control
+  character is `[redacted]`. A space alone does not redact. An empty port is
+  not a host and port.
+- Both locations of a remote with `remote.<name>.vcs` configured are
+  `[redacted]`, because they are a helper's address whatever they look like.
+
+Target resolution:
+
+- A linked worktree resolves to its owner only when the owner lists a
+  worktree that canonicalizes to the selected path. A directory that merely
+  points at a registered repository's Git directory is `not_repository`.
+
+Read side effects:
+
+- "`busy` for every read without exception" has the exceptions recorded for
+  Task 3: `repository_identity`, `list_remotes_redacted`, the Git part of
+  `inspect_repository`, and `new_item_id` use no session. The first two also
+  do not check that the registration still exists.
+- The paragraph about tolerating "duplicate column" is superseded by the
+  Task 5 migration: a lock-free probe, then an immediate transaction that
+  probes again.
+- For reads, `.manyhands/config.toml` is read through the guarded reader with
+  a 64 KiB cap. A link, a non-regular file, a file over the cap or one that is
+  not UTF-8 is an invalid configuration; a file that cannot be opened is
+  `repository_inaccessible`. Other callers and the indexer still read it
+  unguarded and uncapped.
+
+Item reads:
+
+- `ItemDto`: `parent` is `{id, state}` or null; `index` is present;
+  `changed_at` and `change_source` are nullable; `context.kind` may be
+  `unverified`; problems carry `target_id`; tickets carry `readiness`.
+- Lists omit `body` and `source` as the CLI RFC requires. They also leave
+  `observation` null, which is this design's choice, not the RFC's.
+- Unknown metadata is stored to at most 64 nesting levels; anything deeper is
+  null and the item reports `metadata_not_representable`. A stored column
+  that is not what a refresh writes is an invalid stored row.
+- `complete` is false on an item list and on every relationship read when
+  the index holds a source problem that means a directory was not fully
+  read: `.manyhands/worktrees` for either kind; `.manyhands/tickets` or
+  `.manyhands` for tickets and relationship reads; `docs` or any path under
+  it that is not a Markdown file for documents. A stale list carries no
+  recovery action; "Risks" is wrong where it says one is attached.
+
+Queries:
+
+- The original "Trees" and "Critical path" bullets are superseded by the
+  amendment beneath them.
+
+Evidence:
+
+- The read test targets are eight, not three: `read_boundary`,
+  `read_contract`, `read_relationships`, `read_repository`,
+  `read_credentials`, `read_items`, `read_comments` and `read_status`. All
+  are in the native workflow's test list.
+- The schema checker also accepts `$schema`, `$id`, `title` and
+  `description`.
+
