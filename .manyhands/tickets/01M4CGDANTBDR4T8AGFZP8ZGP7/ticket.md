@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M4CGDANTBDR4T8AGFZP8ZGP7"
 title: "Add ticket dependencies, hierarchy and short codes to Wave 03"
 type: "task"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -80,11 +80,16 @@ The product owner approved the RFC, the PRD and RFC amendments, the Wave 03
 allocation including the desktop Cycles, and the drafting choices above, with
 one note: Manyhands does have a SQLite database, as an index and cache that
 drives the interface and searches. The RFC now says so, serves every query
-from that index, and rejects only a database as the canonical store. Merge to
-main and ticket closure are not yet authorized.
+from that index, and rejects only a database as the canonical store.
 
 The Wave 03 Cycle tickets for F1, F2, C1, C3, C5, D1, D3 and D5 are refreshed
 on their own branches with the added scope.
+
+## Closure (2026-10-07)
+
+The product owner authorized closing this ticket on its branch and merging to
+local main. Both closure conditions are met by that merge. No push or worktree
+removal is authorized.
 
 ## Infrastructure
 
