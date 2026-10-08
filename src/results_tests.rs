@@ -325,7 +325,7 @@ fn failure_rejects_the_ok_code() {
 }
 
 /// Every code string the index stores, with the contract string it maps to.
-const STORED_PROBLEM_CODES: [(&str, &str); 16] = [
+const STORED_PROBLEM_CODES: [(&str, &str); 21] = [
     ("invalid-path", "invalid_path"),
     ("missing-front-matter", "missing_front_matter"),
     ("malformed-front-matter", "malformed_front_matter"),
@@ -342,6 +342,11 @@ const STORED_PROBLEM_CODES: [(&str, &str); 16] = [
     ("context", "context_problem"),
     ("branch", "branch_problem"),
     ("retry-required", "retry_required"),
+    ("relationship-wrong-type", "relationship_wrong_type"),
+    ("relationship-invalid-id", "relationship_invalid_id"),
+    ("relationship-self-reference", "relationship_self_reference"),
+    ("duplicate-dependency", "duplicate_dependency"),
+    ("invalid-slug", "invalid_slug"),
 ];
 
 #[test]
@@ -407,8 +412,14 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "context_problem",
             "branch_problem",
             "retry_required",
+            "relationship_wrong_type",
+            "relationship_invalid_id",
+            "relationship_self_reference",
+            "duplicate_dependency",
+            "invalid_slug",
             "path_not_utf8",
             "metadata_not_representable",
+            "relationship_not_a_ticket",
             "unknown_problem",
         ]
     );

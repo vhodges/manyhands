@@ -25,8 +25,14 @@
         "context_problem",
         "branch_problem",
         "retry_required",
+        "relationship_wrong_type",
+        "relationship_invalid_id",
+        "relationship_self_reference",
+        "duplicate_dependency",
+        "invalid_slug",
         "path_not_utf8",
         "metadata_not_representable",
+        "relationship_not_a_ticket",
         "unknown_problem"
       ]
     },

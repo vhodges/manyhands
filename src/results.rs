@@ -374,10 +374,22 @@ problem_codes! {
         "Restore the primary branch, then refresh the index.";
     RetryRequired => "retry_required", Some("retry-required"),
         "The repository changed while it was being observed; refresh the index again.";
+    RelationshipWrongType => "relationship_wrong_type", Some("relationship-wrong-type"),
+        "Write deps as a list of ticket IDs and parent as one ticket ID.";
+    RelationshipInvalidId => "relationship_invalid_id", Some("relationship-invalid-id"),
+        "Use the full ID of a ticket in deps and parent.";
+    RelationshipSelfReference => "relationship_self_reference", Some("relationship-self-reference"),
+        "Remove the ticket's own ID from its deps and parent.";
+    DuplicateDependency => "duplicate_dependency", Some("duplicate-dependency"),
+        "List each dependency once.";
+    InvalidSlug => "invalid_slug", Some("invalid-slug"),
+        "Correct the short code, or remove it.";
     PathNotUtf8 => "path_not_utf8", None,
         "Rename the file so that its path is valid UTF-8.";
     MetadataNotRepresentable => "metadata_not_representable", None,
         "Rewrite the metadata so that it can be represented as JSON.";
+    RelationshipNotATicket => "relationship_not_a_ticket", None,
+        "Name a ticket, not a document, in deps and parent.";
     UnknownProblem => "unknown_problem", None,
         "Refresh the index; if the problem remains, inspect the file.";
 }
