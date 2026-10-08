@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
@@ -1069,8 +1069,13 @@ impl RepositoryService {
         let active_ids = before
             .active_contexts
             .iter()
-            .flat_map(|context| context.items.iter().map(|item| item.id.clone()))
-            .collect::<BTreeSet<_>>();
+            .flat_map(|context| {
+                context
+                    .items
+                    .iter()
+                    .map(|item| (item.id.clone(), item.path.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
         if !changed.contains(&root) {
             persist_context_refresh(
                 &self.registry_path,
@@ -1098,7 +1103,7 @@ impl RepositoryService {
                     &active.items,
                     &active.problems,
                     &active.validation.problems,
-                    &BTreeSet::new(),
+                    &BTreeMap::new(),
                     &root,
                 )?;
             }
@@ -4639,7 +4644,7 @@ fn persist_context_refresh(
     items: &[ObservedItem],
     problems: &[RootObservationProblem],
     validation: &[canonical::ValidationProblem],
-    excluded: &BTreeSet<canonical::ItemId>,
+    excluded: &BTreeMap<canonical::ItemId, PathBuf>,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
@@ -4945,8 +4950,13 @@ fn persist_observation(
     let active_item_ids = observation
         .active_contexts
         .iter()
-        .flat_map(|context| context.items.iter().map(|item| item.id.clone()))
-        .collect::<BTreeSet<_>>();
+        .flat_map(|context| {
+            context
+                .items
+                .iter()
+                .map(|item| (item.id.clone(), item.path.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
     persist_context(
         transaction,
         repository_id,
@@ -4970,7 +4980,7 @@ fn persist_observation(
                 items: &active.items,
                 problems: &active.problems,
                 validation_problems: &active.validation.problems,
-                excluded_item_ids: &BTreeSet::new(),
+                excluded_item_ids: &BTreeMap::new(),
             },
             root,
         )?;
@@ -4984,7 +4994,9 @@ struct PersistedContext<'a> {
     items: &'a [ObservedItem],
     problems: &'a [RootObservationProblem],
     validation_problems: &'a [canonical::ValidationProblem],
-    excluded_item_ids: &'a BTreeSet<canonical::ItemId>,
+    /// Items whose effective copy is in their own context, with that copy's
+    /// path. This context neither lists them nor reports their problems.
+    excluded_item_ids: &'a BTreeMap<canonical::ItemId, PathBuf>,
 }
 
 fn persist_context(
@@ -5000,7 +5012,7 @@ fn persist_context(
     ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     let context_id = transaction.last_insert_rowid();
     for item in observed.items {
-        if observed.excluded_item_ids.contains(&item.id) {
+        if observed.excluded_item_ids.contains_key(&item.id) {
             continue;
         }
         transaction.execute(
@@ -5016,7 +5028,20 @@ fn persist_context(
         )?;
     }
     let observed_at = OffsetDateTime::now_utc().unix_timestamp();
+    let owned_by_excluded_item = |relative: &Path| {
+        observed
+            .excluded_item_ids
+            .iter()
+            .any(|(id, path)| discovery::item_owns_path(id, Some(path), relative))
+    };
     for problem in observed.problems {
+        if let RootObservationProblem::Source { path, .. } = problem
+            && path
+                .strip_prefix(&observed.context.worktree)
+                .is_ok_and(owned_by_excluded_item)
+        {
+            continue;
+        }
         let (path, code, guidance) = match problem {
             RootObservationProblem::Configuration(problem) => (
                 Some(problem.path.as_path()),
@@ -5040,30 +5065,8 @@ fn persist_context(
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, stored_path, code, guidance, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
-    // An excluded item's effective copy is in its own context, which reports
-    // that item's problems; this context's copy of it is not shown at all.
-    let excluded_paths = observed
-        .items
-        .iter()
-        .filter(|item| observed.excluded_item_ids.contains(&item.id))
-        .map(|item| item.path.as_path())
-        .collect::<BTreeSet<_>>();
-    let excluded_directories = observed
-        .excluded_item_ids
-        .iter()
-        .flat_map(|id| {
-            [
-                Path::new(".manyhands/comments").join(id.to_string()),
-                Path::new(".manyhands/tickets").join(id.to_string()),
-            ]
-        })
-        .collect::<Vec<_>>();
     for problem in observed.validation_problems {
-        if excluded_paths.contains(problem.path.as_path())
-            || excluded_directories
-                .iter()
-                .any(|directory| problem.path.starts_with(directory))
-        {
+        if owned_by_excluded_item(&problem.path) {
             continue;
         }
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, problem.path.to_str(), validation_code_name(problem.code.clone()), problem.message, observed_at])

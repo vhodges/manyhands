@@ -268,8 +268,7 @@ fn observe_active_contexts(
             continue;
         }
         let mut sources = Vec::new();
-        collect_root_sources(&expected_path, &mut sources, &mut context_problems);
-        scope_to_authoring_item(
+        collect_authoring_item_sources(
             &expected_path,
             kind,
             &path_id,
@@ -522,36 +521,19 @@ fn parse_authoring_branch(
     Some((kind, item_id))
 }
 
-/// An item worktree is a full checkout, so it also holds a copy of every other
-/// item as of its branch point. Only the item its authoring branch identifies,
-/// and that item's comments, belong to the context; every other item is
-/// observed from the primary context.
-fn scope_to_authoring_item(
-    worktree: &Path,
-    kind: crate::repository::AuthoringKind,
+/// Whether a context-relative path belongs to an item: its ticket directory,
+/// its comment directory, or the item's own file. This is the one rule both
+/// for what an item worktree contributes and for what the primary context
+/// leaves to it.
+pub(super) fn item_owns_path(
     item_id: &canonical::ItemId,
-    sources: &mut Vec<(PathBuf, String)>,
-    problems: &mut Vec<RootObservationProblem>,
-) {
-    let comments = Path::new(".manyhands/comments").join(item_id.to_string());
-    let ticket = Path::new(".manyhands/tickets").join(item_id.to_string());
-    sources.retain(|(path, source)| {
-        path.starts_with(&comments)
-            || canonical::parse_item(path, source)
-                .is_ok_and(|item| authoring_item_matches(&item, kind, item_id))
-    });
-    problems.retain(|problem| match problem {
-        RootObservationProblem::Source { path, .. } => {
-            path.strip_prefix(worktree).is_ok_and(|relative| {
-                relative.starts_with(&comments)
-                    || (kind == crate::repository::AuthoringKind::Ticket
-                        && relative.starts_with(&ticket))
-            })
-        }
-        RootObservationProblem::Configuration(_)
-        | RootObservationProblem::Branch { .. }
-        | RootObservationProblem::Context { .. } => true,
-    });
+    item_path: Option<&Path>,
+    relative: &Path,
+) -> bool {
+    let id = item_id.to_string();
+    Some(relative) == item_path
+        || relative.starts_with(Path::new(".manyhands/comments").join(&id))
+        || relative.starts_with(Path::new(".manyhands/tickets").join(&id))
 }
 
 fn authoring_item_matches(
@@ -676,6 +658,59 @@ fn observe_head(
             }
         }
     }
+}
+
+/// An item worktree is a full checkout, so it also holds a copy of every other
+/// item as of its branch point. Only the item its authoring branch identifies,
+/// and that item's comments, belong to the context; every other item is
+/// observed from the primary context. Collecting only those also keeps the
+/// traversal limits and their problems about this item.
+fn collect_authoring_item_sources(
+    root: &Path,
+    kind: crate::repository::AuthoringKind,
+    item_id: &canonical::ItemId,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    let id = item_id.to_string();
+    match kind {
+        crate::repository::AuthoringKind::Ticket => {
+            let tickets = root.join(".manyhands/tickets");
+            let directory = tickets.join(&id);
+            if directory_exists(&tickets, problems) && directory_exists(&directory, problems) {
+                collect_source(root, &directory.join("ticket.md"), sources, problems);
+            }
+        }
+        crate::repository::AuthoringKind::Document => {
+            // A document can be anywhere under docs/, so the tree is scanned
+            // and every source carrying this ID is kept: a second one is a
+            // duplicate the context must report.
+            let mut documents = Vec::new();
+            let mut document_problems = Vec::new();
+            collect_documents(root, &mut documents, &mut document_problems);
+            documents.retain(|(path, source)| {
+                canonical::parse_item(path, source)
+                    .is_ok_and(|item| canonical_item_id(&item) == item_id)
+            });
+            // Once the document is found, a problem with some other file is
+            // not this context's. A directory problem can still hide a
+            // duplicate, and anything can explain a document that is missing.
+            let found = !documents.is_empty();
+            document_problems.retain(|problem| match problem {
+                RootObservationProblem::Source { path, .. } => !found || path.is_dir(),
+                _ => true,
+            });
+            sources.append(&mut documents);
+            problems.append(&mut document_problems);
+        }
+    }
+    let comments = root.join(".manyhands/comments");
+    let directory = comments.join(&id);
+    if directory_exists(&comments, problems) && directory_exists(&directory, problems) {
+        let mut entries = 0;
+        collect_comment_directory(root, &directory, &mut entries, sources, problems);
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
 fn collect_root_sources(
@@ -892,24 +927,34 @@ fn collect_comments(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
-            for entry in read_managed_directory(&path, &mut entries, problems) {
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    problems.push(source_problem(
-                        path,
-                        "the directory entry type cannot be read",
-                    ));
-                    continue;
-                };
-                if file_type.is_symlink() {
-                    problems.push(source_problem(
-                        path,
-                        "symbolic links are not canonical sources",
-                    ));
-                } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
-                    collect_source(root, &path, sources, problems);
-                }
-            }
+            collect_comment_directory(root, &path, &mut entries, sources, problems);
+        }
+    }
+}
+
+fn collect_comment_directory(
+    root: &Path,
+    directory: &Path,
+    entries: &mut usize,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    for entry in read_managed_directory(directory, entries, problems) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            problems.push(source_problem(
+                path,
+                "the directory entry type cannot be read",
+            ));
+            continue;
+        };
+        if file_type.is_symlink() {
+            problems.push(source_problem(
+                path,
+                "symbolic links are not canonical sources",
+            ));
+        } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+            collect_source(root, &path, sources, problems);
         }
     }
 }

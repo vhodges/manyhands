@@ -3256,3 +3256,69 @@ fn primary_does_not_report_problems_for_an_item_with_its_own_context() {
         snapshot.problems
     );
 }
+
+#[test]
+fn primary_does_not_report_a_malformed_copy_of_a_document_with_its_own_context() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    // Same path as the worktree's effective copy, but unparseable, so primary
+    // cannot learn its ID; the path alone must identify it.
+    fs::write(
+        shared.fixture.root.join("docs/first.md"),
+        "---\nmanyhands_managed: true\nnot: [valid\n",
+    )
+    .unwrap();
+    // A source-level problem in that item's comment directory on primary.
+    let directory = shared
+        .fixture
+        .root
+        .join(".manyhands/comments")
+        .join(shared.first.to_string());
+    fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("missing", directory.join("01ARZ3NDEKTSV4RRFFQ69G5FC3.md")).unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+}
+
+#[test]
+fn document_worktree_reports_a_second_source_with_its_item_id() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    let root = shared.fixture.root.canonicalize().unwrap();
+    let own = context_worktree(&root, &shared.first);
+    fs::write(
+        own.join("docs/copy.md"),
+        document_source_with(&shared.first, "Copy"),
+    )
+    .unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    // The duplicate leaves the context without a valid identified item, so it
+    // is reported as a context problem and not silently indexed.
+    assert!(!item_contexts(&snapshot).contains_key(&shared.first.to_string()));
+    assert!(
+        snapshot
+            .problems
+            .iter()
+            .any(|problem| problem.code == "context"),
+        "{:?}",
+        snapshot.problems
+    );
+}
