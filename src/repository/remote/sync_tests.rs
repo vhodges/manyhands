@@ -3,7 +3,7 @@ use super::*;
 use crate::repository::OwnedPathBoundary;
 use crate::repository::remote::reservation::commit_observation_batch;
 use crate::repository::{EnableRepositoryRequest, FailurePoint, REGISTRY_FILE};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::fs;
 struct NoPrompt;
 impl SessionCredentialProvider for NoPrompt {
@@ -2057,7 +2057,7 @@ fn resolution_candidate_failure_reuses_the_same_candidate_on_retry() {
     })
     .unwrap();
     *service.failure_point.lock().unwrap() = None;
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     assert!(
         git2::Repository::open(root.path())
             .unwrap()
@@ -2073,7 +2073,7 @@ fn resolution_candidate_failure_reuses_the_same_candidate_on_retry() {
         panic!("completion")
     };
     assert_eq!(commit_oid.to_string(), candidate);
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     assert!(
         !git2::Repository::open(root.path())
             .unwrap()
@@ -2112,7 +2112,7 @@ fn resolution_ref_transition_failure_reconciles_candidate_without_second_ref_mov
     assert!(
         matches!(service.resolve_synchronization(request()), Err(SynchronizationError::Repository(error)) if error.kind == RepositoryErrorKind::InjectedFailure)
     );
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     assert!(
         git2::Repository::open(root.path())
             .unwrap()
@@ -2137,7 +2137,7 @@ fn resolution_ref_transition_failure_reconciles_candidate_without_second_ref_mov
     assert_eq!(commit_oid, candidate);
     let mut repository = git2::Repository::open(root.path()).unwrap();
     assert!(repository.mergehead_foreach(|_| true).is_err());
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     assert!(
         !repository.path().join("index.lock").exists(),
         "durable retry retires only the recognized recovery sentinel"
@@ -2528,7 +2528,7 @@ fn index_lock_revalidates_target_change_after_preflight_without_clobbering_it() 
     );
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[test]
 fn unsupported_index_lock_refuses_before_creating_index_lock() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2558,7 +2558,7 @@ fn unsupported_index_lock_refuses_before_creating_index_lock() {
     assert!(!repository.path().join("index.lock").exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn index_lock_pathname_substitution_before_persist_is_refused() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2602,7 +2602,7 @@ fn index_lock_pathname_substitution_before_persist_is_refused() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn unrelated_scratch_leaf_is_never_a_serialization_source() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2648,7 +2648,150 @@ fn unrelated_scratch_leaf_is_never_a_serialization_source() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[test]
+fn native_serialization_uses_the_validated_private_namespace() {
+    let (root, _data, service, request) = protocol_resolution_fixture();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterCandidatePrepared);
+    assert!(service.resolve_synchronization(request.clone()).is_err());
+    let record = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, request.synchronization_id)
+    })
+    .unwrap()
+    .unwrap();
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .reacquire_synchronization_conflict(
+            root.path(),
+            request.synchronization_id,
+            &record.target,
+            request.observation.ordinal,
+            request.observation.fingerprint,
+        )
+        .unwrap()
+    else {
+        panic!("reservation must resume")
+    };
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let held = ResolutionIndexLock::acquire(
+        &repository,
+        &service,
+        root.path(),
+        &owner,
+        request.attempt_id,
+    )
+    .unwrap();
+    let index = held.authoritative_index().unwrap();
+    assert_eq!(
+        index.path(),
+        Some(
+            repository
+                .path()
+                .join(format!(
+                    ".manyhands-resolution-{}/index",
+                    request.attempt_id
+                ))
+                .as_path()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_candidate_storage_refuses_redirected_objects_before_journaling() {
+    use std::os::unix::fs::symlink;
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let old = repository.head().unwrap().target();
+    let index = fs::read(repository.path().join("index")).unwrap();
+    let gitdir = repository.path().to_owned();
+    set_resolution_index_lock_hook(root.path().to_owned(), move || {
+        fs::rename(gitdir.join("objects"), gitdir.join("retained-objects")).unwrap();
+        symlink(gitdir.join("retained-objects"), gitdir.join("objects")).unwrap();
+    });
+    assert!(service.resolve_synchronization(request).is_err());
+    assert_eq!(repository.head().unwrap().target(), old);
+    assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert!(
+        connection
+            .query_row(
+                "SELECT candidate_oid IS NULL FROM remote_resolution_attempts",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_index_image_refuses_executable_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("index");
+    fs::write(&path, b"not an index").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::File::open(directory.path()).unwrap();
+    assert!(matches!(
+        index_file_image_at(&parent, &fixed_index_name("index")),
+        Err(SynchronizationError::ExternalChange)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_owned_resolution_read_refuses_symlinked_root_ancestor() {
+    use std::os::unix::fs::symlink;
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir(directory.path().join("real")).unwrap();
+    fs::create_dir(directory.path().join("real/root")).unwrap();
+    fs::write(directory.path().join("real/root/document"), b"body").unwrap();
+    symlink(
+        directory.path().join("real"),
+        directory.path().join("alias"),
+    )
+    .unwrap();
+    let root = directory.path().join("alias/root");
+    assert!(
+        owned_resolution_file_bytes(
+            &root,
+            Path::new("document"),
+            RepositoryOperation::RepositorySnapshot,
+            &root,
+        )
+        .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_backend_lock_scan_refuses_symlinked_gitdir_ancestor() {
+    use std::os::unix::fs::symlink;
+    let directory = tempfile::tempdir().unwrap();
+    let real = directory.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let repository = git2::Repository::init(real.join("root")).unwrap();
+    let signature = git2::Signature::now("Native", "native@example.com").unwrap();
+    let tree = repository.index().unwrap().write_tree().unwrap();
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "initial",
+            &repository.find_tree(tree).unwrap(),
+            &[],
+        )
+        .unwrap();
+    // Opening an alias first lets libgit2 canonicalize it. Replace an ancestor
+    // only after opening the repository so the helper sees the stale namespace.
+    let moved = directory.path().join("moved");
+    fs::rename(&real, &moved).unwrap();
+    symlink(&moved, &real).unwrap();
+    assert!(refuse_ambiguous_resolution_backend_locks(&repository).is_err());
+}
+
+#[cfg(unix)]
 fn index_with_extension(mut index: Vec<u8>, signature: &[u8; 4]) -> Vec<u8> {
     index.truncate(index.len() - 20);
     index.extend_from_slice(signature);
@@ -2660,7 +2803,7 @@ fn index_with_extension(mut index: Vec<u8>, signature: &[u8; 4]) -> Vec<u8> {
     index
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn unsupported_index_extensions_are_rejected_before_index_lock_creation() {
     for extension in [b"link", b"abcd", b"ABCD"] {
@@ -2678,7 +2821,7 @@ fn unsupported_index_extensions_are_rejected_before_index_lock_creation() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn advisory_index_extensions_are_explicitly_rebuildable() {
     let (root, _data, _service) = fixture();
@@ -2687,7 +2830,7 @@ fn advisory_index_extensions_are_explicitly_rebuildable() {
     assert!(approved_index_extensions(&index).is_ok());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn external_index_substitution_after_persist_rejects_before_ref_transition() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2732,7 +2875,7 @@ fn external_index_substitution_after_persist_rejects_before_ref_transition() {
     assert!(repository.path().join("index.lock").exists());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn substituted_lock_before_verified_release_is_preserved() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2774,7 +2917,7 @@ fn substituted_lock_before_verified_release_is_preserved() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn substituted_lock_after_install_is_retained_without_cleanup() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -2977,7 +3120,7 @@ fn ignored_file_does_not_break_exact_post_ref_retry() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn writer_boundary_rejects_regular_target_replacement_without_advancing_path() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -3037,7 +3180,7 @@ fn writer_boundary_rejects_regular_target_replacement_without_advancing_path() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn writer_temp_source_substitution_is_rejected_without_applying_resolution() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -3103,7 +3246,7 @@ fn writer_temp_source_substitution_is_rejected_without_applying_resolution() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn verified_guarded_temp_replacement_is_retained_without_pathname_cleanup() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -3695,7 +3838,7 @@ fn document_ticket_comment_kind_change_is_external_only_without_effects() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn copied_content_foreign_lock_is_never_recovered_as_owned() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -3738,7 +3881,7 @@ fn copied_content_foreign_lock_is_never_recovered_as_owned() {
     assert_eq!(fs::metadata(&lock).unwrap().ino(), identity);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn sentinel_identity_and_bytes_are_stable_across_index_persistence() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
@@ -3786,7 +3929,7 @@ fn sentinel_identity_and_bytes_are_stable_across_index_persistence() {
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn protocol_resolution_fixture() -> (
     tempfile::TempDir,
     tempfile::TempDir,
@@ -3815,7 +3958,7 @@ fn protocol_resolution_fixture() -> (
     (root, data, service, request)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn acquisition_observation_transaction_failure_recovers_before_candidate_without_drop_cleanup() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -3847,7 +3990,7 @@ fn acquisition_observation_transaction_failure_recovers_before_candidate_without
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn release_observation_transaction_failure_recovers_absence_and_refuses_foreign_replacement() {
     for foreign in [false, true] {
@@ -3903,7 +4046,7 @@ fn release_observation_transaction_failure_recovers_absence_and_refuses_foreign_
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn pre_ref_installed_index_old_head_reuses_candidate_and_preserves_foreign_backend_lock() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -3944,7 +4087,7 @@ fn pre_ref_installed_index_old_head_reuses_candidate_and_preserves_foreign_backe
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn metadata_members_reconcile_independent_absence_and_preserve_foreign_remnants() {
     for missing in RESOLUTION_MERGE_MEMBERS {
@@ -3987,7 +4130,7 @@ fn metadata_members_reconcile_independent_absence_and_preserve_foreign_remnants(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn authoritative_libgit2_serialization_preserves_reuc_and_name_semantics() {
     // Valid v2 index with one REUC and NAME record. A static checksum fixture,
@@ -4035,7 +4178,7 @@ fn authoritative_libgit2_serialization_preserves_reuc_and_name_semantics() {
     assert!(approved_index_extensions(&serialized).is_ok());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn same_image_index_identity_substitution_is_refused_before_canonical_writes() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -4068,7 +4211,7 @@ fn same_image_index_identity_substitution_is_refused_before_canonical_writes() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn uncertain_ref_intent_preserves_candidate_and_both_logs_after_operator_lock_handling() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -4778,7 +4921,7 @@ fn retained_candidate_cannot_bypass_all_side_closure_validation() {
 
 // Locked public-API characterization only. None of these fixture transitions
 // establishes process-death behavior or authorizes production reflog repair.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn ref_effect_api_fixture() -> (tempfile::TempDir, git2::Repository, git2::Oid, git2::Oid) {
     let root = tempfile::tempdir().unwrap();
     let repository = git2::Repository::init(root.path()).unwrap();
@@ -4810,13 +4953,13 @@ fn ref_effect_api_fixture() -> (tempfile::TempDir, git2::Repository, git2::Oid, 
     (root, repository, old, candidate)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn ref_effect_entry(old: git2::Oid, new: git2::Oid) -> Vec<u8> {
     format!("{old} {new} Frozen Identity <frozen@example.invalid> 5678 +0000\towned effect\n")
         .into_bytes()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stock_ref_effect_transaction_appends_both_logs_with_explicit_signature_and_absence() {
     for absent in [false, true] {
@@ -4884,7 +5027,7 @@ fn stock_ref_effect_transaction_appends_both_logs_with_explicit_signature_and_ab
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stock_ref_effect_set_reflog_suppresses_head_and_replaces_branch_even_without_target() {
     for absent in [false, true] {
@@ -4952,7 +5095,7 @@ fn stock_ref_effect_set_reflog_suppresses_head_and_replaces_branch_even_without_
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stock_ref_effect_reflog_write_normalizes_prior_bytes_and_discards_partial_lines() {
     let (_root, repository, old, _candidate) = ref_effect_api_fixture();
@@ -4983,7 +5126,7 @@ fn stock_ref_effect_reflog_write_normalizes_prior_bytes_and_discards_partial_lin
     assert_eq!(repository.refname_to_id("HEAD").unwrap(), old);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stock_ref_effect_linked_worktree_updates_common_branch_and_only_target_head_log() {
     let (root, repository, old, candidate) = ref_effect_api_fixture();
@@ -5032,7 +5175,7 @@ fn stock_ref_effect_linked_worktree_updates_common_branch_and_only_target_head_l
     assert_eq!(linked.refname_to_id("HEAD").unwrap(), candidate);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn uncertain_ref_effect_matrix_preserves_log_images_after_operator_lock_handling() {
     // Explicitly simulated images, not process death inside libgit2. HEAD-only
@@ -5178,7 +5321,7 @@ fn uncertain_ref_effect_matrix_preserves_log_images_after_operator_lock_handling
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn candidate_ref_effect_before_checkpoint_observation_replays_without_another_append() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -5217,7 +5360,7 @@ fn candidate_ref_effect_before_checkpoint_observation_replays_without_another_ap
     // not death in the backend, nor proof of candidate-HEAD log authentication.
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stock_ref_effect_head_append_failure_leaves_branch_append_and_replay_duplicates_it() {
     let (_root, repository, old, candidate) = ref_effect_api_fixture();
@@ -5270,7 +5413,214 @@ fn stock_ref_effect_head_append_failure_leaves_branch_append_and_replay_duplicat
     assert_eq!(repository.refname_to_id("HEAD").unwrap(), candidate);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[test]
+fn ref_log_final_proof_initial_rejects_same_candidate_branch_substitution() {
+    assert_ref_log_final_proof_rejects_stale_target(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ref_log_final_proof_reconcile_rejects_same_candidate_branch_substitution() {
+    assert_ref_log_final_proof_rejects_stale_target(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ref_log_final_proof_reconcile_rejects_third_same_tree_commit() {
+    assert_ref_log_final_proof_rejects_stale_target(true, true);
+}
+
+#[cfg(unix)]
+fn assert_ref_log_final_proof_rejects_stale_target(reconcile: bool, third_commit: bool) {
+    use std::os::unix::fs::MetadataExt;
+
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    repository
+        .config()
+        .unwrap()
+        .set_bool("core.logallrefupdates", false)
+        .unwrap();
+    let logs = [
+        repository.path().join("logs/refs/heads/main"),
+        repository.path().join("logs/HEAD"),
+        repository.path().join("logs/refs/heads/substitute"),
+    ];
+    for log in &logs[..2] {
+        fs::remove_file(log).unwrap();
+    }
+    let old = repository.refname_to_id("HEAD").unwrap();
+    let merge_images =
+        RESOLUTION_MERGE_MEMBERS.map(|member| fs::read(repository.path().join(member)).ok());
+    assert!(merge_images[0].is_some());
+    if reconcile {
+        *service.failure_point.lock().unwrap() =
+            Some(FailurePoint::ResolutionAfterCandidatePrepared);
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        assert_eq!(repository.refname_to_id("HEAD").unwrap(), old);
+    }
+
+    struct EffectSnapshot {
+        candidate: git2::Oid,
+        live: git2::Oid,
+        files: Vec<(PathBuf, Vec<u8>, [u64; 2])>,
+    }
+    let snapshot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let hook_snapshot = snapshot.clone();
+    let hook_root = root.path().to_owned();
+    set_resolution_ref_refresh_hook(root.path().to_owned(), move || {
+        let repository = git2::Repository::open(hook_root).unwrap();
+        let candidate = repository.refname_to_id("HEAD").unwrap();
+        assert_ne!(candidate, old);
+        let commit = repository.find_commit(candidate).unwrap();
+        assert_eq!(commit.parent_count(), 2);
+        assert_eq!(commit.parent_id(0).unwrap(), old);
+        let mut index = repository.index().unwrap();
+        index.read(true).unwrap();
+        assert!(!index.has_conflicts());
+        assert_eq!(index.write_tree_to(&repository).unwrap(), commit.tree_id());
+        let live = if third_commit {
+            let signer = git2::Signature::now("External", "external@example.invalid").unwrap();
+            let foreign = repository
+                .commit(
+                    None,
+                    &signer,
+                    &signer,
+                    "External same-tree commit",
+                    &commit.tree().unwrap(),
+                    &[&commit],
+                )
+                .unwrap();
+            assert_ne!(foreign, candidate);
+            // Fixture-only direct mutation models stale state at the final proof
+            // checkpoint; it does not promise namespace CAS for uncoordinated writers.
+            fs::write(
+                repository.path().join("refs/heads/main"),
+                format!("{foreign}\n"),
+            )
+            .unwrap();
+            foreign
+        } else {
+            fs::write(
+                repository.path().join("refs/heads/substitute"),
+                format!("{candidate}\n"),
+            )
+            .unwrap();
+            fs::write(
+                repository.path().join("HEAD"),
+                b"ref: refs/heads/substitute\n",
+            )
+            .unwrap();
+            candidate
+        };
+        let mut files = vec![
+            repository.path().join("HEAD"),
+            repository.path().join("refs/heads/main"),
+            repository.path().join("index"),
+            repository.path().join("index.lock"),
+        ];
+        if !third_commit {
+            files.push(repository.path().join("refs/heads/substitute"));
+        }
+        for member in RESOLUTION_MERGE_MEMBERS {
+            let path = repository.path().join(member);
+            if path.exists() {
+                files.push(path);
+            }
+        }
+        let files = files
+            .into_iter()
+            .map(|path| {
+                let meta = fs::metadata(&path).unwrap();
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes, [meta.dev(), meta.ino()])
+            })
+            .collect();
+        *hook_snapshot.lock().unwrap() = Some(EffectSnapshot {
+            candidate,
+            live,
+            files,
+        });
+    });
+
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    let result = if reconcile {
+        restarted.resolve_synchronization(request.clone())
+    } else {
+        service.resolve_synchronization(request.clone())
+    };
+    let snapshot = snapshot
+        .lock()
+        .unwrap()
+        .take()
+        .expect("post-backend hook ran");
+    assert!(
+        matches!(result, Err(SynchronizationError::RecoveryRequired)),
+        "stale final proof must reject completion"
+    );
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // A second attempt must preserve the observed foreign state without repeating
+    // the native transition, observing a checkpoint, or retiring owned evidence.
+    for retry in [false, true] {
+        if retry {
+            assert!(restarted.resolve_synchronization(request.clone()).is_err());
+        }
+        assert_eq!(repository.refname_to_id("HEAD").unwrap(), snapshot.live);
+        assert_eq!(
+            repository.refname_to_id("refs/heads/main").unwrap(),
+            if third_commit {
+                snapshot.live
+            } else {
+                snapshot.candidate
+            }
+        );
+        assert_eq!(
+            repository.find_reference("HEAD").unwrap().symbolic_target(),
+            Some(if third_commit {
+                "refs/heads/main"
+            } else {
+                "refs/heads/substitute"
+            })
+        );
+        for (path, bytes, identity) in &snapshot.files {
+            assert!(fs::read(path).unwrap() == *bytes, "effect image preserved");
+            let meta = fs::metadata(path).unwrap();
+            assert_eq!([meta.dev(), meta.ino()], *identity);
+        }
+        for log in &logs {
+            assert!(!log.exists(), "disabled absent logs stay absent");
+        }
+        assert!(
+            RESOLUTION_MERGE_MEMBERS.map(|member| fs::read(repository.path().join(member)).ok())
+                == merge_images
+        );
+        assert!(
+            fs::read(root.path().join("docs/document.md")).unwrap()
+                == request.resolutions[0].1.bytes()
+        );
+        let progress: (String, String, String, Option<String>, String, Option<String>, String) =
+            connection.query_row(
+                "SELECT artifact.phase,artifact.ref_phase,attempt.phase,attempt.checkpoint_oid,step.phase,step.result_oid,attempt.candidate_oid FROM remote_resolution_index_artifacts artifact JOIN remote_resolution_attempts attempt ON attempt.id=artifact.attempt_id JOIN remote_integration_steps step ON step.id=attempt.integration_step_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            ).unwrap();
+        assert_eq!(
+            progress,
+            (
+                "published".into(),
+                "intent".into(),
+                "candidate_prepared".into(),
+                None,
+                "commit_prepared".into(),
+                None,
+                snapshot.candidate.to_string(),
+            )
+        );
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_no_effect_intent_restarts_with_original_images() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -5295,7 +5645,7 @@ fn ref_log_proof_no_effect_intent_restarts_with_original_images() {
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_candidate_requires_exact_logs_and_operator_restoration() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -5322,7 +5672,7 @@ fn ref_log_proof_candidate_requires_exact_logs_and_operator_restoration() {
     assert_eq!(fs::read(&path).unwrap(), intended);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_static_unsafe_metadata_and_policy_refuse_before_canonical_writes() {
     for adverse in [
@@ -5391,7 +5741,7 @@ fn ref_log_proof_static_unsafe_metadata_and_policy_refuse_before_canonical_write
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn frozen_resolution_log_entry(
     repository: &git2::Repository,
     old: git2::Oid,
@@ -5407,7 +5757,7 @@ fn frozen_resolution_log_entry(
     .into_bytes()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_policy_opaque_history_and_frozen_signer_are_private_and_exact() {
     for policy in [None, Some("false"), Some("true"), Some("always")] {
@@ -5505,7 +5855,7 @@ fn ref_log_proof_policy_opaque_history_and_frozen_signer_are_private_and_exact()
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_old_ref_effects_preserve_then_accept_operator_restored_original_images() {
     for shape in [
@@ -5596,7 +5946,7 @@ fn ref_log_proof_old_ref_effects_preserve_then_accept_operator_restored_original
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_unproved_candidate_states_and_policy_changes_preserve_effects() {
     for shape in [
@@ -5689,7 +6039,7 @@ fn ref_log_proof_unproved_candidate_states_and_policy_changes_preserve_effects()
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_missing_partial_tampered_or_substituted_evidence_never_authenticates() {
     for corruption in [
@@ -5765,7 +6115,7 @@ fn ref_log_proof_missing_partial_tampered_or_substituted_evidence_never_authenti
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_manifest_observation_failure_recovers_only_private_preparation() {
     for role in ["baseline", "transition"] {
@@ -5811,7 +6161,7 @@ fn ref_log_proof_manifest_observation_failure_recovers_only_private_preparation(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_legacy_missing_all_evidence_refuses_even_old_no_effect_state() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -5848,7 +6198,7 @@ fn ref_log_proof_legacy_missing_all_evidence_refuses_even_old_no_effect_state() 
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_preserves_every_relevant_foreign_backend_lock_before_writes() {
     for role in [
@@ -5887,7 +6237,7 @@ fn ref_log_proof_preserves_every_relevant_foreign_backend_lock_before_writes() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_snapshot_uses_common_branch_and_target_worktree_head_roles() {
     let (root, repository, old, candidate) = ref_effect_api_fixture();
@@ -5939,7 +6289,7 @@ fn ref_log_proof_snapshot_uses_common_branch_and_target_worktree_head_roles() {
     // Observer/role fidelity only, not full public context resolution/death proof.
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn ref_log_proof_old_operator_restoration_after_failed_checkpoint_keeps_progress_monotonic() {
     let (root, data, service, request) = protocol_resolution_fixture();
@@ -5995,4 +6345,820 @@ fn ref_log_proof_old_operator_restoration_after_failed_checkpoint_keeps_progress
             .unwrap(),
         "observed"
     );
+}
+
+// Real SIGKILL tests, deliberately separate from synthetic partial-log and
+// transaction-fault tests above. The parent owns every disposable fixture and
+// the immutable request; no production helper process or journal format exists.
+#[cfg(target_os = "linux")]
+pub(super) fn process_death_boundary(root: &Path, point: &str) {
+    process_death::boundary(root, point);
+}
+
+// Native process-death evidence remains Linux-only until exercised on macOS.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(super) fn process_death_boundary(_root: &Path, _point: &str) {}
+
+#[cfg(target_os = "linux")]
+mod process_death {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const CHILD_TEST: &str =
+        "repository::remote::sync::tests::process_death::resolution_process_death_child";
+    const TIMEOUT: Duration = Duration::from_secs(30);
+    const CHILD_TIMEOUT_EXIT: i32 = 86;
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct FixtureRequest {
+        operation: String,
+        attempt: String,
+        ordinal: u8,
+        fingerprint: [u8; 32],
+        configuration: [u8; 32],
+        head: String,
+        path_ordinal: u32,
+        sides: [Option<String>; 3],
+        modes: [Option<u32>; 3],
+        result: Vec<u8>,
+    }
+
+    impl FixtureRequest {
+        fn from_request(request: &ResolveSynchronizationRequest) -> Self {
+            assert!(request.identity.is_none());
+            assert_eq!(request.resolutions.len(), 1);
+            let (token, result) = &request.resolutions[0];
+            assert!(token.path == b"docs/document.md");
+            Self {
+                operation: request.synchronization_id.to_string(),
+                attempt: request.attempt_id.to_string(),
+                ordinal: request.observation.ordinal,
+                fingerprint: request.observation.fingerprint,
+                configuration: request.observation.configuration,
+                head: request.observation.head.to_string(),
+                path_ordinal: token.ordinal,
+                sides: [token.base, token.local, token.incoming]
+                    .map(|oid| oid.map(|oid| oid.to_string())),
+                modes: [token.base_mode, token.local_mode, token.incoming_mode],
+                result: result.bytes().to_vec(),
+            }
+        }
+
+        fn into_request(self, root: PathBuf) -> ResolveSynchronizationRequest {
+            let operation = OperationId::parse(&self.operation).expect("fixture operation");
+            let observation = merge::ConflictObservation {
+                operation_id: operation,
+                ordinal: self.ordinal,
+                fingerprint: self.fingerprint,
+                head: self.head.parse().expect("fixture head"),
+                configuration: self.configuration,
+                root: root.clone(),
+            };
+            let [base, local, incoming] = self
+                .sides
+                .map(|oid| oid.map(|oid| oid.parse().expect("fixture side")));
+            let token = merge::ConflictPathToken {
+                observation: observation.clone(),
+                ordinal: self.path_ordinal,
+                path: b"docs/document.md".to_vec(),
+                base,
+                local,
+                incoming,
+                base_mode: self.modes[0],
+                local_mode: self.modes[1],
+                incoming_mode: self.modes[2],
+            };
+            ResolveSynchronizationRequest::new(
+                root,
+                operation,
+                OperationId::parse(&self.attempt).expect("fixture attempt"),
+                observation,
+                vec![(token, RedactedConflictBytes::from_bytes(self.result))],
+                None,
+            )
+        }
+    }
+
+    pub(super) fn boundary(root: &Path, point: &str) {
+        if std::env::var("MANYHANDS_RESOLUTION_DEATH_POINT")
+            .ok()
+            .as_deref()
+            != Some(point)
+            || std::env::var_os("MANYHANDS_RESOLUTION_DEATH_ROOT")
+                .is_none_or(|expected| Path::new(&expected) != root)
+        {
+            return;
+        }
+        let ipc = PathBuf::from(std::env::var_os("MANYHANDS_RESOLUTION_DEATH_IPC").unwrap());
+        let child_timeout = std::env::var("MANYHANDS_RESOLUTION_DEATH_TIMEOUT_MS")
+            .map(|value| Duration::from_millis(value.parse().expect("child timeout milliseconds")))
+            .unwrap_or(TIMEOUT);
+        let deadline = Instant::now() + child_timeout;
+        fs::write(ipc.join("ready"), b"ready").expect("death child readiness");
+        // Neither unwind nor Drop is the crash mechanism. The parent kills and
+        // reaps this process while the real backend/lease handles are still live.
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // A delayed parent must never let this hook unwind through the live
+        // transaction/lease guards. This distinct failure exit is not SIGKILL
+        // and therefore cannot count as a successful boundary-death proof.
+        unsafe { libc::_exit(CHILD_TIMEOUT_EXIT) }
+    }
+
+    struct DropCanary(PathBuf);
+    impl Drop for DropCanary {
+        fn drop(&mut self) {
+            fs::write(&self.0, b"drop ran").expect("death child drop canary");
+        }
+    }
+
+    #[test]
+    fn resolution_process_death_child() {
+        let Some(ipc) = std::env::var_os("MANYHANDS_RESOLUTION_DEATH_IPC") else {
+            return;
+        };
+        let ipc = PathBuf::from(ipc);
+        let root = PathBuf::from(std::env::var_os("MANYHANDS_RESOLUTION_DEATH_ROOT").unwrap());
+        let data = PathBuf::from(std::env::var_os("MANYHANDS_RESOLUTION_DEATH_DATA").unwrap());
+        let dto: FixtureRequest = serde_yaml::from_slice(&fs::read(ipc.join("request")).unwrap())
+            .expect("fixture request decoding");
+        let request = dto.into_request(root.clone());
+        let service = RepositoryService::open_at(&data).expect("death child service");
+        if std::env::var_os("MANYHANDS_RESOLUTION_DEATH_POINT").is_some() {
+            let _drop_canary = DropCanary(ipc.join("drop-ran"));
+            for (point, setter) in [
+                (
+                    "sentinel-published",
+                    set_resolution_index_lock_hook as fn(PathBuf, fn()),
+                ),
+                (
+                    "scratch-prepared",
+                    set_resolution_index_scratch_hook as fn(PathBuf, fn()),
+                ),
+                (
+                    "output-recorded",
+                    set_resolution_index_persist_hook as fn(PathBuf, fn()),
+                ),
+                (
+                    "index-installed",
+                    set_resolution_index_install_hook as fn(PathBuf, fn()),
+                ),
+                (
+                    "release-intent",
+                    set_resolution_index_retire_hook as fn(PathBuf, fn()),
+                ),
+            ] {
+                if std::env::var("MANYHANDS_RESOLUTION_DEATH_POINT").unwrap() == point {
+                    setter(root.clone(), selected_boundary);
+                }
+            }
+            if std::env::var("MANYHANDS_RESOLUTION_DEATH_POINT").unwrap() == "canonical-installed" {
+                service.set_owned_path_hook_for_root_for_testing(
+                    root,
+                    "docs/document.md".into(),
+                    OwnedPathBoundary::TempVerified,
+                    selected_boundary,
+                );
+            }
+            let _ = service.resolve_synchronization(request);
+            panic!("death child missed selected boundary");
+        }
+        let result = service.resolve_synchronization(request);
+        match std::env::var("MANYHANDS_RESOLUTION_DEATH_REFUSED")
+            .ok()
+            .as_deref()
+        {
+            Some("required") => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                    "unproved recovery was not refused"
+                );
+                assert!(result.err().unwrap().to_string() == "synchronization recovery required");
+            }
+            Some("external") => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::ExternalChange)),
+                    "foreign effect was not refused"
+                );
+                assert!(result.err().unwrap().to_string() == "external change");
+            }
+            None => {
+                assert!(
+                    matches!(
+                        result,
+                        Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+                    ),
+                    "death recovery did not complete"
+                );
+            }
+            _ => panic!("invalid recovery expectation"),
+        }
+    }
+
+    fn selected_boundary() {
+        let root = PathBuf::from(std::env::var_os("MANYHANDS_RESOLUTION_DEATH_ROOT").unwrap());
+        boundary(
+            &root,
+            &std::env::var("MANYHANDS_RESOLUTION_DEATH_POINT").unwrap(),
+        );
+    }
+
+    struct ReapedChild(Child);
+    impl Drop for ReapedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn spawn(
+        root: &Path,
+        data: &Path,
+        ipc: &Path,
+        point: Option<&str>,
+        refused: Option<&str>,
+        child_timeout: Option<Duration>,
+    ) -> ReapedChild {
+        let mut command = Command::new(std::env::current_exe().expect("death test executable"));
+        command
+            .args(["--exact", CHILD_TEST, "--test-threads=1"])
+            .env("MANYHANDS_RESOLUTION_DEATH_ROOT", root)
+            .env("MANYHANDS_RESOLUTION_DEATH_DATA", data)
+            .env("MANYHANDS_RESOLUTION_DEATH_IPC", ipc)
+            .env_remove("MANYHANDS_RESOLUTION_DEATH_POINT")
+            .env_remove("MANYHANDS_RESOLUTION_DEATH_REFUSED")
+            .env_remove("MANYHANDS_RESOLUTION_DEATH_TIMEOUT_MS")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(point) = point {
+            command.env("MANYHANDS_RESOLUTION_DEATH_POINT", point);
+        }
+        if let Some(refused) = refused {
+            command.env("MANYHANDS_RESOLUTION_DEATH_REFUSED", refused);
+        }
+        if let Some(timeout) = child_timeout {
+            command.env(
+                "MANYHANDS_RESOLUTION_DEATH_TIMEOUT_MS",
+                timeout.as_millis().to_string(),
+            );
+        }
+        ReapedChild(command.spawn().expect("death child spawn"))
+    }
+
+    fn kill_at(root: &Path, data: &Path, ipc: &Path, point: &str) {
+        let mut child = spawn(root, data, ipc, Some(point), None, None);
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if ipc.join("ready").exists() {
+                break;
+            }
+            assert!(
+                child.0.try_wait().expect("death child status").is_none(),
+                "death child exited before readiness at {point}"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "death child readiness timed out at {point}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let repository = git2::Repository::open(root).unwrap();
+        assert!(
+            matches!(repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot), Err(error) if error.kind == RepositoryErrorKind::RepositoryBusy),
+            "cooperating writer lease was not fenced at {point}"
+        );
+        child.0.kill().expect("death child kill");
+        let status = child.0.wait().expect("death child reap");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert!(
+            !ipc.join("drop-ran").exists(),
+            "death child ran a destructor"
+        );
+        drop(
+            repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)
+                .expect("death did not release OS lease"),
+        );
+    }
+
+    fn recover(root: &Path, data: &Path, ipc: &Path, refused: Option<&str>) {
+        let mut child = spawn(root, data, ipc, None, refused, None);
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if let Some(status) = child.0.try_wait().expect("recovery child status") {
+                assert!(status.success(), "recovery child failed");
+                break;
+            }
+            assert!(Instant::now() < deadline, "recovery child timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    type FileImage = (u64, u64, Vec<u8>);
+
+    fn image(path: &Path) -> FileImage {
+        let metadata = fs::metadata(path).expect("fixture image metadata");
+        (
+            metadata.dev(),
+            metadata.ino(),
+            fs::read(path).expect("fixture image bytes"),
+        )
+    }
+
+    fn optional_image(path: &Path) -> Option<FileImage> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => Some(image(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => panic!("refusal snapshot metadata unavailable"),
+        }
+    }
+
+    // Deliberately no Debug: failed comparisons must not dump fixture bodies or
+    // signer/history bytes. Presence plus identity and bytes cover all remnants.
+    #[derive(PartialEq, Eq)]
+    struct RefusalSnapshot {
+        canonical: FileImage,
+        index: FileImage,
+        head: Option<git2::Oid>,
+        logs: [FileImage; 2],
+        metadata: [Option<FileImage>; 3],
+        sentinel: Option<FileImage>,
+        anchor: FileImage,
+        backend_locks: [Option<FileImage>; 5],
+    }
+
+    fn refusal_snapshot(
+        repository: &git2::Repository,
+        root: &Path,
+        attempt: OperationId,
+    ) -> RefusalSnapshot {
+        let gitdir = repository.path();
+        RefusalSnapshot {
+            canonical: image(&root.join("docs/document.md")),
+            index: image(&gitdir.join("index")),
+            head: repository.head().unwrap().target(),
+            logs: ["logs/refs/heads/main", "logs/HEAD"].map(|role| image(&gitdir.join(role))),
+            metadata: RESOLUTION_MERGE_MEMBERS.map(|member| optional_image(&gitdir.join(member))),
+            sentinel: optional_image(&gitdir.join("index.lock")),
+            anchor: image(&gitdir.join(format!(".manyhands-resolution-{attempt}/sentinel"))),
+            backend_locks: [
+                "HEAD.lock",
+                "logs/HEAD.lock",
+                "packed-refs.lock",
+                "refs/heads/main.lock",
+                "logs/refs/heads/main.lock",
+            ]
+            .map(|role| optional_image(&gitdir.join(role))),
+        }
+    }
+
+    #[test]
+    fn resolution_process_death_timeout_never_unwinds_or_counts_as_boundary_kill() {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let ipc = tempfile::tempdir().unwrap();
+        fs::write(
+            ipc.path().join("request"),
+            serde_yaml::to_string(&FixtureRequest::from_request(&request)).unwrap(),
+        )
+        .unwrap();
+        drop(service);
+        let mut child = spawn(
+            root.path(),
+            data.path(),
+            ipc.path(),
+            Some("ref-locked"),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+        // Deliberately delay the parent's kill until the shortened child timeout
+        // expires. Polling for exit makes the adverse schedule deterministic.
+        let deadline = Instant::now() + TIMEOUT;
+        let status = loop {
+            if let Some(status) = child.0.try_wait().expect("timeout child status") {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "shortened child timeout did not exit"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            ipc.path().join("ready").exists(),
+            "timeout child did not reach boundary"
+        );
+        assert!(
+            !ipc.path().join("drop-ran").exists(),
+            "child timeout ran a destructor"
+        );
+        assert_eq!(status.code(), Some(CHILD_TIMEOUT_EXIT));
+        // An eventual kill/wait must retain the timeout failure status, rather
+        // than qualify this fixture as a successful SIGKILL boundary proof.
+        let _ = child.0.kill();
+        let reaped = child.0.wait().expect("timeout child reap");
+        use std::os::unix::process::ExitStatusExt;
+        assert_ne!(reaped.signal(), Some(libc::SIGKILL));
+        assert_eq!(reaped.code(), Some(CHILD_TIMEOUT_EXIT));
+        let repository = git2::Repository::open(root.path()).unwrap();
+        assert!(
+            repository.path().join("refs/heads/main.lock").exists(),
+            "timeout dropped the backend transaction"
+        );
+    }
+
+    fn prove(point: &str) {
+        let (root, data, service, mut request) = protocol_resolution_fixture();
+        const BODY: &[u8] = b"PRIVATE-DEATH-BODY-CANARY";
+        const SIGNER: &str = "PRIVATE-DEATH-SIGNER-CANARY";
+        const EMAIL: &str = "PRIVATE-DEATH-EMAIL-CANARY@example.invalid";
+        const HISTORY: &[u8] = b"PRIVATE-DEATH-HISTORY-CANARY\xff opaque tail";
+        let mut result = request.resolutions[0].1.bytes().to_vec();
+        result.extend_from_slice(b"\nPRIVATE-DEATH-BODY-CANARY\n  exact caller spacing\n");
+        request.resolutions[0].1 = RedactedConflictBytes::from_bytes(result);
+        let ipc = tempfile::tempdir().unwrap();
+        // Test IPC alone may contain fixture-only bodies. It is outside the
+        // repository and registry, never part of production evidence or logs.
+        fs::write(
+            ipc.path().join("request"),
+            serde_yaml::to_string(&FixtureRequest::from_request(&request)).unwrap(),
+        )
+        .unwrap();
+        drop(service);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let mut config = repository.config().unwrap();
+        config.set_str("user.name", SIGNER).unwrap();
+        config.set_str("user.email", EMAIL).unwrap();
+        let gitdir = repository.path();
+        let old = repository.head().unwrap().target().unwrap();
+        let baseline_index = image(&gitdir.join("index"));
+        let logs = [
+            gitdir.join("logs/refs/heads/main"),
+            gitdir.join("logs/HEAD"),
+        ];
+        for log in &logs {
+            fs::write(log, HISTORY).unwrap();
+        }
+        let baseline_logs = logs.each_ref().map(|path| fs::read(path).unwrap());
+        kill_at(root.path(), data.path(), ipc.path(), point);
+        let canonical = root.path().join("docs/document.md");
+        let installed_path = image(&canonical);
+        let installed_index = image(&gitdir.join("index"));
+        let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let candidate: Option<String> = connection
+            .query_row(
+                "SELECT candidate_oid FROM remote_resolution_attempts",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let killed_logs = logs.each_ref().map(|path| fs::read(path).unwrap());
+        let sentinel = gitdir.join("index.lock");
+        let released = matches!(point, "sentinel-unlinked" | "sentinel-release-barrier");
+        assert_eq!(sentinel.exists(), !released);
+        if !released {
+            let anchor = gitdir.join(format!(
+                ".manyhands-resolution-{}/sentinel",
+                request.attempt_id
+            ));
+            assert!(
+                image(&sentinel) == image(&anchor),
+                "sentinel lost anchored identity"
+            );
+        }
+        let committed = point == "ref-committed"
+            || point.starts_with("metadata-")
+            || point.starts_with("release-")
+            || released;
+        if let Some(member) = point
+            .strip_prefix("metadata-")
+            .and_then(|point| point.split('-').next())
+        {
+            let retired = RESOLUTION_MERGE_MEMBERS
+                .iter()
+                .position(|name| *name == member)
+                .unwrap();
+            for (ordinal, name) in RESOLUTION_MERGE_MEMBERS.iter().enumerate() {
+                assert_eq!(
+                    gitdir.join(name).exists(),
+                    ordinal > retired,
+                    "metadata retirement order changed"
+                );
+            }
+        }
+        let (artifact_phase, ref_phase): (String, String) = connection
+            .query_row(
+                "SELECT phase,ref_phase FROM remote_resolution_index_artifacts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            artifact_phase
+                == if released || point == "release-intent" {
+                    "release_intent"
+                } else if point.starts_with("sentinel-") {
+                    "intent"
+                } else {
+                    "published"
+                },
+            "unexpected sentinel observation boundary"
+        );
+        if matches!(point, "ref-locked" | "ref-intent" | "ref-committed") {
+            assert!(
+                ref_phase
+                    == if point == "ref-locked" {
+                        "not_started"
+                    } else {
+                        "intent"
+                    },
+                "unexpected ref observation boundary"
+            );
+        }
+        if committed {
+            assert!(
+                candidate.as_deref()
+                    == Some(
+                        repository
+                            .head()
+                            .unwrap()
+                            .target()
+                            .unwrap()
+                            .to_string()
+                            .as_str()
+                    ),
+                "candidate ref changed"
+            );
+            assert!(
+                killed_logs
+                    .iter()
+                    .zip(&baseline_logs)
+                    .all(|(result, baseline)| result.starts_with(baseline)
+                        && result.len() > baseline.len()),
+                "expected log append absent"
+            );
+        } else {
+            assert_eq!(repository.head().unwrap().target(), Some(old));
+            assert!(killed_logs == baseline_logs, "precommit logs changed");
+        }
+        if matches!(point, "ref-locked" | "ref-intent") {
+            let backend_lock = gitdir.join("refs/heads/main.lock");
+            let ambiguous = image(&backend_lock);
+            let refused_before = refusal_snapshot(&repository, root.path(), request.attempt_id);
+            recover(root.path(), data.path(), ipc.path(), Some("required"));
+            assert!(
+                refusal_snapshot(&repository, root.path(), request.attempt_id) == refused_before,
+                "backend-lock refusal changed protected images"
+            );
+            assert!(
+                image(&backend_lock) == ambiguous,
+                "ambiguous backend lock changed"
+            );
+            assert!(
+                logs.each_ref().map(|path| fs::read(path).unwrap()) == baseline_logs,
+                "refused recovery changed logs"
+            );
+            assert_eq!(repository.head().unwrap().target(), Some(old));
+            // Simulated operator ONLY on the parent-owned disposable fixture:
+            // all children reaped; exact old ref/logs and lock identity verified.
+            fs::remove_file(backend_lock).unwrap();
+        }
+        if candidate.is_some() {
+            // Frozen ODB signer is authoritative after candidate creation even
+            // when effective configuration changes between real processes.
+            config.set_str("user.name", "Changed Identity").unwrap();
+            config
+                .set_str("user.email", "changed@example.invalid")
+                .unwrap();
+            let mut altered = request.clone();
+            altered.resolutions[0].1 =
+                RedactedConflictBytes::from_bytes(b"altered same-ID bytes".to_vec());
+            fs::write(
+                ipc.path().join("request"),
+                serde_yaml::to_string(&FixtureRequest::from_request(&altered)).unwrap(),
+            )
+            .unwrap();
+            let refused_before = refusal_snapshot(&repository, root.path(), request.attempt_id);
+            recover(root.path(), data.path(), ipc.path(), Some("required"));
+            assert!(
+                refusal_snapshot(&repository, root.path(), request.attempt_id) == refused_before,
+                "altered-request refusal changed protected images"
+            );
+            assert!(
+                image(&canonical) == installed_path
+                    && image(&gitdir.join("index")) == installed_index,
+                "altered retry changed owned effects"
+            );
+            assert!(
+                logs.each_ref().map(|path| fs::read(path).unwrap()) == killed_logs,
+                "altered retry changed logs"
+            );
+            fs::write(
+                ipc.path().join("request"),
+                serde_yaml::to_string(&FixtureRequest::from_request(&request)).unwrap(),
+            )
+            .unwrap();
+        }
+        recover(root.path(), data.path(), ipc.path(), None);
+        let final_candidate = repository.head().unwrap().target().unwrap();
+        assert_ne!(final_candidate, old);
+        if let Some(candidate) = candidate {
+            assert!(
+                final_candidate.to_string() == candidate,
+                "frozen candidate was replaced"
+            );
+        }
+        assert!(
+            fs::read(&canonical).unwrap() == request.resolutions[0].1.bytes(),
+            "caller bytes changed"
+        );
+        if !matches!(point, "sentinel-linked" | "sentinel-published") {
+            assert!(
+                image(&canonical) == installed_path,
+                "exact installed result was rewritten"
+            );
+        }
+        if installed_index != baseline_index {
+            assert!(
+                image(&gitdir.join("index")) == installed_index,
+                "installed index was rewritten"
+            );
+        }
+        let final_logs = logs.each_ref().map(|path| fs::read(path).unwrap());
+        if committed {
+            assert!(
+                final_logs == killed_logs,
+                "completed candidate recovery appended again"
+            );
+        }
+        for (result, baseline) in final_logs.iter().zip(&baseline_logs) {
+            let commit = repository.find_commit(final_candidate).unwrap();
+            let signer = commit.committer();
+            let entry = format!(
+                "{old} {final_candidate} {} <{}> 0 +0000\t{RESOLUTION_REF_MESSAGE}\n",
+                signer.name().unwrap(),
+                signer.email().unwrap()
+            );
+            let mut expected = baseline.clone();
+            expected.extend_from_slice(entry.as_bytes());
+            assert!(
+                *result == expected,
+                "ref transition did not append exactly once"
+            );
+        }
+        assert!(!sentinel.exists());
+        assert!(
+            RESOLUTION_MERGE_MEMBERS
+                .iter()
+                .all(|member| !gitdir.join(member).exists())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM remote_resolution_attempts",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(
+            connection
+                .query_row(
+                    "SELECT phase FROM remote_resolution_index_artifacts",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap()
+                == "released"
+        );
+        let commit = repository.find_commit(final_candidate).unwrap();
+        assert!(
+            commit.committer().name() == Some(SIGNER) && commit.committer().email() == Some(EMAIL),
+            "frozen signer changed"
+        );
+        let staging = gitdir.join(format!(".manyhands-resolution-{}", request.attempt_id));
+        let mut evidence_files = vec![
+            data.path().join(REGISTRY_FILE),
+            data.path().join(format!("{REGISTRY_FILE}-wal")),
+        ];
+        for role in ["baseline", "transition"] {
+            evidence_files.push(staging.join(format!("ref-log-{role}")));
+            evidence_files.push(staging.join(format!("ref-log-{role}-anchor")));
+        }
+        for path in evidence_files {
+            if let Ok(bytes) = fs::read(path) {
+                for canary in [BODY, SIGNER.as_bytes(), EMAIL.as_bytes(), HISTORY] {
+                    assert!(
+                        !bytes.windows(canary.len()).any(|window| window == canary),
+                        "death recovery evidence leaked raw authority"
+                    );
+                }
+            }
+        }
+        drop(
+            repository_lease(
+                &repository,
+                root.path(),
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .expect("completed recovery retained writer lease"),
+        );
+    }
+
+    #[test]
+    fn resolution_process_death_owned_publication_path_and_index() {
+        for point in [
+            "sentinel-linked",
+            "sentinel-published",
+            "canonical-installed",
+            "scratch-serialized",
+            "scratch-prepared",
+            "output-recorded",
+            "index-install-linked",
+            "index-renamed",
+            "index-installed",
+        ] {
+            prove(point);
+        }
+    }
+
+    #[test]
+    fn resolution_process_death_backend_lock_intent_and_commit() {
+        for point in ["ref-locked", "ref-intent", "ref-committed"] {
+            prove(point);
+        }
+    }
+
+    #[test]
+    fn resolution_process_death_each_metadata_retirement_and_release() {
+        for point in [
+            "metadata-MERGE_HEAD-unlinked",
+            "metadata-MERGE_HEAD-barrier",
+            "metadata-MERGE_MSG-unlinked",
+            "metadata-MERGE_MSG-barrier",
+            "metadata-MERGE_MODE-unlinked",
+            "metadata-MERGE_MODE-barrier",
+            "release-intent",
+            "sentinel-unlinked",
+            "sentinel-release-barrier",
+        ] {
+            prove(point);
+        }
+    }
+
+    #[test]
+    fn resolution_process_death_foreign_identity_and_metadata_stay_fenced() {
+        for point in [
+            "output-recorded",
+            "metadata-MERGE_HEAD-unlinked",
+            "sentinel-unlinked",
+        ] {
+            let (root, data, service, request) = protocol_resolution_fixture();
+            let ipc = tempfile::tempdir().unwrap();
+            fs::write(
+                ipc.path().join("request"),
+                serde_yaml::to_string(&FixtureRequest::from_request(&request)).unwrap(),
+            )
+            .unwrap();
+            drop(service);
+            kill_at(root.path(), data.path(), ipc.path(), point);
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let gitdir = repository.path();
+            let sentinel = gitdir.join("index.lock");
+            let anchor = gitdir.join(format!(
+                ".manyhands-resolution-{}/sentinel",
+                request.attempt_id
+            ));
+            let foreign = if point.starts_with("metadata-") {
+                let member = gitdir.join("MERGE_MSG");
+                fs::write(&member, b"foreign merge metadata canary").unwrap();
+                member
+            } else {
+                // Byte-identical content is never authority. Atomic substitution
+                // keeps the original anchored inode alive for identity comparison.
+                let replacement = gitdir.join("fixture-foreign-sentinel");
+                fs::write(&replacement, fs::read(&anchor).unwrap()).unwrap();
+                fs::rename(replacement, &sentinel).unwrap();
+                assert!(
+                    image(&sentinel).0 != image(&anchor).0
+                        || image(&sentinel).1 != image(&anchor).1
+                );
+                sentinel.clone()
+            };
+            assert!(foreign.exists());
+            let refused_before = refusal_snapshot(&repository, root.path(), request.attempt_id);
+            recover(root.path(), data.path(), ipc.path(), Some("external"));
+            assert!(
+                refusal_snapshot(&repository, root.path(), request.attempt_id) == refused_before,
+                "foreign-effect refusal changed protected images"
+            );
+            assert!(
+                sentinel.exists(),
+                "refused recovery released fencing sentinel"
+            );
+        }
+    }
 }

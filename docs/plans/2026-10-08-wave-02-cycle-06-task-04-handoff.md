@@ -1,6 +1,89 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
-## Current state
+## Current pause — after shared Unix native writer, 2026-10-08
+
+Owner requested pause after the current subagent finishes; it has returned.
+**Task 4 remains unaccepted; Tasks 5–7 have not begun. No job is scheduled.**
+
+- Worktree and branch are the existing ticket checkout named below.
+- HEAD: `409a6f9da1554b9c1646907494bbdc05811d5d23`, unaccepted preservation WIP.
+- Accepted Task 3 / final whole-Task-4 review base: `9c7253f`.
+- Last freshly fetched/rebased main: `60b0324f3993b32f783fcb98e0f6e24dd9f750dd`.
+- Empty staging verified. Dirty: src/repository.rs, remote sync.rs/sync_tests.rs,
+  tests/discovery_rebuild.rs, ledger/handoff and comment 01M4C900. **New untracked
+  src/repository/native_resolution.rs must be preserved.** No rollback/cleanup.
+- Owner authorized OpenCode sequential subagents and independent reviews, replacing
+  unavailable retained Pi resume; preservation commit/rebase completed earlier.
+- New owner ruling: **"Best efforts on robustness, but it does not need to be
+  perfect."** Apply proportionate review/fixes; document robustness limitations
+  instead of requiring exhaustive failure-window or power-loss perfection.
+
+### Completed this session
+
+1. Recovered the timed-out writer's evidence; preserved/rebased 20 patch-equivalent
+   commits onto fresh main. Complete checkpoint mapping is in the ledger.
+2. Milestone 2c independently spec/quality reviewed after one fix round: refreshed
+   log proof now checks frozen branch and exact live candidate before completion.
+3. Linux actual SIGKILL/fresh-process recovery tests at 21 boundaries, plus foreign
+   controls; child timeout cannot unwind (`_exit(86)` and Drop-canary regression).
+   Independently spec/quality reviewed after one fix round; final death suite 6.
+4. Discovery failures traced to legitimate bounded Git/cache Busy against flawed
+   unconditional-success tests. Test-only fix independently spec/quality approved;
+   controlled slow-fsync regression 3 passed, discovery suite 69 passed.
+5. Latest native writer `ses_ee60ad283ffet61HIC7U2OlkIL` implemented shared
+   Linux/macOS helper functionality: pinned traversal, nonblocking regular-file
+   reads, native macOS rename APIs, Unix anchored lock/ref/log protocol, validated
+   private-path libgit2 serialization, ordinary object/ref/log storage barriers.
+   **This new seam is NOT independently reviewed.**
+
+### Latest writer evidence and next steps
+
+Latest worker reports Linux 103 sync tests, all-feature locked check, fmt check,
+strict all-target/all-feature clippy, **full all-feature locked suite**, CLI smoke
+and diff check passing through Devenv. These are attributed passes, not native
+macOS/Windows evidence. No macOS compile/runtime, Windows or Linux ARM result;
+macOS target libraries unavailable. Packed/alternate ODB flush policy, macOS full
+device-cache flush and power-loss durability are documented limits. Do not repeat
+an unchanged broad suite just to recover session context.
+
+Next session: read current AGENTS/ledger and preserve dirty work during required
+current-main preflight before new implementation. First obtain independent
+specification and code-quality review of latest Unix-native changes/new module.
+Earlier m2c/death/discovery seams are reviewed, not candidates for redispatch.
+Then Windows implementation: retained ancestor/reparse-safe reads; volume/file
+identity/private anchors and absent-only hard links; native output install,
+metadata retirement and verified release; fixed-role ref/log proof, serialization
+and appropriate barriers. Keep native verification factual/pending; final review
+of all Task 4 uses `9c7253f`. Accept/checkpoint Task 4 before Task 5.
+
+No accepted Task-4 commit or delivery authority. Ticket remains open. No follow-on
+agent/test job launched after pause; narrow process-name check found no Rust
+validation process. Preserve approved policies and the best-effort ruling.
+
+## Earlier OpenCode resume — historical entry
+
+This section supersedes the paused execution state below, which remains the
+historical entry handoff. Owner authorized sequential OpenCode subagents and
+independent reviews instead of unavailable retained Pi resume, plus unaccepted
+preservation/rebase. Missing latest-writer evidence was reconstructed read-only.
+
+Fresh main `60b0324` was fetched; preservation/rebase completed without conflicts.
+Current HEAD is unaccepted WIP `409a6f9`, accepted Task 3 review base `9c7253f`.
+All 20 commits are patch-equivalent; main's effective-copy indexing fix is included.
+The ledger records the complete checkpoint mapping and recovered command evidence.
+
+Milestone 2c received specification and independent code-quality approval after
+one fix round. The current dirty sync.rs/sync_tests.rs add final frozen-branch and
+exact-candidate checks after refreshed log observation. Three new stale-state
+regressions demonstrated red/green; final 16 ref-log and 92 sync tests plus
+Devenv check/fmt/strict clippy passed. The scoped verdict does not accept Task 4.
+
+Next approved work: native helpers, actual child death without Drop and storage-
+ordering characterization, discovery contention and final whole-Task-4 review
+against `9c7253f`. Tasks 5–7 have not begun. No accepted Task-4 checkpoint or
+delivery authorization; retain the open ticket and pending native evidence.
+
+## Original paused state — historical Pi handoff
 
 Paused at owner request after Task 4 milestone 2c writer timeout. **Task 4 is
 unaccepted; Tasks 5–7 have not begun.** Preserve partial implementation, obtain
@@ -113,7 +196,7 @@ This does not establish absence of every detached job. Unrelated MCP processes
 were left untouched. Never dump process command lines/environment: a credential
 was exposed earlier and must not be repeated or persisted.
 
-## Next session sequence
+## Original next-session sequence — superseded by current pause above
 
 1. Inspect exact latest writer status and retained commands; ensure one writer and
    no outstanding owned validation job. Do not silently switch execution protocol.

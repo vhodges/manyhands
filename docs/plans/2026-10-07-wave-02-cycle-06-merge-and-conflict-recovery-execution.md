@@ -828,6 +828,183 @@ in repository.rs/discovery.rs and discovery tests. Main's unrelated `.superpower
 is preserved. Inspect and preserve this identified agent-owned diff, then rebase
 the ticket onto fetched main and record checkpoint mapping before new source edits.
 
+Preservation checkpoint `f854d1e` was created with explicit owner authorization;
+it is unaccepted WIP, not a verified implementation checkpoint. Ticket rebase onto
+`60b0324` completed without conflicts. HEAD is now
+`409a6f9da1554b9c1646907494bbdc05811d5d23`; main ancestry and clean status passed.
+`git range-diff` maps all 20 commits as patch-equivalent. Only the eight upstream
+effective-copy source/test/ticket paths differ between preserved and rebased tips;
+the seven milestone-2c source files are unchanged. Reread AGENTS and inspected
+upstream discovery changes: they alter effective-copy observation/indexing, not
+the resolution effect protocol. Refresh/discovery regressions must cover this
+upstream behavior when completing Task 4.
+
+| Checkpoint | Before this rebase | Current |
+| --- | --- | --- |
+| Task 0 | `151b0cc` | `ae77aac` |
+| Task 1 through lint remediation | `e125f8c` | `9c353b9` |
+| Task 2 accepted | `22d1406` | `fccb2bc` |
+| Task 3 accepted; whole-Task-4 review base | `51fe6f2` | `9c7253f` |
+| Earlier unaccepted Task 4 WIP | `45a139b` | `b2b81b7` |
+| Fresh-session unaccepted preservation | `f854d1e` | `409a6f9` |
+
+Next: fresh milestone-2c specification review against the exact retained
+milestone-2b source baseline, then code-quality review. Fresh targeted/static
+verification covers the final edits and rebase; no completed tasks are redispatched.
+
+### Milestone 2c recovered, remediated and reviewed — 2026-10-08
+
+Fresh Devenv checks on rebased source passed all-feature locked check, fmt check,
+strict all-target/all-feature clippy, 13 `ref_log_` tests, 9 remote-reservation
+and 73 repository-enablement tests. This fills retained final-edit verification
+gaps without claiming a whole-suite/native pass.
+
+Independent specification reviewer `ses_ee63f4c99ffeL1VawuaRUiby9U` reviewed the
+seven-file delta against exact retained milestone-2b source and found two P1s:
+refreshed snapshots did not compare the frozen branch digest, and reconciliation
+did not reread the live candidate OID after its out-of-lease log observation.
+Controller verified both missing gates in source. Worker
+`ses_ee6398e7affeYeh5WjZNa3cn3C` changed only sync.rs/sync_tests.rs: shared final
+proof validation under the reacquired lease now binds the refreshed branch and
+exact live candidate before observation/checkpoint/retirement. Three deterministic
+post-backend/pre-refresh tests exercise initial/reconciliation branch substitution
+and a third same-tree reconciliation commit. They verify preservation of actual
+refs/images/metadata/sentinel and progress, including rejected retries.
+
+Worker evidence: `cargo test --all-features --locked --lib ref_log_final_proof_`
+failed all three intended assertions before the fix and passed all three after;
+final `ref_log_` passed 16 and `repository::remote::sync::tests::` passed 92.
+Final all-feature locked check, fmt check, strict all-target/all-feature clippy
+and diff check passed. All Rust commands used Devenv. A transient parallel Devenv
+startup missing-file error was followed by successful sequential static checks.
+
+Specification re-review accepted this round-1 remediation with no new blockers.
+Fresh code-quality reviewer `ses_ee6338511ffe4aG9Q19YPblNCZ` independently reviewed
+the complete milestone delta and locked backend wiring, approving the scoped seam
+with no concrete blockers. Neither reviewer reran tests or changed files.
+This is milestone-2c approval only: immutable ref/log authority and safe exact-
+state completion are reviewed; whole Task 4 remains unaccepted and no accepted
+Task-4 checkpoint commit was taken. Native helpers, real child death/storage
+ordering, discovery contention and final whole-task/full-suite/CLI/native gates
+remain. Continue sequentially to the approved native-helper/proof seam; do not
+begin Task 5 or infer delivery authority.
+
+### Owner robustness ruling — 2026-10-08
+
+Owner stated: **"Best efforts on robustness, but it does not need to be perfect."**
+Apply this ruling to ongoing work and review: prefer proportionate fixes for
+demonstrated failures, meaningful representative recovery tests and candid evidence
+limits over pursuing perfect robustness or exhaustive every-syscall/power-loss
+coverage. Do not reopen settled architecture or add machinery solely to eliminate
+all theoretical failure windows. Carry remaining robustness limitations explicitly
+in review rather than treating every imperfection as an automatic blocker.
+Functional platform requirements and factual verification claims remain distinct
+from a promise of perfect robustness. No delivery/lifecycle authority is added.
+
+### Linux child-death proof reviewed — 2026-10-08
+
+Worker `ses_ee629d5b5ffeHX0EX3ernRfWLm` changed sync.rs/sync_tests.rs only,
+adding real filtered unit-test child processes, parent-issued kill/wait with
+SIGKILL verification, fresh-process exact-request replay, and 21 kill boundaries:
+sentinel publication before/after directory barrier, canonical installation,
+scratch serialization/sync/output identity, index link/rename/install, actual
+backend lock/ref intent/commit, each of three metadata members before/after its
+barrier, and sentinel release before unlink/after unlink/after barrier. Three
+foreign-state controls and refusal preservation/privacy/lease checks are included.
+These are actual death without Drop, not panic/catch_unwind simulations.
+
+Specification reviewer `ses_ee61c8e96ffeP60e52g1LxgKMf` found one P1: a child
+timeout could panic/unwind before a later parent SIGKILL. Worker replaced it with
+`libc::_exit(86)` and added a 20ms timeout/delayed-parent Drop-canary regression,
+red before the fix and green afterward. Normal kills require SIGKILL and no Drop
+canary; timeout status cannot qualify. Refusal snapshots now include bytes and
+device/inode/presence for canonical/index/logs/all metadata/sentinel/anchor/backend
+locks and HEAD, addressing a nonblocking coverage note. Spec re-review accepted
+round 1. Fresh quality reviewer `ses_ee61324b3ffejlgT2JiazoQDfV` approved with no
+important concrete bugs under the owner best-effort ruling.
+
+Worker-attributed Devenv evidence: final `cargo test --all-features --locked --lib
+resolution_process_death -- --test-threads=1` passed 6; preceding full sync passed
+97 and ref-log 16. Final all-feature check, fmt and strict all-target/all-feature
+clippy plus diff check passed. Native/internal backend-append kills and power-loss
+durability are not inferred. Privacy scan skips absent/unreadable files, retained
+as a nonblocking evidence limitation rather than perfect-coverage requirement.
+
+### Discovery contention diagnosed, corrected and reviewed — 2026-10-08
+
+Controller's fresh all-feature discovery suite failed 3 of 67 tests with
+`RepositoryBusy`: concurrent refresh, same-service corrupt rebuild and two-service
+corrupt rebuild. Worker `ses_ee629d5c3ffe2VQMwiyWCqz7IS` traced the bounded 250ms
+Git/cache lease acquisition and unchanged main orchestration. Controlled 300ms
+fsync delay reproduced all three failures even with serial test-runner execution;
+holders continued and released leases, so leaked locks/deadlocks were not needed.
+The pre-existing tests incorrectly required unconditional success despite bounded
+contention. No production timing/retry change was justified.
+
+Same worker changed only tests/discovery_rebuild.rs: join both callers, accept
+only RepositoryBusy and replay after explicit completion with original IDs;
+keep refresh owner paused until contender returns; retain no-scan/single-epoch,
+single completed record and one corrupt diagnostic assertions. Two deterministic
+held Git/cache lease regressions verify bounded Busy then exact-ID replay after
+release. No extra sleeps or deadline widening. Controlled fsync run turned green
+(3 passed, 57.52s), and full discovery suite passed 69 tests (7.68s), followed by
+Devenv check/fmt/strict clippy and diff check. Independent spec reviewer
+`ses_ee60d0b51ffehcj9dpgQuDGKTi` and quality reviewer
+`ses_ee60c6cf5ffe130wALWrnnq3M2` approved the actual test-only diff, no blockers.
+
+### Shared Unix native-helper implementation; owner pause — 2026-10-08
+
+Read-only inventory `ses_ee62ec651ffedKlKVvs87md0yc` distinguished missing native
+implementation from demonstrated feasibility failure. Worker
+`ses_ee60ad283ffet61HIC7U2OlkIL` then completed a coherent shared Linux/macOS seam:
+new private src/repository/native_resolution.rs pins Unix root/ancestor traversal;
+repository.rs adds pinned/nonblocking reads and macOS exclusive/swap rename APIs;
+sync.rs shares Unix lock/ref/log proof/recovery paths, replaces /proc serialization
+assumptions with validated private paths, and adds ordinary loose-object barriers
+before candidate journaling plus ref/log file/directory barriers before observed.
+sync_tests.rs adds helper regressions and applicable Unix gates. No Git config or
+global libgit2 option was changed. This new seam has NOT received independent review.
+
+Worker reports these final Linux commands passed, all through Devenv:
+
+```sh
+devenv shell -- cargo test --locked --lib repository::remote::sync::tests
+# 103 passed, including process-death coverage
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo fmt --check
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked
+devenv shell -- cargo run --locked --bin manyhands-cli
+```
+
+The full library/integration/SSH/doc-test suite and CLI smoke are worker-attributed
+passes, not native macOS/Windows evidence. Do not rerun the unchanged full suite
+merely because a new session starts. macOS target libraries are absent; no macOS
+compile/runtime, Windows or Linux ARM result is claimed. Packed/alternate object
+storage still depends on backend fsync policy; macOS full device-cache flushing
+and exhaustive power-loss durability are unproved, carried under best-effort ruling.
+
+Owner requested: **"Pause after the current subagent finishes. We'll finish up in
+the morning."** The native writer returned; execution is paused. No follow-on
+reviewer, writer or validation job was launched. Narrow process-name inspection
+found no cargo/rustc/rustfmt/clippy-driver process; it did not inspect command lines
+or environments or claim absence of every possible unrelated process.
+
+HEAD remains `409a6f9da1554b9c1646907494bbdc05811d5d23`, accepted Task 3 review
+base `9c7253f`, last rebased main `60b0324`. Empty staging and the exact ticket
+branch were verified; tracked dirty paths are repository.rs, remote sync.rs/tests,
+discovery_rebuild.rs, this ledger/handoff and canonical comment 01M4C900. New
+native_resolution.rs is untracked and must be preserved. Diff check passed.
+No accepted Task-4 commit, push/PR/CI dispatch, merge, closure or cleanup occurred.
+
+Resume first with independent specification then code-quality review of the Unix
+native seam, preserving earlier reviewed m2c/death/discovery work. Then implement
+Windows retained-ancestor/reparse-safe reads, volume/file identity and anchors,
+absent-only hard-link publication, native output install/metadata retirement/
+verified release, and ref/log proof/serialization/barriers. Native evidence remains
+pending separately. Obtain final whole-Task-4 review against `9c7253f` before its
+accepted checkpoint and Task 5. Tasks 5–7 have not begun; ticket stays open.
+
 ### Milestone 2c timeout; fresh-session handoff saved — 2026-10-08
 
 Workflow `c65ad8a8-a967-4447-89c9-38336033372e` failed because retained writer
@@ -854,3 +1031,18 @@ Owner then requested a saved handoff for a fresh session. Saved
 latest run/session IDs, exact baselines/snapshots, remaining gates and recovery
 sequence. Work is paused. No resume, source fixes, validation, commit or delivery
 was launched after that request. Task4 unaccepted; Task5 not begun.
+
+### Owner resume and current-main preflight — 2026-10-08
+
+Owner requested **"Please continue"**. Resume sequential OpenCode implementation
+and independent review under the recorded best-effort robustness ruling. Reuse
+the existing ticket/worktree and preserve the last writer's unreviewed Unix-native
+seam; earlier m2c/death/discovery approvals remain valid.
+
+Fresh fetch observes main `60b0324f3993b32f783fcb98e0f6e24dd9f750dd`, unchanged
+from the pause and matching local main. Ticket starts at `409a6f9` with the recorded
+eight dirty/untracked paths; no operation/conflict is in progress. Main's unrelated
+`.superpowers/` remains untouched. Identified source/test/doc changes are preserved
+in an explicitly unaccepted WIP snapshot for clean no-op rebase preflight, using
+the approved preservation authority. This is not Task 4 acceptance. Pending first
+step is independent specification then quality review of the native-helper seam.
