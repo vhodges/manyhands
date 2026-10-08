@@ -1506,6 +1506,51 @@ fn a_nonconforming_ticket_list_entry_matches_its_schema_and_golden() {
 }
 
 #[test]
+fn a_nonconforming_resource_read_by_path_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let root = &fixture.root;
+    let path = "docs/broken.md";
+    let source = "no front matter\n";
+    items::write(root, path, source);
+    items::refresh_completely(&enabled.service, root);
+    // What the index stores beside the problem's code is not what is read.
+    let stored = items::index(enabled.data_directory.path())
+        .execute("UPDATE problems SET guidance = ?1", [GUIDANCE_SENTINEL])
+        .unwrap();
+    assert_eq!(stored, 1);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let item = enabled
+        .service
+        .show_path(&repo, None, Path::new(path))
+        .unwrap();
+    let envelope = Envelope::read_success("document show", repo.scope(), item.clone());
+
+    assert_eq!(item.id, None);
+    assert_eq!(item.path, path);
+    assert_eq!(item.source.as_deref(), Some(source));
+    assert_eq!(
+        item.problems
+            .iter()
+            .map(|problem| problem.code)
+            .collect::<Vec<_>>(),
+        [ProblemCode::MissingFrontMatter]
+    );
+    assert_item_contract(
+        "document_show_nonconforming",
+        Some("item.schema.json"),
+        repo.root().to_str().unwrap(),
+        &[&item],
+        &[
+            GUIDANCE_SENTINEL,
+            enabled.data_directory.path().to_str().unwrap(),
+        ],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn a_degraded_index_matches_the_failure_golden() {
     let (fixture, enabled) = items::contract_repository();
     let repo = enabled.service.resolve_repository(&fixture.root).unwrap();

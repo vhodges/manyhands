@@ -26,6 +26,7 @@ pub const CASES: &[&str] = &[
     "comment_list",
     "document_list",
     "document_show",
+    "document_show_nonconforming",
     "failure_authority_not_found",
     "failure_index_unavailable",
     "failure_item_not_found",
