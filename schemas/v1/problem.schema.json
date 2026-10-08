@@ -3,7 +3,7 @@
   "title": "Manyhands JSON v1 content problem",
   "type": "object",
   "additionalProperties": false,
-  "required": ["code", "path", "guidance"],
+  "required": ["code", "path", "target_id", "guidance"],
   "properties": {
     "code": {
       "type": "string",
@@ -36,6 +36,10 @@
       ]
     },
     "path": {
+      "type": ["string", "null"]
+    },
+    "target_id": {
+      "description": "The item ID a problem with a ticket's deps or parent is about. Null for every other problem.",
       "type": ["string", "null"]
     },
     "guidance": {

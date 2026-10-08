@@ -75,7 +75,19 @@
       "type": ["string", "null"]
     },
     "parent": {
-      "type": ["string", "null"]
+      "description": "The ticket's parent, in the shape of a dependency.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "state"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["open", "closed", "unresolved"]
+        }
+      }
     },
     "deps": {
       "type": "array",

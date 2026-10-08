@@ -45,6 +45,7 @@ fn configuration_problem(code: ProblemCode) -> ProblemDto {
     ProblemDto {
         code,
         path: relative_path_string(Path::new(canonical::CONFIG_PATH)),
+        target_id: None,
     }
 }
 

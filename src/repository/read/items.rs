@@ -179,7 +179,8 @@ pub(super) struct Relationships {
     slug: Option<String>,
     parent: Option<String>,
     deps: Vec<String>,
-    problems: Vec<ProblemCode>,
+    /// Each with the item ID it is about, when it is about one.
+    problems: Vec<(ProblemCode, Option<String>)>,
 }
 
 impl From<&canonical::TicketRelationships> for Relationships {
@@ -191,40 +192,80 @@ impl From<&canonical::TicketRelationships> for Relationships {
             problems: view
                 .problems
                 .iter()
-                .map(|problem| ProblemCode::from(problem.code))
+                .map(|problem| {
+                    (
+                        ProblemCode::from(problem.code),
+                        problem.detail.as_ref().map(ToString::to_string),
+                    )
+                })
                 .collect(),
         }
     }
 }
 
-/// What an item ID names among the items the index holds.
+/// What an ID names among the items and comments the index holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     Document,
+    Comment,
     OpenTicket,
     ClosedTicket,
 }
 
-/// Every item the index holds, by ID, as the target of a relationship. An
-/// ID that is not here is in no context the index has seen.
+/// Everything the index holds that has an ID, by that ID, as the target of
+/// a relationship. An ID that is not here is in no context the index has
+/// seen, and a later fetch or merge may still bring a ticket for it.
 pub(super) struct Targets<'a>(BTreeMap<&'a str, Target>);
 
 impl<'a> Targets<'a> {
-    /// `rows` holds one row for each item: its effective copy.
-    pub(super) fn of(rows: &[&'a StoredItem]) -> Self {
-        Self(
-            rows.iter()
-                .map(|row| {
-                    let target = match (row.kind, row.closed_at) {
-                        (ItemDtoKind::Document, _) => Target::Document,
-                        (ItemDtoKind::Ticket, None) => Target::OpenTicket,
-                        (ItemDtoKind::Ticket, Some(_)) => Target::ClosedTicket,
-                    };
-                    (row.id.as_str(), target)
-                })
-                .collect(),
-        )
+    /// `rows` holds one row for each item, its effective copy, and
+    /// `comments` the ID of every stored comment.
+    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
+        let mut targets: BTreeMap<&str, Target> = comments
+            .iter()
+            .map(|comment| (comment.as_str(), Target::Comment))
+            .collect();
+        // An item's row decides what its ID names.
+        targets.extend(rows.iter().map(|row| {
+            let target = match (row.kind, row.closed_at) {
+                (ItemDtoKind::Document, _) => Target::Document,
+                (ItemDtoKind::Ticket, None) => Target::OpenTicket,
+                (ItemDtoKind::Ticket, Some(_)) => Target::ClosedTicket,
+            };
+            (row.id.as_str(), target)
+        }));
+        Self(targets)
     }
+
+    /// What a `deps` entry or a `parent` names: a ticket in some state, or
+    /// `None` for something that is not a ticket.
+    fn state(&self, id: &str) -> Option<DependencyState> {
+        match self.0.get(id) {
+            Some(Target::Document | Target::Comment) => None,
+            Some(Target::OpenTicket) => Some(DependencyState::Open),
+            Some(Target::ClosedTicket) => Some(DependencyState::Closed),
+            None => Some(DependencyState::Unresolved),
+        }
+    }
+}
+
+/// The ID of every comment the index holds for the registration. They are
+/// only compared with IDs that were checked, so none is checked here.
+pub(super) fn stored_comment_ids(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+) -> Result<Vec<String>, ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT comments.comment_id
+           FROM discovered_comments AS comments
+           JOIN discovered_items AS items ON items.id = comments.item_id
+           JOIN contexts ON contexts.id = items.context_id
+          WHERE contexts.repository_id = ?1",
+    )?;
+    let ids = statement
+        .query_map([repo.registration_id()], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(ids)
 }
 
 /// A problem row that has both a path and a context.
@@ -377,7 +418,16 @@ pub(super) fn stored_items(
             // refresh, so the list that carries this says it is behind.
             unknown: match unknown {
                 Some(stored) => {
-                    UnknownMetadata::from_stored(&stored).ok_or_else(invalid_stored_data)?
+                    let mut unknown =
+                        UnknownMetadata::from_stored(&stored).ok_or_else(invalid_stored_data)?;
+                    // An index written before a ticket's relationship keys
+                    // were fields of their own stored them here.
+                    if kind == ItemDtoKind::Ticket {
+                        for key in canonical::RELATIONSHIP_KEYS {
+                            unknown.values.remove(key);
+                        }
+                    }
+                    unknown
                 }
                 None => UnknownMetadata::default(),
             },
@@ -408,7 +458,8 @@ fn item_with_row(items: &mut [StoredItem], row_id: i64) -> Result<&mut StoredIte
 /// another item by a well-formed ID, a ticket has at most one parent, and a
 /// problem's detail is an item ID or nothing: discovery stores nothing
 /// else, so anything else fails the read. A problem code this build does
-/// not know as a relationship problem is `unknown_problem`.
+/// not know as a relationship problem is `unknown_problem`, and is given
+/// no ID.
 fn stored_relationships(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -458,7 +509,9 @@ fn stored_relationships(
         let code: String = row.get(1)?;
         let detail: Option<String> = row.get(2)?;
         if item.kind != ItemDtoKind::Ticket
-            || detail.is_some_and(|detail| detail.parse::<ItemId>().is_err())
+            || detail
+                .as_ref()
+                .is_some_and(|detail| detail.parse::<ItemId>().is_err())
         {
             return Err(invalid_stored_data());
         }
@@ -466,9 +519,9 @@ fn stored_relationships(
         item.relationships
             .problems
             .push(if RELATIONSHIP_PROBLEMS.contains(&code) {
-                code
+                (code, detail)
             } else {
-                ProblemCode::UnknownProblem
+                (ProblemCode::UnknownProblem, None)
             });
     }
     Ok(())
@@ -513,6 +566,7 @@ pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     ProblemDto {
         code,
         path: Some(path.to_owned()),
+        target_id: None,
     }
 }
 
@@ -575,39 +629,35 @@ pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<Pr
 /// Fills in a ticket's `slug`, `parent` and `deps`, and adds the problems
 /// of its relationship values after the ones it already has.
 ///
-/// Each dependency says what its target is among the items the index holds
-/// now: an open ticket, a closed one, or `unresolved` when no context holds
-/// it. A parent in no context is still the ticket's parent. A `deps` entry
-/// or a `parent` that names a document names no ticket: it is left out and
-/// reported. A problem the item already carries is not repeated.
+/// The parent and each dependency say what their target is among what the
+/// index holds now: an open ticket, a closed one, or `unresolved` when no
+/// context holds anything with that ID. A `deps` entry or a `parent` that
+/// names a document or a comment names no ticket: it is left out and
+/// reported with the ID. A problem the item already carries, about the
+/// same ID, is not repeated.
+///
+/// Every ID here was parsed as one, from the file or from the index, so a
+/// problem's `target_id` is never text taken from front matter.
 fn relate(dto: &mut ItemDto, relationships: &Relationships, targets: &Targets<'_>) {
-    let is_document = |id: &String| targets.0.get(id.as_str()) == Some(&Target::Document);
-    let mut codes = relationships.problems.clone();
-    dto.slug = relationships.slug.clone();
-    dto.parent = relationships.parent.clone().filter(|parent| {
-        if is_document(parent) {
-            codes.push(ProblemCode::RelationshipNotATicket);
+    let mut problems = relationships.problems.clone();
+    let mut target = |id: &String| {
+        let state = targets.state(id);
+        if state.is_none() {
+            problems.push((ProblemCode::RelationshipNotATicket, Some(id.clone())));
         }
-        !is_document(parent)
-    });
-    dto.deps = Vec::new();
-    for dependency in &relationships.deps {
-        let state = match targets.0.get(dependency.as_str()) {
-            Some(Target::Document) => {
-                codes.push(ProblemCode::RelationshipNotATicket);
-                continue;
-            }
-            Some(Target::OpenTicket) => DependencyState::Open,
-            Some(Target::ClosedTicket) => DependencyState::Closed,
-            None => DependencyState::Unresolved,
-        };
-        dto.deps.push(DependencyDto {
-            id: dependency.clone(),
+        state.map(|state| DependencyDto {
+            id: id.clone(),
             state,
-        });
-    }
-    for code in codes {
-        let problem = problem(code, &dto.path);
+        })
+    };
+    dto.slug = relationships.slug.clone();
+    dto.parent = relationships.parent.as_ref().and_then(&mut target);
+    dto.deps = relationships.deps.iter().filter_map(&mut target).collect();
+    for (code, target_id) in problems {
+        let problem = ProblemDto {
+            target_id,
+            ..problem(code, &dto.path)
+        };
         if !dto.problems.contains(&problem) {
             dto.problems.push(problem);
         }
@@ -1122,7 +1172,8 @@ impl RepositoryService {
             let problems = stored_problems(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let targets = Targets::of(&rows);
+            let comments = stored_comment_ids(connection, repo)?;
+            let targets = Targets::of(&rows, &comments);
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
@@ -1194,7 +1245,8 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let targets = Targets::of(&effective_rows(repo, &stored).0);
+            let comments = stored_comment_ids(connection, repo)?;
+            let targets = Targets::of(&effective_rows(repo, &stored).0, &comments);
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
@@ -1337,7 +1389,8 @@ impl RepositoryService {
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
-            let targets = Targets::of(&effective_rows(repo, &stored).0);
+            let comments = stored_comment_ids(connection, repo)?;
+            let targets = Targets::of(&effective_rows(repo, &stored).0, &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);

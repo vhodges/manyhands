@@ -50,7 +50,9 @@ pub const CASES: &[&str] = &[
     "repo_list",
     "ticket_list",
     "ticket_list_nonconforming",
+    "ticket_list_relationship_problems",
     "ticket_show",
+    "ticket_show_relationships",
 ];
 
 /// A shorter value is too likely to occur inside unrelated data.

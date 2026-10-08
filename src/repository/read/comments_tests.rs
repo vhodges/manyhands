@@ -117,11 +117,13 @@ fn only_the_code_of_a_validation_problem_reaches_an_entry() {
             {
                 "code": "malformed_front_matter",
                 "path": path,
+                "target_id": null,
                 "guidance": ProblemCode::MalformedFrontMatter.guidance(),
             },
             {
                 "code": "missing_parent",
                 "path": path,
+                "target_id": null,
                 "guidance": ProblemCode::MissingParent.guidance(),
             },
         ])

@@ -65,7 +65,8 @@
           {
             "code": "malformed_front_matter",
             "guidance": "Correct the YAML front matter.",
-            "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE3.md"
+            "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE3.md",
+            "target_id": null
           }
         ],
         "replies": [],

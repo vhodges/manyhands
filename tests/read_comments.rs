@@ -364,6 +364,7 @@ fn files_that_are_not_comments_end_the_root_list_with_null_ids_paths_and_codes()
         json!({
             "code": "malformed_front_matter",
             "path": malformed,
+            "target_id": null,
             "guidance": ProblemCode::MalformedFrontMatter.guidance(),
         })
     );

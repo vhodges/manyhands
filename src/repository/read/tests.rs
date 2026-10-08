@@ -185,12 +185,14 @@ fn problems_serialize_guidance_from_the_registry() {
         let problem = ProblemDto {
             code,
             path: Some("docs/a.md".to_owned()),
+            target_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
         };
         assert_eq!(
             serde_json::to_value(&problem).unwrap(),
             serde_json::json!({
                 "code": code.as_str(),
                 "path": "docs/a.md",
+                "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                 "guidance": code.guidance(),
             })
         );
@@ -198,12 +200,14 @@ fn problems_serialize_guidance_from_the_registry() {
     let stored = ProblemDto {
         code: ProblemCode::from_stored("some-later-code"),
         path: None,
+        target_id: None,
     };
     assert_eq!(
         serde_json::to_value(&stored).unwrap(),
         serde_json::json!({
             "code": "unknown_problem",
             "path": null,
+            "target_id": null,
             "guidance": ProblemCode::UnknownProblem.guidance(),
         })
     );
@@ -402,6 +406,7 @@ fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
             [ProblemDto {
                 code: ProblemCode::UnknownProblem,
                 path: Some(".manyhands/config.toml".to_owned()),
+                target_id: None,
             }]
         );
     };

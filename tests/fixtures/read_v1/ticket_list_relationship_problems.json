@@ -1,0 +1,113 @@
+{
+  "code": "ok",
+  "command": "ticket list",
+  "data": {
+    "complete": true,
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "items": [
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:18:20Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+            "state": "open"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FC2",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": null,
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+        "problems": [
+          {
+            "code": "invalid_slug",
+            "guidance": "Correct the short code, or remove it.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": null
+          },
+          {
+            "code": "relationship_self_reference",
+            "guidance": "Remove the ticket's own ID from its deps and parent.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FC2"
+          },
+          {
+            "code": "duplicate_dependency",
+            "guidance": "List each dependency once.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0"
+          },
+          {
+            "code": "relationship_invalid_id",
+            "guidance": "Use the full ID of a ticket in deps and parent.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": null
+          },
+          {
+            "code": "relationship_not_a_ticket",
+            "guidance": "Name a ticket in deps and parent, not a document or a comment.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0"
+          },
+          {
+            "code": "relationship_not_a_ticket",
+            "guidance": "Name a ticket in deps and parent, not a document or a comment.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FD1"
+          }
+        ],
+        "project": null,
+        "readiness": null,
+        "slug": null,
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "Related badly",
+        "type": "chore",
+        "unknown_metadata": {}
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

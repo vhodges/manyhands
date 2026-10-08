@@ -3277,6 +3277,14 @@ fn dependency(id: &str, state: DependencyState) -> DependencyDto {
     }
 }
 
+/// The ID each of the item's problems is about.
+fn target_ids(item: &ItemDto) -> Vec<Option<&str>> {
+    item.problems
+        .iter()
+        .map(|problem| problem.target_id.as_deref())
+        .collect()
+}
+
 fn ticket<'a>(list: &'a ItemListDto, id: &str) -> &'a ItemDto {
     list.items
         .iter()
@@ -3301,7 +3309,10 @@ fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_met
     assert_eq!(tickets.index.state, IndexState::Current);
     let a = ticket(&tickets, TICKET_A);
     assert_eq!(a.slug.as_deref(), Some(SLUG));
-    assert_eq!(a.parent.as_deref(), Some(TICKET_B));
+    assert_eq!(
+        a.parent,
+        Some(dependency(TICKET_B, DependencyState::Closed))
+    );
     assert_eq!(
         a.deps,
         [
@@ -3332,9 +3343,18 @@ fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_met
             ProblemCode::RelationshipWrongType,
         ]
     );
+    // The ticket itself, the repeated dependency, and nothing for a value
+    // that was never an ID.
+    assert_eq!(
+        target_ids(c),
+        [None, Some(TICKET_C), Some(TICKET_A), None, None]
+    );
     for problem in &c.problems {
         assert_eq!(problem.path.as_deref(), Some(c.path.as_str()));
     }
+    // No text from the file is published with a problem.
+    let serialized = serde_json::to_string(c).unwrap();
+    assert!(!serialized.contains("Not-A-Slug") && !serialized.contains("not-an-id"));
     // On a document the keys are unknown metadata and nothing more.
     let document = &documents.items[0];
     assert_eq!(
@@ -3441,7 +3461,9 @@ fn a_dependency_on_a_document_is_left_out_and_reported_when_read() {
             item.deps,
             [dependency(TICKET_B, DependencyState::Unresolved)]
         );
+        // The parent and the dependency name the same document: one problem.
         assert_eq!(codes(item), [ProblemCode::RelationshipNotATicket]);
+        assert_eq!(target_ids(item), [Some(DOCUMENT_A)]);
         assert_eq!(item.index.state, IndexState::Current);
     }
 
@@ -3824,7 +3846,10 @@ fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
     let a = ticket(&listed, TICKET_A);
     assert_eq!(a.context.kind, ItemContextKind::Active);
     assert_eq!(a.slug.as_deref(), Some(SLUG));
-    assert_eq!(a.parent.as_deref(), Some(TICKET_B));
+    assert_eq!(
+        a.parent,
+        Some(dependency(TICKET_B, DependencyState::Unresolved))
+    );
     assert_eq!(
         a.deps,
         [
@@ -3998,4 +4023,223 @@ fn a_stored_relationship_row_that_discovery_could_not_have_written_fails_the_rea
         );
         assert!(!serde_json::to_string(&listed).unwrap().contains(code));
     }
+}
+
+use support::items::{COMMENT_A, write_comment};
+
+#[test]
+fn a_dependency_or_parent_that_names_a_comment_names_no_ticket() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(TICKET_B, "B", ""),
+    );
+    write_comment(root, TICKET_B, COMMENT_A, None, "2026-09-30T12:00:00Z", "");
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "D", ""));
+    write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(
+            TICKET_A,
+            "A",
+            &format!("parent: {COMMENT_A}\ndeps: [{DOCUMENT_A}, {COMMENT_A}, {TICKET_B}]\n"),
+        ),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let listed = all_tickets(&enabled.service, &repo);
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+
+    for item in [ticket(&listed, TICKET_A), &shown] {
+        // A comment is in the index, so the ID is not one that a fetch
+        // could still bring a ticket for.
+        assert!(item.parent.is_none(), "{item:?}");
+        assert_eq!(item.deps, [dependency(TICKET_B, DependencyState::Open)]);
+        assert_eq!(
+            codes(item),
+            [
+                ProblemCode::RelationshipNotATicket,
+                ProblemCode::RelationshipNotATicket
+            ]
+        );
+        // The comment once, as parent and as dependency, then the document.
+        assert_eq!(target_ids(item), [Some(COMMENT_A), Some(DOCUMENT_A)]);
+        assert_eq!(item.index.state, IndexState::Current);
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_short_code_written_in_uppercase_is_stored_and_read_in_lowercase() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let file = write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(TICKET_A, "A", "slug: MH-VH-K9X2B\n"),
+    );
+    let written = fs::read(&file).unwrap();
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    assert_eq!(
+        stored_relationships(enabled.data_directory.path()).slugs,
+        [(TICKET_A.to_owned(), Some(SLUG.to_owned()))]
+    );
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    for slug in [SLUG, "MH-VH-K9X2B", "mH-Vh-K9x2B"] {
+        let listed = enabled
+            .service
+            .list_tickets(
+                &repo,
+                &TicketFilter {
+                    slug: Some(slug.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(listed.items.len(), 1, "{slug}");
+        for item in [&listed.items[0], &shown] {
+            assert_eq!(item.slug.as_deref(), Some(SLUG));
+            assert_eq!(codes(item), []);
+            assert_eq!(item.index.state, IndexState::Current);
+        }
+    }
+    // The file is not rewritten, and the source shows it as written.
+    assert_eq!(fs::read(&file).unwrap(), written);
+    assert!(shown.source.unwrap().contains("slug: MH-VH-K9X2B\n"));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn relationship_keys_an_older_index_stored_as_unknown_metadata_are_not_repeated() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write_related_items(root);
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // What a build from before the keys were fields stored for a ticket
+    // and, as this build still does, for a document.
+    let older = format!(
+        r#"{{"not_representable":false,"values":{{"deps":["{TICKET_C}"],"other":"kept","parent":"{TICKET_B}","slug":"{SLUG}"}}}}"#
+    );
+    index(enabled.data_directory.path())
+        .execute(
+            "UPDATE discovered_items SET unknown_metadata = ?1 WHERE item_id IN (?2, ?3)",
+            [older.as_str(), TICKET_A, DOCUMENT_A],
+        )
+        .unwrap();
+
+    let tickets = all_tickets(&enabled.service, &repo);
+    let documents = enabled.service.list_documents(&repo).unwrap();
+
+    let a = ticket(&tickets, TICKET_A);
+    assert_eq!(
+        Value::Object(a.unknown_metadata.clone()),
+        json!({"other": "kept"})
+    );
+    assert_eq!(a.slug.as_deref(), Some(SLUG));
+    assert_eq!(documents.items[0].unknown_metadata.len(), 4);
+    assert_git_transport_uninitialized();
+}
+
+/// Adds a context row for the worktree of `worktree_id` holding a second
+/// row for ticket A, with a short code and one dependency, on `target`.
+fn insert_second_ticket_row(data_directory: &Path, root: &str, worktree_id: &str, target: &str) {
+    let connection = index(data_directory);
+    let repository_id: i64 = connection
+        .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO contexts
+                (repository_id, kind, branch, worktree_path, item_id)
+             VALUES (?1, 'active', ?2, ?3, ?4)",
+            rusqlite::params![
+                repository_id,
+                format!("manyhands/ticket/{worktree_id}"),
+                format!("{root}/.manyhands/worktrees/{worktree_id}"),
+                worktree_id
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO discovered_items
+                (context_id, item_id, kind, canonical_path, title, ticket_type, status,
+                 activity_at, activity_source, slug)
+             VALUES (?1, ?2, 'ticket', ?3, 'Second row', 'task', 'open', 5, 'git', 'zz-zz-zzzzz')",
+            rusqlite::params![
+                connection.last_insert_rowid(),
+                TICKET_A,
+                ticket_path(TICKET_A)
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (?1, ?2, 'deps')",
+            rusqlite::params![connection.last_insert_rowid(), target],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_ticket_the_index_holds_twice_shows_only_its_effective_rows_relationships() {
+    let listed_a = |worktree_id: &str, with_directory: bool| {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        write(
+            root,
+            &ticket_path(TICKET_A),
+            &ticket_source(
+                TICKET_A,
+                "A",
+                &format!("slug: {SLUG}\ndeps: [{TICKET_B}]\n"),
+            ),
+        );
+        refresh_completely(&enabled.service, root);
+        if with_directory {
+            fs::create_dir_all(root.join(".manyhands/worktrees").join(worktree_id)).unwrap();
+        }
+        insert_second_ticket_row(
+            enabled.data_directory.path(),
+            &root_string(&fixture),
+            worktree_id,
+            ABSENT,
+        );
+        let repo = enabled.service.resolve_repository(root).unwrap();
+        let list = all_tickets(&enabled.service, &repo);
+        // One entry, and an index that holds an item twice is behind.
+        assert_eq!(ids(&list), [Some(TICKET_A)]);
+        assert_eq!(list.index.state, IndexState::Stale);
+        let a = list.items[0].clone();
+        assert_git_transport_uninitialized();
+        (a.context.kind, a.slug, a.deps)
+    };
+    let primary = (
+        ItemContextKind::Primary,
+        Some(SLUG.to_owned()),
+        vec![dependency(TICKET_B, DependencyState::Unresolved)],
+    );
+    let own_worktree = (
+        ItemContextKind::Active,
+        Some("zz-zz-zzzzz".to_owned()),
+        vec![dependency(ABSENT, DependencyState::Unresolved)],
+    );
+
+    // A copy in another item's worktree is never the effective one.
+    assert_eq!(listed_a(TICKET_C, true), primary);
+    // The ticket's own worktree is, while it is there.
+    assert_eq!(listed_a(TICKET_A, true), own_worktree);
+    assert_eq!(listed_a(TICKET_A, false), primary);
 }

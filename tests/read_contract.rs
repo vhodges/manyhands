@@ -743,6 +743,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         ),
         (
             "item.schema.json",
+            "parent.state",
+            DependencyState::ALL.map(DependencyState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
             "readiness.state",
             ReadinessState::ALL.map(ReadinessState::as_str).to_vec(),
         ),
@@ -872,8 +877,16 @@ fn published_enumerations_list_exactly_the_registered_values() {
 fn every_problem_matches_the_problem_schema() {
     let mut guidance = BTreeSet::new();
     for code in ProblemCode::ALL {
-        for path in [Some("docs/a.md".to_owned()), None] {
-            let problem = serde_json::to_value(ProblemDto { code, path }).unwrap();
+        for (path, target_id) in [
+            (Some("docs/a.md".to_owned()), None),
+            (None, Some(items::TICKET_A.to_owned())),
+        ] {
+            let problem = serde_json::to_value(ProblemDto {
+                code,
+                path,
+                target_id,
+            })
+            .unwrap();
             schema::check_published("problem.schema.json", &problem).unwrap();
             assert_eq!(problem["guidance"], code.guidance());
         }
@@ -1044,6 +1057,118 @@ fn ticket_show_matches_its_schema_and_golden() {
         repo.root().to_str().unwrap(),
         &[&item],
         &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_ticket_with_relationships_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let item = enabled
+        .service
+        .show_item(&repo, &items::item_id(items::TICKET_A))
+        .unwrap();
+    let envelope = Envelope::read_success(
+        "ticket show",
+        item_scope(&repo, items::TICKET_A),
+        item.clone(),
+    );
+
+    assert_eq!(item.slug.as_deref(), Some("mh-vh-k9x2b"));
+    assert_eq!(item.parent.as_ref().unwrap().id, items::TICKET_B);
+    assert_eq!(item.deps.len(), 2);
+    assert_item_contract(
+        "ticket_show_relationships",
+        Some("item.schema.json"),
+        repo.root().to_str().unwrap(),
+        &[&item],
+        &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// Front matter text of relationship values that are ignored. None of it
+/// may be published with the problems that report them.
+const IGNORED_SLUG: &str = "Not-A-Slug-7d1e";
+const IGNORED_ID: &str = "not-an-id-7d1e";
+
+#[test]
+fn ticket_relationship_problems_match_their_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let root = &fixture.root;
+    let path = items::ticket_path(items::TICKET_C);
+    // A parent and a dependency that are documents, the ticket itself, a
+    // dependency twice, and values that are not a short code or an ID.
+    items::write(
+        root,
+        &path,
+        &items::ticket_source_with(
+            items::TICKET_C,
+            "Related badly",
+            "chore",
+            "open",
+            &format!(
+                "slug: {IGNORED_SLUG}\nparent: {}\ndeps:\n  - {}\n  - {}\n  - {}\n  - {}\n  - {IGNORED_ID}\n",
+                items::DOCUMENT_A,
+                items::TICKET_C,
+                items::TICKET_A,
+                items::TICKET_A,
+                items::DOCUMENT_B,
+            ),
+        ),
+    );
+    items::commit(&fixture, &[&path], items::COMMITTED_AT + 300);
+    items::refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = enabled
+        .service
+        .list_tickets(
+            &repo,
+            &TicketFilter {
+                ticket_type: Some("chore".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let envelope = Envelope::read_success("ticket list", repo.scope(), list.clone());
+
+    // The ticket is listed as a ticket, with its one valid dependency.
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].id.as_deref(), Some(items::TICKET_C));
+    assert_eq!(list.items[0].deps.len(), 1);
+    assert_eq!(
+        list.items[0]
+            .problems
+            .iter()
+            .map(|problem| (problem.code, problem.target_id.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (ProblemCode::InvalidSlug, None),
+            (
+                ProblemCode::RelationshipSelfReference,
+                Some(items::TICKET_C)
+            ),
+            (ProblemCode::DuplicateDependency, Some(items::TICKET_A)),
+            (ProblemCode::RelationshipInvalidId, None),
+            (ProblemCode::RelationshipNotATicket, Some(items::DOCUMENT_A)),
+            (ProblemCode::RelationshipNotATicket, Some(items::DOCUMENT_B)),
+        ]
+    );
+    assert_item_contract(
+        "ticket_list_relationship_problems",
+        Some("item_list.schema.json"),
+        repo.root().to_str().unwrap(),
+        &list.items.iter().collect::<Vec<_>>(),
+        &[
+            IGNORED_SLUG,
+            IGNORED_ID,
+            enabled.data_directory.path().to_str().unwrap(),
+        ],
         &envelope,
     );
     assert_git_transport_uninitialized();

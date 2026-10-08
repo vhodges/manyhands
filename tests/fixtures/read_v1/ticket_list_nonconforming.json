@@ -33,7 +33,8 @@
           {
             "code": "malformed_front_matter",
             "guidance": "Correct the YAML front matter.",
-            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md"
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",
+            "target_id": null
           }
         ],
         "project": null,

@@ -193,7 +193,7 @@ fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
             "docs/a.md",
             &context("/r"),
             &index(),
-            &Targets::of(&[]),
+            &Targets::of(&[], &[]),
         )
     };
 
@@ -383,8 +383,17 @@ fn stored(id: &str, kind: ItemDtoKind, closed_at: Option<i64>) -> StoredItem {
     }
 }
 
+const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA5";
+
+fn about(code: ProblemCode, target_id: Option<&str>) -> ProblemDto {
+    ProblemDto {
+        target_id: target_id.map(str::to_owned),
+        ..problem(code, "p")
+    }
+}
+
 #[test]
-fn a_dependency_says_what_its_target_is_and_a_document_is_not_one() {
+fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
     let rows = [
         // A status that says closed closes nothing.
         StoredItem {
@@ -394,16 +403,27 @@ fn a_dependency_says_what_its_target_is_and_a_document_is_not_one() {
         stored(CLOSED, ItemDtoKind::Ticket, Some(1)),
         stored(DOCUMENT, ItemDtoKind::Document, None),
     ];
-    let targets = Targets::of(&rows.iter().collect::<Vec<_>>());
+    // An ID that is both an item's and a comment's is the item's.
+    let comments = [COMMENT.to_owned(), CLOSED.to_owned()];
+    let targets = Targets::of(&rows.iter().collect::<Vec<_>>(), &comments);
+    let dependency = |id: &str, state| DependencyDto {
+        id: id.to_owned(),
+        state,
+    };
     let ticket = StoredItem {
         relationships: Relationships {
             slug: Some("mh-vh-k9x2b".to_owned()),
             parent: Some(ABSENT.to_owned()),
-            deps: [ABSENT, DOCUMENT, CLOSED, OPEN].map(str::to_owned).to_vec(),
+            deps: [ABSENT, DOCUMENT, CLOSED, COMMENT, OPEN]
+                .map(str::to_owned)
+                .to_vec(),
             problems: vec![
-                ProblemCode::RelationshipWrongType,
-                ProblemCode::InvalidSlug,
-                ProblemCode::RelationshipWrongType,
+                (ProblemCode::RelationshipWrongType, None),
+                (ProblemCode::InvalidSlug, None),
+                (ProblemCode::RelationshipWrongType, None),
+                (ProblemCode::DuplicateDependency, Some(OPEN.to_owned())),
+                (ProblemCode::DuplicateDependency, Some(CLOSED.to_owned())),
+                (ProblemCode::DuplicateDependency, Some(OPEN.to_owned())),
             ],
         },
         unknown: UnknownMetadata {
@@ -416,47 +436,57 @@ fn a_dependency_says_what_its_target_is_and_a_document_is_not_one() {
     let dto = stored_item_dto(&ticket, &targets, &index());
 
     assert_eq!(dto.slug.as_deref(), Some("mh-vh-k9x2b"));
-    // A parent no context holds is still the parent.
-    assert_eq!(dto.parent.as_deref(), Some(ABSENT));
-    // In the file's order, without the document.
+    // A parent no context holds is still the parent, and says so.
+    assert_eq!(
+        dto.parent,
+        Some(dependency(ABSENT, DependencyState::Unresolved))
+    );
+    // In the file's order, without the document and the comment.
     assert_eq!(
         dto.deps,
         [
-            (ABSENT, DependencyState::Unresolved),
-            (CLOSED, DependencyState::Closed),
-            (OPEN, DependencyState::Open),
+            dependency(ABSENT, DependencyState::Unresolved),
+            dependency(CLOSED, DependencyState::Closed),
+            dependency(OPEN, DependencyState::Open),
         ]
-        .map(|(id, state)| DependencyDto {
-            id: id.to_owned(),
-            state
-        })
     );
     assert_eq!(dto.readiness, None);
-    // The item's own problems first, each relationship problem once.
+    // The item's own problems first. Problems alike in every way are one;
+    // problems about different IDs are not.
     assert_eq!(
         dto.problems,
         [
-            ProblemCode::MetadataNotRepresentable,
-            ProblemCode::RelationshipWrongType,
-            ProblemCode::InvalidSlug,
-            ProblemCode::RelationshipNotATicket,
+            about(ProblemCode::MetadataNotRepresentable, None),
+            about(ProblemCode::RelationshipWrongType, None),
+            about(ProblemCode::InvalidSlug, None),
+            about(ProblemCode::DuplicateDependency, Some(OPEN)),
+            about(ProblemCode::DuplicateDependency, Some(CLOSED)),
+            about(ProblemCode::RelationshipNotATicket, Some(DOCUMENT)),
+            about(ProblemCode::RelationshipNotATicket, Some(COMMENT)),
         ]
-        .map(|code| problem(code, "p"))
     );
 
-    let child_of_a_document = StoredItem {
-        relationships: Relationships {
-            parent: Some(DOCUMENT.to_owned()),
-            ..Default::default()
-        },
-        ..stored(SELF, ItemDtoKind::Ticket, None)
-    };
-    let dto = stored_item_dto(&child_of_a_document, &targets, &index());
-    assert_eq!(dto.parent, None);
-    assert_eq!(
-        dto.problems,
-        [problem(ProblemCode::RelationshipNotATicket, "p")]
-    );
+    for (parent, state) in [
+        (OPEN, Some(DependencyState::Open)),
+        (CLOSED, Some(DependencyState::Closed)),
+        (DOCUMENT, None),
+        (COMMENT, None),
+    ] {
+        let child = StoredItem {
+            relationships: Relationships {
+                parent: Some(parent.to_owned()),
+                ..Default::default()
+            },
+            ..stored(SELF, ItemDtoKind::Ticket, None)
+        };
+        let dto = stored_item_dto(&child, &targets, &index());
+        assert_eq!(dto.parent, state.map(|state| dependency(parent, state)));
+        let expected = match state {
+            Some(_) => Vec::new(),
+            None => vec![about(ProblemCode::RelationshipNotATicket, Some(parent))],
+        };
+        assert_eq!(dto.problems, expected, "{parent}");
+    }
 }
 
 #[test]

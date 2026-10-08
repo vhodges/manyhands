@@ -389,7 +389,7 @@ problem_codes! {
     MetadataNotRepresentable => "metadata_not_representable", None,
         "Rewrite the metadata so that it can be represented as JSON.";
     RelationshipNotATicket => "relationship_not_a_ticket", None,
-        "Name a ticket, not a document, in deps and parent.";
+        "Name a ticket in deps and parent, not a document or a comment.";
     UnknownProblem => "unknown_problem", None,
         "Refresh the index; if the problem remains, inspect the file.";
 }

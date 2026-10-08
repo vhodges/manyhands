@@ -23,6 +23,12 @@ pub struct ProblemDto {
     /// Repository-relative, or `None` when the problem has no path or its
     /// path cannot be written as one.
     pub path: Option<String>,
+    /// The ID a problem with a ticket's `deps` or `parent` is about: the
+    /// ticket's own for `relationship_self_reference`, the repeated one
+    /// for `duplicate_dependency`, and the document's or comment's for
+    /// `relationship_not_a_ticket`. `None` for every other problem. It is
+    /// always a well-formed item ID and never text from the file.
+    pub target_id: Option<String>,
 }
 
 impl ProblemDto {
@@ -33,9 +39,10 @@ impl ProblemDto {
 
 impl Serialize for ProblemDto {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut problem = serializer.serialize_struct("ProblemDto", 3)?;
+        let mut problem = serializer.serialize_struct("ProblemDto", 4)?;
         problem.serialize_field("code", &self.code)?;
         problem.serialize_field("path", &self.path)?;
+        problem.serialize_field("target_id", &self.target_id)?;
         problem.serialize_field("guidance", self.guidance())?;
         problem.end()
     }
@@ -352,10 +359,10 @@ pub struct ItemDto {
     /// its `slug` is not one, which `problems` reports. It is a label to
     /// search by and never identifies a ticket.
     pub slug: Option<String>,
-    /// The ID of a ticket's parent, whether or not any context holds that
-    /// ticket. Null when it has none, and when its `parent` was ignored:
-    /// `problems` says why.
-    pub parent: Option<String>,
+    /// A ticket's parent, in the shape of a dependency: `unresolved` when
+    /// no context holds a ticket with that ID. Null when it has none, and
+    /// when its `parent` was ignored: `problems` says why.
+    pub parent: Option<DependencyDto>,
     /// A ticket's dependencies in its file's order, each once. An entry
     /// that was ignored is not here, and `problems` says why.
     pub deps: Vec<DependencyDto>,
@@ -394,9 +401,9 @@ pub struct ClosureDto {
     pub closed_by: Option<String>,
 }
 
-/// `state` is what `id` names among the items the index holds when it is
-/// read: an open ticket, a closed one, or nothing in any context it has
-/// seen.
+/// A ticket another ticket depends on or has as its parent. `state` is
+/// what `id` names in the index when it is read: an open ticket, a closed
+/// one, or nothing in any context it has seen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DependencyDto {
     pub id: String,
