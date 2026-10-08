@@ -1091,3 +1091,60 @@ fn a_configuration_that_cannot_be_opened_is_inaccessible() {
     assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
     assert_git_transport_uninitialized();
 }
+
+// A directory can claim a registered repository's Git directory as its
+// common directory without that repository ever having made it a worktree.
+#[test]
+fn a_directory_the_owner_does_not_list_as_a_worktree_is_not_a_repository() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let outside = tempfile::tempdir().unwrap();
+    let fabricated = outside.path().join("fabricated");
+    let administrative = outside.path().join("administrative");
+    fs::create_dir_all(&fabricated).unwrap();
+    fs::create_dir_all(&administrative).unwrap();
+    let owner_git = canonical(&fixture.root.join(".git"));
+    fs::write(administrative.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(
+        administrative.join("commondir"),
+        format!("{}\n", owner_git.to_str().unwrap()),
+    )
+    .unwrap();
+    fs::write(
+        administrative.join("gitdir"),
+        format!("{}\n", fabricated.join(".git").to_str().unwrap()),
+    )
+    .unwrap();
+    fs::write(
+        fabricated.join(".git"),
+        format!("gitdir: {}\n", administrative.to_str().unwrap()),
+    )
+    .unwrap();
+    // Git itself takes the directory for a worktree of the registered
+    // repository.
+    let opened = Repository::open(&fabricated).unwrap();
+    assert!(opened.is_worktree());
+    assert_eq!(canonical(opened.commondir()), owner_git);
+
+    let error = enabled.service.resolve_repository(&fabricated).unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::NotRepository);
+    assert_eq!(error.scope.repository, Some(path_string(&fabricated)));
+    assert_eq!(recovery(&error), json!([]));
+    assert_eq!(
+        enabled
+            .service
+            .inspect_repository(&fabricated)
+            .unwrap_err()
+            .code(),
+        ResultCode::NotRepository
+    );
+    // A worktree the owner made still resolves to it.
+    let linked = outside.path().join("linked");
+    linked_worktree(&fixture, "linked", &linked);
+    assert_eq!(
+        enabled.service.resolve_repository(&linked).unwrap(),
+        enabled.service.resolve_repository(&fixture.root).unwrap()
+    );
+    assert_git_transport_uninitialized();
+}

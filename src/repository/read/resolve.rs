@@ -130,7 +130,11 @@ fn working_directory(repository: &Repository) -> Result<PathBuf, ReadError> {
 /// without `core.worktree` Git takes it to be the directory's parent, which
 /// may be nothing, or another repository. So the root is accepted only when
 /// the repository opened there has the same common Git directory.
-fn owner_root(worktree: &Repository) -> Result<PathBuf, ReadError> {
+///
+/// That shows the two share a Git directory, not that the owner made this
+/// worktree: any directory can be written to name it. So the owner must
+/// also list a worktree at `selected`, the canonical path of this one.
+fn owner_root(worktree: &Repository, selected: &Path) -> Result<PathBuf, ReadError> {
     let common_directory = fs::canonicalize(worktree.commondir()).map_err(inaccessible)?;
     // The worktree exists and names this directory, so failing to open it
     // is a repository that cannot be read, never the absence of one.
@@ -141,6 +145,19 @@ fn owner_root(worktree: &Repository) -> Result<PathBuf, ReadError> {
     if owner.is_worktree()
         || fs::canonicalize(owner.commondir()).map_err(inaccessible)? != common_directory
     {
+        return Err(ReadError::new(ResultCode::NotRepository));
+    }
+    let listed = owner
+        .worktrees()
+        .map_err(|error| ReadError::new(ResultCode::RepositoryInaccessible).with_source(error))?;
+    let is_listed = listed.iter().flatten().any(|name| {
+        owner
+            .find_worktree(name)
+            .ok()
+            .and_then(|listed| fs::canonicalize(listed.path()).ok())
+            .is_some_and(|path| path == selected)
+    });
+    if !is_listed {
         return Err(ReadError::new(ResultCode::NotRepository));
     }
     Ok(root)
@@ -191,7 +208,7 @@ fn repository_root(selected: &Path) -> Result<PathBuf, ReadError> {
     }
     if repository.is_worktree() {
         // No owner is known, so the failure is about the worktree itself.
-        owner_root(&repository).map_err(|error| at_root(error, selected))
+        owner_root(&repository, selected).map_err(|error| at_root(error, selected))
     } else {
         Ok(directory)
     }
