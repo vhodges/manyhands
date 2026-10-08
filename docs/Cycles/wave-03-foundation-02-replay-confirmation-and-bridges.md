@@ -60,7 +60,9 @@ review. Approving them and authorizing implementation are separate gates.
   every other operation on that repository fail with `RecoveryRequired`.
   The design lists the paths under "The Journal Defect". It was found by
   reading the source during planning and has not been reproduced by a test.
-  Decision 2 sets how it is fixed.
+  The product owner asked for defect ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` on 2026-10-08; it is
+  raised on its own branch. Decision 2 confirms it must merge before
+  Part B.
 - Seven defect and follow-up tickets raised from F1 are open. Two touch code
   F2 changes: `01M4EHGE4BXGPMCWWA1S1QR0JW` (index refresh atomicity) and
   `01M4EHGE9TMR99VYZC184J9XEC` (discovery entry caps). Neither blocks F2.
@@ -154,24 +156,28 @@ so they are not lost:
    result without touching the repository. An unfinished one continues only
    if nobody else has changed its paths since it was accepted, or they
    already hold its commit.
-3. **A request that did nothing leaves nothing.** A first attempt that ends
+3. **A request that did nothing leaves nothing.** A local request that ends
    with nothing in flight leaves no request record and no pending journal
    row; the same or another request can follow at once. Whether something
    is in flight is read from the operation's journal row, never guessed
-   from the error returned.
+   from the error returned. Two existing exceptions are stated in the
+   design: a failed index refresh or rebuild, and a synchronization that
+   stopped after it reserved.
 4. **Git and the file system outrank the records.** A stored result that
    names a commit no longer reachable is not returned. After the database is
    lost, a retry is decided from what is on disk.
 5. **Writes to existing resources need a current observation.** A stale one
    is `external_change`; nothing is written. There is no override. A
-   request's own earlier attempt does not make its observation stale.
+   request's own earlier attempt does not make its observation stale, and a
+   request for the state that already exists is a no-op, not a conflict.
 6. **A preview changes nothing** beyond one record in the application
    database. It initializes no repository, creates no directory, writes no
    configuration and contacts no network.
 7. **A confirmation binds what was previewed**: command, target, input and
    observed state. It is accepted once, by one request, within ten minutes,
    and only if a fresh observation still matches. The observation is
-   compared again on any retry whose operation has not begun.
+   compared again on any retry whose operation has no recorded step, unless
+   the command's end state already holds.
 8. **No lock is created.** The boundary takes no lease of its own and keeps
    none between calls. The repository lease, the reservation and the three
    journals remain the only authorities.
@@ -195,10 +201,11 @@ so they are not lost:
 | --- | --- |
 | Replay | For a ticket save and a clean synchronization against a real SSH remote: a retry after a lost result returns the same effects and makes no second commit or push, including when another request saved the item in between; a retry with changed input is rejected with nothing run. |
 | Interruption | With a failure injected at each existing fault point of a save, the retry completes the remainder and creates no duplicate commit, branch, worktree or item. |
-| Nothing left behind | After each kind of rejection before an effect, no request record and no pending journal row exists, and a different request on the same repository succeeds. |
+| Required outcomes | Every row of the design's required-outcomes table has a test that produces the sequence and asserts the outcome. |
+| Nothing left behind | After each kind of rejection of a local request before an effect, no request record and no pending journal row exists, and a different request on the same repository succeeds. The two stated exceptions are each pinned by a test. |
 | Cache loss | With the database deleted between attempt and retry and the repository registered again: a create, a save and a synchronization each reach the intended state once; a save that died before its checkpoint is reported as an external change and a fresh save commits it; a confirmed command asks for a new preview; no result names a commit that is not found. |
 | Observations | A stale token on save, move, slug assignment and repair writes nothing. A document save or move without a source observation is rejected before any write. An uncommitted edit on primary stops a first save without creating a context. |
-| Confirmation | A stale preview, an expired one, one used by another request, one presented with changed input and a missing one are each rejected with their own code and no effect. An accepted one is honored on retry after its expiry; a retry that has made no effect yet observes again. A preview of `repo create` leaves no directory, repository or registration. |
+| Confirmation | A stale preview, an expired one, one used by another request, one presented with changed input and a missing one are each rejected with their own code and no effect. An accepted one is honored on retry after its expiry; a retry whose operation has no recorded step observes again; a retry of a completed command is a no-op. A preview of `repo create` leaves no directory, repository or registration. |
 | No lock | With a preview outstanding, every other operation on the repository proceeds. |
 | Result mapping | Every domain outcome and error variant has a code, enforced by exhaustive matches. A golden envelope exists for every bound command and every result code a fixture can produce; the rest are pinned by a table test. |
 | Partial results | For each binding family, a failure injected after the authoritative step yields `partial`, the completed effects and a recovery action. |
@@ -226,23 +233,26 @@ Each has a recommendation. None is decided.
    and the bindings for existing operations; (C) the bridges.
    *Alternative:* split at a part boundary into two Cycles, which needs a
    Wave amendment and lets C2 or C3 start on a partial foundation.
-2. **The journal defect.** *Recommended:* fix it under its own defect
-   ticket, merged to main before Part B starts, as the effective-copy defect
-   was before F1. It changes Wave 01 code on many paths, two existing tests
-   constrain it, and it deserves its own design and review; Part A does not
-   depend on it. *Alternative:* fix it inside F2 as the first task of
-   Part B.
-   Two cases remain after the fix, both existing behavior that the boundary
-   makes reachable by users. A save interrupted between its write and its
-   checkpoint blocks the repository until the same request is repeated with
-   the same body; nothing can clear it if the body is lost, or if someone
-   else has since committed different content to the same file. And a
-   process killed between `enable` or `remote select` writing the
-   configuration file and committing it leaves a dirty worktree that blocks
-   authoring. *Recommended:* decide on that defect ticket whether the
-   library needs a way to abandon an operation, before C3 makes saves
-   reachable by users. The desktop keeps drafts and an agent keeps its input
-   file, so the body is normally there.
+2. **The journal defect.** Ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` is raised. *Recommended:* it is
+   fixed there and merged to main before Part B starts, as the
+   effective-copy defect was before F1. It changes Wave 01 code on many
+   paths, existing tests constrain it, and it deserves its own design and
+   review; Part A does not depend on it. *Alternative:* fix it inside F2 as
+   the first task of Part B.
+   Three cases remain after the fix, all existing behavior that the
+   boundary makes reachable by users; the design lists them. An operation
+   killed after its journal row is written blocks the repository until the
+   same request is repeated with the same input, and nothing clears it if
+   the input is lost or someone else has since committed different content
+   to the same file. A process killed between `enable` or
+   `remote select` writing the configuration file and committing it leaves
+   a dirty worktree that blocks authoring. And a synchronization that stops
+   after reserving appears to hold its reservation, blocking local work
+   until the request is retried or cancelled; that one is unconfirmed.
+   *Recommended:* decide on the defect ticket whether the library needs a
+   way to abandon an operation, before C3 makes saves reachable by users,
+   and whether its operations should report what they wrote, which would
+   let the boundary stop inferring it.
 3. **Effects for changes that are not canonical content.** Identity, host
    trust, keys, remotes and registration removal fit none of the six
    effects, and the effect values are frozen. *Recommended:* report every
@@ -303,8 +313,12 @@ Smaller rulings the design makes, listed so they can be overruled:
   the first request that accepts it. A clock set backwards expires it.
 - An observation token is part of a request's input. After
   `external_change` the caller reads again and uses a new request ID.
-- A request whose first attempt ends with nothing in flight leaves no
-  record, and releases the confirmation it had accepted.
+- A request that ends with nothing in flight leaves no record, and releases
+  the confirmation it had accepted.
+- Losing a request record is safe: a request for the state that already
+  exists is answered as a no-op.
+- The replay rules are built test-first against the design's
+  required-outcomes table, with a design checkpoint after Task 7.
 - A retry examines only the request's own paths; unrelated commits on the
   same branch do not stop it.
 - The adoption ID is supplied by the caller in the corrected source; the
@@ -335,24 +349,30 @@ Smaller rulings the design makes, listed so they can be overruled:
 
 ## Review Record
 
-The three documents were reviewed on 2026-10-08 in two rounds. In the first,
+The three documents were reviewed on 2026-10-08 in three rounds. In the first,
 one independent reviewer read them against the source and one against the
 Wave, the RFCs and each other; their blocking findings are the first seven
 rows. The documents were rewritten, and a third reviewer attacked the
 mechanisms the rewrite introduced; its blocking findings are the last four
-rows. The corrections for that second round have not themselves been
-reviewed. Nothing here has been run.
+rows but four. A fourth reviewer then walked fifteen timelines through the
+corrected rules and found four more blocking errors; those are the last
+four rows. **Every round found blocking errors in how a retried request is
+settled, including in the previous round's corrections, and the corrections
+for the third round have not been reviewed.** The design therefore states
+the required outcomes as the contract and treats its mechanism as
+provisional; the plan builds it test-first and stops for a checkpoint.
+Nothing here has been run.
 
 | Source | Concern | Classification | Resolution |
 | --- | --- | --- | --- |
 | Source review; `recovery.rs:342-379`, `repository.rs:3727-3791`, `2583-2618` | Ordinary rejections leave a pending journal row that blocks the repository; the first draft called it possible and named three operations. | Decision | Stated as certain from source, with every path; decision 2. |
 | Source review; `repository.rs:3507-3596`, `3286-3300` | Re-running `create_and_enable` after it completed fails, and `set_publication_remote` reports a change and a commit that are not the request's. | Settled | Per-operation replay table; `repo create` retries through `enable`; `remote select` compares before calling. |
 | Source review; `read/items.rs:485-503`, `sync.rs:359` | The first draft's cache-loss table assumed a registered repository with keys and pins. Losing the database loses all three. | Settled | Table rewritten from an unregistered repository; "equal and committed" required for a no-op. |
-| RFC review; CLI RFC 183 | A retry of an interrupted save would have failed its own observation check. | Settled | A retry skips the token check and uses the branch tip and expected digest recorded at acceptance. |
+| RFC review; CLI RFC 183 | A retry of an interrupted save would have failed its own observation check. | Settled | A retry skips the token check and re-enters the domain operation with the expectation recorded at acceptance. |
 | RFC review; CLI RFC 325, 333-334 | A failure class fixed per code gives the wrong exit status when one code stops a request before and after an effect. | Settled | One rule for outcome and class from cancellation, effects and code. |
 | RFC review; CLI RFC 118-119 | Refusing repair of a closed ticket contradicted the repair rules. | Settled | The guard covers save and slug assignment only. |
 | Both reviews; CLI RFC 177 | A retry after acceptance never observed again, even before any effect. | Settled | The observation is compared again until the request has made an effect. |
-| Source review; `repository.rs:2090-2095`, `recovery.rs:444-454` | The journal step does not show whether a commit was made, so an earlier attempt's commit could be misattributed or the file rewritten. | Settled | The branch tip is recorded at acceptance; a retry looks for its commit after that tip and otherwise does not re-run. |
+| Source review; `repository.rs:2090-2095`, `recovery.rs:444-454` | The journal step does not show whether a commit was made, so an earlier attempt's commit could be misattributed or the file rewritten. | Settled | The position is recorded at acceptance; the commit is taken from commits after it that left the request's paths as intended. |
 | Source review; `repository.rs:1440-1473`, `items.rs:1585-1587` | A token over primary's on-disk bytes does not match a context checked out from primary's head when primary has an uncommitted edit. | Settled | A first save requires primary's file to equal its head blob. |
 | Source review; `canonical.rs:805-837` | The serializer emits unknown keys first and cannot quote selectively. | Settled | Key order is not canonical; quoting is left to the serializer and proven by round trip. |
 | Source review; `repository.rs:7178-7186` | A folder past discovery's limits would stop all authoring. | Settled | `create_folder` refuses to cross them. |
@@ -367,6 +387,11 @@ reviewed. Nothing here has been run.
 | Second review; `repository.rs:2368-2378` | Refusing a retry whenever the branch tip moved would strand requests after any unrelated commit, and the tip is undefined for a first save. | Settled | The check examines only the request's paths; an absent branch is recorded as primary's head. |
 | Second review; `keys/deletion.rs:86-133`, `repository.rs:3192-3200` | "Has made an effect" had no source for confirmation retries, and the rule for commands without a journal was false. | Settled | A journal row for the operation ID is the test. Commands without one compare again, and a new preview completes a partial change. Whether an interrupted key deletion can be finished is established in Task 12. |
 | Second review; `local_authoring.rs:5689-5712`, `6417-6495` | The journal fix cannot be decided from the error kind, and two existing tests require a pending row after a standalone context failure. | Decision | Stated in the design; settled on the defect ticket under decision 2. |
+| Third review; `recovery.rs:474-479`, `repository.rs:2090-2095` | Skipping the save when its commit was found left a journal row that only the save can complete. | Settled | A retry always calls the domain operation; the evidence check supplies only the commit. |
+| Third review; `keys/generation.rs:154-191` | An interrupted key generation is completed by its next call; treating its first result as final would lose the key. | Settled | Finished only on success or "retained for inspection". |
+| Third review; `repository.rs:4295-4299` | A completed `repo remove`, identity change or host approval whose result was lost would be answered with `external_change`. | Settled | A retry first asks whether the end state already holds. |
+| Third review; `repository.rs:1941-1949` | Content already in place from another request makes the domain report an external change, not a no-op. | Settled | The already-applied rule, stated once and used for late callers, lost records and cache loss. |
+| Third review; `sync.rs:520`, `recovery.rs:280-285` | A synchronization that stops after reserving appears to hold its reservation and block local work. | Open | Stated as open case 3; reproduced in Task 13; reported to Wave 02 Cycle 06 if it holds. |
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,

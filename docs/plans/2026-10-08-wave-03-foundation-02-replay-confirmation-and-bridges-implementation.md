@@ -39,8 +39,10 @@ author are changes to `canonical` and the existing save paths.
 **Spec:** [Cycle](../Cycles/wave-03-foundation-02-replay-confirmation-and-bridges.md)
 and [design](2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md).
 
-**Status:** Draft for product-owner review, revised twice after independent
-review. It assumes the recommended option of each decision in the Cycle
+**Status:** Draft for product-owner review, revised three times after
+independent review. The replay rules of Tasks 6 and 7 follow a mechanism
+that has failed review in its details three times; see the checkpoint after
+Task 7. It assumes the recommended option of each decision in the Cycle
 document; a different decision changes the tasks named under
 [Decision Dependencies](#decision-dependencies).
 
@@ -191,7 +193,7 @@ moved or changed behavior, update the design before coding.
 
 ## Prerequisite: Journal Rows After A Rejection
 
-Done under its own defect ticket, with its own short design, and merged to
+Done under defect ticket `01M4EWN2DK3MY6H4GBYDYXF6QH`, with its own short design, and merged to
 main before Part B, if decision 2 is as recommended. Otherwise it is the
 first task of Part B here. Part A does not wait for it. What follows is the
 requirement F2 places on that work, not its design.
@@ -204,7 +206,8 @@ error, the journal row was begun by this call, and this call wrote nothing
 durable or rolled back what it wrote, the row is completed. Whether the
 call wrote is tracked by the call itself; it cannot be read from the error
 kind or the recorded step. A row stays pending when an effect was made and
-work remains, and after a failure inside a standalone `prepare_context`.
+work remains, after a failure inside a standalone `prepare_context`, and
+after a failed refresh or rebuild, which this fix does not cover.
 Creating an editing context as part of a save is not such an effect;
 initializing a repository is.
 
@@ -235,7 +238,10 @@ If one does not fail first, the path was not defective: say so and drop it.
   - a create that failed after the repository was initialized
     (`tests/recovery_foundation_gate.rs`, near line 1388);
   - the two standalone `prepare_context` failures
-    (`tests/local_authoring.rs`, near lines 5689 and 6466).
+    (`tests/local_authoring.rs`, near lines 5689 and 6466);
+  - a failed rebuild and two failed refreshes
+    (`tests/recovery_foundation_gate.rs`, near line 951;
+    `tests/discovery_rebuild.rs`, near lines 1575 and 2100).
 - After `enable` rolls back inside a `create_and_enable`, a repeat of the
   create with the same operation ID: decide what it returns, and test it.
 - Every existing test passes unchanged.
@@ -447,7 +453,12 @@ schema and goldens, `.gitattributes`.
 tables and their migration; record insert, lookup, entering (which raises
 the attempt number), and finish and delete, each conditional on the record
 being `accepted` with the caller's attempt number; `show_request`; an
-injectable clock on the service. No `execute` yet.
+injectable clock on the service; and in each of the three journals a lookup
+of one operation by ID that says absent, pending with its step or phase, or
+completed. No `execute` yet.
+
+Also **Files:** `src/repository/recovery.rs`,
+`src/repository/remote/state.rs`, `src/repository/keys/registry.rs`.
 
 **Tests first:**
 
@@ -462,8 +473,11 @@ injectable clock on the service. No `execute` yet.
 - Insert is refused for an existing request ID. Finish succeeds once on an
   accepted record and changes nothing on a finished one.
 - With attempts 1 and 2 entered, a finish or delete by attempt 1 changes
-  nothing; by attempt 2 it applies. Delete by any attempt above 1 is
-  refused.
+  nothing; by attempt 2 it applies.
+- The journal lookup returns absent, pending with its step and completed
+  for a local operation, a synchronization (in the remote journal and, for
+  one bound locally with no remote, in the local one) and a key operation.
+  It works for a root that no longer exists.
 - Deleting a record releases the confirmation it accepted, in the same
   transaction; the confirmation's expiry time is unchanged.
 - `show_request` returns `accepted`, `finished` with its stored result, and
@@ -486,9 +500,13 @@ injectable clock on the service. No `execute` yet.
 `tests/mutation_contract.rs`, schemas and goldens for `ticket create` and
 `ticket save`.
 
-**Contract:** The design's "What execute does", including Settling,
-"Re-entering a request" and "After the cache is lost", complete, proven
-through `ticket create` and `ticket save`. Token checking and the primary-is-committed rule from
+**Contract:** The rows of the design's "Required outcomes" table that a save
+or a create can produce are this task's specification. Write a test for
+each row first. Then build "What execute does", Settling, "Re-entering a
+request", the already-applied rule and "After the cache is lost" to pass
+them, through `ticket create` and `ticket save`. Where the design's
+mechanism cannot meet a row, the row wins: change the mechanism, record
+the change in the ledger and carry it to the checkpoint below. Token checking and the primary-is-committed rule from
 Observations. The create binding composes the short code. The save binding
 refuses a closed ticket, if decision 5 is as recommended. `outcome.rs`
 starts the exhaustive mappings with the kinds these bindings return and an
@@ -517,9 +535,14 @@ explicit `internal_error` arm for each other kind.
   unchanged. After a partial result, the same mismatch is `partial`.
 - **Interruption:** with a failure injected at each of `BeforeItemWrite`,
   `AfterOwnedWriteBeforeLifecyclePersistence`, `BeforeCheckpointCommit` and
-  `BeforeIndexTransactionCommit`, a retry on a fresh service completes
-  although the caller's token is now stale; exactly one checkpoint commit
-  exists.
+  `BeforeIndexTransactionCommit`, a retry on a fresh service completes;
+  exactly one checkpoint commit exists. For the points after the write the
+  record stayed `accepted` and the retry succeeds although the caller's
+  token is now stale. For `BeforeItemWrite` nothing was in flight, the
+  record was deleted, and the retry is a new request.
+- The same four with the process killed instead of an injected error (a
+  child process that exits at the fault point): the journal row is pending
+  in every case, and the retry with the same body completes.
 - **Lost output:** the domain call succeeds and the test discards the result
   before the record is settled (a boundary fault point added for this). The
   retry returns `committed` with that commit and makes none.
@@ -537,20 +560,34 @@ explicit `internal_error` arm for each other kind.
   written and the record stays `accepted`.
 - **Identical content from another request:** a request that never reached
   the domain, then a second request saving the same content, then a retry
-  of the first: the retry is a no-op and reports no commit.
-- **An error after the write is not "nothing happened":** with the cache
-  guard held by a child process so that the journal update after the
-  checkpoint returns busy, the result is `partial`, the record stays
-  `accepted`, and a retry finishes it. The same with an injected SQLite
-  failure after the file write.
+  of the first: the retry is `already_applied` and reports no commit.
+- **A late caller:** a request with a stale token whose content already
+  equals the item, committed, and no record: `already_applied`, nothing
+  written. The same with the file equal and uncommitted:
+  `external_change`.
+- **The commit is found, the journal step is not:** a save commits and the
+  journal update that follows returns busy (the cache guard held by a
+  child process). The result is `partial`; the retry calls the save again,
+  which writes and commits nothing, completes its row and hand-off, and
+  the record is `finished` with that commit. A different request then
+  succeeds.
+- **An error after the write is not "nothing happened":** with an injected
+  SQLite failure after the file write, the result is `partial` with
+  `write: written` and `checkpoint: pending`, the record stays
+  `accepted`, and a retry finishes it.
 - **Concurrent duplicate:** while one call is inside the domain operation
   (held by a boundary test hook), a second call with the same request
-  returns `busy`; the first then completes and its record is `finished`
-  with the commit. And the mirror: the first is rejected while a second is
-  inside the domain call; the record is not deleted.
+  returns `busy` and leaves the record `accepted`. The first completes and
+  returns its commit to its caller; it does not settle the record, because
+  its attempt is no longer current. A third call then finishes the record
+  with that same commit. One commit exists.
+- A second call that checks evidence before the first commits and gets the
+  lease after it reports the first's commit, not a no-op.
 - A slug is unchanged by an identity change and by a prefix change, each
   followed by a save through the boundary. A create interrupted after its
-  write and retried after the initials changed recognizes its own commit.
+  write and retried after the initials changed commits with the slug first
+  written. A foreign commit that leaves a created ticket's other fields
+  equal and adds no slug is not taken for the request's own.
 - A failure after the checkpoint and before discovery is `partial` with
   `discovery_pending`, `checkpoint: committed` and an `operation.resume`
   action naming the operation; the record stays `accepted` and a retry
@@ -585,6 +622,23 @@ explicit `internal_error` arm for each other kind.
 - The library and these targets build without the `desktop` feature.
 
 **Verify:** `devenv shell -- cargo test --locked --test mutation_replay --test mutation_contract --test mutation_relationships`.
+
+## Design Checkpoint After Task 7
+
+Stop here. Before Task 8:
+
+1. Rewrite the design's "What execute does", Settling and "Re-entering a
+   request" to describe what was built, and note each place the mechanism
+   changed to satisfy a required outcome.
+2. Have an independent reviewer read the code and tests of Tasks 6 and 7
+   against the required-outcomes table, with the instruction to find a
+   sequence of events the tests do not cover.
+3. Report to the product owner: which outcomes are proven, what changed,
+   and whether the open cases of the journal defect were met in practice.
+   Continue only when told to.
+
+Every later binding reuses this machinery, so an error left here is copied
+twenty-six times.
 
 ## Task 8: Observations And Document Bindings
 
@@ -640,8 +694,10 @@ every domain outcome enum maps to a code. Bindings for `remote add`,
 - `remote select`: success with the commit; selecting the selected remote is
   `noop` and reports no commit, on a first call and on a retry; a failure
   after the commit is `partial`; a retry reports that commit.
-- `index refresh` and `index rebuild`: `discovery: current`; a failed
-  refresh is `partial`.
+- `index refresh` and `index rebuild`: `discovery: current`. A failed
+  refresh is an error with its code, not `partial`; its record stays
+  `accepted`, a different request is refused until it is retried, and the
+  retry completes. This pins the stated exception.
 - `index rebuild` with the database deleted, and with it corrupt, runs
   without a record and registers the repository again.
 - Replay and changed input for each binding.
@@ -660,10 +716,11 @@ every domain outcome enum maps to a code. Bindings for `remote add`,
 - `key generate`: the digest is the same for two different passphrases and
   differs between protected and unprotected and between labels; a retry
   after the key was created returns the same key and creates no second
-  file; a failure injected mid-generation is `partial` with
-  `recovery_required` and the domain's recovery state in `data`, and the
-  record is `finished`, because the domain returns that for this operation
-  ID on every later call.
+  file. With a failure injected after the key pair is written, the result
+  is `partial` with `recovery_required`, the record stays `accepted`, and
+  the retry registers the key. With a failure before the pair is complete,
+  the retry reports the files as retained for inspection, and the record is
+  then `finished`.
 - No passphrase, and no value derived from one, is in any record, envelope
   or event. `assert_operation_records_hold_no_content` passes unchanged.
 - `key import`: success; the same source again is `noop` naming the existing
@@ -758,8 +815,10 @@ each with its preview and observation digest.
 **Tests first:**
 
 - `repo remove`: the preview names the registration; a retry of the same
-  request returns the stored result although the registration is gone; the
-  repository's files and Git state are byte-identical.
+  request returns the stored result although the registration is gone; with
+  the result lost before settlement, the retry is a no-op and not
+  `external_change`; the repository's files and Git state are
+  byte-identical.
 - `remote remove`: the preview says whether polling is affected. For the
   selected publication remote, `prepare` is `publication_remote_in_use`
   and no confirmation is issued. Selecting the remote between preview and
@@ -775,12 +834,11 @@ each with its preview and observation digest.
   key is `key_not_deletable`; a selected key is `selected_key_in_use`.
 - `key delete` with a failure injected after the private file is removed is
   `partial` with `recovery_required`, and the record stays `accepted`.
-  First read `src/repository/keys/deletion.rs` to establish what the
-  domain needs to finish that deletion under the same operation ID. If it
-  can be finished, the retry finishes it without comparing the observation
-  again. If it cannot, stop and report: that is a Wave 02 defect, and the
-  binding must not work around it.
-- A retry after a completed deletion returns the stored result.
+  The retry obtains a fresh review, skips the observation comparison and
+  completes the deletion under the same operation ID.
+- A retry after a completed deletion returns the stored result; with the
+  result lost, it is a no-op, reached by calling the deletion with no
+  review.
 - Every effect is `not_requested` for all three.
 - Changed input and replay for each.
 
@@ -817,6 +875,16 @@ without changing it; `remote_synchronization` must pass unchanged.
 - No publication remote: `blocked` with `publication_remote_required`.
 - A divergent remote is `merge_required`; a remotely deleted context branch
   is `remote_branch_deleted`; a rejected push is `push_rejected`.
+- **Open case 3, reproduced or refuted.** After each of those three, and
+  after `host_approval_required` and `unlock_required`: is the
+  reservation still active; does a save on the repository return
+  `recovery_required`; does another synchronization return `busy`; and
+  does the same request again, or `cancel_request` followed by the same
+  request, release it? Pin what happens. Each result carries a
+  `request.retry` action. If the reservation is held, record it in the
+  ledger as a finding for Wave 02 Cycle 06 and do not work around it.
+- A synchronization reported as interrupted is `cancelled` only when its
+  row's phase is cancelled.
 - An unknown host is `host_approval_required` with the authority and the
   presented fingerprint in `data` and a `host.approve` action. A rotated
   host key is `host_replacement_required` with both fingerprints.
@@ -916,6 +984,8 @@ and `initials_source`.
 - Replay returns the stored result; changed input is `request_mismatch`.
 - After `identity_required` on a save, `repo identity-set`, then a new save
   succeeds.
+- With the result lost after the identity was written, the retry is a no-op
+  and not `external_change`.
 
 **Verify:** `devenv shell -- cargo test --locked --test mutation_bridges --test mutation_contract --test read_repository --test read_contract`.
 
@@ -954,7 +1024,8 @@ pin.
   pin the result, and prove a retry of the same request ends with exactly
   one pin.
 - Replay of a finished request returns the stored result without
-  connecting; changed input is `request_mismatch`.
+  connecting; changed input is `request_mismatch`. With the result lost
+  after the pin was written, the retry is a no-op.
 
 **Verify:** `devenv shell -- cargo test --locked --test mutation_remote --test ssh_transport`.
 
@@ -1109,11 +1180,13 @@ extended; `repair_item`; the `repair_item` journal action in `action_name`,
   and a replay case. Tasks 15 and 17, and the key registry commands of
   Task 10, bind operations with no journal; their interruption case is an
   injected failure and their replay case is the stored result.
-- **Known thin spots.** Local operations offer one cancellation point. A
-  save interrupted after its write still needs its original body. Whether
-  an interrupted key deletion can be finished is not yet known. The last
-  round of corrections to these documents was not independently reviewed. Native
+- **Known thin spots.** Local operations offer one cancellation point. An
+  operation killed after its journal row is written needs its original
+  input. Whether a refused synchronization holds its reservation is
+  unconfirmed. The replay mechanism has failed review three times and its
+  latest corrections are unreviewed; the checkpoint after Task 7 exists for
+  that reason. Native
   behavior is unproven. Each is stated in the design.
 - **Not verified during planning.** No Rust command was run. The design's
-  audit is from two readings of the source and a third of the mechanisms. The
+  audit is from two readings of the source and two of the mechanisms. The
   prerequisite's tests are the first reproduction of the journal defect.
