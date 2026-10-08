@@ -2940,3 +2940,395 @@ fn remove_registration_cascades_only_its_derived_rows() {
         })
         .unwrap();
 }
+
+fn commit_primary_source(fixture: &support::TestRepository, path: &str, source: Option<&str>) {
+    let absolute = fixture.root.join(path);
+    let mut index = fixture.repository.index().unwrap();
+    index.read(true).unwrap();
+    // Enablement commits the configuration without refreshing this index.
+    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
+    match source {
+        Some(source) => {
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(&absolute, source).unwrap();
+            index.add_path(Path::new(path)).unwrap();
+        }
+        None => {
+            fs::remove_file(&absolute).unwrap();
+            index.remove_path(Path::new(path)).unwrap();
+        }
+    }
+    index.write().unwrap();
+    let tree = fixture
+        .repository
+        .find_tree(index.write_tree().unwrap())
+        .unwrap();
+    let parent = fixture.repository.head().unwrap().peel_to_commit().unwrap();
+    let signature = git2::Signature::now("Manyhands Test", "test@example.invalid").unwrap();
+    fixture
+        .repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "fixture",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+}
+
+fn document_source_with(id: &canonical::ItemId, title: &str) -> String {
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {id}\ntitle: {title}\n---\n"
+    )
+}
+
+fn create_document_context(
+    service: &RepositoryService,
+    root: &Path,
+    id: &canonical::ItemId,
+    path: &str,
+) {
+    let outcome = service
+        .save_document(SaveDocumentRequest {
+            target: AuthoringTarget {
+                root: root.to_owned(),
+                kind: AuthoringKind::Document,
+                item_id: id.clone(),
+                intent: ContextIntent::Create,
+                operation_id: support::new_operation_id(),
+            },
+            source_path: None,
+            destination_path: PathBuf::from(path),
+            draft: DocumentDraft {
+                title: path.to_owned(),
+                body: String::new(),
+            },
+            expected_source: None,
+            expected_destination: manyhands::repository::ExpectedPathObservation::Missing,
+        })
+        .unwrap();
+    // The save's own index handoff is not what these tests assert; the
+    // explicit refresh or rebuild that follows is.
+    assert!(!matches!(outcome, SaveOutcome::IdentityRequired { .. }));
+}
+
+struct SharedItemFixture {
+    fixture: support::TestRepository,
+    enabled: support::EnabledRepository,
+    shared: canonical::ItemId,
+    first: canonical::ItemId,
+    second: canonical::ItemId,
+}
+
+/// A primary document that both item worktrees contain as part of their
+/// checkout, plus one document owned by each worktree.
+fn repository_with_two_contexts_sharing_an_item() -> SharedItemFixture {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let shared: canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FB1".parse().unwrap();
+    let first = support::document_id();
+    let second: canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FB0".parse().unwrap();
+    commit_primary_source(
+        &fixture,
+        "docs/shared.md",
+        Some(&document_source_with(&shared, "Shared")),
+    );
+    create_document_context(&enabled.service, &fixture.root, &first, "docs/first.md");
+    create_document_context(&enabled.service, &fixture.root, &second, "docs/second.md");
+    SharedItemFixture {
+        fixture,
+        enabled,
+        shared,
+        first,
+        second,
+    }
+}
+
+fn item_contexts(snapshot: &RepositorySnapshot) -> BTreeMap<String, PathBuf> {
+    snapshot
+        .items
+        .iter()
+        .map(|item| (item.id.to_string(), item.context.clone()))
+        .collect()
+}
+
+fn context_worktree(root: &Path, id: &canonical::ItemId) -> PathBuf {
+    root.join(".manyhands/worktrees")
+        .join(id.to_string())
+        .canonicalize()
+        .unwrap()
+}
+
+fn assert_one_effective_copy(shared: &SharedItemFixture, snapshot: &RepositorySnapshot) {
+    let root = shared.fixture.root.canonicalize().unwrap();
+    assert_eq!(snapshot.items.len(), 3, "{:?}", snapshot.items);
+    let contexts = item_contexts(snapshot);
+    assert_eq!(contexts[&shared.shared.to_string()], root);
+    assert_eq!(
+        contexts[&shared.first.to_string()],
+        context_worktree(&root, &shared.first)
+    );
+    assert_eq!(
+        contexts[&shared.second.to_string()],
+        context_worktree(&root, &shared.second)
+    );
+}
+
+#[test]
+fn item_checked_out_in_two_item_worktrees_is_indexed_once_from_primary() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+    let reread = shared
+        .enabled
+        .service
+        .repository_snapshot(&shared.fixture.root)
+        .unwrap();
+    assert_one_effective_copy(&shared, &reread);
+}
+
+#[test]
+fn rebuild_indexes_one_effective_copy_per_item_like_refresh() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    fs::remove_file(
+        shared
+            .enabled
+            .data_directory
+            .path()
+            .join(manyhands::repository::REGISTRY_FILE),
+    )
+    .unwrap();
+    let service = RepositoryService::open_at(shared.enabled.data_directory.path()).unwrap();
+
+    let snapshot = service
+        .rebuild_repository(rebuild_request!(&shared.fixture.root))
+        .unwrap();
+
+    assert_one_effective_copy(&shared, &snapshot);
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+}
+
+#[test]
+fn stale_or_malformed_copy_in_another_item_worktree_changes_nothing() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    let root = shared.fixture.root.canonicalize().unwrap();
+    let foreign = context_worktree(&root, &shared.first);
+    fs::write(foreign.join("docs/shared.md"), "---\nnot: [valid\n").unwrap();
+    fs::write(
+        foreign.join("docs/stray.md"),
+        "---\nmanyhands_managed: true\n---\n",
+    )
+    .unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+}
+
+#[test]
+fn item_deleted_on_primary_is_not_listed_from_an_unrelated_worktree_checkout() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    commit_primary_source(&shared.fixture, "docs/shared.md", None);
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    let contexts = item_contexts(&snapshot);
+    assert_eq!(contexts.len(), 2, "{:?}", snapshot.items);
+    assert!(!contexts.contains_key(&shared.shared.to_string()));
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+}
+
+#[test]
+fn item_worktree_contributes_only_its_own_comments() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    let root = shared.fixture.root.canonicalize().unwrap();
+    let own = context_worktree(&root, &shared.first);
+    let comment = |id: &str, item: &canonical::ItemId| {
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {id}\nitem_id: {item}\ncreated_at: 2026-09-30T12:00:00Z\n---\n"
+        )
+    };
+    let own_comment = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+    let foreign_comment = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+    for (item, id) in [
+        (&shared.first, own_comment),
+        (&shared.shared, foreign_comment),
+    ] {
+        let directory = own.join(".manyhands/comments").join(item.to_string());
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(format!("{id}.md")), comment(id, item)).unwrap();
+    }
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    let comments = |id: &canonical::ItemId| -> Vec<String> {
+        snapshot
+            .items
+            .iter()
+            .find(|item| item.id == *id)
+            .unwrap()
+            .comments
+            .iter()
+            .map(|thread| thread.id.to_string())
+            .collect()
+    };
+    assert_eq!(comments(&shared.first), [own_comment]);
+    assert!(comments(&shared.shared).is_empty());
+    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+}
+
+#[test]
+fn primary_does_not_report_problems_for_an_item_with_its_own_context() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    // Primary's own copy of the first item's files is not the effective copy.
+    let directory = shared
+        .fixture
+        .root
+        .join(".manyhands/comments")
+        .join(shared.first.to_string());
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("01ARZ3NDEKTSV4RRFFQ69G5FC2.md"),
+        "---\nmanyhands_managed: true\nmanyhands_kind: comment\n---\n",
+    )
+    .unwrap();
+    // A problem with an item that has no context of its own is still reported.
+    fs::write(
+        shared.fixture.root.join("docs/broken.md"),
+        "---\nmanyhands_managed: true\n---\n",
+    )
+    .unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    let paths = snapshot
+        .problems
+        .iter()
+        .filter_map(|problem| problem.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [PathBuf::from("docs/broken.md")],
+        "{:?}",
+        snapshot.problems
+    );
+}
+
+#[test]
+fn primary_reports_an_unattributable_file_but_not_an_active_items_directories() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    // Unparseable, so primary cannot learn which item this file is. It stays a
+    // primary problem even though it sits at the path of an active item.
+    fs::write(
+        shared.fixture.root.join("docs/first.md"),
+        "---\nmanyhands_managed: true\nnot: [valid\n",
+    )
+    .unwrap();
+    // A source-level problem in that item's comment directory on primary.
+    let directory = shared
+        .fixture
+        .root
+        .join(".manyhands/comments")
+        .join(shared.first.to_string());
+    fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("missing", directory.join("01ARZ3NDEKTSV4RRFFQ69G5FC3.md")).unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    assert_one_effective_copy(&shared, &snapshot);
+    let paths = snapshot
+        .problems
+        .iter()
+        .filter_map(|problem| problem.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [PathBuf::from("docs/first.md")],
+        "{:?}",
+        snapshot.problems
+    );
+}
+
+#[test]
+fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
+    let shared = repository_with_two_contexts_sharing_an_item();
+    let root = shared.fixture.root.canonicalize().unwrap();
+    let own = context_worktree(&root, &shared.first);
+    fs::write(
+        own.join("docs/copy.md"),
+        document_source_with(&shared.first, "Copy"),
+    )
+    .unwrap();
+
+    let RefreshOutcome::Refreshed { snapshot } = shared
+        .enabled
+        .service
+        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .unwrap()
+    else {
+        panic!("expected stable refresh");
+    };
+
+    // The duplicate leaves the context without a valid identified item, so it
+    // is reported as a context problem and not silently indexed.
+    assert!(!item_contexts(&snapshot).contains_key(&shared.first.to_string()));
+    assert!(
+        snapshot
+            .problems
+            .iter()
+            .any(|problem| problem.code == "context"),
+        "{:?}",
+        snapshot.problems
+    );
+}

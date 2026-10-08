@@ -1066,11 +1066,6 @@ impl RepositoryService {
             return Err(error);
         }
         let mut changed = changed_contexts(&before, &after, &root);
-        let active_ids = before
-            .active_contexts
-            .iter()
-            .flat_map(|context| context.items.iter().map(|item| item.id.clone()))
-            .collect::<BTreeSet<_>>();
         if !changed.contains(&root) {
             persist_context_refresh(
                 &self.registry_path,
@@ -1082,7 +1077,6 @@ impl RepositoryService {
                 &before.items,
                 &before.problems,
                 &before.validation.problems,
-                &active_ids,
                 &root,
             )?;
         }
@@ -1098,7 +1092,6 @@ impl RepositoryService {
                     &active.items,
                     &active.problems,
                     &active.validation.problems,
-                    &BTreeSet::new(),
                     &root,
                 )?;
             }
@@ -4639,7 +4632,6 @@ fn persist_context_refresh(
     items: &[ObservedItem],
     problems: &[RootObservationProblem],
     validation: &[canonical::ValidationProblem],
-    excluded: &BTreeSet<canonical::ItemId>,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
@@ -4709,7 +4701,6 @@ fn persist_context_refresh(
             items,
             problems,
             validation_problems: validation,
-            excluded_item_ids: excluded,
         },
         root,
     )?;
@@ -4942,11 +4933,6 @@ fn persist_observation(
             params![repository_id, validation_code_name(problem.code.clone()), problem.message],
         ),
     }.map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    let active_item_ids = observation
-        .active_contexts
-        .iter()
-        .flat_map(|context| context.items.iter().map(|item| item.id.clone()))
-        .collect::<BTreeSet<_>>();
     persist_context(
         transaction,
         repository_id,
@@ -4956,7 +4942,6 @@ fn persist_observation(
             items: &observation.items,
             problems: &observation.problems,
             validation_problems: &observation.validation.problems,
-            excluded_item_ids: &active_item_ids,
         },
         root,
     )?;
@@ -4970,7 +4955,6 @@ fn persist_observation(
                 items: &active.items,
                 problems: &active.problems,
                 validation_problems: &active.validation.problems,
-                excluded_item_ids: &BTreeSet::new(),
             },
             root,
         )?;
@@ -4984,7 +4968,6 @@ struct PersistedContext<'a> {
     items: &'a [ObservedItem],
     problems: &'a [RootObservationProblem],
     validation_problems: &'a [canonical::ValidationProblem],
-    excluded_item_ids: &'a BTreeSet<canonical::ItemId>,
 }
 
 fn persist_context(
@@ -5000,9 +4983,6 @@ fn persist_context(
     ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     let context_id = transaction.last_insert_rowid();
     for item in observed.items {
-        if observed.excluded_item_ids.contains(&item.id) {
-            continue;
-        }
         transaction.execute(
             "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source)],

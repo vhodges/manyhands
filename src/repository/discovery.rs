@@ -130,12 +130,19 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
     };
     let mut sources = Vec::new();
     collect_root_sources(root, &mut sources, &mut problems);
-    let validation = canonical::validate_context(sources.clone());
-    let items = observe_items(repository, root, &sources, &validation);
+    let mut validation = canonical::validate_context(sources.clone());
+    let mut items = observe_items(repository, root, &sources, &validation);
     let active_contexts = match configuration {
         RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
         RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
     };
+    leave_active_items_to_their_contexts(
+        root,
+        &active_contexts,
+        &mut items,
+        &mut validation.problems,
+        &mut problems,
+    );
 
     RootObservation {
         configuration_blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
@@ -268,7 +275,13 @@ fn observe_active_contexts(
             continue;
         }
         let mut sources = Vec::new();
-        collect_root_sources(&expected_path, &mut sources, &mut context_problems);
+        collect_authoring_item_sources(
+            &expected_path,
+            kind,
+            &path_id,
+            &mut sources,
+            &mut context_problems,
+        );
         let validation = canonical::validate_context(sources.clone());
         if !validation
             .items
@@ -515,6 +528,53 @@ fn parse_authoring_branch(
     Some((kind, item_id))
 }
 
+fn item_ticket_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/tickets").join(item_id.to_string())
+}
+
+fn item_comment_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/comments").join(item_id.to_string())
+}
+
+/// An item with its own active context is observed there. The primary context
+/// neither lists its copy of that item nor reports problems inside that
+/// item's ticket and comment directories.
+///
+/// Only those directories are attributed by path. A primary document that
+/// cannot be parsed carries no ID, so it cannot be attributed to an item and
+/// stays a primary problem.
+fn leave_active_items_to_their_contexts(
+    root: &Path,
+    active_contexts: &[ActiveContextObservation],
+    items: &mut Vec<ObservedItem>,
+    validation_problems: &mut Vec<canonical::ValidationProblem>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    let directories = active_contexts
+        .iter()
+        .filter_map(|context| context.context.item_id.as_ref())
+        .flat_map(|id| [item_ticket_directory(id), item_comment_directory(id)])
+        .collect::<Vec<_>>();
+    if directories.is_empty() {
+        return;
+    }
+    let owned = |relative: &Path| {
+        directories
+            .iter()
+            .any(|directory| relative.starts_with(directory))
+    };
+    items.retain(|item| {
+        !active_contexts
+            .iter()
+            .any(|context| context.context.item_id.as_ref() == Some(&item.id))
+    });
+    validation_problems.retain(|problem| !owned(&problem.path));
+    problems.retain(|problem| match problem {
+        RootObservationProblem::Source { path, .. } => !path.strip_prefix(root).is_ok_and(&owned),
+        _ => true,
+    });
+}
+
 fn authoring_item_matches(
     item: &canonical::CanonicalItem,
     kind: crate::repository::AuthoringKind,
@@ -637,6 +697,54 @@ fn observe_head(
             }
         }
     }
+}
+
+/// An item worktree is a full checkout, so it also holds a copy of every other
+/// item as of its branch point. Only the item its authoring branch identifies,
+/// and that item's comments, belong to the context; every other item is
+/// observed from the primary context.
+fn collect_authoring_item_sources(
+    root: &Path,
+    kind: crate::repository::AuthoringKind,
+    item_id: &canonical::ItemId,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    match kind {
+        crate::repository::AuthoringKind::Ticket => {
+            let directory = root.join(item_ticket_directory(item_id));
+            if directory_exists(&root.join(".manyhands/tickets"), problems)
+                && directory_exists(&directory, problems)
+            {
+                collect_source(root, &directory.join("ticket.md"), sources, problems);
+            }
+        }
+        crate::repository::AuthoringKind::Document => {
+            // A document can be anywhere under docs/, so the tree is scanned
+            // and every source carrying this ID is kept. A second one fails
+            // validation as a duplicate, which rejects the context.
+            //
+            // Problems with the rest of the tree are the primary context's to
+            // report, not this one's, so they are not kept. The scan is still
+            // bounded by the whole-tree limits: a document beyond them is not
+            // found, and the context is rejected as missing its item.
+            let mut documents = Vec::new();
+            collect_documents(root, &mut documents, &mut Vec::new());
+            documents.retain(|(path, source)| {
+                canonical::parse_item(path, source)
+                    .is_ok_and(|item| canonical_item_id(&item) == item_id)
+            });
+            sources.append(&mut documents);
+        }
+    }
+    let directory = root.join(item_comment_directory(item_id));
+    if directory_exists(&root.join(".manyhands/comments"), problems)
+        && directory_exists(&directory, problems)
+    {
+        let mut entries = 0;
+        collect_comment_directory(root, &directory, &mut entries, sources, problems);
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
 fn collect_root_sources(
@@ -853,24 +961,34 @@ fn collect_comments(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
-            for entry in read_managed_directory(&path, &mut entries, problems) {
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    problems.push(source_problem(
-                        path,
-                        "the directory entry type cannot be read",
-                    ));
-                    continue;
-                };
-                if file_type.is_symlink() {
-                    problems.push(source_problem(
-                        path,
-                        "symbolic links are not canonical sources",
-                    ));
-                } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
-                    collect_source(root, &path, sources, problems);
-                }
-            }
+            collect_comment_directory(root, &path, &mut entries, sources, problems);
+        }
+    }
+}
+
+fn collect_comment_directory(
+    root: &Path,
+    directory: &Path,
+    entries: &mut usize,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    for entry in read_managed_directory(directory, entries, problems) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            problems.push(source_problem(
+                path,
+                "the directory entry type cannot be read",
+            ));
+            continue;
+        };
+        if file_type.is_symlink() {
+            problems.push(source_problem(
+                path,
+                "symbolic links are not canonical sources",
+            ));
+        } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+            collect_source(root, &path, sources, problems);
         }
     }
 }
