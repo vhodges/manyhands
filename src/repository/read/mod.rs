@@ -24,19 +24,20 @@ use crate::{
 };
 
 mod admin;
+mod comments;
 mod credentials;
 mod dto;
 mod items;
 mod resolve;
 
 pub use dto::{
-    Accessibility, ChangeSource, ClosureDto, ClosureState, ConfigurationDto, ConfigurationState,
-    DependencyDto, DependencyState, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
-    IdentitySource, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
-    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
-    KeyPublicMetadataState, NewIdDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
-    ReadinessReasonDto, ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto,
-    RepositoryListDto, RepositorySummaryDto,
+    Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
+    ConfigurationDto, ConfigurationState, DependencyDto, DependencyState, HostPinDto,
+    HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexState, IndexStateDto,
+    ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto,
+    KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto, ProblemDto,
+    PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto, ReadinessState, RemoteDto,
+    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
 };
 pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;

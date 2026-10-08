@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 comment threads of one item",
+  "description": "Root comments in order, each with its replies, followed by the nonconforming entries.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete", "context", "index"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "comment.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "context": {
+      "$ref": "item_context.schema.json"
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

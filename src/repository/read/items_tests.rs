@@ -210,6 +210,7 @@ fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
 #[test]
 fn nonconforming_entries_need_a_conformity_code_at_an_item_path_with_no_item() {
     let item = |worktree: &str, path: &str| StoredItem {
+        row_id: 0,
         context: context(worktree),
         id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
         kind: ItemDtoKind::Document,
@@ -300,6 +301,7 @@ fn nonconforming_entries_need_a_conformity_code_at_an_item_path_with_no_item() {
 #[test]
 fn ticket_filters_compare_whole_values_and_closure_reads_only_closed_at() {
     let ticket = |status: &str, closed_at| StoredItem {
+        row_id: 0,
         context: context("/r"),
         id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
         kind: ItemDtoKind::Ticket,

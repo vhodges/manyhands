@@ -415,3 +415,51 @@ pub struct ItemContextDto {
     pub worktree: String,
     pub head_oid: Option<String>,
 }
+
+/// An item's comment threads: the root comments in `created_at` and then ID
+/// order, each with its replies in the same order beneath it, followed by a
+/// nonconforming entry, in path order, for each file among the item's
+/// comments that is not a comment of it.
+///
+/// `context` is the item's effective copy, which every comment was read
+/// from. `index` is `stale` when the comments are no longer what the index
+/// stored. The index says which files there are, so a comment file added
+/// since the last refresh is not listed until the next one.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CommentListDto {
+    pub items: Vec<CommentDto>,
+    pub complete: bool,
+    pub context: ItemContextDto,
+    pub index: IndexStateDto,
+}
+
+/// A comment, or a file where one should be.
+///
+/// A nonconforming entry has no `id`, `parent_id`, `author`, `created_at`
+/// or `body` and no replies; its `path` and `problems` say what is wrong
+/// and where. Everything else here was read from the comment's file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CommentDto {
+    pub id: Option<String>,
+    /// The item the comment is filed under.
+    pub item_id: String,
+    /// Null for a root comment.
+    pub parent_id: Option<String>,
+    /// The comment's `created_by` front matter value, and null when it has
+    /// none. Nothing is derived from Git history.
+    pub author: Option<String>,
+    pub created_at: Option<String>,
+    pub body: Option<String>,
+    /// Relative to the list's `context.worktree`, with forward slashes.
+    pub path: String,
+    /// Front matter keys Manyhands does not define, in key order at every
+    /// depth; `created_by` is never among them. A value JSON cannot express
+    /// is null and is reported in `problems` as
+    /// `metadata_not_representable`.
+    pub unknown_metadata: serde_json::Map<String, serde_json::Value>,
+    /// On a comment that has an `id`, only what does not stop it being one:
+    /// `metadata_not_representable`, and `invalid_field` for a `created_by`
+    /// that is not a non-empty string.
+    pub problems: Vec<ProblemDto>,
+    pub replies: Vec<CommentDto>,
+}

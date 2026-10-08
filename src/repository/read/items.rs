@@ -115,15 +115,15 @@ impl ItemDtoKind {
 
 /// A context row: one working tree the index observed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct StoredContext {
+pub(super) struct StoredContext {
     kind: ItemContextKind,
     branch: Option<String>,
-    worktree: String,
+    pub(super) worktree: String,
     head_oid: Option<String>,
 }
 
 impl StoredContext {
-    fn dto(&self) -> ItemContextDto {
+    pub(super) fn dto(&self) -> ItemContextDto {
         ItemContextDto {
             kind: self.kind,
             branch: self.branch.clone(),
@@ -134,11 +134,13 @@ impl StoredContext {
 }
 
 /// An item row with its context.
-struct StoredItem {
-    context: StoredContext,
+pub(super) struct StoredItem {
+    /// The row's own key in the index, which its comments are stored under.
+    pub(super) row_id: i64,
+    pub(super) context: StoredContext,
     id: String,
     kind: ItemDtoKind,
-    path: String,
+    pub(super) path: String,
     title: String,
     ticket_type: Option<String>,
     status: Option<String>,
@@ -152,15 +154,15 @@ struct StoredItem {
 }
 
 /// A problem row that has both a path and a context.
-struct StoredProblem {
-    context: StoredContext,
-    path: String,
-    code: ProblemCode,
+pub(super) struct StoredProblem {
+    pub(super) context: StoredContext,
+    pub(super) path: String,
+    pub(super) code: ProblemCode,
 }
 
 /// What an index row holds that is not what a read expects. No read
 /// repairs or skips such a row.
-fn invalid_stored_data() -> ReadError {
+pub(super) fn invalid_stored_data() -> ReadError {
     ReadError::new(ResultCode::InternalError)
 }
 
@@ -190,7 +192,7 @@ fn timestamp(seconds: i64) -> Option<String> {
 /// The registration's index state and, in seconds, when it was last
 /// refreshed. A registration removed since the repository was resolved is
 /// `repository_not_registered`.
-fn stored_index_state(
+pub(super) fn stored_index_state(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<(IndexStateDto, Option<i64>), ReadError> {
@@ -247,7 +249,7 @@ fn stored_contexts(
 
 /// Every document and ticket the index holds for the registration. The
 /// order is the index's; each caller sorts what it returns.
-fn stored_items(
+pub(super) fn stored_items(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredItem>, ReadError> {
@@ -256,7 +258,7 @@ fn stored_items(
                 items.item_id, items.kind, items.canonical_path, items.title,
                 items.ticket_type, items.status, items.project, items.team,
                 items.closed_at, items.closed_by, items.unknown_metadata,
-                items.activity_at, items.activity_source
+                items.activity_at, items.activity_source, items.id
            FROM discovered_items AS items
            JOIN contexts ON contexts.id = items.context_id
           WHERE contexts.repository_id = ?1
@@ -270,6 +272,7 @@ fn stored_items(
         let unknown: Option<String> = row.get(14)?;
         let activity_source: String = row.get(16)?;
         items.push(StoredItem {
+            row_id: row.get(17)?,
             context: StoredContext {
                 kind: stored_context_kind(&context_kind)?,
                 branch: row.get(1)?,
@@ -305,7 +308,7 @@ fn stored_items(
 /// Every stored problem that has a path and a context, in context, path,
 /// code and then insertion order. The stored guidance is not read: it can
 /// hold a parser's or the operating system's own words.
-fn stored_problems(
+pub(super) fn stored_problems(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredProblem>, ReadError> {
@@ -337,7 +340,7 @@ fn stored_problems(
     Ok(problems)
 }
 
-fn problem(code: ProblemCode, path: &str) -> ProblemDto {
+pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     ProblemDto {
         code,
         path: Some(path.to_owned()),
@@ -392,7 +395,7 @@ fn closure(closed_at: Option<String>, closed_by: Option<String>) -> ClosureDto {
 }
 
 /// The problems an item's own metadata gives it.
-fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<ProblemDto> {
+pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<ProblemDto> {
     unknown
         .not_representable
         .then(|| problem(ProblemCode::MetadataNotRepresentable, path))
@@ -483,7 +486,7 @@ fn same_indexed_metadata(file: &ItemDto, stored: &ItemDto) -> bool {
 }
 
 /// `index`, or `stale` when it claims to be current.
-fn behind(index: &IndexStateDto) -> IndexStateDto {
+pub(super) fn behind(index: &IndexStateDto) -> IndexStateDto {
     IndexStateDto {
         state: match index.state {
             IndexState::Current => IndexState::Stale,
@@ -527,15 +530,15 @@ pub(super) fn observation_token(branch: Option<&str>, path: &str, source: &[u8])
 }
 
 /// An item file as it is on disk.
-struct ItemFile {
-    bytes: Vec<u8>,
+pub(super) struct ItemFile {
+    pub(super) bytes: Vec<u8>,
     /// When it was last modified, in whole seconds, where the platform
     /// says.
     modified: Option<i64>,
 }
 
 /// What reading an item file found, short of a failure of the read itself.
-enum ItemFileRead {
+pub(super) enum ItemFileRead {
     Found(ItemFile),
     /// Nothing is at the path.
     Missing,
@@ -569,7 +572,7 @@ fn below(root: &Path, relative: &Path) -> PathBuf {
 /// forward slashes, with no NUL, no empty, `.` or `..` component, and not
 /// under the directory that holds item worktrees. This says nothing about whether it
 /// is a place an item can be.
-fn is_plain_relative(path: &str) -> bool {
+pub(super) fn is_plain_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', '\0'])
         && path
@@ -605,7 +608,7 @@ fn canonical_item_kind(path: &str) -> Option<ItemDtoKind> {
 /// links. What it cannot open for any reason other than what is at the
 /// path, such as a file this user may not read, is
 /// `repository_inaccessible`.
-fn read_item_file(
+pub(super) fn read_item_file(
     repo: &ResolvedRepository,
     worktree: &str,
     path: &str,
@@ -672,7 +675,7 @@ impl ItemFile {
     /// platform reports no time; and a file whose time is in the future
     /// reads as newer until that time passes. A change to metadata the
     /// index stores is seen separately, by comparing it.
-    fn newer_than(&self, refreshed_at: Option<i64>) -> bool {
+    pub(super) fn newer_than(&self, refreshed_at: Option<i64>) -> bool {
         self.modified
             .zip(refreshed_at)
             .is_some_and(|(modified, refreshed)| modified > refreshed)
@@ -803,6 +806,65 @@ fn effective_rows<'a>(
     (rows, is_behind)
 }
 
+/// The effective copy of one item: the row the index holds it in, the file
+/// that row names as it is now, and the index state to report with it.
+pub(super) struct EffectiveCopy<'a> {
+    pub(super) row: &'a StoredItem,
+    pub(super) file: ItemFile,
+    pub(super) index: IndexStateDto,
+}
+
+/// Finds the effective copy of the item `id` among the stored rows and
+/// reads its file.
+///
+/// The rows are tried in `row_rank` order: the item's own worktree first,
+/// then the primary copy, and a copy in another item's worktree last. Only
+/// a row with nothing behind it gives way to the next; a copy that is there
+/// and cannot be read is a failure, not a reason to answer from another
+/// copy. `index` comes back `stale` when it claimed to be current and held
+/// the item more than once, or only as a copy in another item's worktree.
+///
+/// No row, and no row with a file behind it, is `item_not_found`.
+pub(super) fn effective_copy<'a>(
+    repo: &ResolvedRepository,
+    stored: &'a [StoredItem],
+    id: &str,
+    index: IndexStateDto,
+) -> Result<EffectiveCopy<'a>, ReadError> {
+    let mut rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
+    // A refresh can only find the item if the index is behind.
+    if rows.is_empty() {
+        return Err(item_not_found(repo, index.state != IndexState::Current));
+    }
+    let index = if rows.len() > 1 {
+        behind(&index)
+    } else {
+        index
+    };
+    // The sort keeps the index's order within each rank.
+    rows.sort_by_key(|row| row_rank(repo, row));
+    for row in rows {
+        if canonical_item_kind(&row.path).is_none() {
+            return Err(invalid_stored_data());
+        }
+        match read_item_file(repo, &row.context.worktree, &row.path)? {
+            ItemFileRead::Found(file) => {
+                // Answered from a copy in another item's worktree: a last
+                // resort, and the index is behind for offering nothing
+                // better.
+                let index = if row_rank(repo, row) == OTHER_WORKTREE {
+                    behind(&index)
+                } else {
+                    index
+                };
+                return Ok(EffectiveCopy { row, file, index });
+            }
+            ItemFileRead::Missing | ItemFileRead::NotAFile => {}
+        }
+    }
+    Err(item_not_found(repo, true))
+}
+
 impl RepositoryService {
     /// Every managed document, ordered by path and then ID, with a
     /// nonconforming entry for each file under `docs/` that is not one.
@@ -911,46 +973,7 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let mut rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
-            // A refresh can only find the item if the index is behind.
-            if rows.is_empty() {
-                return Err(item_not_found(repo, index.state != IndexState::Current));
-            }
-            let index = if rows.len() > 1 {
-                behind(&index)
-            } else {
-                index
-            };
-            // The item's own worktree first, then the primary copy, and a
-            // copy in another item's worktree last. The sort keeps the
-            // index's order within each.
-            rows.sort_by_key(|row| row_rank(repo, row));
-            let mut found = None;
-            for row in &rows {
-                if canonical_item_kind(&row.path).is_none() {
-                    return Err(invalid_stored_data());
-                }
-                // Only a row with nothing behind it gives way to the next.
-                // A copy that is there and cannot be read is a failure, not
-                // a reason to answer from another copy.
-                match read_item_file(repo, &row.context.worktree, &row.path)? {
-                    ItemFileRead::Found(file) => {
-                        found = Some((*row, file));
-                        break;
-                    }
-                    ItemFileRead::Missing | ItemFileRead::NotAFile => {}
-                }
-            }
-            let Some((row, file)) = found else {
-                return Err(item_not_found(repo, true));
-            };
-            // Answered from a copy in another item's worktree: a last resort,
-            // and the index is behind for offering nothing better.
-            let index = if row_rank(repo, row) == OTHER_WORKTREE {
-                behind(&index)
-            } else {
-                index
-            };
+            let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
@@ -1199,7 +1222,7 @@ fn nonconforming_entries(
 
 /// `item_not_found`, with a refresh of the repository as its recovery when
 /// a refresh could change the answer.
-fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadError {
+pub(super) fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadError {
     let error = ReadError::new(ResultCode::ItemNotFound);
     if !refresh {
         return error;
