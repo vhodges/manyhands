@@ -10,11 +10,20 @@ manyhands_managed: true
 
 **Status:** Approved MVP/Dogfooding release
 
-**Version:** 0.5
+**Version:** 0.6
 
 **Owner:** The product owner maintains this document. Requirement IDs are stable once published; changes to intent or acceptance criteria require an updated version and changelog entry.
 
 ## Changelog
+
+### 0.6 - 2026-10-07
+
+- Added `MH-CONTENT-005`: tickets can record blocking dependencies and a
+  parent, and Manyhands answers which work is ready or blocked.
+- Added `MH-CONTENT-006`: tickets carry a short code for people. The
+  canonical identifier is unchanged and remains the only identity.
+- Added the Ticket Graph And Workflow Enhancements roadmap entry for the
+  related work that is deferred.
 
 ### 0.5 - 2026-10-05
 
@@ -253,6 +262,40 @@ This PRD defines product outcomes and user-observable behavior. RFCs own technic
   become a user context-selection result.
 - Nonconforming discovered content remains visible in lists with its nonconforming state and recovery guidance.
 - Primary-branch suggestion and same-item identification remain RFC-owned; primary-branch selection occurs during repository enablement.
+
+### MH-CONTENT-005: Relate Tickets and Find Ready Work
+
+**Priority:** Should
+
+**Rationale:** People and agents need to know which work can start now and what is holding the rest back, without keeping that order in their heads or in prose.
+
+**Acceptance Criteria:**
+
+- A ticket may record the tickets that block it and may record one parent ticket.
+- A user can list the tickets that are ready to start and the tickets that are blocked, with the reason each blocked ticket is blocked.
+- A ticket is ready only when every ticket blocking it has completed the close lifecycle; status text alone does not unblock it.
+- A user can view what a ticket depends on, what depends on it, its parent and its children.
+- A user can view open tickets as ordered batches that can be worked in parallel, and the longest chain of dependent open tickets.
+- A parent groups tickets and does not block them. No progress or status rollup is required.
+- A dependency that would form a cycle is rejected when it is saved. A cycle, or a reference to a ticket that cannot be found, that arrives another way is displayed with guidance and is not silently repaired.
+- Closing a ticket reports the tickets that became ready as a result.
+- Exact fields, validation and query definitions remain RFC-owned.
+
+### MH-CONTENT-006: Refer to Tickets by a Short Code
+
+**Priority:** Should
+
+**Rationale:** A 26-character identifier is safe for automation but hard for people to read, say or type.
+
+**Acceptance Criteria:**
+
+- A newly created ticket receives a short code made of an optional project prefix, the creator's initials and a short code derived from its identifier.
+- A ticket's short code does not change after it is assigned.
+- The short code is displayed wherever a ticket is named, alongside access to the canonical identifier.
+- A user can find tickets by short code. When more than one ticket has the same short code, all are shown with enough context to choose between them.
+- The short code is never an identity: operations that change a ticket select it by canonical identifier, and a short code is not accepted in its place.
+- A ticket without a short code remains valid, and a user can assign one explicitly.
+- The exact format and derivation remain RFC-owned.
 
 ## Comments
 
@@ -653,6 +696,18 @@ The first milestone is a collaboration-complete dogfooding release: trusted coll
 ### Planning and Rollups
 
 Follow-on work adds planning and board views, scorecards, team rollups, and project rollups.
+
+### Ticket Graph And Workflow Enhancements
+
+Follow-on work may build on ticket relationships and short codes:
+
+- Importance and bottleneck analytics over the dependency graph, such as
+  ranking tickets by how much downstream work they block.
+- Typed non-blocking links between tickets, such as related, discovered-from
+  and supersedes.
+- A ticket priority and priority ordering of ready work.
+- Assigning tickets and claiming a ticket to work on.
+- Full-text search across tickets and documents.
 
 ### Templates and Scaffolding
 

@@ -82,6 +82,10 @@ optional and is omitted for a local-only repository. `primary_branch` and
 Unknown configuration keys MUST be retained when rewriting the file so future
 versions can add settings safely.
 
+The optional keys `ticket_slug_prefix` and `ticket_slug_code_length` are
+defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
+Both may be absent.
+
 An absent, malformed, unsupported-version, or invalid configuration is a
 visible repository problem. It MUST NOT cause Markdown content to be omitted or
 rewritten.
@@ -173,6 +177,11 @@ closed_by: "Vince Hodges <vhodges@gmail.com>"
 `closed_at` is an RFC 3339 UTC timestamp. `closed_by` is the confirmed Git
 identity used for the closing checkpoint. The closure lifecycle owns changes to
 these fields.
+
+A ticket may also carry the optional `deps`, `parent` and `slug` fields
+defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
+They never decide conformity, they do not replace the ULID as identity, and
+that RFC owns their validation.
 
 ### Comments
 

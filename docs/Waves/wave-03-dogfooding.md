@@ -43,7 +43,7 @@ identifiers and the Wave 02 entry dependency changed; see
 
 ## Authority And Traceability
 
-This Wave implements [PRD v0.5](../PRD/mvp.md), the
+This Wave implements [PRD v0.6](../PRD/mvp.md), the
 [MVP architecture RFC](../RFC/mvp-rfc.md), and these approved technical RFCs:
 
 - [Desktop information architecture and editor](../RFC/desktop-information-architecture-and-editor.md).
@@ -54,17 +54,21 @@ This Wave implements [PRD v0.5](../PRD/mvp.md), the
 - [Repository index persistence and refresh](../RFC/repository-index-persistence-and-refresh.md).
 - [Authentication and credential handling](../RFC/authentication-and-credential-handling.md).
 - [Test and compatibility strategy](../RFC/test-and-compatibility-strategy.md).
+- [Ticket relationships and short codes](../RFC/ticket-relationships-and-short-codes.md).
 
 The [RFC approval register](../RFC/wave-03-rfc-review.md) records the approved
 choices and remaining feasibility obligations. Wave planning does not reopen
 rich-text/source mode, desktop-only background polling, canonical-only in-app
 conflict resolution, the shared SSH key, or full ULIDs as mutation selectors.
+The short code added on 2026-10-07 is a search key for people and does not
+change that last rule.
 
 | PRD area | Owning Cycles and acceptance |
 | --- | --- |
 | `MH-PROD-001/002`, `MH-UX-001` | F1–F2, C1–C5 and D1–D6 compose complete front ends; G1 proves non-developer dogfooding. |
 | `MH-REPO-001`–`004`, `MH-CRED-001` | Shared bridges in F2; CLI administration in C2; desktop onboarding/settings in D1; selected-key/session evidence in both tracks. |
 | `MH-CONTENT-001`–`004` | Shared reads and bridges in F1/F2; CLI discovery/authoring in C1/C3; desktop discovery in D1 and rich-text/source authoring in D2/D3. |
+| `MH-CONTENT-005/006` | Fields, validation, short-code generation and graph reads in F1/F2; CLI queries in C1 and authoring in C3; desktop display in D1 and editing in D3; made-ready reporting on close in C5/D5. |
 | `MH-COMMENT-001/002` | CLI discussion in C4; desktop discussion in D4; ordering/rebuild recovery in G1. |
 | `MH-COLLAB-001/002` | Shared request/recovery boundary in F2; local authoring in C3/D2/D3. |
 | `MH-COLLAB-003/004` | Deliberate CLI collaboration in C4/C5; desktop collaboration in D4/D5; automatic polling in D6. |
@@ -239,7 +243,10 @@ publication is introduced.
 The following are outside this Wave: boards/rollups, templates/scaffolding,
 multi-repository planning, Git-forge key upload, application authorization,
 HTTP(S) publication, cloning, ticket reopening, comment editing/deletion,
-lossy short IDs, a custom status vocabulary and automated attachment imports.
+short codes as identities or mutation selectors, a custom status vocabulary
+and automated attachment imports. Ticket analytics beyond plan and critical
+path, typed links, priority, assignment and full-text search are on the PRD
+roadmap, not in this Wave.
 In-app conflict editing covers owned canonical Markdown. Other conflicts get
 external-tool guidance and safe re-observation before deliberate resume.
 
@@ -332,6 +339,10 @@ JSON v1 DTOs for every read. Read services cover repository/identity/remote/
 key/host inspection, public-key text, document/ticket/comment reads,
 operation/conflict inspection, index/poll status and ID generation. Ticket
 lists carry the approved lifecycle closure filter, independent of status text.
+Ticket DTOs carry `slug`, `parent`, `deps`, readiness and relationship
+problems. Read services cover the ticket relationship queries: ready, blocked,
+dependencies in both directions, children, cycles, plan, critical path and
+find by short code, over index edge records rebuilt from canonical files.
 Fill narrow missing read APIs and report stale/malformed state honestly; reads
 do not perform implicit refresh or network contact.
 
@@ -342,7 +353,10 @@ scheduling. No CLI verb or desktop screen is delivered by this Cycle.
 **Exit evidence:** Library integration tests against real repositories cover
 every read service, typed malformed rows, deterministic ordering and complete
 lists. Golden DTO schemas and redaction fixtures are published. An open ticket
-whose status text is `closed` is listed as lifecycle-open. No display or GPUI
+whose status text is `closed` is listed as lifecycle-open.
+Relationship queries are proven across primary and active worktrees with an
+unresolved dependency, a merged-in cycle and a duplicate short code, each
+reported and none repaired. No display or GPUI
 dependency, no canonical mutation and no resident process.
 
 ### F2: Request Replay, Confirmation And Shared Mutation Bridges
@@ -362,6 +376,10 @@ alternate journal or lock authority. Add the shared bridges: confirmed local
 identity configuration for create/enable, configured-host approval through
 scoped transport verification, folder creation, and marker-only
 repair/adoption with stable ID allocation.
+Ticket create and save accept `deps` and `parent`, write them in canonical
+form and reject a cycle before any write. Create generates the short code;
+add the explicit short-code assign operation, repository-local initials and
+the optional repository prefix.
 
 **Out of scope:** New Git lifecycle algorithms, CLI verbs, terminal secret
 interaction, desktop confirmations and background scheduling. Promotion and
@@ -372,7 +390,9 @@ rejection, changed-input rejection, accepted-consent retry, lost output
 reconciliation, cache-loss recovery and no duplicate effects. Cancellation is
 observed at approved safe points. Each bridge has expected-observation, retry
 and failure evidence; host approval publishes nothing and refreshes no remote
-ref; ambiguous identity stays non-editable. No body/secret enters request
+ref; ambiguous identity stays non-editable.
+Golden vectors fix the short-code and initials derivations; a short code is
+unchanged by rename, identity change and prefix change. No body/secret enters request
 records.
 
 ## CLI Track
@@ -387,6 +407,9 @@ mutation commands prematurely.
 **In scope:** Command parsing, no-argument/help/version, human output, JSON v1
 envelopes over the F1 DTOs, stable error/exit mapping, and every read verb F1
 serves, including `ticket list --closure open|closed|all` defaulting to `all`.
+Include the relationship read verbs: `ticket ready`, `blocked`, `deps`,
+`children`, `cycles`, `plan`, `critical-path` and `find`. A short code
+passed as `--id` is rejected as an invalid ID.
 Preserve early transport initialization while adapting handled startup
 failures to the CLI envelope when `--json` is recognizable, and test that
 failure output boundary against the actual merged startup.
@@ -429,7 +452,11 @@ available for agents and project dogfooding.
 
 **In scope:** Document/ticket create/save, document move, folder creation,
 explicit repair/adoption, index refresh/rebuild and identity recovery, over
-the F2 bridges. Preserve unknown metadata, ULIDs and body content; use actual
+the F2 bridges.
+Ticket create and save take `deps` and `parent`; add `ticket slug-assign`,
+initials on `repo identity-set` and the prefix on `repo create`/`enable`.
+Record the Wave 03 Cycle dependencies in the project's own tickets when these
+operations meet this gate. Preserve unknown metadata, ULIDs and body content; use actual
 context provisioning and source/destination observations. Empty folders are
 local until they contain tracked content; do not add hidden placeholder
 commits. Index-only actions never fetch or rewrite canonical state.
@@ -473,7 +500,8 @@ Switch ticket comment dogfooding to the CLI when supported.
 **In scope:** Document promotion, ticket close, their prepare/confirm/resume
 flows, explicit poll once and polling policy controls. Verify whole-branch
 effects, closure identity, local-only pending publication, remote-first cleanup
-ordering and cleanup-only retries through Wave 02 services. Complete every
+ordering and cleanup-only retries through Wave 02 services.
+Ticket close reports the tickets it made ready. Complete every
 command's input/output schema, help, recovery example and exit mapping.
 
 **Out of scope:** CLI background scheduling/indexing, desktop behavior,
@@ -497,7 +525,10 @@ prove command exit leaves no resident worker. This is the CLI contract gate.
 filter, multiple open-item tabs, active-context provenance, malformed/stale
 views, repository/remotes/identity/key/host settings, manual refresh/rebuild,
 operation area and asynchronous service calls. Lists default to lifecycle-open
-tickets with a visible Closed/All filter. Settings mutations use F2
+tickets with a visible Closed/All filter.
+Show each ticket's short code, offer ready and blocked filters with reasons,
+find by short code with every match listed, and show a ticket's dependencies,
+dependents, parent and children read-only. Settings mutations use F2
 confirmation, replay and bridges directly; they do not wait for or call the
 CLI. Viewing does not provision a context. Restore focus after prompts; do not
 serialize credential-bearing state into UI diagnostics. Preserve pre-thread
@@ -545,7 +576,9 @@ exact normalizations before the implementation plan is approved.
 
 **In scope:** Integrate the chosen native editor through GPUI Kit, shared draft/
 undo state across rich/source modes, metadata controls, item create/edit/save,
-document moves/folders, explicit repair and stale-edit review. Use D2 recovery
+document moves/folders, explicit repair and stale-edit review.
+Metadata controls edit `deps` and `parent` by choosing tickets and explain a
+rejected cycle before any save. Use D2 recovery
 and the F2 observation/progress results and bridges. Support source fallback
 for unsupported constructs, safe local resource rendering and keyboard
 formatting. Expose unsaved/local checkpoint/index-pending states accurately.
@@ -592,6 +625,7 @@ resolution and checkpoint/resume, external guidance for unsupported conflicts,
 Approve and merge/Close ticket effect summaries, exact confirmation, final
 draft-save boundary and partial publication/cleanup recovery. Show all affected
 branch paths and lifecycle closure metadata separately from project status.
+A completed close lists the tickets it made ready.
 Primary publication success is not equivalent to cleanup success.
 
 **Out of scope:** Arbitrary code/binary resolution writes, forced overwrite,
@@ -668,6 +702,7 @@ a claim those public APIs exist.
 | --- | --- | --- |
 | Repository inventory, full canonical reads, malformed DTOs, public-key/host inspection, closure filter | F1 | Read-only library APIs; no front-end SQLite scraping or implicit fetch. |
 | Request digest, creation observations, consent, progress/cancel and replay | F2 | Wrap actual domain operations; preserve Git authority and existing leases. |
+| Ticket relationship fields, cycle rejection, short-code generation and graph reads | F1 (reads), F2 (writes) | Index edge records rebuilt from canonical files; ULID remains the only identity and mutation selector. |
 | Missing identity during create/enable and public identity configuration | F2 | Explicit confirmed local persistence, including a not-yet-created root. |
 | Configured-host approval | F2 | Scoped transport verification; no publication or remote-ref refresh. |
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
@@ -765,6 +800,13 @@ On the same date the product owner approved `zorite-editor` as the editor.
 The product owner also accepted the byte changes its load normalization makes;
 the desktop/editor and canonical RFCs are amended accordingly. Neither
 decision completes the native evidence D3 and G1 owe.
+
+On 2026-10-07 the product owner also directed that ticket dependencies, a
+parent hierarchy and a human short code be added in this Wave, with the ULID
+remaining the canonical identity. PRD v0.6 and the
+[ticket relationships and short codes RFC](../RFC/ticket-relationships-and-short-codes.md) define them. The product
+owner approved that RFC and this Wave's allocation of it on 2026-10-07, on
+ticket `01M4CGDANTBDR4T8AGFZP8ZGP7`.
 
 The refreshed API audit, native tester/machine
 assignments and implementation-baseline evidence remain open; none is implied by design
