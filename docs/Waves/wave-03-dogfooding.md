@@ -347,7 +347,11 @@ problems. Read services cover the ticket relationship queries: ready, blocked,
 dependencies in both directions, children, cycles, plan, critical path and
 find by short code, over index edge records rebuilt from canonical files.
 Fill narrow missing read APIs and report stale/malformed state honestly; reads
-do not perform implicit refresh or network contact.
+do not perform implicit refresh or network contact. Reads list what the index
+holds and never list a directory or scan; the indexer picks up new files, and
+a short delay before a new file appears is accepted (product owner,
+2026-10-08). Comment reads return one flat, ordered list with each entry's
+depth, and report a comment's `created_by` as its author without writing it.
 
 **Out of scope:** Command parsing, human output, exit codes and help; desktop
 views; canonical/config/key writes; network attempts; request replay; polling
@@ -383,6 +387,9 @@ Ticket create and save accept `deps` and `parent`, write them in canonical
 form and reject a cycle before any write. Create generates the short code;
 add the explicit short-code assign operation, repository-local initials and
 the optional repository prefix.
+Comment creation writes the comment's optional `created_by` field from the
+confirmed Git identity, as the canonical schema RFC defines; F1 only reads it
+(product owner, 2026-10-08).
 
 **Out of scope:** New Git lifecycle algorithms, CLI verbs, terminal secret
 interaction, desktop confirmations and background scheduling. Promotion and
@@ -706,6 +713,7 @@ a claim those public APIs exist.
 | Repository inventory, full canonical reads, malformed DTOs, public-key/host inspection, closure filter | F1 | Read-only library APIs; no front-end SQLite scraping or implicit fetch. |
 | Request digest, creation observations, consent, progress/cancel and replay | F2 | Wrap actual domain operations; preserve Git authority and existing leases. |
 | Ticket relationship fields, cycle rejection, short-code generation and graph reads | F1 (reads), F2 (writes) | Index edge records rebuilt from canonical files; ULID remains the only identity and mutation selector. |
+| Comment author (`created_by`) | F1 (reads), F2 (writes) | Written once at comment creation from the confirmed Git identity; never derived from Git history. |
 | Missing identity during create/enable and public identity configuration | F2 | Explicit confirmed local persistence, including a not-yet-created root. |
 | Configured-host approval | F2 | Scoped transport verification; no publication or remote-ref refresh. |
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
@@ -812,6 +820,13 @@ remaining the canonical identity. PRD v0.6 and the
 [ticket relationships and short codes RFC](../RFC/ticket-relationships-and-short-codes.md) define them. The product
 owner approved that RFC and this Wave's allocation of it on 2026-10-07, on
 ticket `01M4CGDANTBDR4T8AGFZP8ZGP7`.
+
+On 2026-10-08 the product owner authorized amendments on the F1 ticket,
+`01M4CC0VMQ7R15A7M9SPN3KB67`, to bring this Wave and the CLI, relationships
+and index RFCs into agreement with rulings made while implementing F1. In
+this document they add writing the comment `created_by` field to F2, and
+state that reads list what the index holds and that comments are read as a
+flat list.
 
 The refreshed API audit, native tester/machine
 assignments and implementation-baseline evidence remain open; none is implied by design

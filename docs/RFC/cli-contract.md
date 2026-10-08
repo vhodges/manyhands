@@ -96,13 +96,13 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. |
 | `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Closure metadata cannot be supplied; free-form status may be `closed` without making the ticket lifecycle-closed. |
 | `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Project status does not control closure; `ticket close` owns `closed_at`/`closed_by`. Reopening is outside MVP. |
-| `comment list` | `--id` selects the parent item; return ordered roots/replies with parent IDs and visible malformed entries. |
+| `comment list` | `--id` selects the parent item; return one flat, ordered list of roots and replies with parent IDs and depth, then visible malformed entries. Replies are not nested. |
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`. One checkpoint then immediate configured sync; no-remote means local pending. |
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization. Unsaved caller files are not implicitly submitted. |
 | `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
 | `index status`, `index refresh`, `index rebuild` | Inspect cache freshness, or local scan/rebuild. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
-| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. Resume never infers permission for a different target/action. |
+| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
@@ -224,17 +224,38 @@ uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 (`not_requested`, `complete`, `pending`), and nullable string `commit_oid`.
 It describes the operation including effects observed from an earlier attempt.
 
+A recovery `action` is a dotted name from a closed, published registry. An
+action carries exactly its registered argument keys, or none when the result
+names no repository. Reads use `index.rebuild`, `index.refresh` and
+`repo.inspect`, each with the argument `root`. Mutation commands add theirs,
+such as `operation.resume`, with the Cycle that delivers them.
+
 Item DTOs include ID, kind, repository-relative path, required and optional
 canonical metadata, unknown metadata, body, observation, context/provenance,
 conformity problems and content-change timestamp. `show` additionally includes
 complete canonical `source`; list omits bodies/source. Malformed entries use
 nullable IDs/metadata plus exact path and problem code. Comment DTOs include
-ID, item ID, parent ID, author, created timestamp, body and conformity problems.
-List `data` is `{ "items": [...], "complete": true }`; it is never an unversioned
-top-level array. Read operations intentionally return requested source; mutation
+ID, item ID, parent ID, depth, author, created timestamp, body and conformity
+problems. List `data` is an object with `items` and a boolean `complete`, as in
+`{ "items": [...], "complete": true }`; it is never an unversioned top-level
+array. `complete` is false when a directory holding the listed kind could not
+be fully read, so entries may be missing. Lists read from the index also carry
+its state. Read operations intentionally return requested source; mutation
 outcomes, errors, polling logs and progress do not echo it.
 
-Other DTOs expose the table's named non-secret fields, plus problem codes.
+`comment list` returns one flat list; replies are not nested (product owner,
+2026-10-08). `items` is the depth-first flattening of the threads: each root
+comment in `created_at` then ID order, immediately followed by its replies in
+the same order, each followed by its own; then nonconforming entries in path
+order. `depth` is 0 for a root comment and for a nonconforming entry. For
+every entry `parent_id` is null exactly when `depth` is 0; otherwise it is the
+`id` of the nearest earlier entry one level up. The consumer builds and renders
+the tree. A nested chain's JSON depth would exceed default parser limits, and
+changing the shape after the CLI ships would be breaking.
+
+Other DTOs expose the table's named non-secret fields, plus problem codes. An
+operation's failure code comes from its own closed registry, separate from the
+envelope's result codes.
 Command-specific JSON Schemas and golden fixtures MUST be published alongside
 the CLI implementation before its Cycle can exit; they must follow this
 envelope and specify required/nullable fields for every command. This RFC does
@@ -276,11 +297,26 @@ Example: a comment checkpoint succeeded but configured publication failed:
 }
 ```
 
-Envelope breaking changes require a new schema version. Additive object fields
-are allowed; consumers ignore unknown fields. Outcome/effect enum changes and
-command input meaning changes are breaking. Recovery codes are extensible:
-clients handle an unknown code through outcome and exit class, retaining the
-structured result rather than retrying blindly.
+The version 1 JSON Schemas are closed: every object they define sets
+`additionalProperties: false` and requires all of its properties, except the
+free-form objects (the envelope's `data`, `unknown_metadata` and a recovery
+action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
+
+- A schema describes exactly what the build that ships it produces.
+- Adding a field, an enumeration value or a result or problem code is a
+  non-breaking change made in place within version 1. The envelope's outcome
+  and effect values are the exception: a client decides what happened from
+  them, so any change to those two sets is breaking.
+- Consumers MUST ignore fields they do not know and MUST tolerate codes and
+  enumeration values they do not know. A client handles an unknown code
+  through outcome and exit class, retaining the structured result rather than
+  retrying blindly.
+- Output from a newer build is therefore not guaranteed to validate against an
+  older build's schema. Validate output only against the schemas of the build
+  that produced it.
+- Removing, renaming or retyping a field, or changing the meaning of an
+  existing value, requires a new schema version. So does changing the outcome
+  or effect values, or the meaning of a command input.
 
 ## Exit statuses and partial completion
 

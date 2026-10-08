@@ -87,7 +87,7 @@ landed in between.
   - host trust pins: list and one authority;
   - documents and tickets: list, and one complete item with source, body,
     metadata, unknown metadata, context and an observation token;
-  - a nonconforming resource by exact path;  - an item's comment threads, ordered, with bodies and, where recorded, authors;
+  - a nonconforming resource by exact path;  - an item's comments as one flat, ordered list with each entry's depth, with bodies and, where recorded, authors;
   - index status, polling status and the operation inventory;
   - a new canonical ULID.
 - **Ticket list filters.** Exact `status`, `type` and `project`; lifecycle
@@ -97,7 +97,9 @@ landed in between.
   in both directions, children, cycles, plan, critical path and find by short
   code. The index gains edge records rebuilt from canonical files.
 - **Published contract.** JSON Schemas for the envelope and every DTO, with
-  golden JSON fixtures.
+  golden JSON fixtures. The schemas are closed and describe exactly what the
+  build that ships them produces; the CLI RFC states the compatibility rule
+  (decision 8).
 
 Every read is local. It contacts no network, refreshes nothing implicitly, and
 changes no canonical file, Git object, ref, worktree or configuration.
@@ -125,7 +127,8 @@ Two reads named in the Wave document cannot be complete at this baseline:
   change (decision 2).
 - **Polling status.** The stored policy and latest outcome are reported. The
   next eligible time and per-attempt history do not exist until Wave 02
-  Cycle 08; those fields are present and null.
+  Cycle 08; the next eligible time is present and null, and no outcome time
+  or history is reported.
 
 ## Required Read Contract
 
@@ -136,16 +139,22 @@ read may do nothing else. Specifically:
 
 - No canonical file, Git object, ref, worktree, Git configuration or key file
   is created, changed or removed.
-- No refresh or scan runs. A read reports what the index holds and says when
-  that is stale, never having been refreshed, or unavailable.
+- No refresh or scan runs, and no directory is listed. A read reports what
+  the index holds and says when that is stale, never having been refreshed,
+  or unavailable. The indexer is what picks up a new file, so a document,
+  ticket or comment added since the last refresh appears after the next one
+  (decision 7).
 - No network contact occurs, and no credential is requested or unlocked.
 - A read takes only the shared index lock. It never blocks behind, or steals,
   a repository operation lease.
 
-Lists are complete and deterministically ordered. An empty result, a stale
-index, a never-refreshed index and an unavailable index are four different
-answers. Only an unavailable index is a failure; the others return the rows
-the index has and say which state it is in. A file that fails the canonical
+Lists are deterministically ordered and complete, or say they are not:
+`complete` is false when a directory holding the listed kind could not be
+fully read, and entries may then be missing. An empty result, a stale index,
+a never-refreshed index and an unavailable index are four different answers.
+Only an unavailable index is a failure; the others return the rows the index
+has and say which state it is in. The index status read is the exception: it
+reports an unavailable index as a state. A file that fails the canonical
 schema's required-field or front-matter rules appears in its list as a
 nonconforming entry with a null ID, its exact path and a problem code; it is
 never hidden. A relationship problem never makes a ticket nonconforming; it is
@@ -173,7 +182,7 @@ A ticket is closed when it carries lifecycle closure metadata, whatever its
 | No side effects | Before-and-after snapshots show canonical files, Git refs, worktrees, configuration and key files unchanged by every read. Every read test runs with the Git transport uninitialized, where any network-capable path fails closed, so a passing read cannot have reached one. |
 | Redaction | Serialized output for every DTO and error contains no credential from a remote URL, no backend error text, no stored guidance text and no sentinel secret planted in fixtures. |
 | Published contract | A JSON Schema exists for the envelope and each DTO; each golden fixture is produced by the library, matches its stored file byte for byte and satisfies its schema. |
-| Front-end independence | The library builds, and the three new test targets pass, without the `desktop` feature and without a display. |
+| Front-end independence | The library builds, and the eight new read test targets pass, without the `desktop` feature and without a display. |
 | Regression | The four required Devenv checks and the CLI smoke test pass. |
 
 Native execution on Windows and macOS is not claimed by this Cycle; see the
@@ -208,6 +217,29 @@ The two wording corrections to the relationships RFC proposed in the review
 record are also applied on this branch. These RFC and Wave amendments reach
 main when this branch merges.
 
+## Product-Owner Decisions (2026-10-08)
+
+Made during and after implementation. The execution ledger records the
+rulings they follow from; the design carries the detail.
+
+7. **Reads list what the index holds.** A read never lists a directory or
+   scans. The indexer picks up new files, and a short delay before a new
+   file appears in a list is accepted.
+8. **Schema compatibility.** The v1 JSON Schemas stay closed. A schema
+   describes exactly what the build that ships it produces. Adding a field,
+   an enumeration value or a result or problem code is non-breaking and made
+   in place within v1; consumers must ignore fields and tolerate codes and
+   enumeration values they do not know, and validate output only against the
+   schemas of the build that produced it. Removing, renaming or retyping a
+   field, or changing the meaning of an existing value, requires a new
+   contract version, as does any change to the envelope's outcome and effect
+   values. The CLI RFC is amended on this branch.
+9. **Comments are a flat list.** `list_comments` returns each root followed
+   by its replies depth-first, every entry carrying `depth` and `parent_id`,
+   and no nested `replies`. The consumer builds the tree. A nested chain's
+   JSON depth exceeds default parser limits, and changing the shape after
+   the CLI ships would be breaking.
+
 ## Review Record
 
 The three documents were reviewed against the Wave document, the governing
@@ -219,7 +251,7 @@ Rows classified "Decision" were decided on 2026-10-07 as recorded above.
 | --- | --- | --- | --- | --- |
 | Independent review; `discovery.rs:270-298`, `repository.rs:5349-5356` | The index has no single effective copy once two item worktrees exist; the first draft assumed one row per item. | Decision | Decision 1. | Effective-copy acceptance row; a reproducing test is the first step of the fix. |
 | Independent review; relationships RFC validation | The first draft stored relationship problems where they would be listed as nonconforming entries, and passed stored guidance text, which can hold backend error text, into DTOs. | Settled | Relationship problems are stored per item and reported on the ticket. Nonconforming entries come only from schema-conformity codes. DTO guidance is fixed text per code; stored guidance is never serialized. | Redaction and nonconforming tests. |
-| Independent review; `recovery.rs:90-104`, `keys/registry.rs:593-620` | Two of the three operation stores have no start or update time, and key-material operations belong to no repository. | Settled | Order operations by operation ID, which is a ULID and so sorts by creation time. Report `updated_at` only where stored. Key-material operations are listed with application scope. | Operation ordering test. |
+| Independent review; `recovery.rs:90-104`, `keys/registry.rs:593-620` | Two of the three operation stores have no start or update time, and key-material operations belong to no repository. | Settled | Order operations by operation ID, which is a ULID and so sorts by creation time. Report `updated_at` only where stored. Key-material operations are listed with owner `application`. | Operation ordering test. |
 | Wave 03 F1 scope | Conflict inspection has no data model at this baseline. | Decision | Decision 2. | Wave document amendment if accepted. |
 | Project convention | Earlier plans barred new Cargo dependencies without approval. | Decision | Decision 3. | `Cargo.lock` change limited to the direct-dependency entry. |
 | CLI RFC comment DTO | The DTO requires an author; the schema stores none. Git-derived authorship is costly and unstable. | Decision | Decision 4. | Schema RFC amendment if accepted. |

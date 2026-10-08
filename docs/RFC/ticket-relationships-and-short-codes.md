@@ -34,6 +34,12 @@ and [desktop](desktop-information-architecture-and-editor.md) RFCs; each
 carries a pointer here. [Wave 03](../Waves/wave-03-dogfooding.md) assigns the
 work to Cycles.
 
+On 2026-10-08 the product owner authorized amendments that bring this RFC into
+agreement with rulings made while implementing Wave 03 Cycle F1: a closed
+dependency never blocks, so only a cycle among open tickets blocks; the
+critical path is over plannable tickets; and the read details stated under
+[Validation](#validation), [Queries](#queries) and [Index](#index).
+
 ## Canonical fields
 
 All three fields are optional ticket front matter. A ticket without them is
@@ -97,7 +103,8 @@ code     = 5*8 crockford-base32-lowercase
 `slug` is written once, when the ticket is created, and is never rewritten:
 not when the ticket is renamed, when the creator's name changes, or when the
 repository's prefix changes. It is matched case-insensitively and displayed in
-lowercase.
+lowercase. A slug written by hand with uppercase letters is accepted and read
+in lowercase; the file is not rewritten.
 
 The parts are derived as follows.
 
@@ -158,15 +165,24 @@ is reported and visible; no file is repaired or rewritten by scanning.
 | --- | --- |
 | `deps` or `parent` is the wrong type, or contains a value that is not a ULID | Visible problem on the ticket. The invalid value is ignored for graph queries. The ticket stays readable and editable. |
 | A `deps` entry or `parent` names the ticket itself | Visible problem; the entry is ignored. |
+| A `deps` entry repeats an earlier entry | Visible problem; the repeat is ignored. |
 | A `deps` entry or `parent` names an item that is not a ticket | Visible problem; the entry is ignored. |
 | A `deps` entry names a ticket not found in any scanned context | An **unresolved dependency**. It counts as blocking, and the ticket shows a diagnostic naming the ID. A fetch, poll or merge can resolve it later. |
 | `parent` names a ticket not found in any scanned context | The ticket is shown as a root with a diagnostic naming the ID. |
-| `deps` entries form a cycle | Every ticket on the cycle is blocked and shows a diagnostic naming the cycle. |
+| `deps` entries form a cycle | Every ticket on the cycle shows a diagnostic naming the cycle. Only a cycle among open tickets blocks: each ticket on it is blocked. A closed dependency never blocks, so a cycle that passes through a closed ticket does not block by itself. |
 | `parent` links form a cycle | Each ticket on the cycle is shown as a root with a diagnostic. |
 | `slug` does not match the grammar | Visible problem. The value is preserved and is not searchable. |
 
 None of these makes a ticket nonconforming in the canonical RFC's sense. Only
 the required fields decide conformity.
+
+A `deps`, `parent` or `slug` key whose value is null is read as absent and is
+not a problem. A null entry inside a `deps` list is a wrong type.
+
+Whether a target is a ticket, and whether a ticket is on a cycle, depend on
+other items. Those two conditions are decided when a ticket is read, against
+the items the index holds then, and are reported on the ticket as
+`relationship_not_a_ticket`, `dependency_cycle` and `parent_cycle`.
 
 ## Writing relationships
 
@@ -204,12 +220,12 @@ ticket. A ticket is **blocked** when it is open and not ready.
 | Query | Result |
 | --- | --- |
 | Ready | Open tickets that are ready. |
-| Blocked | Open tickets that are blocked, each with the reasons: open blockers, unresolved IDs, and cycle membership. |
-| Dependencies of a ticket | The tree of tickets it depends on, the tree of tickets that depend on it, or both, to an optional depth. Each node carries closure state. A ticket reached twice is marked as repeated, not expanded again. |
-| Cycles | Every `deps` cycle and every `parent` cycle among scanned tickets. |
+| Blocked | Open tickets that are blocked, each with the reasons: open blockers, unresolved IDs, and membership of a cycle of open tickets. A cycle reason names at most 16 of the cycle's IDs, the lowest, and says whether that is all of them. |
+| Dependencies of a ticket | The tree of tickets it depends on, the tree of tickets that depend on it, or both, to an optional depth. Each tree is returned as a flat list of lines in depth-first order, and each line carries its depth and closure state. A ticket reached twice is marked as repeated, not expanded again. |
+| Cycles | Every `deps` cycle and every `parent` cycle among scanned tickets, open or closed. Each cycle is listed whole, once. |
 | Children of a ticket | Its direct children; the ticket result also carries its parent. |
-| Plan | Open tickets in ordered batches. Every ticket in a batch has all its open dependencies in earlier batches, so tickets in one batch can be worked in parallel. Tickets on a cycle or behind an unresolved dependency are listed separately as unplannable, with the reason. |
-| Critical path | The longest chain of open tickets by dependency, as an ordered list. Length is counted in tickets; there are no estimates. Ties resolve by the deterministic ordering below. |
+| Plan | Open tickets in ordered batches. Every ticket in a batch has all its open dependencies in earlier batches, so tickets in one batch can be worked in parallel. Tickets on a cycle of open tickets, behind an unresolved dependency, or downstream of either are listed separately as unplannable, with the reason. |
+| Critical path | The longest chain of plannable tickets by dependency, as an ordered list. A plannable ticket is an open ticket that is not on a cycle, not behind an unresolved dependency and not downstream of either. Length is counted in tickets; there are no estimates. Ties resolve by the deterministic ordering below. |
 | Find by slug | Every ticket whose slug matches, case-insensitively. |
 
 Ready, blocked and plan accept the ticket list filters (`status`, `type`,
@@ -242,8 +258,8 @@ Existing verbs change as follows.
   (a ULID, or null to clear). `ticket create` accepts optional `initials`.
   Neither accepts `slug`.
 - `ticket list` and `ticket show` include `slug`, `parent`, `deps`, readiness
-  and any relationship problems. `ticket list` accepts `--slug` as an exact
-  filter and `--ready` / `--blocked`.
+  and any relationship problems. `ticket list` accepts `--slug` as a
+  whole-code, case-insensitive filter and `--ready` / `--blocked`.
 - `repo create` and `repo enable` accept optional `ticket_slug_prefix`, shown
   in the confirmation preview and written to the tracked configuration.
 - `repo identity` reports the effective initials and their source.
@@ -272,13 +288,14 @@ No board, graph canvas or rollup view is required.
 
 Manyhands already keeps a local SQLite index as a cache of canonical files; it
 drives the desktop interface, lists and searches. This RFC extends it and adds
-no second store. The index adds a slug to item discovery and an edge record:
-source ticket, target ULID and kind (`deps` or `parent`). An edge's context
+no second store. The index adds a slug to item discovery, an edge record
+(source ticket, target ULID and kind, `deps` or `parent`) and a record of
+each relationship problem found in a ticket's own file. An edge's context
 is its source ticket's context. Whether a target resolves, and a ticket's
 readiness, are computed when read, not stored, because both change when
-another ticket is closed, fetched or merged. Edges are rebuilt from canonical
-files on refresh and rebuild, like every other index record. Losing the index
-loses no relationship.
+another ticket is closed, fetched or merged. These records are rebuilt from
+canonical files on refresh and rebuild, like every other index record. Losing
+the index loses no relationship.
 
 ## Deferred and rejected
 

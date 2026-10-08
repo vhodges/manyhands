@@ -420,16 +420,27 @@ product-owner decision of 2026-10-08, reads list what the index holds and the
 indexer is what picks up new files, so a comment added since the last refresh
 appears after the next one. Problems that only a whole-context validation can
 find (a duplicate ID, a parent in another item) are taken from what the
-refresh stored. `CommentDto` is `id`, `item_id`, `parent_id`, `author`,
-`created_at`, `body`, `path`, `unknown_metadata`, `problems` and `replies`.
+refresh stored. `CommentDto` is `id`, `item_id`, `parent_id`, `depth`,
+`author`, `created_at`, `body`, `path`, `unknown_metadata` and `problems`.
 `CommentListDto` adds `complete`, `context` and `index`, once for the list.
+
+The list is flat; replies are not nested (product-owner decision of
+2026-10-08). `items` is the depth-first flattening of the ordered threads:
+each root in `created_at` then ID order, immediately followed by its replies
+in the same order, each followed by its own; then nonconforming entries in
+path order. `depth` is an integer, 0 for a root comment and for a
+nonconforming entry. For every entry `parent_id` is null exactly when `depth`
+is 0; otherwise it is the `id` of the nearest earlier entry one level up. The
+consumer builds and renders the tree. A nested chain's JSON depth exceeds
+default parser limits, and changing the shape after the CLI ships would be
+breaking.
 
 `author` is the comment's `created_by` front-matter value when present, and
 null otherwise. Under Cycle decision 4 that field joins the comment schema and
 is written from F2 onward; F1 only reads it, from unknown metadata, exactly as
 it reads the relationship fields. No Git history is walked. A comment that
 fails to parse appears with a null ID, its path and its problem, at the end of
-the root list.
+the list with `depth` 0.
 
 If decision 4 is not accepted and Git-derived authorship is wanted instead, it
 needs a full-history walk per item. libgit2 has no path-limited walk, and the
@@ -725,6 +736,21 @@ fixtures already do, so line-ending conversion cannot break byte equality.
 Setting `MANYHANDS_UPDATE_GOLDEN=1` rewrites the fixture files. It is a
 developer aid; the checks never set it.
 
+The v1 schemas stay closed: `additionalProperties: false` and every property
+required. The compatibility rule (product-owner decision of 2026-10-08) is:
+
+- A schema describes exactly what the build that ships it produces.
+- Adding a field, an enumeration value or a result or problem code is a
+  non-breaking change made in place within v1, except the envelope's outcome
+  and effect values, which the CLI RFC keeps breaking.
+- Consumers MUST ignore fields they do not know and MUST tolerate codes and
+  enumeration values they do not know.
+- Output from a newer build is therefore not guaranteed to validate against an
+  older build's schema. Validate output only against the schemas of the build
+  that produced it.
+- Removing, renaming or retyping a field, or changing the meaning of an
+  existing value, requires a new contract version.
+
 ## Alternatives Rejected
 
 - **Derive `Serialize` on the domain types.** It would make every rename a
@@ -849,6 +875,15 @@ Queries:
 
 - The original "Trees" and "Critical path" bullets are superseded by the
   amendment beneath them.
+
+Product-owner decisions of 2026-10-08, written into the sections named:
+
+- **Schema compatibility rule.** The v1 schemas stay closed and describe
+  exactly what the build that ships them produces; additions are made in
+  place and consumers ignore what they do not know. See "Published Contract".
+- **Comments are a flat list.** `CommentDto` loses `replies` and gains
+  `depth`; `list_comments` returns the depth-first flattening. See
+  "Comments".
 
 Evidence:
 
