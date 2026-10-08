@@ -1188,3 +1188,54 @@ Independent spec `ses_ee435ef12ffeU3OkR6KWbAibem` and quality
 Native success remains unproved until the new matrix actually runs. Rust production
 matches the whole-task reviewed/full-tested tree; this extra test-only correction
 does not justify repeating unchanged broad validation before publication.
+
+### Verification checkpoint published; native matrix running — 2026-10-08
+
+Created authorized verification checkpoint `d0a49897e06b43d1ad725a9c7c1dce12639b4f8b`.
+History-only reconciliation with the sole equivalent remote checkpoint produced
+`a9593a0d1b1ab27513b7abc34f6b9a422a29b41c`. Reviewed tree identity remained
+`f7f874aca83eda77693f1e9a5853963144f5d847`; full tree diff from d0a4989 is empty,
+and original remote 2dbd3b4 is an ancestor. Normal non-force push advanced the
+existing ticket remote to a9593a0, preserving all remote history.
+
+Manually dispatched workflow build.yml on that ticket branch:
+https://github.com/vhodges/manyhands/actions/runs/37788386532
+This run must be inspected on exact SHA a9593a0; pending jobs are not passes.
+Task 4 remains unaccepted and Tasks 5–7 have not begun. Ticket stays open; no PR,
+main merge, closure or cleanup occurred. Source is unchanged by bookkeeping.
+
+### Native run 1 failures and reviewed fixes — 2026-10-08
+
+Run 37788386532 finished failed on all five jobs. Windows release compilation
+stopped at E0308 (Index::open received PathBuf instead of &Path); macOS built
+successfully and passed 286 library tests, failing one secondary raw-path fixture;
+Linux built and passed library tests, then failed four recovery-foundation creation
+cases. Early failures mean later integration/platform behavior was not verified.
+Failed logs are retained at /tmp/opencode/cycle06-native-37788386532-failures.log.
+
+Worker `ses_ee42ad3aaffejfL5vNnKwsZjFP` borrowed the Windows index pathname and
+fixed the remaining secondary reservation fixture's canonical parent. The new
+Unix alias regression reproduced RepositoryNotRegistered before the fix, then
+reservation 29 and integration reservation 9 plus static checks passed. Its broad
+suite attempts hit 120s/600s shell limits; partial 295-library/integration results
+were not a full pass. No cargo/rustc process names remained in the subsequent check.
+
+Read-only diagnosis, then writer `ses_ee42ad399ffeL9qT7imV0tlMXF`, proved the Linux
+root cause with isolated HOME/default-branch runs: libgit2 is_empty is branch-default
+dependent, so actual unborn HEAD=main is misclassified when the effective default
+is master/unset. Developer global default main masked this pre-existing production
+bug. CI was not configured to hide it. Enablement now classifies actual HEAD,
+propagates non-UnbornBranch errors, and rejects a pre-existing requested primary
+before mutation/rollback can delete its history. Deterministic local-default tests
+first failed main/trunk behavior; classification alone exposed an existing-ref
+rollback deletion; the early guard then passed all three regressions. Foundation
+unborn assertions now check symbolic HEAD, UnbornBranch and absent refs directly.
+Two existing rollback fixtures receive local identities instead of developer config.
+
+Isolated master and main configurations each passed foundation 50 and enablement
+76 tests. Final required Devenv check/fmt/strict clippy/full all-feature suite and
+CLI completed successfully with an appropriate 40-minute suite budget; all SSH
+15 observation/41 synchronization/31 fixture/103 transport and doc tests finished.
+Independent spec `ses_ee406346cffe2JVWc1SQp12K7z` and quality
+`ses_ee4048c90ffevjaEILObiSP4mK` approved this actual CI-fix set. Native re-run is
+still required; no Task 4 acceptance follows from the local correction.

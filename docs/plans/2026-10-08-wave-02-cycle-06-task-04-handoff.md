@@ -24,6 +24,12 @@ history-only reconciliation; dispatch native matrix and inspect/fix actual failu
 Task 4 remains unaccepted until these gates are handled; Tasks 5–7 not started.
 No PR/merge/closure/cleanup authorization. Ledger records all agents and decisions.
 
+Published verification checkpoint d0a4989 through history-only merge a9593a0,
+preserving the sole equivalent remote checkpoint and identical reviewed tree
+without force. Manual native run is dispatched on a9593a0:
+https://github.com/vhodges/manyhands/actions/runs/37788386532
+Next inspect/fix its actual results. Pending jobs do not accept Task 4.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.

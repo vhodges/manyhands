@@ -36,7 +36,7 @@ fn output_matches(image: &Image, output: (u64, u64, [u8; 32])) -> bool {
 fn private_index(directory: &Directory, name: &str) -> Result<git2::Index, SynchronizationError> {
     let image = required(directory, name)?;
     external(directory.matches(name, &image))?;
-    let index = git2::Index::open(directory.path().join(name))
+    let index = git2::Index::open(&directory.path().join(name))
         .map_err(|_| SynchronizationError::ExternalChange)?;
     external(directory.matches(name, &image))?;
     Ok(index)
