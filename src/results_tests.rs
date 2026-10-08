@@ -8,9 +8,9 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::{
     CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
-    IntegrationEffect, Outcome, PublicationEffect, REDACTED, RecoveryAction, ResultCode,
-    SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string, object_id_string, redact_url,
-    relative_path_string, timestamp_string,
+    IntegrationEffect, Outcome, ProblemCode, PublicationEffect, REDACTED, RecoveryAction,
+    ResultCode, SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string, object_id_string,
+    redact_url, relative_path_string, timestamp_string,
 };
 
 const ENVELOPE_FIELDS: [&str; 11] = [
@@ -322,6 +322,115 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
 #[should_panic(expected = "a failure cannot carry the ok code")]
 fn failure_rejects_the_ok_code() {
     let _ = Envelope::<Value>::failure("item show", Scope::default(), ResultCode::Ok, Vec::new());
+}
+
+/// Every code string the index stores, with the contract string it maps to.
+const STORED_PROBLEM_CODES: [(&str, &str); 16] = [
+    ("invalid-path", "invalid_path"),
+    ("missing-front-matter", "missing_front_matter"),
+    ("malformed-front-matter", "malformed_front_matter"),
+    ("malformed-configuration", "malformed_configuration"),
+    ("missing-field", "missing_field"),
+    ("invalid-field", "invalid_field"),
+    ("kind-path-mismatch", "kind_path_mismatch"),
+    ("duplicate-id", "duplicate_id"),
+    ("missing-comment-item", "missing_comment_item"),
+    ("missing-parent", "missing_parent"),
+    ("cross-item-parent", "cross_item_parent"),
+    ("comment-cycle", "comment_cycle"),
+    ("source", "source_unreadable"),
+    ("context", "context_problem"),
+    ("branch", "branch_problem"),
+    ("retry-required", "retry_required"),
+];
+
+#[test]
+fn stored_problem_codes_map_to_the_registry() {
+    for (stored, expected) in STORED_PROBLEM_CODES {
+        let code = ProblemCode::from_stored(stored);
+        assert_eq!(code.as_str(), expected, "{stored}");
+        assert_eq!(code.stored(), Some(stored));
+    }
+    let registered: BTreeSet<_> = ProblemCode::ALL
+        .into_iter()
+        .filter_map(ProblemCode::stored)
+        .collect();
+    assert_eq!(
+        registered,
+        STORED_PROBLEM_CODES
+            .iter()
+            .map(|(stored, _)| *stored)
+            .collect()
+    );
+}
+
+#[test]
+fn unrecognized_stored_problem_codes_become_unknown_problem() {
+    // The contract string of a code is not its stored string.
+    for stored in [
+        "",
+        "future-code",
+        "invalid_path",
+        "unknown_problem",
+        "Source",
+    ] {
+        assert_eq!(
+            ProblemCode::from_stored(stored),
+            ProblemCode::UnknownProblem,
+            "{stored:?}"
+        );
+    }
+}
+
+#[test]
+fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
+    let names: Vec<_> = ProblemCode::ALL
+        .into_iter()
+        .map(ProblemCode::as_str)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "invalid_path",
+            "missing_front_matter",
+            "malformed_front_matter",
+            "malformed_configuration",
+            "missing_field",
+            "invalid_field",
+            "kind_path_mismatch",
+            "duplicate_id",
+            "missing_comment_item",
+            "missing_parent",
+            "cross_item_parent",
+            "comment_cycle",
+            "source_unreadable",
+            "context_problem",
+            "branch_problem",
+            "retry_required",
+            "path_not_utf8",
+            "metadata_not_representable",
+            "unknown_problem",
+        ]
+    );
+    assert_eq!(
+        names.iter().collect::<BTreeSet<_>>().len(),
+        ProblemCode::ALL.len()
+    );
+    for code in ProblemCode::ALL {
+        let name = code.as_str();
+        assert!(
+            name.bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+            "{name}"
+        );
+        let guidance = code.guidance();
+        assert!(guidance.ends_with('.') && guidance.is_ascii(), "{name}");
+        assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
+    }
+    assert_eq!(
+        ProblemCode::RetryRequired.guidance(),
+        "The repository changed while it was being observed; refresh the index again."
+    );
 }
 
 #[test]

@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "operation_id", "arguments"],
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": ["string", "null"]
+    },
+    "arguments": {
+      "type": "object"
+    }
+  }
+}

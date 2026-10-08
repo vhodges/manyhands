@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "write",
+    "checkpoint",
+    "discovery",
+    "publication",
+    "integration",
+    "cleanup",
+    "commit_oid"
+  ],
+  "properties": {
+    "write": {
+      "type": "string",
+      "enum": ["not_requested", "unchanged", "written"]
+    },
+    "checkpoint": {
+      "type": "string",
+      "enum": ["not_requested", "unchanged", "committed", "pending"]
+    },
+    "discovery": {
+      "type": "string",
+      "enum": ["not_requested", "current", "pending"]
+    },
+    "publication": {
+      "type": "string",
+      "enum": ["not_requested", "published", "current", "pending"]
+    },
+    "integration": {
+      "type": "string",
+      "enum": ["not_requested", "complete", "pending"]
+    },
+    "cleanup": {
+      "type": "string",
+      "enum": ["not_requested", "complete", "pending"]
+    },
+    "commit_oid": {
+      "type": ["string", "null"]
+    }
+  }
+}

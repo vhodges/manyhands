@@ -1,0 +1,357 @@
+//! Read-only services for the Manyhands front ends.
+//!
+//! Every read that touches the index goes through `read_session`: the shared
+//! index lock, a read-only connection and a transaction that is rolled back.
+//! A read returns a DTO or a `ReadError`; neither carries backend text.
+
+// `ReadError` carries its whole scope by value, as the result contract has it.
+#![allow(clippy::result_large_err)]
+
+use std::{error::Error, fmt, path::Path};
+
+use rusqlite::{Connection, Transaction, TransactionBehavior};
+
+use super::{
+    RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService, cache_read_guard,
+    keys::{KeyMaterialError, KeyMaterialErrorKind},
+    open_registry_read_only,
+    transport::SshTransportErrorKind,
+};
+use crate::{
+    canonical,
+    results::{Envelope, ProblemCode, RecoveryAction, ResultCode, Scope},
+};
+
+mod dto;
+
+pub use dto::{NewIdDto, ProblemDto};
+
+/// The recovery action a degraded index calls for.
+const REBUILD_INDEX_ACTION: &str = "index.rebuild";
+
+/// Why a read returned no data.
+///
+/// `Display` prints only the code's fixed message. The source is kept for
+/// in-process logging by a front end and is never serialized.
+pub struct ReadError {
+    pub code: ResultCode,
+    pub scope: Scope,
+    pub recovery: Vec<RecoveryAction>,
+    source: Option<Box<dyn Error + Send + Sync>>,
+}
+
+impl ReadError {
+    /// `code` must not be `ResultCode::Ok`.
+    pub fn new(code: ResultCode) -> Self {
+        debug_assert!(
+            code != ResultCode::Ok,
+            "a read error cannot carry the ok code"
+        );
+        let recovery = match code {
+            ResultCode::IndexUnavailable => vec![RecoveryAction {
+                action: REBUILD_INDEX_ACTION.to_owned(),
+                operation_id: None,
+                arguments: serde_json::Map::new(),
+            }],
+            _ => Vec::new(),
+        };
+        Self {
+            code,
+            scope: Scope::default(),
+            recovery,
+            source: None,
+        }
+    }
+
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub fn with_recovery(mut self, recovery: Vec<RecoveryAction>) -> Self {
+        self.recovery = recovery;
+        self
+    }
+
+    fn with_source(mut self, source: impl Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+
+    /// The failure envelope for this error. The caller names the command,
+    /// as it does for `Envelope::read_success`.
+    pub fn to_envelope<T>(&self, command: impl Into<String>) -> Envelope<T> {
+        Envelope::failure(
+            command,
+            self.scope.clone(),
+            self.code,
+            self.recovery.clone(),
+        )
+    }
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code.message())
+    }
+}
+
+// Written out so that formatting a read error can never print its source.
+impl fmt::Debug for ReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadError")
+            .field("code", &self.code)
+            .field("scope", &self.scope)
+            .field("recovery", &self.recovery)
+            .field("has_source", &self.source.is_some())
+            .finish()
+    }
+}
+
+impl Error for ReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn Error + 'static))
+    }
+}
+
+// Each conversion below maps by kind through a `match` with no wildcard arm,
+// so a kind added later does not compile until it is mapped. None of them
+// formats the error it converts.
+
+impl From<RepositoryError> for ReadError {
+    fn from(error: RepositoryError) -> Self {
+        Self::new(repository_error_code(error.kind)).with_source(error)
+    }
+}
+
+impl From<KeyMaterialError> for ReadError {
+    fn from(error: KeyMaterialError) -> Self {
+        Self::new(key_material_error_code(error.kind)).with_source(error)
+    }
+}
+
+impl From<SshTransportErrorKind> for ReadError {
+    fn from(kind: SshTransportErrorKind) -> Self {
+        Self::new(ssh_transport_error_code(&kind))
+    }
+}
+
+impl From<canonical::ValidationProblem> for ReadError {
+    fn from(problem: canonical::ValidationProblem) -> Self {
+        Self::new(validation_error_code(&problem.code))
+    }
+}
+
+/// A failure of the read-only index connection. SQLite's own busy and
+/// corruption results keep their meaning; everything else is internal.
+impl From<rusqlite::Error> for ReadError {
+    fn from(error: rusqlite::Error) -> Self {
+        let code = match error.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                ResultCode::Busy
+            }
+            Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase) => {
+                ResultCode::IndexUnavailable
+            }
+            _ => ResultCode::InternalError,
+        };
+        Self::new(code).with_source(error)
+    }
+}
+
+fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
+    match kind {
+        RepositoryErrorKind::InvalidPath => ResultCode::InvalidPath,
+        RepositoryErrorKind::InaccessibleRepository => ResultCode::RepositoryInaccessible,
+        RepositoryErrorKind::NotRepository => ResultCode::NotRepository,
+        RepositoryErrorKind::BareRepository => ResultCode::BareRepository,
+        RepositoryErrorKind::RepositoryNotRegistered
+        | RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotRegistered,
+        RepositoryErrorKind::IndexUnavailable => ResultCode::IndexUnavailable,
+        RepositoryErrorKind::RepositoryBusy => ResultCode::Busy,
+        // A backend failure. Its text stays in the source.
+        RepositoryErrorKind::Io | RepositoryErrorKind::Sqlite | RepositoryErrorKind::Git => {
+            ResultCode::InternalError
+        }
+        // Shared key registration and selection. Key reads use the session.
+        RepositoryErrorKind::InvalidSharedKeyMetadata
+        | RepositoryErrorKind::InvalidSharedKeySourcePath
+        | RepositoryErrorKind::SharedKeyRegistryUnavailable
+        | RepositoryErrorKind::SharedKeyMaterialPending => ResultCode::InternalError,
+        // Preconditions of authoring and of branch and worktree changes.
+        RepositoryErrorKind::DetachedHead
+        | RepositoryErrorKind::WrongCheckedOutBranch
+        | RepositoryErrorKind::DirtyWorktree
+        | RepositoryErrorKind::ConflictedWorktree
+        | RepositoryErrorKind::DirtyConfigurationPath
+        | RepositoryErrorKind::InvalidIdentity
+        | RepositoryErrorKind::MissingAuthoringTarget
+        | RepositoryErrorKind::OccupiedItemPath
+        | RepositoryErrorKind::MismatchedAuthoringContext => ResultCode::InternalError,
+        // Configuration and remote changes.
+        RepositoryErrorKind::InvalidConfiguration
+        | RepositoryErrorKind::InvalidPublicationRemote
+        | RepositoryErrorKind::UnavailablePublicationRemote
+        | RepositoryErrorKind::SelectedRemoteRemoval
+        | RepositoryErrorKind::RemoteNameConflict => ResultCode::InternalError,
+        // Recoverable operations, which only a mutation begins or resumes.
+        RepositoryErrorKind::RegistryRefreshPending
+        | RepositoryErrorKind::OperationMismatch
+        | RepositoryErrorKind::RecoveryRequired
+        | RepositoryErrorKind::ExternalChange
+        | RepositoryErrorKind::RollbackIncomplete
+        | RepositoryErrorKind::InjectedFailure => ResultCode::InternalError,
+    }
+}
+
+fn key_material_error_code(kind: KeyMaterialErrorKind) -> ResultCode {
+    match kind {
+        KeyMaterialErrorKind::Busy => ResultCode::Busy,
+        KeyMaterialErrorKind::NotRegistered => ResultCode::KeyNotFound,
+        // Reported for any registry failure, not only a degraded index, so
+        // it cannot promise that a rebuild is the recovery.
+        KeyMaterialErrorKind::RegistryUnavailable => ResultCode::InternalError,
+        // Input to generation, import and unlock.
+        KeyMaterialErrorKind::InvalidLabel
+        | KeyMaterialErrorKind::InvalidPassphrase
+        | KeyMaterialErrorKind::ConfirmationRequired => ResultCode::InternalError,
+        // Private key files, which no read opens.
+        KeyMaterialErrorKind::HomeUnavailable
+        | KeyMaterialErrorKind::UnsafePath
+        | KeyMaterialErrorKind::ProtectionUnavailable
+        | KeyMaterialErrorKind::SourceMissing
+        | KeyMaterialErrorKind::SourceUnreadable
+        | KeyMaterialErrorKind::NotRegularFile
+        | KeyMaterialErrorKind::InvalidGeneratedKey
+        | KeyMaterialErrorKind::UnlockFailed
+        | KeyMaterialErrorKind::SourceChanged
+        | KeyMaterialErrorKind::RandomnessUnavailable
+        | KeyMaterialErrorKind::GenerationFailed
+        | KeyMaterialErrorKind::StorageUnavailable => ResultCode::InternalError,
+        // Deletion and selection.
+        KeyMaterialErrorKind::SelectedKeyMustBeCleared
+        | KeyMaterialErrorKind::ImportedKey
+        | KeyMaterialErrorKind::OwnershipUnverified
+        | KeyMaterialErrorKind::SelectionChanged
+        | KeyMaterialErrorKind::OperationMismatch => ResultCode::InternalError,
+    }
+}
+
+/// No read reaches the SSH transport, so every kind is internal. The match
+/// is still written out: a kind added later has to be placed here.
+fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCode {
+    match kind {
+        SshTransportErrorKind::ConfigurationInvalid
+        | SshTransportErrorKind::PublicationRemoteMissing
+        | SshTransportErrorKind::UsernameRequired
+        | SshTransportErrorKind::EndpointChanged => ResultCode::InternalError,
+        SshTransportErrorKind::NoSelectedKey
+        | SshTransportErrorKind::KeyMissing
+        | SshTransportErrorKind::KeyUnreadable
+        | SshTransportErrorKind::KeySourceChanged
+        | SshTransportErrorKind::SelectionChanged
+        | SshTransportErrorKind::KeyInvalidOrUnsupported
+        | SshTransportErrorKind::KeyRejected
+        | SshTransportErrorKind::UnlockCancelled
+        | SshTransportErrorKind::ProviderUnavailable
+        | SshTransportErrorKind::UnlockFailed => ResultCode::InternalError,
+        SshTransportErrorKind::HostApprovalRequired { .. }
+        | SshTransportErrorKind::HostReplacementRequired { .. }
+        | SshTransportErrorKind::HostTrustChanged
+        | SshTransportErrorKind::HostVerificationUnavailable => ResultCode::InternalError,
+        SshTransportErrorKind::RegistryUnavailable
+        | SshTransportErrorKind::RuntimeUninitialized
+        | SshTransportErrorKind::TransportUnavailable
+        | SshTransportErrorKind::RemoteUnavailable
+        | SshTransportErrorKind::PushRejected
+        | SshTransportErrorKind::ProtocolFailure => ResultCode::InternalError,
+    }
+}
+
+/// A validation problem is a read error only when it rejects what the caller
+/// supplied: an ID or a path. A problem found in content is a `ProblemDto`.
+fn validation_error_code(code: &canonical::ValidationCode) -> ResultCode {
+    match code {
+        canonical::ValidationCode::InvalidPath => ResultCode::InvalidPath,
+        // What `ItemId::from_str` reports for a string that is not a ULID.
+        canonical::ValidationCode::InvalidField => ResultCode::InvalidId,
+        canonical::ValidationCode::MissingFrontMatter
+        | canonical::ValidationCode::MalformedFrontMatter
+        | canonical::ValidationCode::MalformedConfiguration
+        | canonical::ValidationCode::MissingField
+        | canonical::ValidationCode::KindPathMismatch
+        | canonical::ValidationCode::DuplicateId
+        | canonical::ValidationCode::MissingCommentItem
+        | canonical::ValidationCode::MissingParent
+        | canonical::ValidationCode::CrossItemParent
+        | canonical::ValidationCode::CommentCycle => ResultCode::InternalError,
+    }
+}
+
+impl From<&canonical::ValidationCode> for ProblemCode {
+    fn from(code: &canonical::ValidationCode) -> Self {
+        match code {
+            canonical::ValidationCode::InvalidPath => Self::InvalidPath,
+            canonical::ValidationCode::MissingFrontMatter => Self::MissingFrontMatter,
+            canonical::ValidationCode::MalformedFrontMatter => Self::MalformedFrontMatter,
+            canonical::ValidationCode::MalformedConfiguration => Self::MalformedConfiguration,
+            canonical::ValidationCode::MissingField => Self::MissingField,
+            canonical::ValidationCode::InvalidField => Self::InvalidField,
+            canonical::ValidationCode::KindPathMismatch => Self::KindPathMismatch,
+            canonical::ValidationCode::DuplicateId => Self::DuplicateId,
+            canonical::ValidationCode::MissingCommentItem => Self::MissingCommentItem,
+            canonical::ValidationCode::MissingParent => Self::MissingParent,
+            canonical::ValidationCode::CrossItemParent => Self::CrossItemParent,
+            canonical::ValidationCode::CommentCycle => Self::CommentCycle,
+        }
+    }
+}
+
+impl RepositoryService {
+    /// Runs `read` against the index without being able to change it.
+    ///
+    /// The session holds the shared index lock, bounded as every lease is,
+    /// and gives `read` a read-only connection inside a deferred transaction
+    /// that is rolled back whatever `read` returns. A lock not obtained in
+    /// time is `busy`; a degraded index is `index_unavailable`.
+    fn read_session<T>(
+        &self,
+        operation: RepositoryOperation,
+        read: impl FnOnce(&Connection) -> Result<T, ReadError>,
+    ) -> Result<T, ReadError> {
+        let data_directory = self
+            .registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
+        self.require_index_available(operation, None)?;
+        let connection = open_registry_read_only(&self.registry_path)?;
+        let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Deferred)?;
+        let result = read(&transaction);
+        // Dropping the transaction rolls it back as well; this states it.
+        let _ = transaction.rollback();
+        result
+    }
+
+    #[doc(hidden)]
+    pub fn read_session_for_testing<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> T,
+    ) -> Result<T, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| Ok(read(connection)))
+    }
+
+    /// A new item ID. Nothing is reserved or written; the ID becomes an item
+    /// only when a later save uses it.
+    pub fn new_item_id(&self) -> NewIdDto {
+        NewIdDto {
+            id: canonical::ItemId::generate().to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

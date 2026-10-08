@@ -28,6 +28,7 @@ use crate::canonical;
 mod coordination;
 mod discovery;
 pub mod keys;
+mod read;
 mod recovery;
 mod remote;
 pub mod transport;
@@ -46,6 +47,7 @@ pub use keys::{
     SharedKeyOwnership, SharedKeyRegistration, SharedKeySelectionOutcome,
     UnregisterSharedKeyOutcome,
 };
+pub use read::*;
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
     claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
@@ -703,6 +705,7 @@ pub enum RepositoryOperation {
     RefreshRepository,
     RebuildRepository,
     RepositorySnapshot,
+    Read,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

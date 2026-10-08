@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repository", "item_id", "branch", "worktree", "remote"],
+  "properties": {
+    "repository": {
+      "type": ["string", "null"]
+    },
+    "item_id": {
+      "type": ["string", "null"]
+    },
+    "branch": {
+      "type": ["string", "null"]
+    },
+    "worktree": {
+      "type": ["string", "null"]
+    },
+    "remote": {
+      "type": ["string", "null"]
+    }
+  }
+}

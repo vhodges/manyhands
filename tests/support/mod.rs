@@ -19,6 +19,9 @@ use manyhands::{
 };
 use rusqlite::{Connection, params};
 
+pub mod golden;
+pub mod schema;
+
 pub struct TestRepository {
     // Fields drop in declaration order, so the repository closes before TempDir removes it.
     pub repository: Repository,

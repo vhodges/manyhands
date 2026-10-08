@@ -297,6 +297,104 @@ impl Serialize for ResultCode {
     }
 }
 
+/// Defines `ProblemCode` from one list: its contract string, the code string
+/// the index stores for it, if any, and its guidance. Adding a code is one
+/// entry.
+macro_rules! problem_codes {
+    ($($variant:ident => $string:literal, $stored:expr, $guidance:literal;)+) => {
+        /// A stable code for a problem found in observed content. `as_str`
+        /// is the contract; the variant name is not.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum ProblemCode {
+            $($variant),+
+        }
+
+        impl ProblemCode {
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $string),+
+                }
+            }
+
+            /// The fixed English guidance. Text stored with a problem is
+            /// never used in its place.
+            pub const fn guidance(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $guidance),+
+                }
+            }
+
+            /// The code string the index stores for this problem, or `None`
+            /// for a code that only a read produces.
+            pub const fn stored(self) -> Option<&'static str> {
+                match self {
+                    $(Self::$variant => $stored),+
+                }
+            }
+        }
+    };
+}
+
+problem_codes! {
+    InvalidPath => "invalid_path", Some("invalid-path"),
+        "Move the file to a canonical Manyhands path.";
+    MissingFrontMatter => "missing_front_matter", Some("missing-front-matter"),
+        "Add YAML front matter to the file.";
+    MalformedFrontMatter => "malformed_front_matter", Some("malformed-front-matter"),
+        "Correct the YAML front matter.";
+    MalformedConfiguration => "malformed_configuration", Some("malformed-configuration"),
+        "Correct the Manyhands configuration file.";
+    MissingField => "missing_field", Some("missing-field"),
+        "Add the required front matter field.";
+    InvalidField => "invalid_field", Some("invalid-field"),
+        "Correct the invalid front matter field.";
+    KindPathMismatch => "kind_path_mismatch", Some("kind-path-mismatch"),
+        "Make the item kind agree with the directory that holds the file.";
+    DuplicateId => "duplicate_id", Some("duplicate-id"),
+        "Give each item its own ID.";
+    MissingCommentItem => "missing_comment_item", Some("missing-comment-item"),
+        "Restore the item the comment belongs to, or remove the comment.";
+    MissingParent => "missing_parent", Some("missing-parent"),
+        "Restore the parent comment, or remove the reply.";
+    CrossItemParent => "cross_item_parent", Some("cross-item-parent"),
+        "Make the reply name a parent comment on the same item.";
+    CommentCycle => "comment_cycle", Some("comment-cycle"),
+        "Break the cycle between the comments' parents.";
+    SourceUnreadable => "source_unreadable", Some("source"),
+        "Make the file readable, then refresh the index.";
+    ContextProblem => "context_problem", Some("context"),
+        "Repair the item's branch or worktree, then refresh the index.";
+    BranchProblem => "branch_problem", Some("branch"),
+        "Restore the primary branch, then refresh the index.";
+    RetryRequired => "retry_required", Some("retry-required"),
+        "The repository changed while it was being observed; refresh the index again.";
+    PathNotUtf8 => "path_not_utf8", None,
+        "Rename the file so that its path is valid UTF-8.";
+    MetadataNotRepresentable => "metadata_not_representable", None,
+        "Rewrite the metadata so that it can be represented as JSON.";
+    UnknownProblem => "unknown_problem", None,
+        "Refresh the index; if the problem remains, inspect the file.";
+}
+
+impl ProblemCode {
+    /// Maps a code string stored in the index. A string this build does not
+    /// recognize becomes `unknown_problem`.
+    pub fn from_stored(stored: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|code| code.stored() == Some(stored))
+            .unwrap_or(Self::UnknownProblem)
+    }
+}
+
+impl Serialize for ProblemCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Removes what may be a credential from a remote URL.
 ///
 /// A network `scheme://` URL loses its password, query and fragment. Its

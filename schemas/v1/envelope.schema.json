@@ -1,0 +1,76 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "command",
+    "request_id",
+    "operation_id",
+    "outcome",
+    "code",
+    "message",
+    "scope",
+    "effects",
+    "data",
+    "recovery"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "command": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": ["string", "null"]
+    },
+    "operation_id": {
+      "type": ["string", "null"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "noop", "partial", "blocked", "cancelled", "error"]
+    },
+    "code": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "invalid_path",
+        "not_repository",
+        "not_repository_root",
+        "bare_repository",
+        "repository_not_registered",
+        "repository_inaccessible",
+        "invalid_id",
+        "item_not_found",
+        "path_not_found",
+        "key_not_found",
+        "public_key_unavailable",
+        "authority_not_found",
+        "operation_not_found",
+        "index_unavailable",
+        "busy",
+        "internal_error"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "$ref": "effects.schema.json"
+    },
+    "data": {
+      "type": ["object", "null"]
+    },
+    "recovery": {
+      "type": "array",
+      "items": {
+        "$ref": "recovery_action.schema.json"
+      }
+    }
+  }
+}
