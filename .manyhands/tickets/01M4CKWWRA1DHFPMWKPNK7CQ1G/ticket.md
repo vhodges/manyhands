@@ -53,8 +53,12 @@ on the F1 branch:
 - The index holds exactly one row per item ID.
 - An item with its own active context is attributed to that worktree; every
   other item is attributed to primary, whatever copies other worktrees hold.
-- Validation problems follow the same split: an active context reports
-  problems only for its identified item's files, and primary reports the rest.
+- Problems follow the same split: an active context reports problems only for
+  its identified item's files, and primary reports the rest.
+- Primary attributes a file to an item only by that item's ticket and comment
+  directories. A primary document that cannot be parsed carries no ID, so it
+  stays a primary problem even when the item it was has its own context
+  (settled in code review, 2026-10-07).
 - Refresh, rebuild and the snapshot read behave identically with one, two or
   many item worktrees.
 

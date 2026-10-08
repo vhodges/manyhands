@@ -3258,10 +3258,10 @@ fn primary_does_not_report_problems_for_an_item_with_its_own_context() {
 }
 
 #[test]
-fn primary_does_not_report_a_malformed_copy_of_a_document_with_its_own_context() {
+fn primary_reports_an_unattributable_file_but_not_an_active_items_directories() {
     let shared = repository_with_two_contexts_sharing_an_item();
-    // Same path as the worktree's effective copy, but unparseable, so primary
-    // cannot learn its ID; the path alone must identify it.
+    // Unparseable, so primary cannot learn which item this file is. It stays a
+    // primary problem even though it sits at the path of an active item.
     fs::write(
         shared.fixture.root.join("docs/first.md"),
         "---\nmanyhands_managed: true\nnot: [valid\n",
@@ -3287,11 +3287,21 @@ fn primary_does_not_report_a_malformed_copy_of_a_document_with_its_own_context()
     };
 
     assert_one_effective_copy(&shared, &snapshot);
-    assert!(snapshot.problems.is_empty(), "{:?}", snapshot.problems);
+    let paths = snapshot
+        .problems
+        .iter()
+        .filter_map(|problem| problem.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [PathBuf::from("docs/first.md")],
+        "{:?}",
+        snapshot.problems
+    );
 }
 
 #[test]
-fn document_worktree_reports_a_second_source_with_its_item_id() {
+fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
     let shared = repository_with_two_contexts_sharing_an_item();
     let root = shared.fixture.root.canonicalize().unwrap();
     let own = context_worktree(&root, &shared.first);

@@ -130,12 +130,19 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
     };
     let mut sources = Vec::new();
     collect_root_sources(root, &mut sources, &mut problems);
-    let validation = canonical::validate_context(sources.clone());
-    let items = observe_items(repository, root, &sources, &validation);
+    let mut validation = canonical::validate_context(sources.clone());
+    let mut items = observe_items(repository, root, &sources, &validation);
     let active_contexts = match configuration {
         RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
         RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
     };
+    leave_active_items_to_their_contexts(
+        root,
+        &active_contexts,
+        &mut items,
+        &mut validation.problems,
+        &mut problems,
+    );
 
     RootObservation {
         configuration_blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
@@ -521,19 +528,51 @@ fn parse_authoring_branch(
     Some((kind, item_id))
 }
 
-/// Whether a context-relative path belongs to an item: its ticket directory,
-/// its comment directory, or the item's own file. This is the one rule both
-/// for what an item worktree contributes and for what the primary context
-/// leaves to it.
-pub(super) fn item_owns_path(
-    item_id: &canonical::ItemId,
-    item_path: Option<&Path>,
-    relative: &Path,
-) -> bool {
-    let id = item_id.to_string();
-    Some(relative) == item_path
-        || relative.starts_with(Path::new(".manyhands/comments").join(&id))
-        || relative.starts_with(Path::new(".manyhands/tickets").join(&id))
+fn item_ticket_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/tickets").join(item_id.to_string())
+}
+
+fn item_comment_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/comments").join(item_id.to_string())
+}
+
+/// An item with its own active context is observed there. The primary context
+/// neither lists its copy of that item nor reports problems inside that
+/// item's ticket and comment directories.
+///
+/// Only those directories are attributed by path. A primary document that
+/// cannot be parsed carries no ID, so it cannot be attributed to an item and
+/// stays a primary problem.
+fn leave_active_items_to_their_contexts(
+    root: &Path,
+    active_contexts: &[ActiveContextObservation],
+    items: &mut Vec<ObservedItem>,
+    validation_problems: &mut Vec<canonical::ValidationProblem>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    let directories = active_contexts
+        .iter()
+        .filter_map(|context| context.context.item_id.as_ref())
+        .flat_map(|id| [item_ticket_directory(id), item_comment_directory(id)])
+        .collect::<Vec<_>>();
+    if directories.is_empty() {
+        return;
+    }
+    let owned = |relative: &Path| {
+        directories
+            .iter()
+            .any(|directory| relative.starts_with(directory))
+    };
+    items.retain(|item| {
+        !active_contexts
+            .iter()
+            .any(|context| context.context.item_id.as_ref() == Some(&item.id))
+    });
+    validation_problems.retain(|problem| !owned(&problem.path));
+    problems.retain(|problem| match problem {
+        RootObservationProblem::Source { path, .. } => !path.strip_prefix(root).is_ok_and(&owned),
+        _ => true,
+    });
 }
 
 fn authoring_item_matches(
@@ -663,8 +702,7 @@ fn observe_head(
 /// An item worktree is a full checkout, so it also holds a copy of every other
 /// item as of its branch point. Only the item its authoring branch identifies,
 /// and that item's comments, belong to the context; every other item is
-/// observed from the primary context. Collecting only those also keeps the
-/// traversal limits and their problems about this item.
+/// observed from the primary context.
 fn collect_authoring_item_sources(
     root: &Path,
     kind: crate::repository::AuthoringKind,
@@ -672,41 +710,37 @@ fn collect_authoring_item_sources(
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
-    let id = item_id.to_string();
     match kind {
         crate::repository::AuthoringKind::Ticket => {
-            let tickets = root.join(".manyhands/tickets");
-            let directory = tickets.join(&id);
-            if directory_exists(&tickets, problems) && directory_exists(&directory, problems) {
+            let directory = root.join(item_ticket_directory(item_id));
+            if directory_exists(&root.join(".manyhands/tickets"), problems)
+                && directory_exists(&directory, problems)
+            {
                 collect_source(root, &directory.join("ticket.md"), sources, problems);
             }
         }
         crate::repository::AuthoringKind::Document => {
             // A document can be anywhere under docs/, so the tree is scanned
-            // and every source carrying this ID is kept: a second one is a
-            // duplicate the context must report.
+            // and every source carrying this ID is kept. A second one fails
+            // validation as a duplicate, which rejects the context.
+            //
+            // Problems with the rest of the tree are the primary context's to
+            // report, not this one's, so they are not kept. The scan is still
+            // bounded by the whole-tree limits: a document beyond them is not
+            // found, and the context is rejected as missing its item.
             let mut documents = Vec::new();
-            let mut document_problems = Vec::new();
-            collect_documents(root, &mut documents, &mut document_problems);
+            collect_documents(root, &mut documents, &mut Vec::new());
             documents.retain(|(path, source)| {
                 canonical::parse_item(path, source)
                     .is_ok_and(|item| canonical_item_id(&item) == item_id)
             });
-            // Once the document is found, a problem with some other file is
-            // not this context's. A directory problem can still hide a
-            // duplicate, and anything can explain a document that is missing.
-            let found = !documents.is_empty();
-            document_problems.retain(|problem| match problem {
-                RootObservationProblem::Source { path, .. } => !found || path.is_dir(),
-                _ => true,
-            });
             sources.append(&mut documents);
-            problems.append(&mut document_problems);
         }
     }
-    let comments = root.join(".manyhands/comments");
-    let directory = comments.join(&id);
-    if directory_exists(&comments, problems) && directory_exists(&directory, problems) {
+    let directory = root.join(item_comment_directory(item_id));
+    if directory_exists(&root.join(".manyhands/comments"), problems)
+        && directory_exists(&directory, problems)
+    {
         let mut entries = 0;
         collect_comment_directory(root, &directory, &mut entries, sources, problems);
     }
