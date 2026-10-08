@@ -32,6 +32,17 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: F1 and F2.
 
+## Added Scope (2026-10-07)
+
+Ticket relationships and short codes, per the
+[RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
+rebased onto main.
+
+Show each ticket's short code, offer ready and blocked filters with reasons,
+find by short code with every match listed, and show a ticket's dependencies,
+dependents, parent and children read-only.
+
 ## Exit Evidence
 
 Native startup and keyboard onboarding/credential/inspection
