@@ -337,7 +337,10 @@ through, so neither front end scrapes SQLite, Git or the filesystem itself.
 error and recovery-action taxonomy; redaction; and versioned, serializable
 JSON v1 DTOs for every read. Read services cover repository/identity/remote/
 key/host inspection, public-key text, document/ticket/comment reads,
-operation/conflict inspection, index/poll status and ID generation. Ticket
+operation inspection, index/poll status and ID generation. Conflict
+inspection is not in F1: no conflict record exists before Wave 02 Cycle 06,
+so whichever of C4 or D5 is planned first lands that read as a shared-library
+change under track rule 5 (product owner, 2026-10-07). Ticket
 lists carry the approved lifecycle closure filter, independent of status text.
 Ticket DTOs carry `slug`, `parent`, `deps`, readiness and relationship
 problems. Read services cover the ticket relationship queries: ready, blocked,
@@ -708,6 +711,8 @@ a claim those public APIs exist.
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
 | Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. |
+| Conflict inspection read | First of C4 or D5, as a shared-library change | Read-only over the Wave 02 Cycle 06 conflict record; same DTO and redaction rules as F1. |
+| One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
 | Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |

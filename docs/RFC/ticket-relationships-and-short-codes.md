@@ -66,8 +66,9 @@ Manyhands writes `deps` as a YAML block sequence, one ID per line, sorted
 ascending and without duplicates. One entry per line keeps two branches that
 add different dependencies from conflicting on the same line. An empty list is
 written by omitting the field. A hand-written flow sequence or unsorted list is
-read normally and rewritten in the canonical form on the next save that
-changes `deps`.
+read normally and rewritten in the canonical form on the next save of the
+ticket. The serializer re-emits all front matter on every save, so values are
+preserved and formatting is not.
 
 There is one dependency type, and it blocks. Non-blocking link types are
 [future work](#deferred-and-rejected).
@@ -271,11 +272,13 @@ No board, graph canvas or rollup view is required.
 
 Manyhands already keeps a local SQLite index as a cache of canonical files; it
 drives the desktop interface, lists and searches. This RFC extends it and adds
-no second store. The index adds a slug and a readiness state to item discovery, and an edge
-record: source ticket ULID, target ULID, kind (`deps` or `parent`), the context
-it was read from, and whether the target resolved. Edges are rebuilt from
-canonical files on refresh and rebuild, like every other index record. Losing
-the index loses no relationship.
+no second store. The index adds a slug to item discovery and an edge record:
+source ticket, target ULID and kind (`deps` or `parent`). An edge's context
+is its source ticket's context. Whether a target resolves, and a ticket's
+readiness, are computed when read, not stored, because both change when
+another ticket is closed, fetched or merged. Edges are rebuilt from canonical
+files on refresh and rebuild, like every other index record. Losing the index
+loses no relationship.
 
 ## Deferred and rejected
 

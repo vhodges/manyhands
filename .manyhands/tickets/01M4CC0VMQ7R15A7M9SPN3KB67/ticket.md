@@ -19,9 +19,20 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-foundation-01-read-boundary-and-results.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-foundation-01-read-boundary-and-results.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
+- [x] Independent review of the three documents; revisions made.
+- [x] Product owner decides the six open decisions in the Cycle document
+  (2026-10-07, all as recommended).
+- [x] Product owner approves the Cycle, design and plan (2026-10-07).
+- [ ] Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G` (one effective copy per item) merged to main.
+- [ ] Implementation authorization (separate).
+
+Planning artifacts:
+[Cycle](../../../docs/Cycles/wave-03-foundation-01-read-boundary-and-results.md),
+[design](../../../docs/plans/2026-10-07-wave-03-foundation-01-read-boundary-and-results-design.md),
+[plan](../../../docs/plans/2026-10-07-wave-03-foundation-01-read-boundary-and-results-implementation.md).
 
 ## Entry Gate
 
