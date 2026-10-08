@@ -95,7 +95,7 @@ fn concurrent_refreshes_with_the_same_operation_id_have_one_index_owner() {
         release_receive.recv().unwrap();
     });
 
-    let outcomes = std::thread::scope(|scope| {
+    let (first_result, second_result) = std::thread::scope(|scope| {
         let first = scope.spawn(|| {
             enabled
                 .service
@@ -105,27 +105,99 @@ fn concurrent_refreshes_with_the_same_operation_id_have_one_index_owner() {
         let second = scope.spawn(|| {
             second_service.refresh_repository(refresh_request!(&fixture.root, operation_id))
         });
+        // Keep the live owner paused until the contender has checked ownership.
+        // Release it even if the contender panicked, before inspecting results.
+        let second_result = second.join();
         release_send.send(()).unwrap();
-        [
-            first.join().unwrap().unwrap(),
-            second.join().unwrap().unwrap(),
-        ]
+        (first.join(), second_result)
     });
 
+    assert!(matches!(
+        first_result.unwrap().unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+    match second_result.unwrap() {
+        Ok(outcome) => assert!(matches!(outcome, RefreshOutcome::IndexPending { .. })),
+        Err(error) => assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy),
+    }
+    // A bounded Busy is replayed only after both calls stop. Even a successful
+    // contender's replay must not scan or acquire a second indexing epoch.
+    assert!(matches!(
+        second_service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::IndexPending { .. }
+    ));
+    assert_one_completed_refresh_owner(&enabled.service, operation_id);
+}
+
+fn assert_one_completed_refresh_owner(
+    service: &RepositoryService,
+    operation_id: manyhands::repository::OperationId,
+) {
+    let owners = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .prepare(
+                    "SELECT operation_ulid, state, index_owner_epoch FROM operation_records
+                     WHERE action = 'refresh' ORDER BY id",
+                )
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        })
+        .unwrap();
     assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| matches!(outcome, RefreshOutcome::Refreshed { .. }))
-            .count(),
-        1
+        owners,
+        vec![(operation_id.to_string(), "completed".to_owned(), 1)]
     );
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| matches!(outcome, RefreshOutcome::IndexPending { .. }))
-            .count(),
-        1
-    );
+}
+
+#[test]
+fn refresh_replays_the_original_id_after_explicit_git_or_cache_lease_release() {
+    for kind in [LeaseKind::Repository, LeaseKind::CacheWrite] {
+        let fixture = support::born_repository();
+        let enabled = support::enabled_repository(&fixture);
+        let operation_id = support::operation_id();
+        let holder = support::hold_lease_in_child_for_test(
+            &fixture.root,
+            enabled.data_directory.path(),
+            kind,
+            "cache_lease_child",
+        );
+        let blocked = enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id));
+        holder.release();
+
+        let error = blocked.unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+        assert_eq!(error.operation, RepositoryOperation::RefreshRepository);
+        assert!(matches!(
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::Refreshed { .. }
+        ));
+        let replay = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+        replay.set_observation_hook_for_testing(|| panic!("completed replay must not scan"));
+        assert!(matches!(
+            replay
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap(),
+            RefreshOutcome::IndexPending { .. }
+        ));
+        assert_one_completed_refresh_owner(&enabled.service, operation_id);
+    }
 }
 
 #[test]
@@ -2374,18 +2446,27 @@ fn concurrent_corrupt_rebuilds_replace_the_cache_once() {
     });
     let operation_id = support::operation_id();
 
-    std::thread::scope(|scope| {
+    let results = std::thread::scope(|scope| {
         let first = scope
             .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         observed_receive.recv().unwrap();
         let second = scope
             .spawn(|| service.rebuild_repository(rebuild_request!(&fixture.root, operation_id)));
         release_send.send(()).unwrap();
-        first.join().unwrap().unwrap();
-        second.join().unwrap().unwrap();
+        (first.join(), second.join())
     });
 
     assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    for result in [results.0, results.1] {
+        if let Err(error) = result.unwrap() {
+            assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+            service
+                .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+                .unwrap();
+        }
+    }
+    assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    assert_one_completed_rebuild(&service, operation_id);
     assert!(service.repository_snapshot(&fixture.root).is_ok());
 }
 
@@ -2404,7 +2485,7 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
     });
     let operation_id = support::operation_id();
 
-    std::thread::scope(|scope| {
+    let results = std::thread::scope(|scope| {
         let first = scope.spawn(|| {
             first_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         });
@@ -2413,13 +2494,84 @@ fn services_sharing_a_corrupt_cache_replace_it_once() {
             second_service.rebuild_repository(rebuild_request!(&fixture.root, operation_id))
         });
         release_send.send(()).unwrap();
-        first.join().unwrap().unwrap();
-        second.join().unwrap().unwrap();
+        (first.join(), second.join())
     });
 
     assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    for (service, result) in [(&first_service, results.0), (&second_service, results.1)] {
+        if let Err(error) = result.unwrap() {
+            assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+            service
+                .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+                .unwrap();
+        }
+    }
+    assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+    assert_one_completed_rebuild(&first_service, operation_id);
     assert!(first_service.repository_snapshot(&fixture.root).is_ok());
     assert!(second_service.repository_snapshot(&fixture.root).is_ok());
+}
+
+fn assert_one_completed_rebuild(
+    service: &RepositoryService,
+    operation_id: manyhands::repository::OperationId,
+) {
+    let operations = service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .prepare(
+                    "SELECT operation_ulid, state, persisted_context_count FROM operation_records
+                     WHERE action = 'rebuild' ORDER BY id",
+                )
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(
+        operations,
+        vec![(operation_id.to_string(), "completed".to_owned(), 1)]
+    );
+}
+
+#[test]
+fn corrupt_rebuild_replays_the_original_id_after_explicit_git_or_cache_lease_release() {
+    for kind in [LeaseKind::Repository, LeaseKind::CacheWrite] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let operation_id = support::operation_id();
+        let holder = support::hold_lease_in_child_for_test(
+            &fixture.root,
+            data.path(),
+            kind,
+            "cache_lease_child",
+        );
+        let blocked = service.rebuild_repository(rebuild_request!(&fixture.root, operation_id));
+        holder.release();
+
+        let error = blocked.unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+        assert_eq!(error.operation, RepositoryOperation::RebuildRepository);
+        service
+            .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+            .unwrap();
+        service
+            .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+            .unwrap();
+        assert_eq!(corrupt_diagnostic_count(data.path()), 1);
+        assert_one_completed_rebuild(&service, operation_id);
+        assert!(service.repository_snapshot(&fixture.root).is_ok());
+    }
 }
 
 #[test]

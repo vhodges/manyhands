@@ -28,6 +28,8 @@ use crate::canonical;
 mod coordination;
 mod discovery;
 pub mod keys;
+#[cfg(unix)]
+mod native_resolution;
 mod read;
 mod recovery;
 mod remote;
@@ -6088,28 +6090,8 @@ fn owned_parent_directory(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<std::fs::File, RepositoryError> {
-    let root_name = CString::new(root.as_os_str().as_bytes()).map_err(|_| {
-        authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::InvalidPath,
-            "root cannot contain NUL",
-        )
-    })?;
-    let root_fd = unsafe {
-        libc::open(
-            root_name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if root_fd < 0 {
-        return Err(RepositoryError::io(
-            operation,
-            Some(repository_root.to_owned()),
-            std::io::Error::last_os_error(),
-        ));
-    }
-    let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    let mut directory = native_resolution::open_directory(root)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
     let parent = relative.parent().ok_or_else(|| {
         authoring_error(
             operation,
@@ -6354,16 +6336,43 @@ fn owned_file_bytes_with_mode_policy(
             "an owned path needs a parent directory",
         )
     })?;
-    if !root.join(parent_path).exists() {
-        return Ok(None);
+    let mut parent = native_resolution::open_directory(root)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    for component in parent_path.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths must be relative",
+            ));
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths cannot contain NUL",
+            )
+        })?;
+        parent = match native_resolution::open_directory_at(&parent, &name) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(RepositoryError::io(
+                    operation,
+                    Some(repository_root.to_owned()),
+                    error,
+                ));
+            }
+        };
     }
-    let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
     let leaf = owned_leaf(relative, operation, repository_root)?;
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
             leaf.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
@@ -6459,7 +6468,7 @@ fn owned_file_image_at(
         libc::openat(
             parent.as_raw_fd(),
             leaf.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
@@ -6537,7 +6546,41 @@ fn renameat2(
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn renameat2(
+    source_parent: &std::fs::File,
+    source: &CString,
+    destination_parent: &std::fs::File,
+    destination: &CString,
+    flags: libc::c_uint,
+) -> std::io::Result<()> {
+    let flags = match flags {
+        1 => libc::RENAME_EXCL,
+        2 => libc::RENAME_SWAP,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid rename mode",
+            ));
+        }
+    };
+    let result = unsafe {
+        libc::renameatx_np(
+            source_parent.as_raw_fd(),
+            source.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination.as_ptr(),
+            flags,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn renameat2(
     _source_parent: &std::fs::File,
     _source: &CString,
@@ -6625,29 +6668,8 @@ fn owned_resolution_temp_directory(
         // real synchronization always uses the private Git directory below.
         return owned_parent_directory(root, relative, true, operation, repository_root);
     };
-    let directory = CString::new(repository.path().as_os_str().as_bytes()).map_err(|_| {
-        authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::ExternalChange,
-            "private Git directory has an invalid path",
-        )
-    })?;
-    let fd = unsafe {
-        libc::open(
-            directory.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::ExternalChange,
-            "could not safely open the private Git directory for guarded replacement",
-        ));
-    }
-    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    native_resolution::open_directory(repository.path())
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))
 }
 
 #[cfg(unix)]

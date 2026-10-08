@@ -29,6 +29,9 @@ static RESOLUTION_INDEX_EFFECT_HOOK: std::sync::OnceLock<ResolutionIndexLockHook
 #[cfg(test)]
 static RESOLUTION_INDEX_RETIRE_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
     std::sync::OnceLock::new();
+#[cfg(test)]
+static RESOLUTION_REF_REFRESH_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 fn set_resolution_index_lock_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
@@ -81,6 +84,15 @@ fn set_resolution_index_retire_hook(root: PathBuf, hook: impl FnOnce() + Send + 
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-retire hook")
+        .push((root, Box::new(hook)));
+}
+
+#[cfg(test)]
+fn set_resolution_ref_refresh_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+    RESOLUTION_REF_REFRESH_HOOK
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .expect("resolution ref-refresh hook")
         .push((root, Box::new(hook)));
 }
 
@@ -139,7 +151,6 @@ use std::{
     path::Path,
 };
 
-#[cfg(target_os = "linux")]
 #[cfg(unix)]
 use std::{
     ffi::CString,
@@ -562,7 +573,7 @@ fn index_file_image_at(
         libc::openat(
             parent.as_raw_fd(),
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 {
@@ -572,7 +583,7 @@ fn index_file_image_at(
     let metadata = file
         .metadata()
         .map_err(|_| SynchronizationError::ExternalChange)?;
-    if !metadata.is_file() {
+    if !metadata.is_file() || metadata.mode() & 0o111 != 0 {
         return Err(SynchronizationError::ExternalChange);
     }
     let mut bytes = Vec::new();
@@ -597,7 +608,7 @@ fn index_image_is_exact(observed: &IndexFileImage, expected: &IndexFileImage) ->
         && observed.bytes == expected.bytes
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn index_entries_match(left: &git2::Index, right: &git2::Index) -> bool {
     left.len() == right.len()
         && left.iter().zip(right.iter()).all(|(left, right)| {
@@ -605,7 +616,7 @@ fn index_entries_match(left: &git2::Index, right: &git2::Index) -> bool {
         })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn approved_index_extensions(raw: &[u8]) -> Result<(), SynchronizationError> {
     const HEADER_LEN: usize = 12;
     const ENTRY_PREFIX_LEN: usize = 62;
@@ -681,7 +692,7 @@ fn approved_index_extensions(raw: &[u8]) -> Result<(), SynchronizationError> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn index_leaf_present(
     parent: &std::fs::File,
     name: &CString,
@@ -704,36 +715,54 @@ fn index_leaf_present(
     }
 }
 
-#[cfg(target_os = "linux")]
-fn index_from_descriptor(file: &std::fs::File) -> Result<git2::Index, SynchronizationError> {
-    git2::Index::open(Path::new(&format!("/proc/self/fd/{}", file.as_raw_fd())))
-        .map_err(|_| SynchronizationError::ExternalChange)
+#[cfg(unix)]
+fn index_from_private_path(
+    file: &std::fs::File,
+    path: &Path,
+) -> Result<git2::Index, SynchronizationError> {
+    let parent_path = path.parent().ok_or(SynchronizationError::ExternalChange)?;
+    let parent = native_resolution::open_directory(parent_path)
+        .map_err(|_| SynchronizationError::ExternalChange)?;
+    let name = CString::new(
+        path.file_name()
+            .ok_or(SynchronizationError::ExternalChange)?
+            .as_bytes(),
+    )
+    .map_err(|_| SynchronizationError::ExternalChange)?;
+    let stamp = ref_log_stamp(file)?;
+    let (current, _) = index_file_image_at(&parent, &name)?;
+    if ref_log_stamp(&current)? != stamp {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    // Stock libgit2 requires a pathname. Cooperative private namespace plus
+    // descriptor pre/post proof works on macOS too; no /proc filesystem required.
+    let index = git2::Index::open(path).map_err(|_| SynchronizationError::ExternalChange)?;
+    let (current, _) = index_file_image_at(&parent, &name)?;
+    if ref_log_stamp(file)? != stamp
+        || ref_log_stamp(&current)? != stamp
+        || !native_resolution::directory_matches(parent_path, &parent)
+            .map_err(|_| SynchronizationError::ExternalChange)?
+    {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    Ok(index)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn fixed_index_name(name: &str) -> CString {
     CString::new(name).expect("fixed artifact role")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn open_index_directory(
     parent: &std::fs::File,
     name: &CString,
 ) -> Result<std::fs::File, SynchronizationError> {
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(SynchronizationError::ExternalChange);
-    }
-    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    native_resolution::open_directory_at(parent, name)
+        .map_err(|_| SynchronizationError::ExternalChange)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn write_private_index_file(
     parent: &std::fs::File,
     name: &str,
@@ -744,7 +773,7 @@ fn write_private_index_file(
         libc::openat(
             parent.as_raw_fd(),
             name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
             0o600,
         )
     };
@@ -752,11 +781,10 @@ fn write_private_index_file(
         return Err(SynchronizationError::ExternalChange);
     }
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    if !file
+    let metadata = file
         .metadata()
-        .map_err(|_| SynchronizationError::ExternalChange)?
-        .is_file()
-    {
+        .map_err(|_| SynchronizationError::ExternalChange)?;
+    if !metadata.is_file() || metadata.mode() & 0o111 != 0 {
         return Err(SynchronizationError::ExternalChange);
     }
     file.set_len(0)
@@ -765,7 +793,7 @@ fn write_private_index_file(
         .map_err(|_| SynchronizationError::ExternalChange)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn backend_lock_present_at(
     parent: &std::fs::File,
     relative: &Path,
@@ -797,7 +825,7 @@ fn backend_lock_present_at(
 
 /// Relevant files-backend lock roles have no application-created durable
 /// provenance. In particular, a loose-ref lock may guard partial reflog appends.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn refuse_ambiguous_resolution_backend_locks(
     repository: &git2::Repository,
 ) -> Result<(), SynchronizationError> {
@@ -824,18 +852,7 @@ fn refuse_ambiguous_resolution_backend_locks(
             ],
         ),
     ] {
-        let root = CString::new(root.as_os_str().as_bytes())
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let fd = unsafe {
-            libc::open(
-                root.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        let parent = unsafe { std::fs::File::from_raw_fd(fd) };
+        let parent = open_ref_log_root(root)?;
         for role in roles {
             if backend_lock_present_at(&parent, &role)? {
                 return Err(SynchronizationError::RecoveryRequired);
@@ -845,45 +862,15 @@ fn refuse_ambiguous_resolution_backend_locks(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const RESOLUTION_REF_MESSAGE: &str = "manyhands resolution";
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn open_ref_log_root(path: &Path) -> Result<std::fs::File, SynchronizationError> {
-    if !path.is_absolute() {
-        return Err(SynchronizationError::RecoveryRequired);
-    }
-    let mut directory = open_index_directory_root()?;
-    for component in path.components() {
-        match component {
-            std::path::Component::RootDir => {}
-            std::path::Component::Normal(name) => {
-                let name = CString::new(name.as_bytes())
-                    .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                directory = open_index_directory(&directory, &name)
-                    .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            }
-            _ => return Err(SynchronizationError::RecoveryRequired),
-        }
-    }
-    Ok(directory)
+    native_resolution::open_directory(path).map_err(|_| SynchronizationError::RecoveryRequired)
 }
 
-#[cfg(target_os = "linux")]
-fn open_index_directory_root() -> Result<std::fs::File, SynchronizationError> {
-    let fd = unsafe {
-        libc::open(
-            c"/".as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(SynchronizationError::RecoveryRequired);
-    }
-    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
-}
-
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn open_ref_log_file(
     root: &Path,
     role: &Path,
@@ -924,10 +911,87 @@ fn open_ref_log_file(
     Err(SynchronizationError::RecoveryRequired)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 type RefLogStamp = (u64, u64, u64, u32, i64, i64, i64, i64);
 
-#[cfg(target_os = "linux")]
+/// Ordinary file and containing-directory barriers for a fixed Git role. An
+/// absent loose object may already live in a pack/alternate; that backend's
+/// storage ordering remains governed by its existing fsync policy. No config
+/// or global libgit2 option is changed, and no exhaustive power-loss guarantee
+/// (including macOS full device-cache flush) is inferred from these barriers.
+#[cfg(unix)]
+fn sync_git_role(root: &Path, role: &Path) -> Result<(), SynchronizationError> {
+    if let Some(file) = open_ref_log_file(root, role)? {
+        file.sync_all()
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    }
+    let mut directories = vec![open_ref_log_root(root)?];
+    let parent = role
+        .parent()
+        .ok_or(SynchronizationError::RecoveryRequired)?;
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(SynchronizationError::RecoveryRequired);
+        };
+        let name =
+            CString::new(name.as_bytes()).map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let directory = directories
+            .last()
+            .ok_or(SynchronizationError::RecoveryRequired)?;
+        if !index_leaf_present(directory, &name)? {
+            break;
+        }
+        directories.push(open_index_directory(directory, &name)?);
+    }
+    for directory in directories.iter().rev() {
+        directory
+            .sync_all()
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_resolution_candidate(
+    repository: &git2::Repository,
+    candidate: git2::Oid,
+    resolutions: &[(merge::ConflictPathToken, merge::RedactedConflictBytes)],
+) -> Result<(), SynchronizationError> {
+    let commit = repository
+        .find_commit(candidate)
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let tree = commit
+        .tree()
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let mut objects = std::collections::BTreeSet::from([candidate, tree.id()]);
+    // Tree serialization can create nested tree objects, not just the root.
+    tree.walk(git2::TreeWalkMode::PostOrder, |_, entry| {
+        if entry.kind() == Some(git2::ObjectType::Tree) {
+            objects.insert(entry.id());
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    for (token, _) in resolutions {
+        let path =
+            std::str::from_utf8(&token.path).map_err(|_| SynchronizationError::RecoveryRequired)?;
+        objects.insert(
+            tree.get_path(Path::new(path))
+                .map_err(|_| SynchronizationError::RecoveryRequired)?
+                .id(),
+        );
+    }
+    for oid in objects {
+        let oid = oid.to_string();
+        sync_git_role(
+            repository.commondir(),
+            Path::new(&format!("objects/{}/{}", &oid[..2], &oid[2..])),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn ref_log_stamp(file: &std::fs::File) -> Result<RefLogStamp, SynchronizationError> {
     let meta = file
         .metadata()
@@ -947,7 +1011,7 @@ fn ref_log_stamp(file: &std::fs::File) -> Result<RefLogStamp, SynchronizationErr
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RefLogImage {
@@ -958,14 +1022,14 @@ struct RefLogImage {
     identity: Option<[u64; 2]>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl RefLogImage {
     fn same_image(&self, other: &Self) -> bool {
         self.present == other.present && self.length == other.length && self.digest == other.digest
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct RefLogObservation {
     file: Option<std::fs::File>,
     stamp: Option<RefLogStamp>,
@@ -973,7 +1037,7 @@ struct RefLogObservation {
     image: RefLogImage,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl RefLogObservation {
     fn read(root: &Path, role: &Path) -> Result<Self, SynchronizationError> {
         let mut file = open_ref_log_file(root, role)?;
@@ -1029,7 +1093,7 @@ impl RefLogObservation {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn resolution_log_policy(repository: &git2::Repository) -> Result<u8, SynchronizationError> {
     let config = repository
         .config()
@@ -1052,7 +1116,7 @@ fn resolution_log_policy(repository: &git2::Repository) -> Result<u8, Synchroniz
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct RefLogSnapshot {
     branch: String,
     policy: u8,
@@ -1060,8 +1124,25 @@ struct RefLogSnapshot {
     logs: [RefLogObservation; 2], // fixed roles: common branch, target-worktree HEAD
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl RefLogSnapshot {
+    fn storage_barrier(&self, repository: &git2::Repository) -> Result<(), SynchronizationError> {
+        self.revalidate(repository)?;
+        for (root, role) in [
+            (repository.commondir(), PathBuf::from(&self.branch)),
+            (repository.commondir(), PathBuf::from("packed-refs")),
+            (repository.path(), PathBuf::from("HEAD")),
+            (
+                repository.commondir(),
+                PathBuf::from(format!("logs/{}", self.branch)),
+            ),
+            (repository.path(), PathBuf::from("logs/HEAD")),
+        ] {
+            sync_git_role(root, &role)?;
+        }
+        self.revalidate(repository)
+    }
+
     fn read(repository: &git2::Repository) -> Result<Self, SynchronizationError> {
         let head = repository
             .find_reference("HEAD")
@@ -1163,9 +1244,36 @@ impl RefLogSnapshot {
             .zip(images)
             .all(|(log, image)| log.image.same_image(image))
     }
+
+    // Caller holds the reacquired common-Git lease. A refreshed snapshot must
+    // authenticate the frozen target, not merely its own current branch/images.
+    fn validate_final_proof(
+        &self,
+        repository: &git2::Repository,
+        proof: &RefLogManifest,
+        candidate: git2::Oid,
+    ) -> Result<(), SynchronizationError> {
+        self.revalidate(repository)?;
+        if !self.matches(
+            proof
+                .intended
+                .as_ref()
+                .ok_or(SynchronizationError::RecoveryRequired)?,
+        ) || self.policy != proof.policy
+            || self.roots != proof.roots
+            || *blake3::hash(self.branch.as_bytes()).as_bytes() != proof.branch_digest
+            || repository
+                .refname_to_id("HEAD")
+                .map_err(|_| SynchronizationError::RecoveryRequired)?
+                != candidate
+        {
+            return Err(SynchronizationError::RecoveryRequired);
+        }
+        Ok(())
+    }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn resolution_signer_digest(
     signature: &git2::Signature<'_>,
 ) -> Result<[u8; 32], SynchronizationError> {
@@ -1191,7 +1299,7 @@ fn resolution_signer_digest(
     Ok(*hash.finalize().as_bytes())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RefLogManifest {
@@ -1215,7 +1323,7 @@ struct RefLogManifest {
     baseline_manifest_digest: Option<[u8; 32]>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Clone, Copy)]
 struct RefLogContext<'a> {
     service: &'a RepositoryService,
@@ -1225,7 +1333,7 @@ struct RefLogContext<'a> {
     input: [u8; 32],
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn ref_manifest_image_at(
     parent: &std::fs::File,
     name: &CString,
@@ -1260,7 +1368,7 @@ fn ref_manifest_image_at(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl ResolutionIndexLock {
     fn ref_manifest(
         &self,
@@ -1515,7 +1623,7 @@ impl ResolutionIndexLock {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn apply_resolution_ref(
     repository: &git2::Repository,
     context: RefLogContext<'_>,
@@ -1537,6 +1645,8 @@ fn apply_resolution_ref(
     transaction
         .lock_ref(&snapshot.branch)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    #[cfg(test)]
+    tests::process_death_boundary(root, "ref-locked");
     snapshot.revalidate(repository)?;
     if repository
         .refname_to_id(&snapshot.branch)
@@ -1575,6 +1685,8 @@ fn apply_resolution_ref(
             "intent"
         },
     )?;
+    #[cfg(test)]
+    tests::process_death_boundary(root, "ref-intent");
     transaction
         .set_target(
             &snapshot.branch,
@@ -1585,31 +1697,38 @@ fn apply_resolution_ref(
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
     transaction
         .commit()
-        .map_err(|_| SynchronizationError::RecoveryRequired)
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    #[cfg(test)]
+    tests::process_death_boundary(root, "ref-committed");
+    Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const RESOLUTION_MERGE_MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
 
 /// Operation-private hard-link anchor and durable immutable identity establish
 /// ownership, not sentinel contents. Never exchanged with or installed as index.
 struct ResolutionIndexLock {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     parent: std::fs::File,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     staging: std::fs::File,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
+    parent_path: PathBuf,
+    #[cfg(unix)]
+    staging_path: PathBuf,
+    #[cfg(unix)]
     baseline: IndexFileImage,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     sentinel: IndexFileImage,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     artifact: state::ResolutionIndexArtifact,
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(test, unix))]
     workdir: PathBuf,
 }
 
 impl ResolutionIndexLock {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn acquire(
         repository: &git2::Repository,
         service: &RepositoryService,
@@ -1617,24 +1736,16 @@ impl ResolutionIndexLock {
         owner: &RemoteReservation,
         attempt: OperationId,
     ) -> Result<Self, SynchronizationError> {
-        let gitdir = CString::new(repository.path().as_os_str().as_bytes())
+        let parent_path = repository.path().to_owned();
+        let parent = native_resolution::open_directory(&parent_path)
             .map_err(|_| SynchronizationError::ExternalChange)?;
-        let fd = unsafe {
-            libc::open(
-                gitdir.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(SynchronizationError::ExternalChange);
-        }
-        let parent = unsafe { std::fs::File::from_raw_fd(fd) };
         let retained = state::with_transaction(service, root, |tx, id| {
             let record = state::read_operation(tx, id, owner.operation_id())?
                 .ok_or_else(state::recovery_required)?;
             state::resolution_index_artifact(tx, &record, attempt)
         })?;
         let stage_name = fixed_index_name(&format!(".manyhands-resolution-{attempt}"));
+        let staging_path = parent_path.join(format!(".manyhands-resolution-{attempt}"));
         let lock_name = fixed_index_name("index.lock");
         if retained.is_none() && index_leaf_present(&parent, &lock_name)? {
             // No journaled anchor means no authority over any live lock.
@@ -1661,11 +1772,12 @@ impl ResolutionIndexLock {
         let artifact = if let Some(artifact) = retained {
             artifact
         } else {
-            let (file, baseline) = index_file_image_at(&parent, &fixed_index_name("index"))?;
+            let (_, baseline) = index_file_image_at(&parent, &fixed_index_name("index"))?;
             approved_index_extensions(&baseline.bytes)?;
             // Locked libgit2 validates checksum and the supported v2 format before effects.
-            index_from_descriptor(&file)?;
             write_private_index_file(&staging, "baseline", &baseline.bytes)?;
+            let (file, _) = index_file_image_at(&staging, &fixed_index_name("baseline"))?;
+            index_from_private_path(&file, &staging_path.join("baseline"))?;
             let sentinel_bytes = format!(
                 "manyhands-resolution-sentinel-v2\n{}\n{attempt}\n",
                 owner.operation_id()
@@ -1712,6 +1824,8 @@ impl ResolutionIndexLock {
         let mut held = Self {
             parent,
             staging,
+            parent_path,
+            staging_path,
             baseline,
             sentinel,
             artifact,
@@ -1745,6 +1859,8 @@ impl ResolutionIndexLock {
                 return Err(SynchronizationError::ExternalChange);
             }
             held.verify_sentinel()?;
+            #[cfg(test)]
+            tests::process_death_boundary(&held.workdir, "sentinel-linked");
             held.parent
                 .sync_all()
                 .and_then(|()| held.staging.sync_all())
@@ -1772,7 +1888,7 @@ impl ResolutionIndexLock {
         Ok(held)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn acquire(
         _repository: &git2::Repository,
         _service: &RepositoryService,
@@ -1783,8 +1899,22 @@ impl ResolutionIndexLock {
         Err(SynchronizationError::ExternalChange)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
+    fn verify_namespace(&self) -> Result<(), SynchronizationError> {
+        if native_resolution::directory_matches(&self.parent_path, &self.parent)
+            .map_err(|_| SynchronizationError::ExternalChange)?
+            && native_resolution::directory_matches(&self.staging_path, &self.staging)
+                .map_err(|_| SynchronizationError::ExternalChange)?
+        {
+            Ok(())
+        } else {
+            Err(SynchronizationError::ExternalChange)
+        }
+    }
+
+    #[cfg(unix)]
     fn verify_sentinel(&self) -> Result<(), SynchronizationError> {
+        self.verify_namespace()?;
         let (_, anchor) = index_file_image_at(&self.staging, &fixed_index_name("sentinel"))?;
         let (_, live) = index_file_image_at(&self.parent, &fixed_index_name("index.lock"))?;
         if index_image_is_exact(&anchor, &self.sentinel)
@@ -1796,7 +1926,7 @@ impl ResolutionIndexLock {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn authoritative_index(&self) -> Result<git2::Index, SynchronizationError> {
         self.verify_sentinel()?;
         // Private preparation is disposable until output identity is journaled.
@@ -1812,26 +1942,24 @@ impl ResolutionIndexLock {
             }
         }
         write_private_index_file(&self.staging, "index", &self.baseline.bytes)?;
-        git2::Index::open(&PathBuf::from(format!(
-            "/proc/self/fd/{}/index",
-            self.staging.as_raw_fd()
-        )))
-        .map_err(|_| SynchronizationError::ExternalChange)
+        let (file, _) = index_file_image_at(&self.staging, &fixed_index_name("index"))?;
+        index_from_private_path(&file, &self.staging_path.join("index"))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn authoritative_index(&self) -> Result<git2::Index, SynchronizationError> {
         Err(SynchronizationError::ExternalChange)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn persisted_images_match(&self) -> Result<(), SynchronizationError> {
         self.verify_sentinel()?;
         self.installed_image_matches()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn installed_image_matches(&self) -> Result<(), SynchronizationError> {
+        self.verify_namespace()?;
         let (_, image) = index_file_image_at(&self.parent, &fixed_index_name("index"))?;
         match self.artifact.output {
             Some((device, inode, digest))
@@ -1845,12 +1973,12 @@ impl ResolutionIndexLock {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn persisted_images_match(&self) -> Result<(), SynchronizationError> {
         Err(SynchronizationError::ExternalChange)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn persist(
         &mut self,
         source: &mut git2::Index,
@@ -1861,6 +1989,9 @@ impl ResolutionIndexLock {
         attempt: OperationId,
     ) -> Result<(), SynchronizationError> {
         self.verify_sentinel()?;
+        if source.path() != Some(self.staging_path.join("index").as_path()) {
+            return Err(SynchronizationError::ExternalChange);
+        }
         let (_, original) = index_file_image_at(&self.parent, &fixed_index_name("index"))?;
         if original.bytes != self.baseline.bytes
             || (original.device, original.inode) != self.artifact.baseline_identity
@@ -1872,6 +2003,8 @@ impl ResolutionIndexLock {
         source
             .write()
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        #[cfg(test)]
+        tests::process_death_boundary(&self.workdir, "scratch-serialized");
         let (file, prepared) = index_file_image_at(&self.staging, &fixed_index_name("index"))?;
         file.sync_all()
             .and_then(|()| self.staging.sync_all())
@@ -1882,7 +2015,8 @@ impl ResolutionIndexLock {
                 .workdir()
                 .ok_or(SynchronizationError::ExternalChange)?,
         );
-        let parsed = index_from_descriptor(&file)?;
+        self.verify_namespace()?;
+        let parsed = index_from_private_path(&file, &self.staging_path.join("index"))?;
         if !index_entries_match(&parsed, source) || parsed.has_conflicts() {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -1909,7 +2043,7 @@ impl ResolutionIndexLock {
         self.persisted_images_match()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn install_prepared(&self) -> Result<(), SynchronizationError> {
         self.verify_sentinel()?;
         let (_, current) = index_file_image_at(&self.parent, &fixed_index_name("index"))?;
@@ -1952,6 +2086,8 @@ impl ResolutionIndexLock {
         {
             return Err(SynchronizationError::ExternalChange);
         }
+        #[cfg(test)]
+        tests::process_death_boundary(&self.workdir, "index-install-linked");
         if unsafe {
             libc::renameat(
                 self.staging.as_raw_fd(),
@@ -1963,6 +2099,8 @@ impl ResolutionIndexLock {
         {
             return Err(SynchronizationError::ExternalChange);
         }
+        #[cfg(test)]
+        tests::process_death_boundary(&self.workdir, "index-renamed");
         self.parent
             .sync_all()
             .and_then(|()| self.staging.sync_all())
@@ -1970,7 +2108,7 @@ impl ResolutionIndexLock {
         self.persisted_images_match()
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn persist(
         &mut self,
         _source: &mut git2::Index,
@@ -1983,8 +2121,9 @@ impl ResolutionIndexLock {
         Err(SynchronizationError::ExternalChange)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn metadata_matches(&self, allow_absent: bool) -> Result<(), SynchronizationError> {
+        self.verify_namespace()?;
         for (ordinal, member) in RESOLUTION_MERGE_MEMBERS.iter().enumerate() {
             let name = fixed_index_name(member);
             let present = index_leaf_present(&self.parent, &name)?;
@@ -2000,7 +2139,7 @@ impl ResolutionIndexLock {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn retire_metadata(&self) -> Result<(), SynchronizationError> {
         self.persisted_images_match()?;
         self.metadata_matches(true)?;
@@ -2013,15 +2152,22 @@ impl ResolutionIndexLock {
                 if unsafe { libc::unlinkat(self.parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
                     return Err(SynchronizationError::ExternalChange);
                 }
+                #[cfg(test)]
+                tests::process_death_boundary(
+                    &self.workdir,
+                    &format!("metadata-{member}-unlinked"),
+                );
                 self.parent
                     .sync_all()
                     .map_err(|_| SynchronizationError::ExternalChange)?;
+                #[cfg(test)]
+                tests::process_death_boundary(&self.workdir, &format!("metadata-{member}-barrier"));
             }
         }
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     fn retire(
         &mut self,
         service: &RepositoryService,
@@ -2041,6 +2187,7 @@ impl ResolutionIndexLock {
         }
         #[cfg(test)]
         run_resolution_index_retire_hook(&self.workdir);
+        self.verify_namespace()?;
         if index_leaf_present(&self.parent, &fixed_index_name("index.lock"))? {
             if self.artifact.phase == "released" {
                 return Err(SynchronizationError::ExternalChange);
@@ -2058,20 +2205,24 @@ impl ResolutionIndexLock {
             {
                 return Err(SynchronizationError::ExternalChange);
             }
+            #[cfg(test)]
+            tests::process_death_boundary(&self.workdir, "sentinel-unlinked");
         }
         self.parent
             .sync_all()
             .map_err(|_| SynchronizationError::ExternalChange)?;
+        #[cfg(test)]
+        tests::process_death_boundary(&self.workdir, "sentinel-release-barrier");
         service.advance_synchronization_index_artifact(root, owner, attempt, "released")?;
         self.artifact.phase = "released".into();
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn retire_metadata(&self) -> Result<(), SynchronizationError> {
         Err(SynchronizationError::ExternalChange)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn retire(
         &mut self,
         _service: &RepositoryService,
@@ -3626,7 +3777,7 @@ impl RepositoryService {
                 return Ok(Some(merge::ResolveSynchronizationOutcome::ValidationFailed));
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         let mut ref_snapshot = RefLogSnapshot::read(&repository)?;
         let mut lease =
             repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
@@ -3647,14 +3798,14 @@ impl RepositoryService {
         if Self::conflict_configuration(root)? != request.observation.configuration {
             return Err(SynchronizationError::ExternalChange);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         refuse_ambiguous_resolution_backend_locks(&repository)?;
         let mut index_lock =
             ResolutionIndexLock::acquire(&repository, self, root, &owner, request.attempt_id)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         index_lock.metadata_matches(phase == "applied")?;
         let current_head = local_oid(&repository)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         let ref_proof = {
             ref_snapshot.revalidate(&repository)?;
             let commit = repository
@@ -3673,7 +3824,7 @@ impl RepositoryService {
                 &commit.committer(),
             )?
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         if (current_head == candidate
             && !ref_snapshot.matches(
                 ref_proof
@@ -3689,7 +3840,7 @@ impl RepositoryService {
             if phase != "candidate_prepared" || current_head != step.intent.local_oid {
                 return Err(SynchronizationError::ExternalChange);
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             if index_lock.artifact.output.is_none() {
                 // A recorded candidate never re-enters candidate creation or
                 // identity preflight. Rebuild only its private index preparation.
@@ -3768,7 +3919,7 @@ impl RepositoryService {
                     request.attempt_id,
                 )?;
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             index_lock.install_prepared()?;
             let commit = repository
                 .find_commit(candidate)
@@ -3831,7 +3982,7 @@ impl RepositoryService {
                 .name()
                 .ok_or(SynchronizationError::RecoveryRequired)?
                 .to_owned();
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             {
                 if name != ref_snapshot.branch {
                     return Err(SynchronizationError::RecoveryRequired);
@@ -3852,29 +4003,21 @@ impl RepositoryService {
                 // Full image hashing stays outside the short common-Git lease;
                 // the reservation and stable sentinel continue fencing writers.
                 drop(lease);
+                #[cfg(test)]
+                run_resolution_index_hook(&RESOLUTION_REF_REFRESH_HOOK, root);
                 ref_snapshot = RefLogSnapshot::read(&repository)?;
                 lease =
                     repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(unix))]
             {
                 let _ = name;
                 return Err(SynchronizationError::RecoveryRequired);
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            ref_snapshot.revalidate(&repository)?;
-            if !ref_snapshot.matches(
-                ref_proof
-                    .intended
-                    .as_ref()
-                    .ok_or(SynchronizationError::RecoveryRequired)?,
-            ) || ref_snapshot.policy != ref_proof.policy
-                || ref_snapshot.roots != ref_proof.roots
-            {
-                return Err(SynchronizationError::RecoveryRequired);
-            }
+            ref_snapshot.validate_final_proof(&repository, &ref_proof, candidate)?;
             index_lock.installed_image_matches()?;
             index_lock.metadata_matches(phase == "applied")?;
         }
@@ -3928,8 +4071,14 @@ impl RepositoryService {
         let tree_id = tree.id();
         drop(tree);
         drop(commit);
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         refuse_ambiguous_resolution_backend_locks(&repository)?;
+        #[cfg(unix)]
+        {
+            sync_resolution_candidate(&repository, candidate, &request.resolutions)?;
+            ref_snapshot.storage_barrier(&repository)?;
+            ref_snapshot.validate_final_proof(&repository, &ref_proof, candidate)?;
+        }
         self.advance_synchronization_resolution_ref_effect(
             root,
             &owner,
@@ -3955,7 +4104,7 @@ impl RepositoryService {
             RepositoryOperation::RepositorySnapshot,
             root,
         )?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         if index_lock.artifact.phase == "published" {
             index_lock.retire_metadata()?;
         } else {
@@ -4027,7 +4176,7 @@ impl RepositoryService {
         }
         // This is deliberately taken before acquiring the durable attempt: a
         // failed local preflight must leave no attempt metadata to resume.
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         let mut ref_snapshot = RefLogSnapshot::read(&preflight_repository)?;
         let preflight_digest = resolution_preflight(&preflight_repository, &request.resolutions)?;
 
@@ -4053,7 +4202,7 @@ impl RepositoryService {
         };
         let mut repository = Self::inspect_conflict_target(&root, &inspection.target)?;
         let lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         ref_snapshot.revalidate(&repository)?;
         if local_oid(&repository)? != request.observation.head
             || Self::conflict_configuration(&root)? != request.observation.configuration
@@ -4100,7 +4249,7 @@ impl RepositoryService {
         };
         let signature = git2::Signature::new(&identity.0, &identity.1, &git2::Time::new(0, 0))
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         resolution_signer_digest(&signature)?;
         let mut input = blake3::Hasher::new();
         input.update(b"manyhands-resolution-v1\0");
@@ -4192,7 +4341,7 @@ impl RepositoryService {
         }
         let mut index_lock =
             ResolutionIndexLock::acquire(&repository, self, &root, &owner, request.attempt_id)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             index_lock.metadata_matches(false)?;
             ref_snapshot.revalidate(&repository)?;
@@ -4330,13 +4479,15 @@ impl RepositoryService {
                 &[&head, &incoming],
             )
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        #[cfg(unix)]
+        sync_resolution_candidate(&repository, candidate, &request.resolutions)?;
         self.prepare_synchronization_resolution_candidate(
             &root,
             &owner,
             request.attempt_id,
             candidate,
         )?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         let ref_proof = index_lock.bind_ref_transition(
             RefLogContext {
                 service: self,
@@ -4416,11 +4567,11 @@ impl RepositoryService {
         {
             return Err(SynchronizationError::ExternalChange);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         index_lock.metadata_matches(false)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         refuse_ambiguous_resolution_backend_locks(&repository)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             if name != ref_snapshot.branch {
                 return Err(SynchronizationError::RecoveryRequired);
@@ -4439,7 +4590,7 @@ impl RepositoryService {
                 &ref_proof,
             )?;
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = name;
             return Err(SynchronizationError::RecoveryRequired);
@@ -4452,27 +4603,19 @@ impl RepositoryService {
             &root,
         )?;
         drop(lease);
-        #[cfg(target_os = "linux")]
+        #[cfg(test)]
+        run_resolution_index_hook(&RESOLUTION_REF_REFRESH_HOOK, &root);
+        #[cfg(unix)]
         {
             ref_snapshot = RefLogSnapshot::read(&repository)?;
         }
         let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            ref_snapshot.revalidate(&repository)?;
-            if !ref_snapshot.matches(
-                ref_proof
-                    .intended
-                    .as_ref()
-                    .ok_or(SynchronizationError::RecoveryRequired)?,
-            ) || ref_snapshot.policy != ref_proof.policy
-                || ref_snapshot.roots != ref_proof.roots
-            {
-                return Err(SynchronizationError::RecoveryRequired);
-            }
+            ref_snapshot.validate_final_proof(&repository, &ref_proof, candidate)?;
         }
         index_lock.persisted_images_match()?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         index_lock.metadata_matches(false)?;
         if foreign_resolution_metadata_present(&repository)
             || Self::conflict_configuration(&root)? != request.observation.configuration
@@ -4519,8 +4662,13 @@ impl RepositoryService {
         drop(tree);
         drop(incoming);
         drop(head);
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         refuse_ambiguous_resolution_backend_locks(&repository)?;
+        #[cfg(unix)]
+        {
+            ref_snapshot.storage_barrier(&repository)?;
+            ref_snapshot.validate_final_proof(&repository, &ref_proof, candidate)?;
+        }
         self.advance_synchronization_resolution_ref_effect(
             &root,
             &owner,
