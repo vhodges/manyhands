@@ -116,19 +116,93 @@ pub fn insert_current_observation(data_directory: &Path) {
         .unwrap();
 }
 
+/// A manual synchronization of the one registered repository, created at
+/// `STORED_AT` and updated 100 seconds later: of the primary branch, or of
+/// `item`'s branch when one is given as its kind and ID. It has made no
+/// change yet, so it carries no checkpoint. `configure_remote` must have
+/// run.
+pub fn insert_remote_synchronization(
+    data_directory: &Path,
+    id: &str,
+    item: Option<(&str, &str)>,
+    phase: &str,
+    completed_step: Option<&str>,
+    outcome: Option<&str>,
+) {
+    let branch = item.map(|(kind, item)| format!("manyhands/{kind}/{item}"));
+    items::index(data_directory)
+        .execute(
+            "INSERT INTO remote_operation_records (
+                repository_id, operation_ulid, configuration_generation, remote_name,
+                primary_branch, primary_ref, primary_tracking_ref, context_ref,
+                context_tracking_ref, kind, item_id, local_branch, action, priority, phase,
+                completed_step, created_at, updated_at, outcome
+             ) SELECT id, ?1, 0, 'origin', 'main', 'refs/heads/main',
+                      'refs/remotes/origin/main', ?2, ?3, ?4, ?5, ?6, ?7, 'manual', ?8, ?9,
+                      ?10, ?11, ?12
+                 FROM repositories",
+            params![
+                id,
+                branch.as_ref().map(|branch| format!("refs/heads/{branch}")),
+                branch
+                    .as_ref()
+                    .map(|branch| format!("refs/remotes/origin/{branch}")),
+                item.map(|(kind, _)| kind),
+                item.map(|(_, item)| item),
+                branch.as_deref().unwrap_or("main"),
+                if item.is_some() {
+                    "synchronize_context"
+                } else {
+                    "synchronize_primary"
+                },
+                phase,
+                completed_step,
+                STORED_AT,
+                STORED_AT + 100,
+                outcome
+            ],
+        )
+        .unwrap();
+}
+
+/// The commit a completed synchronization published in these fixtures.
+pub const PUBLISHED_OID: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// A synchronization of the primary branch that published `PUBLISHED_OID`
+/// and has not yet handed it to the index. `configure_remote` must have
+/// run.
+pub fn insert_remote_index_pending(data_directory: &Path, id: &str) {
+    items::index(data_directory)
+        .execute(
+            "INSERT INTO remote_operation_records (
+                repository_id, operation_ulid, configuration_generation, remote_name,
+                primary_branch, primary_ref, primary_tracking_ref, local_branch, action,
+                priority, phase, completed_step, created_at, updated_at, outcome,
+                sync_checkpoint, expected_oid, local_oid, primary_tracking_oid, push_oid,
+                push_advertised_oid, authoritative_kind, authoritative_oid, index_pending
+             ) SELECT id, ?1, 0, 'origin', 'main', 'refs/heads/main',
+                      'refs/remotes/origin/main', 'main', 'synchronize_primary', 'manual',
+                      'completed', 'before_discovery', ?2, ?3, 'completed',
+                      'discovery_pending', ?4, ?4, ?4, ?4, ?4, 'published', ?4, 1
+                 FROM repositories",
+            params![id, STORED_AT, STORED_AT + 100, PUBLISHED_OID],
+        )
+        .unwrap();
+}
+
 /// What a key-material operation's paths and label hold in these fixtures;
 /// no read may publish it.
 pub const KEY_MATERIAL_SENTINEL: &str = "SENTINEL-4e7a";
 
-/// A key-material operation for a key of its own. `action` is `generate`
-/// or `delete`.
+/// A key-material operation for a key of its own, whose ID is returned.
+/// `action` is `generate` or `delete`.
 pub fn insert_key_material(
     data_directory: &Path,
     id: &str,
     action: &str,
     phase: &str,
     failure_code: Option<&str>,
-) {
+) -> String {
     let key_id = manyhands::repository::SharedKeyId::new().to_string();
     let label = (action == "generate").then(|| format!("label {KEY_MATERIAL_SENTINEL}"));
     items::index(data_directory)
@@ -149,4 +223,5 @@ pub fn insert_key_material(
             ],
         )
         .unwrap();
+    key_id
 }

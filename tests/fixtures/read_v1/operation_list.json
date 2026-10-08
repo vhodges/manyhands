@@ -7,54 +7,72 @@
       {
         "action": "generate_key",
         "completed_step": null,
-        "context": null,
         "failure_code": "source_missing",
         "family": "key_material",
         "item_id": null,
+        "key_id": "<key-id>",
         "next_action": "inspect_retained_files",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
         "scope": "application",
         "state": "retained_for_inspection",
-        "updated_at": null
+        "updated_at": null,
+        "worktree": null
       },
       {
         "action": "poll",
         "completed_step": null,
-        "context": null,
         "failure_code": null,
         "family": "remote",
         "item_id": null,
+        "key_id": null,
         "next_action": null,
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1",
         "scope": "repository",
         "state": "reserved",
-        "updated_at": "2023-11-14T22:15:00Z"
+        "updated_at": "2023-11-14T22:15:00Z",
+        "worktree": null
       },
       {
         "action": "save_document",
         "completed_step": "authoring_destination_observed",
-        "context": "<repository>",
         "failure_code": null,
         "family": "local",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+        "key_id": null,
         "next_action": "resume",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA2",
         "scope": "repository",
         "state": "authoring_destination_observed",
-        "updated_at": "2023-11-14T22:13:20Z"
+        "updated_at": "2023-11-14T22:13:20Z",
+        "worktree": "<repository>"
+      },
+      {
+        "action": "synchronize_context",
+        "completed_step": "before_fetch",
+        "failure_code": null,
+        "family": "remote",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "key_id": null,
+        "next_action": "resume",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+        "scope": "repository",
+        "state": "interrupted",
+        "updated_at": "2023-11-14T22:15:00Z",
+        "worktree": null
       },
       {
         "action": "refresh",
         "completed_step": null,
-        "context": null,
         "failure_code": null,
         "family": "local",
         "item_id": null,
+        "key_id": null,
         "next_action": "resume",
         "operation_id": null,
         "scope": "repository",
         "state": "failed",
-        "updated_at": "2023-11-14T22:13:20Z"
+        "updated_at": "2023-11-14T22:13:20Z",
+        "worktree": null
       }
     ]
   },

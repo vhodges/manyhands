@@ -732,6 +732,14 @@ fn repository_with_operations() -> (support::TestRepository, support::EnabledRep
         None,
     );
     operations::insert_remote_poll(data, operations::OPERATION_B, "reserved", None, None);
+    operations::insert_remote_synchronization(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+        None,
+        "interrupted",
+        Some("before_fetch"),
+        None,
+    );
     operations::insert_key_material(
         data,
         operations::OPERATION_A,
@@ -771,7 +779,7 @@ fn every_status_read(
         outcome(
             service
                 .list_operations(repo)
-                .map(|list| assert_eq!(list.items.len(), 3)),
+                .map(|list| assert_eq!(list.items.len(), 4)),
         ),
         show(operations::OPERATION_A),
         show(operations::OPERATION_B),

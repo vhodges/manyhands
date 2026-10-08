@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 unfinished operations",
-  "description": "Ordered by operation ID; operations with no ID follow, in the order they were stored.",
+  "description": "The operations with work outstanding, ordered by operation ID; operations with no ID follow, in the order they were stored. A poll that ended is never listed. One ID can appear twice, as a remote synchronization and as the local refresh that hands it to the index.",
   "type": "object",
   "additionalProperties": false,
   "required": ["items", "complete"],

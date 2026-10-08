@@ -1796,7 +1796,8 @@ fn poll_status_matches_its_schema_and_golden() {
 
 /// A repository with an operation in each store: a key generation kept for
 /// inspection, the poll that holds the reservation, a document save part of
-/// the way through, and a refresh from before operations had IDs.
+/// the way through, an interrupted synchronization of a ticket, and a
+/// refresh from before operations had IDs.
 fn repository_with_operations() -> (
     support::TestRepository,
     support::EnabledRepository,
@@ -1822,6 +1823,14 @@ fn repository_with_operations() -> (
         )
         .unwrap();
     operations::insert_remote_poll(data, OPERATION_B, "reserved", None, None);
+    operations::insert_remote_synchronization(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+        Some(("ticket", items::TICKET_A)),
+        "interrupted",
+        Some("before_fetch"),
+        None,
+    );
     operations::insert_key_material(
         data,
         OPERATION_A,
@@ -1847,14 +1856,21 @@ fn operation_list_matches_its_schema_and_golden() {
             OperationFamily::KeyMaterial,
             OperationFamily::Remote,
             OperationFamily::Local,
+            OperationFamily::Remote,
             OperationFamily::Local,
         ]
     );
+    // The key is a new one each run.
+    let key_id = list.items[0].key_id.as_deref().unwrap();
+    assert!(SharedKeyId::parse(key_id).is_ok());
     golden::assert_contract(
         &ContractCase {
             name: "operation_list",
             data_schema: Some("operation_list.schema.json"),
-            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            placeholders: &[
+                (repo.root().to_str().unwrap(), "<repository>"),
+                (key_id, "<key-id>"),
+            ],
             sentinels: &[
                 operations::KEY_MATERIAL_SENTINEL,
                 enabled.data_directory.path().to_str().unwrap(),
@@ -1950,7 +1966,7 @@ fn every_stored_operation_shape_matches_the_operation_schema() {
         );
     }
 
-    assert_eq!(shapes.len(), 6);
+    assert_eq!(shapes.len(), 7);
     for operation in shapes {
         let value = serde_json::to_value(&operation).unwrap();
         schema::check_published("operation.schema.json", &value).unwrap();

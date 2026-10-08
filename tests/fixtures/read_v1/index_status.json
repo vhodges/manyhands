@@ -8,15 +8,16 @@
       {
         "action": "refresh",
         "completed_step": null,
-        "context": null,
         "failure_code": null,
         "family": "local",
         "item_id": null,
+        "key_id": null,
         "next_action": "resume",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
         "scope": "repository",
         "state": "failed",
-        "updated_at": "2023-11-14T22:13:20Z"
+        "updated_at": "2023-11-14T22:13:20Z",
+        "worktree": null
       }
     ],
     "problem_count": 2,

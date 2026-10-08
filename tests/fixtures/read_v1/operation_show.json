@@ -4,15 +4,16 @@
   "data": {
     "action": "poll",
     "completed_step": "after_advertisement",
-    "context": null,
     "failure_code": "protocol_rejected",
     "family": "remote",
     "item_id": null,
+    "key_id": null,
     "next_action": null,
     "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA5",
     "scope": "repository",
     "state": "failed",
-    "updated_at": "2023-11-14T22:15:00Z"
+    "updated_at": "2023-11-14T22:15:00Z",
+    "worktree": null
   },
   "effects": {
     "checkpoint": "not_requested",

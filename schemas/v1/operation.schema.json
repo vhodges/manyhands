@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 stored operation",
-  "description": "One operation as its store last recorded it. state and completed_step are the store's own lower_snake_case names; completed means the operation finished.",
+  "description": "One operation as its store last recorded it. state and completed_step are the store's own lower_snake_case names. completed is the last state, and an operation can be completed and still be listed with a next_action: a remote synchronization whose index hand-off is pending, or a key generation that has since lost its files. worktree is an absolute path and is set only for a local operation; key_id only for a key-material operation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,8 @@
     "completed_step",
     "next_action",
     "item_id",
-    "context",
+    "key_id",
+    "worktree",
     "updated_at",
     "failure_code"
   ],
@@ -72,7 +73,10 @@
     "item_id": {
       "type": ["string", "null"]
     },
-    "context": {
+    "key_id": {
+      "type": ["string", "null"]
+    },
+    "worktree": {
       "type": ["string", "null"]
     },
     "updated_at": {

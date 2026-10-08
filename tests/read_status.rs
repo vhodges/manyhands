@@ -8,10 +8,11 @@ use std::fs;
 
 use manyhands::{
     repository::{
-        IndexStatusState, OperationAction, OperationDto, OperationFamily, OperationId,
-        OperationNextAction, OperationScope, PollingInterval, PollingOutcome, RecoveryInspection,
-        RefreshOutcome, RemoteOperationSafePoint, RemoteOutcomeCategory, RemoteReservation,
-        RemoteReservationOutcome, RemoteSafePointOutcome, ResolvedRepository,
+        AuthoringKind, IndexState, IndexStatusState, OperationAction, OperationDto,
+        OperationFamily, OperationId, OperationNextAction, OperationScope, PollingInterval,
+        PollingOutcome, RecoveryInspection, RefreshOutcome, RemoteOperationAction,
+        RemoteOperationSafePoint, RemoteOperationTarget, RemoteOutcomeCategory, RemoteRefPlan,
+        RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome, ResolvedRepository,
         keys::{KeyMaterialAction, RecoveryAction},
     },
     results::{OperationFailureCode, Outcome, ProblemCode, ResultCode},
@@ -19,12 +20,13 @@ use manyhands::{
 use serde_json::{Value, json};
 use support::{
     items::{
-        self, DOCUMENT_A, contract_repository, degraded_service, document_source,
+        self, DOCUMENT_A, TICKET_A, contract_repository, degraded_service, document_source,
         never_refreshed_repository, refresh, refresh_completely, write,
     },
     operations::{
         self, KEY_MATERIAL_SENTINEL, OPERATION_A, OPERATION_ABSENT, OPERATION_B, OPERATION_C,
-        STORED_AT_TEXT, configure_remote, insert_key_material, insert_local, insert_remote_poll,
+        STORED_AT_TEXT, configure_remote, insert_key_material, insert_local,
+        insert_remote_index_pending, insert_remote_poll, insert_remote_synchronization,
         poll_target,
     },
 };
@@ -443,7 +445,7 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
         Some("authoring_checkpoint_observed"),
     );
     insert_local(data, None, "refresh", "failed", None);
-    insert_key_material(
+    let key_id = insert_key_material(
         data,
         OPERATION_A,
         "generate",
@@ -493,7 +495,8 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "completed_step": null,
             "next_action": "inspect_retained_files",
             "item_id": null,
-            "context": null,
+            "key_id": key_id,
+            "worktree": null,
             "updated_at": null,
             "failure_code": "source_missing",
         })
@@ -517,7 +520,8 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "completed_step": "authoring_checkpoint_observed",
             "next_action": "resume",
             "item_id": null,
-            "context": null,
+            "key_id": null,
+            "worktree": null,
             "updated_at": STORED_AT_TEXT,
             "failure_code": null,
         })
@@ -893,7 +897,8 @@ fn a_stored_operation_that_cannot_be_valid_fails_the_read() {
         .execute(
             "INSERT INTO key_material_operations
                 (operation_id, key_id, action, private_key_path, public_key_path, phase)
-             VALUES (?1, 'key', 'delete', 'private', 'public', 'pair-written')",
+             VALUES (?1, '01ARZ3NDEKTSV4RRFFQ69G5FK0', 'delete', 'private', 'public',
+                     'pair-written')",
             [OPERATION_A],
         )
         .unwrap();
@@ -907,6 +912,17 @@ fn a_stored_operation_that_cannot_be_valid_fails_the_read() {
     ] {
         assert_eq!(error.code(), ResultCode::InternalError);
     }
+    // And one for a key whose ID is not one.
+    items::index(data)
+        .execute(
+            "UPDATE key_material_operations SET phase = 'prepared', key_id = 'not-a-key'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        service.list_operations(&repo).unwrap_err().code(),
+        ResultCode::InternalError
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -1002,5 +1018,590 @@ fn a_remote_operation_shown_by_id_reports_each_stored_phase_and_step() {
             .as_deref(),
         Some(OPERATION_C)
     );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn index_status_is_stale_when_the_index_holds_an_item_twice() {
+    let (fixture, enabled) = contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    assert_eq!(
+        enabled.service.index_status(&repo).unwrap().state,
+        IndexStatusState::Current
+    );
+    // What a refresh leaves part of the way through: the same item in the
+    // primary context and in an item worktree's.
+    let index = items::index(enabled.data_directory.path());
+    index
+        .execute(
+            "INSERT INTO contexts (repository_id, kind, branch, worktree_path, head_oid)
+             SELECT repository_id, 'active', 'manyhands/document/x',
+                    worktree_path || '/.manyhands/worktrees/x', head_oid
+               FROM contexts",
+            [],
+        )
+        .unwrap();
+    index
+        .execute(
+            "INSERT INTO discovered_items (
+                context_id, item_id, kind, canonical_path, title, activity_at, activity_source
+             ) SELECT (SELECT MAX(id) FROM contexts), item_id, kind, canonical_path, title,
+                      activity_at, activity_source
+                 FROM discovered_items WHERE item_id = ?1",
+            [DOCUMENT_A],
+        )
+        .unwrap();
+    drop(index);
+
+    let status = enabled.service.index_status(&repo).unwrap();
+
+    assert_eq!(status.state, IndexStatusState::Stale);
+    assert_eq!(status.context_count, Some(2));
+    // Still four items: the one held twice is one item.
+    assert_eq!(status.item_count, Some(4));
+    assert_eq!(
+        enabled.service.list_documents(&repo).unwrap().index.state,
+        IndexState::Stale
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_remote_operation_that_can_be_resumed_is_listed_and_a_poll_that_ended_is_not() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = |last: char| format!("01ARZ3NDEKTSV4RRFFQ69G5FR{last}");
+    // Synchronizations a restart is given the reservation for.
+    insert_remote_synchronization(
+        data,
+        &id('2'),
+        Some(("ticket", TICKET_A)),
+        "interrupted",
+        Some("before_fetch"),
+        None,
+    );
+    insert_remote_synchronization(
+        data,
+        &id('1'),
+        None,
+        "failed",
+        Some("before_fetch"),
+        Some("transport_unavailable"),
+    );
+    // One that published and has not reached the index.
+    insert_remote_index_pending(data, &id('0'));
+    // One that was cancelled, which is final, and the same with
+    // reconciliation left to do.
+    insert_remote_synchronization(
+        data,
+        &id('3'),
+        None,
+        "cancelled",
+        Some("before_fetch"),
+        Some("cancelled"),
+    );
+    insert_remote_synchronization(
+        data,
+        &id('4'),
+        Some(("document", DOCUMENT_A)),
+        "cancelled",
+        Some("before_fetch"),
+        Some("cancelled"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE remote_operation_records SET reconciliation_required = 1
+              WHERE operation_ulid = ?1",
+            [id('4')],
+        )
+        .unwrap();
+    // Polls that ended, of each kind.
+    insert_remote_poll(
+        data,
+        &id('5'),
+        "failed",
+        Some("before_transport"),
+        Some("transport_unavailable"),
+    );
+    insert_remote_poll(
+        data,
+        &id('6'),
+        "interrupted",
+        Some("after_advertisement"),
+        None,
+    );
+    insert_remote_poll(
+        data,
+        &id('7'),
+        "completed",
+        Some("after_batch_commit"),
+        Some("completed"),
+    );
+
+    let list = service.list_operations(&repo).unwrap();
+
+    let listed: Vec<_> = list
+        .items
+        .iter()
+        .map(|operation| {
+            (
+                operation.operation_id.clone().unwrap(),
+                operation.action,
+                operation.state.as_str(),
+                operation.item_id.as_deref(),
+                operation.next_action,
+            )
+        })
+        .collect();
+    let resume = Some(OperationNextAction::Resume);
+    assert_eq!(
+        listed,
+        [
+            (
+                id('0'),
+                OperationAction::SynchronizePrimary,
+                "completed",
+                None,
+                resume
+            ),
+            (
+                id('1'),
+                OperationAction::SynchronizePrimary,
+                "failed",
+                None,
+                resume
+            ),
+            (
+                id('2'),
+                OperationAction::SynchronizeContext,
+                "interrupted",
+                Some(TICKET_A),
+                resume
+            ),
+            (
+                id('4'),
+                OperationAction::SynchronizeContext,
+                "cancelled",
+                Some(DOCUMENT_A),
+                None
+            ),
+        ]
+    );
+    assert!(
+        list.items
+            .iter()
+            .all(|operation| operation.family == OperationFamily::Remote
+                && operation.worktree.is_none()
+                && operation.key_id.is_none())
+    );
+    assert_eq!(
+        list.items[1].failure_code,
+        Some(OperationFailureCode::TransportUnavailable)
+    );
+    assert_eq!(
+        list.items[0].completed_step.as_deref(),
+        Some("before_discovery")
+    );
+    // The commit a synchronization published is not an operation's to give.
+    let text = serde_json::to_string(&list).unwrap();
+    assert!(!text.contains(operations::PUBLISHED_OID), "{text}");
+    // None of them holds the reservation.
+    assert_eq!(
+        service.polling_status(&repo).unwrap().active_operation_id,
+        None
+    );
+    // Those not listed are still found, and offer nothing.
+    for last in ['3', '5', '6', '7'] {
+        let shown = service
+            .show_operation(&repo, operations::operation_id(&id(last)))
+            .unwrap();
+        assert_eq!(shown.next_action, None, "{shown:?}");
+    }
+
+    // However many polls end, the list is what it was.
+    for number in 0..40 {
+        insert_remote_poll(
+            data,
+            &format!("01ARZ3NDEKTSV4RRFFQ69G5F{number:02}"),
+            if number % 2 == 0 {
+                "failed"
+            } else {
+                "interrupted"
+            },
+            Some("before_transport"),
+            (number % 2 == 0).then_some("protocol_rejected"),
+        );
+    }
+    assert_eq!(service.list_operations(&repo).unwrap(), list);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_remote_operation_about_an_item_names_it() {
+    let (fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let cases = [
+        (RemoteOperationAction::Promote, OperationAction::Promote),
+        (RemoteOperationAction::Close, OperationAction::Close),
+        (
+            RemoteOperationAction::SynchronizeContext,
+            OperationAction::SynchronizeContext,
+        ),
+    ];
+    for (remote_action, action) in cases {
+        let id = OperationId::new();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            remote_action,
+            AuthoringKind::Document,
+            items::item_id(DOCUMENT_A),
+        )
+        .unwrap();
+        reserved(
+            service
+                .reserve_remote_operation(&fixture.root, id, &target)
+                .unwrap(),
+        );
+
+        let list = service.list_operations(&repo).unwrap();
+        let [operation] = &list.items[..] else {
+            panic!("{list:?}");
+        };
+        assert_eq!(operation.operation_id, Some(id.to_string()));
+        assert_eq!(operation.action, action);
+        assert_eq!(operation.item_id.as_deref(), Some(DOCUMENT_A));
+        assert_eq!(operation.state, "reserved");
+        // It holds the reservation; whether anything runs it is not stored.
+        assert_eq!(operation.next_action, None);
+        assert_eq!(&service.show_operation(&repo, id).unwrap(), operation);
+
+        items::index(data)
+            .execute(
+                "UPDATE remote_operation_records SET phase = 'cancelled'",
+                [],
+            )
+            .unwrap();
+        assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_synchronization_and_its_index_refresh_share_an_id_and_are_both_listed() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = operations::operation_id(OPERATION_A);
+    insert_remote_index_pending(data, OPERATION_A);
+    // Until the hand-off begins there is only the remote operation.
+    let alone = service.list_operations(&repo).unwrap();
+    assert_eq!(alone.items.len(), 1);
+    assert_eq!(alone.items[0].family, OperationFamily::Remote);
+    assert_eq!(service.show_operation(&repo, id).unwrap(), alone.items[0]);
+
+    // The refresh that hands it to the index, as synchronization begins it.
+    insert_local(data, Some(OPERATION_A), "refresh", "indexing", None);
+    items::index(data)
+        .execute("UPDATE operation_records SET target = ''", [])
+        .unwrap();
+
+    let list = service.list_operations(&repo).unwrap();
+    let pair: Vec<_> = list
+        .items
+        .iter()
+        .map(|operation| {
+            (
+                operation.operation_id.as_deref(),
+                operation.family,
+                operation.action,
+                operation.next_action,
+            )
+        })
+        .collect();
+    let resume = Some(OperationNextAction::Resume);
+    assert_eq!(
+        pair,
+        [
+            (
+                Some(OPERATION_A),
+                OperationFamily::Local,
+                OperationAction::Refresh,
+                resume
+            ),
+            (
+                Some(OPERATION_A),
+                OperationFamily::Remote,
+                OperationAction::SynchronizePrimary,
+                resume
+            ),
+        ]
+    );
+    // Both are listed, so the local one is shown.
+    assert_eq!(
+        service.show_operation(&repo, id).unwrap().family,
+        OperationFamily::Local
+    );
+
+    // The refresh completed and the remote record has not been told.
+    items::index(data)
+        .execute("UPDATE operation_records SET state = 'completed'", [])
+        .unwrap();
+    let shown = service.show_operation(&repo, id).unwrap();
+    assert_eq!(shown.family, OperationFamily::Remote);
+    assert_eq!(shown.next_action, resume);
+    assert_eq!(service.list_operations(&repo).unwrap().items, [shown]);
+
+    // Told, nothing is left: the local record is shown, as finished.
+    items::index(data)
+        .execute("UPDATE remote_operation_records SET index_pending = 0", [])
+        .unwrap();
+    assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    let shown = service.show_operation(&repo, id).unwrap();
+    assert_eq!(
+        (shown.family, shown.next_action),
+        (OperationFamily::Local, None)
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_local_synchronization_is_reported_as_one_and_its_target_is_not_published() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    let oid = operations::PUBLISHED_OID;
+    let cases = [
+        (
+            OPERATION_A,
+            format!("synchronization-local-v1/primary/{oid}"),
+            OperationAction::SynchronizePrimary,
+            None,
+        ),
+        (
+            OPERATION_B,
+            format!("synchronization-local-v1/ticket/{TICKET_A}/{oid}"),
+            OperationAction::SynchronizeContext,
+            Some(TICKET_A),
+        ),
+        (
+            OPERATION_C,
+            format!("synchronization-local-v1/document/{DOCUMENT_A}/{oid}"),
+            OperationAction::SynchronizeContext,
+            Some(DOCUMENT_A),
+        ),
+        // Any other target leaves the record what it says it is.
+        (
+            "01ARZ3NDEKTSV4RRFFQ69G5FA3",
+            format!("{SENTINEL}/docs/a.md"),
+            OperationAction::Refresh,
+            None,
+        ),
+        (
+            "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+            String::new(),
+            OperationAction::Refresh,
+            None,
+        ),
+    ];
+    for (id, target, _, _) in &cases {
+        insert_local(data, Some(id), "refresh", "created", None);
+        items::index(data)
+            .execute(
+                "UPDATE operation_records SET target = ?1 WHERE operation_ulid = ?2",
+                [target.as_str(), id],
+            )
+            .unwrap();
+    }
+
+    let list = service.list_operations(&repo).unwrap();
+
+    assert_eq!(list.items.len(), cases.len());
+    for (operation, (id, _, action, item)) in list.items.iter().zip(&cases) {
+        assert_eq!(operation.operation_id.as_deref(), Some(*id));
+        assert_eq!(operation.family, OperationFamily::Local);
+        assert_eq!(operation.action, *action, "{id}");
+        assert_eq!(operation.item_id.as_deref(), *item, "{id}");
+        assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+        assert_eq!(
+            &service
+                .show_operation(&repo, operations::operation_id(id))
+                .unwrap(),
+            operation
+        );
+    }
+    let text = serde_json::to_string(&list).unwrap();
+    for hidden in [oid, SENTINEL, "synchronization-local"] {
+        assert!(!text.contains(hidden), "{text}");
+    }
+
+    // A target under that prefix that synchronization did not write, and
+    // one on a record that is not a refresh.
+    let damaged = [
+        (
+            "refresh",
+            "synchronization-local-v1/primary/not-an-oid".to_owned(),
+        ),
+        ("refresh", format!("synchronization-local-v1/ticket/{oid}")),
+        (
+            "refresh",
+            format!("synchronization-local-v1/comment/{TICKET_A}/{oid}"),
+        ),
+        ("refresh", "synchronization-local-v1/".to_owned()),
+        (
+            "save_ticket",
+            format!("synchronization-local-v1/primary/{oid}"),
+        ),
+    ];
+    for (action, target) in damaged {
+        items::index(data)
+            .execute(
+                "UPDATE operation_records SET action = ?1, target = ?2
+                  WHERE operation_ulid = ?3",
+                [action, target.as_str(), OPERATION_A],
+            )
+            .unwrap();
+        for error in [
+            service.list_operations(&repo).map(drop).unwrap_err(),
+            service
+                .show_operation(&repo, operations::operation_id(OPERATION_A))
+                .map(drop)
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.code(), ResultCode::InternalError, "{target}");
+        }
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_local_operation_carries_the_item_and_working_tree_its_record_holds() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    let worktree = repo.root().join(".manyhands/worktrees").join(TICKET_A);
+    insert_local(
+        data,
+        Some(OPERATION_A),
+        "save_ticket",
+        "worktree_observed",
+        Some("worktree_observed"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE operation_records SET item_id = ?1, context_path = ?2",
+            [TICKET_A, worktree.to_str().unwrap()],
+        )
+        .unwrap();
+
+    let list = service.list_operations(&repo).unwrap();
+
+    let [operation] = &list.items[..] else {
+        panic!("{list:?}");
+    };
+    assert_eq!(operation.item_id.as_deref(), Some(TICKET_A));
+    assert_eq!(operation.worktree.as_deref(), worktree.to_str());
+    assert_eq!(operation.key_id, None);
+    let value = serde_json::to_value(operation).unwrap();
+    assert_eq!(value["worktree"], json!(worktree.to_str().unwrap()));
+    assert!(value.get("context").is_none());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn polling_status_reads_only_the_policy_and_the_current_observation() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    // An observation that is no longer the current one is not the latest.
+    items::index(data)
+        .execute(
+            "INSERT INTO remote_observation_batches (
+                repository_id, remote_name, primary_branch, configuration_generation,
+                observed_at, is_current
+             ) SELECT id, 'origin', 'main', 0, 5, 0 FROM repositories",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        service.polling_status(&repo).unwrap().latest_observed_at,
+        None
+    );
+
+    // A current observation made for a remote the policy no longer names
+    // is one the snapshot refuses whole. Its time is still what is stored.
+    operations::insert_current_observation(data);
+    items::index(data)
+        .execute(
+            "UPDATE remote_observation_batches SET remote_name = 'elsewhere'
+              WHERE is_current = 1",
+            [],
+        )
+        .unwrap();
+    assert!(service.remote_snapshot(repo.root()).is_err());
+    let status = service.polling_status(&repo).unwrap();
+    assert_eq!(status.latest_observed_at.as_deref(), Some(STORED_AT_TEXT));
+    assert_eq!(status.interval_seconds, 300);
+
+    // A policy that cannot be one fails the read, and says nothing more.
+    let invalid = [
+        "interval_seconds = 5",
+        "automatic_backoff_seconds = 7",
+        "enabled = 2",
+        "latest_outcome = 'gone fishing'",
+    ];
+    for change in invalid {
+        let index = items::index(data);
+        index
+            .execute_batch(&format!(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE remote_polling_state SET {change};"
+            ))
+            .unwrap();
+        drop(index);
+        let error = service.polling_status(&repo).unwrap_err();
+        assert_eq!(error.code(), ResultCode::InternalError, "{change}");
+        assert_eq!(error.scope.repository.as_deref(), repo.root().to_str());
+        assert!(error.recovery.is_empty());
+        items::index(data)
+            .execute_batch(
+                "UPDATE remote_polling_state
+                    SET interval_seconds = 300, automatic_backoff_seconds = NULL,
+                        enabled = 1, latest_outcome = NULL;",
+            )
+            .unwrap();
+        service.polling_status(&repo).unwrap();
+    }
+
+    // So does a registration with no policy at all.
+    items::index(data)
+        .execute("DELETE FROM remote_polling_state", [])
+        .unwrap();
+    assert_eq!(
+        service.polling_status(&repo).unwrap_err().code(),
+        ResultCode::InternalError
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_index_problem_with_an_empty_stored_path_has_none() {
+    let (_fixture, enabled, repo) = enabled();
+    items::index(enabled.data_directory.path())
+        .execute(
+            "INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at)
+             SELECT repository_id, id, '', 'context', ?1, 0 FROM contexts",
+            [SENTINEL],
+        )
+        .unwrap();
+
+    let status = enabled.service.index_status(&repo).unwrap();
+
+    let [problem] = &status.problems[..] else {
+        panic!("{:?}", status.problems);
+    };
+    assert_eq!(problem.code, ProblemCode::ContextProblem);
+    assert_eq!(problem.path, None);
+    assert_eq!(problem.worktree.as_deref(), repo.root().to_str());
     assert_git_transport_uninitialized();
 }
