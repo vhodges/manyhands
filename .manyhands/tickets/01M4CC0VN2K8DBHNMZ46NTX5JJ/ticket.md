@@ -1,0 +1,40 @@
+---
+manyhands_managed: true
+manyhands_kind: ticket
+id: "01M4CC0VN2K8DBHNMZ46NTX5JJ"
+title: "Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure"
+type: "cycle"
+status: "open"
+project: "manyhands"
+team: "core"
+wave: "03"
+cycle: "D5"
+---
+
+Complete deliberate desktop collaboration lifecycles.
+
+Desktop track of [Wave 03](../../../docs/Waves/wave-03-dogfooding.md#d5-desktop-conflict-recovery-promotion-and-closure).
+The Wave document owns this Cycle's scope, exclusions and track rules.
+
+## Planning
+
+- [ ] Create `docs/Cycles/wave-03-desktop-05-recovery-and-completion.md`.
+- [ ] Create the design and implementation plan and record their checkpoints
+  as ticket comments.
+
+## Entry Gate
+
+Wave 02 Cycles 06, 09 and 10 have review and verification evidence on the main
+branch used for this Cycle before its implementation plan is approved. An
+unmerged or in-flight Wave 02 branch does not satisfy this.
+The Wave 03 entry gate applies, including the refreshed API audit for the
+capabilities this Cycle consumes.
+
+Wave 03 dependencies: F1, F2 and D1–D4.
+
+## Exit Evidence
+
+Native keyboard conflict and completion journeys; stale
+resolution/confirmation, dirty primary, local-only close/promotion, remote
+cleanup rejection, interruption and cleanup-only replay. Preserved drafts and
+contexts remain inspectable and no retry repeats a merge or closure checkpoint.
