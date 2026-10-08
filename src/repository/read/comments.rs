@@ -1,9 +1,11 @@
 //! The comment threads of one item.
 //!
 //! The index says which copy of the item is the effective one and which
-//! comment files that copy has. Everything a comment says is read from its
-//! file as it is now, through the same guarded reader as the item itself,
-//! and validated and ordered by the canonical rules a refresh applies.
+//! files among that copy's comments there are. What a comment says is read
+//! from its file as it is now, through the same guarded reader as the item
+//! itself. The item's file and its comments are then validated and ordered
+//! by the canonical rules; a problem that only the whole context shows is
+//! taken from what the last refresh stored.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,16 +25,26 @@ use super::{
 use crate::{
     canonical::{self, ItemId},
     repository::{RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
-    results::{ProblemCode, timestamp_string},
+    results::{ProblemCode, ResultCode, timestamp_string},
 };
 
 /// The front matter key that records who created a comment. The canonical
 /// parser does not define it yet, so it arrives among the unknown keys.
 const CREATED_BY: &str = "created_by";
 
+/// Where every item's comments are, relative to a context's worktree.
+const COMMENTS_DIRECTORY: &str = ".manyhands/comments";
+
+/// The problems a refresh finds by looking at every file of a context, so
+/// that the files of one item are not enough to find them again: an ID
+/// that another item's comment also has, and a parent that is a comment on
+/// another item.
+const CONTEXT_WIDE_PROBLEMS: [ProblemCode; 2] =
+    [ProblemCode::DuplicateId, ProblemCode::CrossItemParent];
+
 /// Where an item's comment files are, as a path prefix.
 fn comment_directory(item: &str) -> String {
-    format!(".manyhands/comments/{item}/")
+    format!("{COMMENTS_DIRECTORY}/{item}/")
 }
 
 /// Whether `path` is written as a file directly inside `directory`, which
@@ -162,6 +174,22 @@ fn add_code(entries: &mut BTreeMap<String, Vec<ProblemCode>>, path: &str, code: 
     }
 }
 
+/// Records what validation found wrong with each file in `paths`. Only a
+/// problem's code is kept: its message can repeat the file's text or the
+/// parser's. A problem with any other file, the item's own included, is
+/// not a comment's and is left to the item read.
+fn add_validation_codes(
+    entries: &mut BTreeMap<String, Vec<ProblemCode>>,
+    problems: &[canonical::ValidationProblem],
+    paths: &BTreeSet<String>,
+) {
+    for found in problems {
+        if let Some(path) = found.path.to_str().filter(|path| paths.contains(*path)) {
+            add_code(entries, path, ProblemCode::from(&found.code));
+        }
+    }
+}
+
 impl RepositoryService {
     /// The comment threads of the item with this ID, read from the item's
     /// effective copy: the worktree created to edit it when there is one,
@@ -172,23 +200,41 @@ impl RepositoryService {
     /// `created_by` value and null when it has none; Git history is never
     /// read.
     ///
-    /// The index says which files to read: those it holds as the item's
-    /// comments and those among them it holds a problem for. Each is read
-    /// as it is now, and together with the item's own file they are
-    /// validated as a refresh would validate them. A file that is not a
-    /// comment of the item by those rules, that is not valid UTF-8, or
-    /// that is no longer a regular file follows the threads as a
-    /// nonconforming entry, in path order, with a null ID, its path and
-    /// the reason. A file that is gone is left out.
+    /// The index says which files there are: those it holds as the item's
+    /// comments, and those directly inside the item's comment directory it
+    /// holds a problem for. Nothing lists the directory, so a comment added
+    /// since the last refresh is not returned until the indexer has seen
+    /// it. That is how every read works, not something this one reports.
     ///
-    /// `index.state` is `stale` when the comments are no longer what the
-    /// index stored. A comment file added since the last refresh is not
-    /// read, and nothing reports it, until the next one.
+    /// Each of those files is read as it is now. What is checked again,
+    /// over the item's own file and those files alone, is everything one
+    /// item's files can show: front matter, fields, the path a comment is
+    /// filed at, a parent that is no comment of the item, and a cycle of
+    /// parents. What takes the whole context to find is not checked again
+    /// and is taken from the problems the last refresh stored: an ID that
+    /// another item's comment has too, and a parent that is a comment on
+    /// another item. A file with such a stored problem that is no newer
+    /// than that refresh keeps it; one that is newer is checked like any
+    /// other, and the index is `stale`.
+    ///
+    /// A file that is not a comment of the item by either means, that is
+    /// not valid UTF-8, or that is no longer a regular file follows the
+    /// threads as a nonconforming entry, in path order, with a null ID,
+    /// its path and the reason. A file that is gone is left out.
+    ///
+    /// `complete` is false when the last refresh could not read the item's
+    /// comment directory, or the directory that holds every item's, or
+    /// stopped part of the way through it: there may be comments it never
+    /// saw. `index.state` is `stale` when the item's file or a comment's
+    /// is newer than the last refresh, or the comments are no longer what
+    /// the index stored.
     ///
     /// An item the index does not hold, whose file is gone, or whose file
     /// now holds another item is `item_not_found`, as it is for
-    /// `show_item`. A file that cannot be opened is
-    /// `repository_inaccessible`: the list is not returned without it.
+    /// `show_item`. A comment the index holds whose file cannot be opened
+    /// is `repository_inaccessible`: the list is not returned without it.
+    /// A file the refresh itself could not open, and stored as such, is a
+    /// nonconforming entry instead.
     pub fn list_comments(
         &self,
         repo: &ResolvedRepository,
@@ -215,20 +261,36 @@ impl RepositoryService {
             {
                 return Err(invalid_stored_data());
             }
+            // What the index stored about the files there that are not
+            // comments, and whether it could look at all of them.
+            let mut stored_codes: BTreeMap<String, Vec<ProblemCode>> = BTreeMap::new();
+            let mut complete = true;
+            for stored in stored_problems(connection, repo)? {
+                if &stored.context.worktree != worktree {
+                    continue;
+                }
+                if is_file_in(&directory, &stored.path) {
+                    add_code(&mut stored_codes, &stored.path, stored.code);
+                } else if stored.code == ProblemCode::SourceUnreadable
+                    && (stored.path == COMMENTS_DIRECTORY
+                        || stored.path == directory.trim_end_matches('/'))
+                {
+                    // The refresh could not read the directory, or stopped
+                    // part of the way through it.
+                    complete = false;
+                }
+            }
             // The files the index knows of there, comments or not.
-            let mut paths: BTreeSet<String> =
-                indexed.iter().map(|comment| comment.path.clone()).collect();
-            paths.extend(
-                stored_problems(connection, repo)?
-                    .into_iter()
-                    .filter(|problem| {
-                        &problem.context.worktree == worktree
-                            && is_file_in(&directory, &problem.path)
-                    })
-                    .map(|problem| problem.path),
-            );
+            let paths: BTreeSet<String> = indexed
+                .iter()
+                .map(|comment| &comment.path)
+                .chain(stored_codes.keys())
+                .cloned()
+                .collect();
 
-            let mut is_behind = false;
+            // Newer than the refresh, the item may no longer be what the
+            // index stored its comments against.
+            let mut is_behind = item_file.newer_than(refreshed_at);
             let mut entries: BTreeMap<String, Vec<ProblemCode>> = BTreeMap::new();
             let mut sources = Vec::new();
             // An item file that is not text is not an item, and then no
@@ -243,9 +305,44 @@ impl RepositoryService {
                 sources.push((PathBuf::from(&row.path), source));
             }
             for path in &paths {
-                match read_item_file(repo, worktree, path)? {
+                let stored_here = stored_codes.get(path).map_or(&[][..], Vec::as_slice);
+                let unreadable_when_stored = stored_here.contains(&ProblemCode::SourceUnreadable);
+                let read = match read_item_file(repo, worktree, path) {
+                    Ok(read) => read,
+                    // The refresh could not open this file either and
+                    // stored that, so the index holds no comment here to
+                    // leave out: the file is listed as what it was found
+                    // to be. An indexed comment that cannot be opened
+                    // fails the read.
+                    Err(error)
+                        if error.code() == ResultCode::RepositoryInaccessible
+                            && unreadable_when_stored
+                            && !indexed.iter().any(|comment| &comment.path == path) =>
+                    {
+                        add_code(&mut entries, path, ProblemCode::SourceUnreadable);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                match read {
                     ItemFileRead::Found(file) => {
-                        is_behind |= file.newer_than(refreshed_at);
+                        let newer = file.newer_than(refreshed_at);
+                        is_behind |= newer;
+                        // A problem that takes the whole context to find
+                        // cannot be found again from this item's files. As
+                        // long as the file is the one the refresh saw, the
+                        // stored finding stands and the file is kept out of
+                        // validation, so that a reply to it has no parent.
+                        if !newer
+                            && stored_here
+                                .iter()
+                                .any(|code| CONTEXT_WIDE_PROBLEMS.contains(code))
+                        {
+                            for code in stored_here {
+                                add_code(&mut entries, path, *code);
+                            }
+                            continue;
+                        }
                         match String::from_utf8(file.bytes) {
                             Ok(source) => sources.push((PathBuf::from(path), source)),
                             Err(_) => add_code(&mut entries, path, ProblemCode::SourceUnreadable),
@@ -253,20 +350,15 @@ impl RepositoryService {
                     }
                     ItemFileRead::Missing => is_behind = true,
                     ItemFileRead::NotAFile => {
+                        // Behind unless that is what the refresh found.
+                        is_behind |= !unreadable_when_stored;
                         add_code(&mut entries, path, ProblemCode::SourceUnreadable);
                     }
                 }
             }
 
             let validation = canonical::validate_context(sources);
-            for found in &validation.problems {
-                // The item's own problems are the item read's to report. A
-                // problem's message can repeat the file's text; only its
-                // code is kept.
-                if let Some(path) = found.path.to_str().filter(|path| paths.contains(*path)) {
-                    add_code(&mut entries, path, ProblemCode::from(&found.code));
-                }
-            }
+            add_validation_codes(&mut entries, &validation.problems, &paths);
             let threads = canonical::ordered_comment_threads(&validation);
             let mut current = BTreeSet::new();
             collect_indexed(&threads, &directory, &mut current);
@@ -283,7 +375,7 @@ impl RepositoryService {
                 .collect();
             Ok(CommentListDto {
                 items,
-                complete: true,
+                complete,
                 context: row.context.dto(),
                 index: if is_behind { behind(&index) } else { index },
             })

@@ -742,7 +742,20 @@ fn no_comment_is_read_through_a_symbolic_link() {
             .unwrap()
             .contains(SENTINEL)
     );
-    assert!(ids(&redirected.items).iter().all(Option::is_none));
+    // Both files the index knows of are still listed, as files that cannot
+    // be reached, and nothing is read through the link.
+    assert_eq!(ids(&redirected.items), [None, None]);
+    for (entry, id) in [
+        (&redirected.items[0], COMMENT_A),
+        (&redirected.items[1], COMMENT_B),
+    ] {
+        assert_nonconforming(
+            entry,
+            TICKET_A,
+            &comment_path(TICKET_A, id),
+            &[ProblemCode::SourceUnreadable],
+        );
+    }
     assert_eq!(redirected.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
 }
@@ -900,5 +913,320 @@ fn a_degraded_index_and_a_removed_registration_fail_the_read() {
             "arguments": {"root": repo.root().to_str().unwrap()},
         }])
     );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_comment_id_two_items_share_is_reported_from_what_the_refresh_stored() {
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(TICKET_B, "Other", ""),
+    );
+    // One ID under two items: each file is a comment of its item by every
+    // rule its own item's files can show.
+    let shared = write_comment(root, TICKET_A, COMMENT_A, None, &time(1), "");
+    write_comment(root, TICKET_B, COMMENT_A, None, &time(1), "");
+    write_comment(root, TICKET_A, COMMENT_B, Some(COMMENT_A), &time(2), "");
+    write_comment(root, TICKET_A, COMMENT_C, None, &time(3), "");
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&list.items), [Some(COMMENT_C), None, None]);
+    assert_nonconforming(
+        &list.items[1],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_A),
+        &[ProblemCode::DuplicateId],
+    );
+    // Its parent is not a comment, as the refresh found too.
+    assert_nonconforming(
+        &list.items[2],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_B),
+        &[ProblemCode::MissingParent],
+    );
+    assert_eq!(list.index.state, IndexState::Current);
+    assert!(list.complete);
+    let other = comments(&enabled.service, &repo, TICKET_B);
+    assert_eq!(ids(&other.items), [None]);
+    assert_nonconforming(
+        &other.items[0],
+        TICKET_B,
+        &comment_path(TICKET_B, COMMENT_A),
+        &[ProblemCode::DuplicateId],
+    );
+    assert_eq!(other.index.state, IndexState::Current);
+
+    // Changed since the refresh, the file is checked as it is now, by what
+    // this item's files show, and the index is behind.
+    set_modified(&shared, SystemTime::now() + Duration::from_secs(30));
+    let changed = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&changed.items), [Some(COMMENT_A), Some(COMMENT_C)]);
+    assert_eq!(ids(&changed.items[0].replies), [Some(COMMENT_B)]);
+    assert_eq!(changed.index.state, IndexState::Stale);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_reply_to_another_items_comment_is_reported_from_what_the_refresh_stored() {
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(TICKET_B, "Other", ""),
+    );
+    write_comment(root, TICKET_B, COMMENT_A, None, &time(1), "");
+    let reply = write_comment(root, TICKET_A, COMMENT_B, Some(COMMENT_A), &time(2), "");
+    write_comment(root, TICKET_A, COMMENT_C, Some(COMMENT_B), &time(3), "");
+    write_comment(root, TICKET_A, COMMENT_D, None, &time(4), "");
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&list.items), [Some(COMMENT_D), None, None]);
+    assert_nonconforming(
+        &list.items[1],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_B),
+        &[ProblemCode::CrossItemParent],
+    );
+    assert_nonconforming(
+        &list.items[2],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_C),
+        &[ProblemCode::MissingParent],
+    );
+    assert_eq!(list.index.state, IndexState::Current);
+    assert_eq!(
+        ids(&comments(&enabled.service, &repo, TICKET_B).items),
+        [Some(COMMENT_A)]
+    );
+
+    // Changed since the refresh: this item's files show only that the
+    // parent is no comment of it.
+    set_modified(&reply, SystemTime::now() + Duration::from_secs(30));
+    let changed = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&changed.items), [Some(COMMENT_D), None, None]);
+    assert_nonconforming(
+        &changed.items[1],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_B),
+        &[ProblemCode::MissingParent],
+    );
+    assert_eq!(changed.index.state, IndexState::Stale);
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_the_refresh_could_not_open_is_listed_as_unreadable_while_it_still_is() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write_comment(root, TICKET_A, COMMENT_A, None, &time(1), "");
+    let file = write_comment(root, TICKET_A, COMMENT_B, None, &time(2), "");
+    if !permissions_bind_or_skip(
+        "a_file_the_refresh_could_not_open_is_listed_as_unreadable_while_it_still_is",
+        &file,
+    ) {
+        return;
+    }
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let result = enabled.service.list_comments(&repo, &item_id(TICKET_A));
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let list = result.unwrap();
+    assert_eq!(ids(&list.items), [Some(COMMENT_A), None]);
+    assert_nonconforming(
+        &list.items[1],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_B),
+        &[ProblemCode::SourceUnreadable],
+    );
+    assert_eq!(list.index.state, IndexState::Current);
+    assert!(list.complete);
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn the_list_is_not_complete_when_the_refresh_could_not_read_the_comment_directory() {
+    use std::os::unix::fs::symlink;
+
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(
+        outside.path().join(format!("{COMMENT_A}.md")),
+        comment_source(TICKET_A, COMMENT_A, None, &time(1), ""),
+    )
+    .unwrap();
+    for linked in [
+        format!(".manyhands/comments/{TICKET_A}"),
+        ".manyhands/comments".to_owned(),
+    ] {
+        let (fixture, enabled) = repository_with_ticket();
+        let root = &fixture.root;
+        write(
+            root,
+            &ticket_path(TICKET_B),
+            &ticket_source(TICKET_B, "Other", ""),
+        );
+        if linked.ends_with(TICKET_A) {
+            write_comment(root, TICKET_B, COMMENT_B, None, &time(1), "");
+        }
+        symlink(outside.path(), root.join(&linked)).unwrap();
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+
+        let list = comments(&enabled.service, &repo, TICKET_A);
+
+        // Nothing is read through the link, and the list says that it may
+        // not be everything.
+        assert!(list.items.is_empty(), "{linked}: {list:?}");
+        assert!(!list.complete, "{linked}");
+        assert_eq!(list.index.state, IndexState::Current, "{linked}");
+        // An item whose own directory could be read is not affected by
+        // another item's.
+        let other = comments(&enabled.service, &repo, TICKET_B);
+        assert_eq!(other.complete, linked.ends_with(TICKET_A), "{linked}");
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_changed_item_file_or_a_problem_file_that_is_no_longer_a_file_is_stale() {
+    use std::os::unix::fs::symlink;
+
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write_comment(root, TICKET_A, COMMENT_A, None, &time(1), "");
+    let malformed = write(
+        root,
+        &comment_path(TICKET_A, COMMENT_B),
+        "no front matter\n",
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let stored = comments(&enabled.service, &repo, TICKET_A);
+    assert_eq!(ids(&stored.items), [Some(COMMENT_A), None]);
+    assert_eq!(stored.index.state, IndexState::Current);
+
+    // The item's own file is newer than the refresh.
+    let ticket = root.join(ticket_path(TICKET_A));
+    let modified = fs::metadata(&ticket).unwrap().modified().unwrap();
+    set_modified(&ticket, SystemTime::now() + Duration::from_secs(30));
+    let item_changed = comments(&enabled.service, &repo, TICKET_A);
+
+    assert!(item_changed.items == stored.items);
+    assert_eq!(item_changed.index.state, IndexState::Stale);
+    set_modified(&ticket, modified);
+    assert_eq!(
+        comments(&enabled.service, &repo, TICKET_A).index.state,
+        IndexState::Current
+    );
+
+    // A file the index holds a conformity problem for is now a link.
+    fs::remove_file(&malformed).unwrap();
+    symlink(&ticket, &malformed).unwrap();
+    let linked = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&linked.items), [Some(COMMENT_A), None]);
+    assert_nonconforming(
+        &linked.items[1],
+        TICKET_A,
+        &comment_path(TICKET_A, COMMENT_B),
+        &[ProblemCode::SourceUnreadable],
+    );
+    assert_eq!(linked.index.state, IndexState::Stale);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_stale() {
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write_comment(root, TICKET_A, COMMENT_A, None, &time(1), "");
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // A second row for the item, in its own worktree, as a refresh that has
+    // stored one context and not yet removed the other leaves it.
+    let worktree = repo.root().join(".manyhands/worktrees").join(TICKET_A);
+    let connection = index(enabled.data_directory.path());
+    connection
+        .execute(
+            "INSERT INTO contexts (repository_id, kind, branch, worktree_path, item_id)
+             SELECT id, 'active', ?1, ?2, ?3 FROM repositories",
+            rusqlite::params![
+                format!("manyhands/ticket/{TICKET_A}"),
+                worktree.to_str().unwrap(),
+                TICKET_A
+            ],
+        )
+        .unwrap();
+    let context_row = connection.last_insert_rowid();
+    connection
+        .execute(
+            "INSERT INTO discovered_items
+                (context_id, item_id, kind, canonical_path, title, ticket_type, status,
+                 activity_at, activity_source)
+             VALUES (?1, ?2, 'ticket', ?3, 'Worktree row', 'task', 'open', 5, 'git')",
+            rusqlite::params![context_row, TICKET_A, ticket_path(TICKET_A)],
+        )
+        .unwrap();
+    let item_row = connection.last_insert_rowid();
+    connection
+        .execute(
+            "INSERT INTO discovered_comments
+                (item_id, comment_id, canonical_path, created_at)
+             VALUES (?1, ?2, ?3, 0)",
+            rusqlite::params![item_row, COMMENT_B, comment_path(TICKET_A, COMMENT_B)],
+        )
+        .unwrap();
+    drop(connection);
+
+    // The worktree is not there: the primary row is the one with a file
+    // behind it, and its comments are the ones read.
+    let from_primary = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&from_primary.items), [Some(COMMENT_A)]);
+    assert_eq!(from_primary.context.kind, ItemContextKind::Primary);
+    assert_eq!(Path::new(&from_primary.context.worktree), repo.root());
+    assert_eq!(from_primary.index.state, IndexState::Stale);
+
+    // The worktree is there: its row is the effective one, and only the
+    // comments stored under that row, read from that worktree, are listed.
+    write(
+        &worktree,
+        &ticket_path(TICKET_A),
+        &ticket_source(TICKET_A, "Commented", ""),
+    );
+    write_comment(&worktree, TICKET_A, COMMENT_B, None, &time(0), "");
+    write_comment(
+        &worktree,
+        TICKET_A,
+        COMMENT_A,
+        None,
+        &time(9),
+        "edited: here\n",
+    );
+    let from_worktree = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&from_worktree.items), [Some(COMMENT_B)]);
+    assert_eq!(from_worktree.context.kind, ItemContextKind::Active);
+    assert_eq!(Path::new(&from_worktree.context.worktree), worktree);
+    assert_eq!(from_worktree.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
 }

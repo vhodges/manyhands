@@ -73,3 +73,57 @@ fn only_a_file_directly_inside_the_items_comment_directory_is_one_of_its_comment
         assert!(!is_file_in(&directory, &path), "{path:?}");
     }
 }
+
+#[test]
+fn only_the_code_of_a_validation_problem_reaches_an_entry() {
+    const SENTINEL: &str = "SENTINEL-2b9f";
+    let directory = comment_directory(ITEM);
+    let path = format!("{directory}{COMMENT}.md");
+    let item_path = format!(".manyhands/tickets/{ITEM}/ticket.md");
+    let found = |path: &str, code| canonical::ValidationProblem {
+        path: PathBuf::from(path),
+        code,
+        message: format!("invalid YAML: {SENTINEL}"),
+    };
+    let problems = [
+        found(&path, canonical::ValidationCode::MalformedFrontMatter),
+        found(&path, canonical::ValidationCode::MissingParent),
+        // Found twice, listed once.
+        found(&path, canonical::ValidationCode::MalformedFrontMatter),
+        // Not one of the item's comment files: the item read's to report.
+        found(&item_path, canonical::ValidationCode::MissingField),
+    ];
+    let mut entries = BTreeMap::new();
+
+    add_validation_codes(&mut entries, &problems, &BTreeSet::from([path.clone()]));
+
+    assert_eq!(
+        entries,
+        BTreeMap::from([(
+            path.clone(),
+            vec![
+                ProblemCode::MalformedFrontMatter,
+                ProblemCode::MissingParent
+            ]
+        )])
+    );
+    let entry = nonconforming_entry(ITEM, &path, &entries[&path]);
+    let serialized = serde_json::to_string(&entry).unwrap();
+    assert!(!serialized.contains(SENTINEL), "{serialized}");
+    assert!(!serialized.contains("invalid YAML"), "{serialized}");
+    assert_eq!(
+        serde_json::to_value(&entry.problems).unwrap(),
+        serde_json::json!([
+            {
+                "code": "malformed_front_matter",
+                "path": path,
+                "guidance": ProblemCode::MalformedFrontMatter.guidance(),
+            },
+            {
+                "code": "missing_parent",
+                "path": path,
+                "guidance": ProblemCode::MissingParent.guidance(),
+            },
+        ])
+    );
+}

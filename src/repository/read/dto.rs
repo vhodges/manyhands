@@ -422,9 +422,15 @@ pub struct ItemContextDto {
 /// comments that is not a comment of it.
 ///
 /// `context` is the item's effective copy, which every comment was read
-/// from. `index` is `stale` when the comments are no longer what the index
-/// stored. The index says which files there are, so a comment file added
-/// since the last refresh is not listed until the next one.
+/// from. `index` is `stale` when the item's file or a comment's is newer
+/// than the last refresh, or the comments are no longer what the index
+/// stored.
+///
+/// The index says which files there are, so a comment added since the
+/// last refresh is not listed until the indexer has seen it. `complete` is
+/// about something else: it is false when the last refresh could not read
+/// the directory that holds the comments, or stopped part of the way
+/// through it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CommentListDto {
     pub items: Vec<CommentDto>,
@@ -437,7 +443,10 @@ pub struct CommentListDto {
 ///
 /// A nonconforming entry has no `id`, `parent_id`, `author`, `created_at`
 /// or `body` and no replies; its `path` and `problems` say what is wrong
-/// and where. Everything else here was read from the comment's file.
+/// and where. Everything else here was read from the comment's file. The
+/// reason is found by checking the file again, except `duplicate_id` and
+/// `cross_item_parent`, which take the whole context to find and are what
+/// the last refresh stored.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CommentDto {
     pub id: Option<String>,
