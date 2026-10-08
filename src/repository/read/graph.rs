@@ -99,7 +99,12 @@ pub(super) struct Plan<'a> {
 /// or a ticket that depends on itself. Two cycles that share a ticket are
 /// therefore one. A parent cycle is the same for `parent`, and since a
 /// ticket has one parent it is always a simple ring. Neither looks at
-/// whether a ticket is closed.
+/// whether a ticket is closed: they are what is wrong with the files.
+///
+/// What blocks is narrower. A closed dependency never blocks, so only a
+/// cycle among open tickets, following no edge into a closed one, keeps
+/// its tickets from ever being ready. Those are the open cycles. Each lies
+/// inside one dependency cycle and can be smaller than it.
 pub(super) struct TicketGraph {
     ids: Vec<String>,
     closed: Vec<bool>,
@@ -113,6 +118,10 @@ pub(super) struct TicketGraph {
     cycles: Vec<Vec<usize>>,
     /// The position in `cycles` of the cycle a ticket is on.
     cycle_of: Vec<Option<usize>>,
+    /// The cycles among open tickets, in the same order.
+    open_cycles: Vec<Vec<usize>>,
+    /// The position in `open_cycles` of the cycle an open ticket is on.
+    open_cycle_of: Vec<Option<usize>>,
     parent_cycles: Vec<Vec<usize>>,
     on_parent_cycle: Vec<bool>,
 }
@@ -157,13 +166,21 @@ impl TicketGraph {
             }
             parents.push(parent);
         }
-        let cycles = dependency_cycles(&deps);
-        let mut cycle_of = vec![None; count];
-        for (cycle, members) in cycles.iter().enumerate() {
-            for &member in members {
-                cycle_of[member] = Some(cycle);
+        let membership = |cycles: &[Vec<usize>]| {
+            let mut cycle_of = vec![None; count];
+            for (cycle, members) in cycles.iter().enumerate() {
+                for &member in members {
+                    cycle_of[member] = Some(cycle);
+                }
             }
-        }
+            cycle_of
+        };
+        let cycles = dependency_cycles(&deps, |_| true);
+        let cycle_of = membership(&cycles);
+        // No edge into a closed ticket is followed, so no closed ticket is
+        // reached and none is on an open cycle.
+        let open_cycles = dependency_cycles(&deps, |ticket| !closed[ticket]);
+        let open_cycle_of = membership(&open_cycles);
         let parent_cycles = parent_cycles(&parents);
         let mut on_parent_cycle = vec![false; count];
         for &member in parent_cycles.iter().flatten() {
@@ -177,6 +194,8 @@ impl TicketGraph {
             children,
             cycles,
             cycle_of,
+            open_cycles,
+            open_cycle_of,
             parent_cycles,
             on_parent_cycle,
         }
@@ -195,18 +214,18 @@ impl TicketGraph {
             .collect()
     }
 
-    /// The IDs a reason gives for the cycle at `cycle`, and whether they
-    /// are all of it: its lowest IDs, as many as a reason may hold.
+    /// The IDs a reason gives for the open cycle at `cycle`, and whether
+    /// they are all of it: its lowest IDs, as many as a reason may hold.
     fn cycle_names(&self, cycle: usize) -> (Vec<String>, bool) {
-        let members = &self.cycles[cycle];
+        let members = &self.open_cycles[cycle];
         let named = &members[..members.len().min(CYCLE_IDS_IN_A_REASON)];
         (self.names(named), named.len() == members.len())
     }
 
     /// Why the open ticket at `ticket` cannot be started, one reason for
     /// each cause: each dependency that is an open ticket and each that is
-    /// unresolved, in the ticket's own order, and then the dependency
-    /// cycle it is on. Empty when it is ready.
+    /// unresolved, in the ticket's own order, and then the cycle of open
+    /// tickets it is on. Empty when it is ready.
     fn blockers(&self, ticket: usize) -> Vec<ReadinessReasonDto> {
         let reason = |code, ids| ReadinessReasonDto {
             code,
@@ -227,7 +246,7 @@ impl TicketGraph {
                 )),
             })
             .collect();
-        if let Some(cycle) = self.cycle_of[ticket] {
+        if let Some(cycle) = self.open_cycle_of[ticket] {
             let (ids, complete) = self.cycle_names(cycle);
             reasons.push(ReadinessReasonDto {
                 code: ReadinessReasonCode::DependencyCycle,
@@ -238,18 +257,18 @@ impl TicketGraph {
         reasons
     }
 
+    /// A ticket whose dependencies are all closed waits for no open
+    /// ticket, so it is on no open cycle either.
     fn is_ready(&self, ticket: usize) -> bool {
         !self.closed[ticket]
-            && self.cycle_of[ticket].is_none()
             && self.deps[ticket]
                 .iter()
                 .all(|edge| matches!(edge, Edge::Ticket(dependency) if self.closed[*dependency]))
     }
 
     /// `closed` for a closed ticket, whatever it depends on. An open ticket
-    /// is `ready` when every dependency is a closed ticket and it is on no
-    /// dependency cycle, and `blocked` otherwise. `None` for an ID that is
-    /// no ticket's.
+    /// is `ready` when every dependency is a closed ticket, and `blocked`
+    /// otherwise. `None` for an ID that is no ticket's.
     pub(super) fn readiness_state(&self, id: &str) -> Option<ReadinessState> {
         let ticket = self.position(id)?;
         Some(if self.closed[ticket] {
@@ -274,6 +293,14 @@ impl TicketGraph {
             state: self.readiness_state(id)?,
             reasons,
         })
+    }
+
+    /// The lowest ID of the dependency cycle the ticket is on, closed
+    /// tickets counted, whether or not that cycle blocks anything.
+    pub(super) fn dependency_cycle(&self, id: &str) -> Option<&str> {
+        let cycle = self.cycle_of[self.position(id)?]?;
+        let lowest = *self.cycles[cycle].first()?;
+        Some(&self.ids[lowest])
     }
 
     /// Whether the ticket's `parent` links lead back to it.
@@ -447,13 +474,13 @@ impl TicketGraph {
     }
 
     /// Whether an open ticket can never be reached by closing tickets: it
-    /// is on a dependency cycle, has an unresolved dependency, or depends,
-    /// through open tickets, on one that is.
+    /// is on a cycle of open tickets, has an unresolved dependency, or
+    /// depends, through open tickets, on one that is.
     fn unplannable(&self) -> Vec<bool> {
         let mut unplannable: Vec<bool> = (0..self.ids.len())
             .map(|ticket| {
                 !self.closed[ticket]
-                    && (self.cycle_of[ticket].is_some()
+                    && (self.open_cycle_of[ticket].is_some()
                         || self.deps[ticket]
                             .iter()
                             .any(|edge| matches!(edge, Edge::Unresolved(_))))
@@ -518,7 +545,7 @@ impl TicketGraph {
     /// Why the open ticket at `ticket` is unplannable, one reason for each
     /// cause: in its own order, each dependency that is unresolved and
     /// each that is an unplannable open ticket outside its own cycle, and
-    /// then the dependency cycle it is on.
+    /// then the cycle of open tickets it is on.
     fn unplannable_reasons(
         &self,
         ticket: usize,
@@ -529,7 +556,7 @@ impl TicketGraph {
             ids,
             complete: true,
         };
-        let cycle = self.cycle_of[ticket];
+        let cycle = self.open_cycle_of[ticket];
         let mut reasons: Vec<UnplannableReasonDto> = self.deps[ticket]
             .iter()
             .filter_map(|edge| match edge {
@@ -539,7 +566,7 @@ impl TicketGraph {
                 )),
                 Edge::Ticket(dependency)
                     if unplannable[*dependency]
-                        && (cycle.is_none() || self.cycle_of[*dependency] != cycle) =>
+                        && (cycle.is_none() || self.open_cycle_of[*dependency] != cycle) =>
                 {
                     Some(reason(
                         UnplannableReasonCode::UnplannableDependency,
@@ -629,8 +656,9 @@ impl TicketGraph {
 
 /// The dependency cycles: the strongly connected components that hold more
 /// than one ticket or a ticket that depends on itself, by Tarjan's
-/// algorithm with its own stack in place of recursion.
-fn dependency_cycles(deps: &[Vec<Edge>]) -> Vec<Vec<usize>> {
+/// algorithm with its own stack in place of recursion. Only an edge into a
+/// ticket `follow` accepts is an edge.
+fn dependency_cycles(deps: &[Vec<Edge>], follow: impl Fn(usize) -> bool) -> Vec<Vec<usize>> {
     const UNVISITED: usize = usize::MAX;
     let mut order = vec![UNVISITED; deps.len()];
     let mut lowest = vec![0_usize; deps.len()];
@@ -656,6 +684,7 @@ fn dependency_cycles(deps: &[Vec<Edge>]) -> Vec<Vec<usize>> {
             if let Some(edge) = deps[ticket].get(followed) {
                 frame.1 += 1;
                 match edge {
+                    Edge::Ticket(next) if !follow(*next) => {}
                     Edge::Ticket(next) if order[*next] == UNVISITED => frames.push((*next, 0)),
                     Edge::Ticket(next) if on_stack[*next] => {
                         lowest[ticket] = lowest[ticket].min(order[*next]);
@@ -679,9 +708,9 @@ fn dependency_cycles(deps: &[Vec<Edge>]) -> Vec<Vec<usize>> {
                     break;
                 }
             }
-            let depends_on_itself = deps[ticket]
-                .iter()
-                .any(|edge| matches!(edge, Edge::Ticket(next) if *next == ticket));
+            let depends_on_itself = deps[ticket].iter().any(
+                |edge| matches!(edge, Edge::Ticket(next) if *next == ticket && follow(ticket)),
+            );
             if component.len() > 1 || depends_on_itself {
                 component.sort_unstable();
                 cycles.push(component);
@@ -964,9 +993,10 @@ impl RepositoryService {
     /// batches, so the tickets of one batch can be worked at once; batch 1
     /// is the ready tickets. A ticket that closing tickets can never
     /// reach is in `unplannable` with its reasons instead: it is on a
-    /// dependency cycle, has an unresolved dependency, or depends on a
-    /// ticket that is unplannable. Batches and `unplannable` are in ID
-    /// order.
+    /// cycle of open tickets, has an unresolved dependency, or depends on
+    /// an open ticket that is unplannable. A closed dependency holds
+    /// nothing back, whatever it depends on. Batches and `unplannable`
+    /// are in ID order.
     ///
     /// The plan is always made from every ticket. `filter` chooses which
     /// of them are returned: a batch keeps its number, and a batch left

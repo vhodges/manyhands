@@ -390,6 +390,8 @@ problem_codes! {
         "Rewrite the metadata so that it can be represented as JSON.";
     RelationshipNotATicket => "relationship_not_a_ticket", None,
         "Name a ticket in deps and parent, not a document or a comment.";
+    DependencyCycle => "dependency_cycle", None,
+        "Break the cycle between the tickets' dependencies.";
     ParentCycle => "parent_cycle", None,
         "Break the cycle between the tickets' parents.";
     UnknownProblem => "unknown_problem", None,

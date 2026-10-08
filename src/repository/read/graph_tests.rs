@@ -168,43 +168,113 @@ fn every_open_ticket_on_a_dependency_cycle_is_blocked_and_names_it() {
 }
 
 #[test]
-fn a_cycle_through_a_closed_ticket_is_still_a_cycle() {
-    // B waits only for C, which is closed, and is on the cycle all the same.
+fn a_closed_dependency_never_blocks_though_the_cycle_through_it_is_still_reported() {
+    // The links run in a ring, and C, which is closed, is on it.
     let graph = graph([
         ticket("A", &["B"]),
         ticket("B", &["C"]),
         closed("C", &["A"]),
     ]);
 
-    let cycle = ("dependency_cycle", names(&["A", "B", "C"]));
+    // B waits only for C, which is closed: it is ready.
+    assert_eq!(readiness(&graph, "B"), (ReadinessState::Ready, vec![]));
+    // A waits for B and for nothing else: no open ticket waits for itself.
     assert_eq!(
         readiness(&graph, "A"),
         (
             ReadinessState::Blocked,
-            vec![("open_dependency", names(&["B"])), cycle.clone()]
+            vec![("open_dependency", names(&["B"]))]
         )
     );
-    assert_eq!(
-        readiness(&graph, "B"),
-        (ReadinessState::Blocked, vec![cycle])
-    );
     assert_eq!(readiness(&graph, "C"), (ReadinessState::Closed, vec![]));
-    assert_eq!(cycles(&graph), [("deps", names(&["A", "B", "C"]))]);
     let plan = graph.plan();
-    assert!(plan.batches.is_empty());
+    assert_eq!(plan.batches, [["B"], ["A"]]);
+    assert!(plan.unplannable.is_empty());
+    assert_eq!(graph.critical_path(), ["B", "A"]);
+    // The cycles read looks at every ticket, closed or not, and each
+    // ticket on the cycle is told of it by its lowest ID.
+    assert_eq!(cycles(&graph), [("deps", names(&["A", "B", "C"]))]);
+    for id in ["A", "B", "C"] {
+        assert_eq!(graph.dependency_cycle(id), Some("A"), "{id}");
+    }
+}
+
+/// The tickets the graph says are ready, in ID order.
+fn ready(graph: &TicketGraph, ids: &[&str]) -> Vec<String> {
+    ids.iter()
+        .filter(|id| graph.readiness_state(id) == Some(ReadinessState::Ready))
+        .map(|id| (*id).to_owned())
+        .collect()
+}
+
+#[test]
+fn only_a_cycle_among_open_tickets_blocks_and_batch_one_is_the_ready_tickets() {
+    let graph = graph([
+        // A and B wait for each other; A also waits for C, which is closed
+        // and waits for A, so all three are one cycle to the cycles read.
+        ticket("A", &["B", "C"]),
+        ticket("B", &["A"]),
+        closed("C", &["A"]),
+        // A closed ticket that depends on itself blocks nothing.
+        closed("D", &["D"]),
+        ticket("E", &["D"]),
+        // Behind the open cycle, and behind a closed ticket that is on one.
+        ticket("F", &["A"]),
+        ticket("G", &["C", "E"]),
+        ticket("H", &[]),
+    ]);
+    let all = ["A", "B", "C", "D", "E", "F", "G", "H"];
+
+    assert_eq!(
+        cycles(&graph),
+        [("deps", names(&["A", "B", "C"])), ("deps", names(&["D"]))]
+    );
+    // The reason names the tickets that wait for each other, and not the
+    // closed one.
+    assert_eq!(
+        readiness(&graph, "A"),
+        (
+            ReadinessState::Blocked,
+            vec![
+                ("open_dependency", names(&["B"])),
+                ("dependency_cycle", names(&["A", "B"])),
+            ]
+        )
+    );
+    assert_eq!(ready(&graph, &all), ["E", "H"]);
+    let plan = graph.plan();
+    assert_eq!(plan.batches, [vec!["E", "H"], vec!["G"]]);
+    assert_eq!(plan.batches[0], ready(&graph, &all));
     assert_eq!(
         unplannable(&plan),
         [
             (
                 "A".to_owned(),
-                vec![("dependency_cycle", names(&["A", "B", "C"]))]
+                vec![("dependency_cycle", names(&["A", "B"]))]
             ),
             (
                 "B".to_owned(),
-                vec![("dependency_cycle", names(&["A", "B", "C"]))]
+                vec![("dependency_cycle", names(&["A", "B"]))]
+            ),
+            (
+                "F".to_owned(),
+                vec![("unplannable_dependency", names(&["A"]))]
             ),
         ]
     );
+    assert_eq!(graph.critical_path(), ["E", "G"]);
+    // Every ticket on a cycle is told of it, whether or not it blocks.
+    for (id, lowest) in [
+        ("A", Some("A")),
+        ("B", Some("A")),
+        ("C", Some("A")),
+        ("D", Some("D")),
+        ("E", None),
+        ("F", None),
+        ("Z", None),
+    ] {
+        assert_eq!(graph.dependency_cycle(id), lowest, "{id}");
+    }
 }
 
 #[test]

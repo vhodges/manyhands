@@ -3366,7 +3366,10 @@ fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_met
         Value::Object(a.unknown_metadata.clone()),
         json!({"other": "kept"})
     );
-    assert_eq!(codes(a), []);
+    // Nothing in A's file was ignored. A and C wait for each other, which
+    // each of them reports with the lowest ID of the two.
+    assert_eq!(codes(a), [ProblemCode::DependencyCycle]);
+    assert_eq!(target_ids(a), [Some(TICKET_A)]);
     let b = ticket(&tickets, TICKET_B);
     assert_eq!((&b.slug, &b.parent, b.deps.len()), (&None, &None, 0));
     let c = ticket(&tickets, TICKET_C);
@@ -3381,13 +3384,21 @@ fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_met
             ProblemCode::DuplicateDependency,
             ProblemCode::RelationshipInvalidId,
             ProblemCode::RelationshipWrongType,
+            ProblemCode::DependencyCycle,
         ]
     );
-    // The ticket itself, the repeated dependency, and nothing for a value
-    // that was never an ID.
+    // The ticket itself, the repeated dependency, nothing for a value that
+    // was never an ID, and the lowest ID of the cycle.
     assert_eq!(
         target_ids(c),
-        [None, Some(TICKET_C), Some(TICKET_A), None, None]
+        [
+            None,
+            Some(TICKET_C),
+            Some(TICKET_A),
+            None,
+            None,
+            Some(TICKET_A)
+        ]
     );
     for problem in &c.problems {
         assert_eq!(problem.path.as_deref(), Some(c.path.as_str()));

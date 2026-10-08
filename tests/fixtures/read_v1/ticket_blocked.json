@@ -98,6 +98,12 @@
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
         "problems": [
           {
+            "code": "dependency_cycle",
+            "guidance": "Break the cycle between the tickets' dependencies.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+          },
+          {
             "code": "parent_cycle",
             "guidance": "Break the cycle between the tickets' parents.",
             "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
@@ -167,6 +173,12 @@
         },
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR4/ticket.md",
         "problems": [
+          {
+            "code": "dependency_cycle",
+            "guidance": "Break the cycle between the tickets' dependencies.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR4/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+          },
           {
             "code": "parent_cycle",
             "guidance": "Break the cycle between the tickets' parents.",

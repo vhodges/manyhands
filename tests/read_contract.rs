@@ -1316,15 +1316,20 @@ fn ticket_deps_matches_its_schema_and_golden() {
         .service
         .ticket_dependencies(
             &repo,
-            &items::item_id(items::RELATED_D),
+            &items::item_id(items::RELATED_E),
             DependencyDirection::Both,
             Some(2),
         )
         .unwrap();
 
-    assert_eq!(tree.dependencies.len(), 3);
-    assert!(tree.dependents.is_empty());
-    let envelope = Envelope::read_success("ticket deps", item_scope(&repo, items::RELATED_D), tree);
+    // E and F wait for each other, and G waits for E: both trees have
+    // lines, and each comes back to E on a repeated line.
+    assert_eq!(tree.dependencies.len(), 2);
+    assert_eq!(tree.dependents.len(), 3);
+    for lines in [&tree.dependencies, &tree.dependents] {
+        assert_eq!(lines.iter().filter(|line| line.repeated).count(), 1);
+    }
+    let envelope = Envelope::read_success("ticket deps", item_scope(&repo, items::RELATED_E), tree);
     assert_relationship_contract(
         "ticket_deps",
         "dependency_tree.schema.json",

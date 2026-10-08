@@ -26,9 +26,10 @@ pub struct ProblemDto {
     /// The ID a problem with a ticket's `deps` or `parent` is about: the
     /// ticket's own for `relationship_self_reference`, the repeated one
     /// for `duplicate_dependency`, and the document's or comment's for
-    /// `relationship_not_a_ticket`, and the parent for `parent_cycle`.
-    /// `None` for every other problem. It is
-    /// always a well-formed item ID and never text from the file.
+    /// `relationship_not_a_ticket`, the lowest ID of the cycle for
+    /// `dependency_cycle`, and the parent for `parent_cycle`. `None` for
+    /// every other problem. It is always a well-formed item ID and never
+    /// text from the file.
     pub target_id: Option<String>,
 }
 
@@ -422,8 +423,9 @@ pub struct DependencyDto {
 
 /// `closed` for a ticket with lifecycle closure metadata, whatever its
 /// `status` says and whatever it depends on. An open ticket is `ready` when
-/// every dependency is a closed ticket and it is on no dependency cycle,
-/// and `blocked` otherwise. `reasons` is empty unless it is `blocked`.
+/// every dependency is a closed ticket, and `blocked` otherwise: a closed
+/// dependency never blocks, whatever it depends on in turn. `reasons` is
+/// empty unless it is `blocked`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReadinessDto {
     pub state: ReadinessState,
@@ -431,17 +433,21 @@ pub struct ReadinessDto {
 }
 
 /// One cause of a ticket being blocked. `ids` is the dependency for
-/// `open_dependency` and `unresolved_dependency`, and the tickets of the
-/// cycle, in ID order, for `dependency_cycle`.
+/// `open_dependency` and `unresolved_dependency`. For `dependency_cycle`
+/// it is the open tickets that wait for each other, this one among them,
+/// in ID order.
 ///
 /// A ticket has one reason for each dependency that is an open ticket and
 /// each that no context holds a ticket for, in its file's order, and then
-/// one for the dependency cycle it is on, if it is on one.
+/// one for the cycle of open tickets it is on, if it is on one.
+///
+/// Only open tickets block, so the cycle a reason names can be part of a
+/// larger one the cycles read lists, which counts closed tickets too. A
+/// ticket on a cycle that blocks nothing has no such reason; its
+/// `problems` report the cycle either way.
 ///
 /// A reason names at most sixteen tickets of a cycle, the lowest IDs, and
-/// `complete` is false when the cycle has more. The first is always the
-/// cycle's lowest ID, which is the first ID of that cycle where the cycles
-/// read lists it whole.
+/// `complete` is false when the cycle has more.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReadinessReasonDto {
     pub code: ReadinessReasonCode,
@@ -888,13 +894,13 @@ pub struct UnplannableTicketDto {
 
 /// `ids` is the dependency for `unresolved_dependency` and for
 /// `unplannable_dependency`, which is an open ticket that is itself
-/// unplannable, and the tickets of the cycle for `dependency_cycle`, named
-/// as a readiness reason names them: at most sixteen, with `complete` false
-/// when the cycle has more.
+/// unplannable, and for `dependency_cycle` the open tickets that wait for
+/// each other, named as a readiness reason names them: at most sixteen,
+/// with `complete` false when the cycle has more.
 ///
 /// A ticket has one reason for each such dependency, in its file's order,
-/// and then one for the dependency cycle it is on. A dependency on its own
-/// cycle is covered by the cycle and has no reason of its own.
+/// and then one for the cycle of open tickets it is on. A dependency on its
+/// own cycle is covered by the cycle and has no reason of its own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UnplannableReasonDto {
     pub code: UnplannableReasonCode,

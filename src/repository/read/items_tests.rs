@@ -702,3 +702,66 @@ fn a_file_decides_its_own_readiness_against_what_the_index_holds_of_the_rest() {
         (ReadinessState::Closed, vec![])
     );
 }
+
+#[test]
+fn every_ticket_on_a_dependency_cycle_says_so_whether_or_not_it_blocks() {
+    // The links run in a ring through CLOSED, so no open ticket waits for
+    // itself and nothing is blocked by the ring.
+    let rows = [
+        related_to(SELF, None, &[OPEN], None),
+        related_to(OPEN, None, &[CLOSED], None),
+        related_to(CLOSED, None, &[SELF], Some(1)),
+        // Waits for the ring and is not on it.
+        related_to(ABSENT, None, &[SELF], None),
+    ];
+    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let dto = |row: &StoredItem| stored_item_dto(row, &related, &index());
+    let state = |row: &StoredItem| dto(row).readiness.map(|readiness| readiness.state);
+
+    // Each names the cycle by its lowest ID, the closed ticket included.
+    for row in &rows[..3] {
+        assert_eq!(
+            dto(row).problems,
+            [about(ProblemCode::DependencyCycle, Some(SELF))],
+            "{}",
+            row.id
+        );
+    }
+    assert_eq!(dto(&rows[3]).problems, []);
+    assert_eq!(state(&rows[0]), Some(ReadinessState::Blocked));
+    assert_eq!(state(&rows[1]), Some(ReadinessState::Ready));
+    assert_eq!(state(&rows[2]), Some(ReadinessState::Closed));
+    // The problem is found when a ticket is read and is never stored: a
+    // stored row that claims either cycle is one this build does not know.
+    for stored in [
+        "dependency_cycle",
+        "dependency-cycle",
+        "parent_cycle",
+        "parent-cycle",
+    ] {
+        assert_eq!(
+            ProblemCode::from_stored(stored),
+            ProblemCode::UnknownProblem
+        );
+    }
+    assert!(!RELATIONSHIP_PROBLEMS.contains(&ProblemCode::DependencyCycle));
+}
+
+#[test]
+fn a_list_of_documents_is_related_without_a_graph_of_tickets() {
+    let rows = [
+        related_to(SELF, None, &[OPEN], None),
+        related_to(OPEN, None, &[SELF], None),
+        stored(DOCUMENT, ItemDtoKind::Document, None),
+    ];
+    let rows: Vec<&StoredItem> = rows.iter().collect();
+    let related = Related::for_documents(&rows, &[]);
+
+    let document = stored_item_dto(rows[2], &related, &index());
+    assert_eq!(document.readiness, None);
+    assert_eq!(document.problems, []);
+    // What an ID names is still known, which is all a document needs.
+    assert_eq!(related.targets.state(SELF), Some(DependencyState::Open));
+    assert_eq!(related.targets.state(DOCUMENT), None);
+    assert_eq!(related.graph.readiness_state(SELF), None);
+}

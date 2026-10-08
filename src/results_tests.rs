@@ -420,6 +420,7 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "path_not_utf8",
             "metadata_not_representable",
             "relationship_not_a_ticket",
+            "dependency_cycle",
             "parent_cycle",
             "unknown_problem",
         ]

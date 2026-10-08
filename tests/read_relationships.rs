@@ -390,6 +390,45 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
         assert_eq!(shown.readiness, ticket(&listed, id).readiness);
         assert_eq!(shown.index.state, IndexState::Current);
     }
+    // The trees, the plan and the critical path follow the same copies.
+    let down = tree(service, &repo, TICKET_D, DependencyDirection::Down, None);
+    assert_eq!(
+        lines(&down.dependencies),
+        [TICKET_B.to_owned(), format!(" {TICKET_A}")]
+    );
+    assert_eq!(
+        down.dependencies
+            .iter()
+            .map(|node| node.state)
+            .collect::<Vec<_>>(),
+        [DependencyState::Open, DependencyState::Closed]
+    );
+    let up = tree(service, &repo, TICKET_A, DependencyDirection::Up, None);
+    assert_eq!(
+        lines(&up.dependents),
+        [
+            TICKET_B.to_owned(),
+            format!(" {TICKET_D}"),
+            TICKET_C.to_owned(),
+        ]
+    );
+    assert_eq!(up.ticket.state, DependencyState::Closed);
+    let both = tree(service, &repo, TICKET_B, DependencyDirection::Both, Some(1));
+    assert_eq!(lines(&both.dependencies), [TICKET_A.to_owned()]);
+    assert_eq!(lines(&both.dependents), [TICKET_D.to_owned()]);
+    let plan = plan(service, &repo);
+    assert_eq!(
+        batches(&plan),
+        [(1, vec![TICKET_B, TICKET_C]), (2, vec![TICKET_D])]
+    );
+    assert!(plan.unplannable.is_empty());
+    assert_eq!(batches(&plan)[0].1, sorted_ids(&ready));
+    for (batch, kind) in [(0, ItemContextKind::Active), (1, ItemContextKind::Primary)] {
+        assert_eq!(plan.batches[batch].items[0].context.kind, kind);
+    }
+    let path = service.ticket_critical_path(&repo).unwrap();
+    assert_eq!(ids(&path), [TICKET_B, TICKET_D]);
+    assert!(service.ticket_cycles(&repo).unwrap().items.is_empty());
     // Read by path, the primary copy of A is the open ticket its file is.
     let copy = service
         .show_path(&repo, None, Path::new(&ticket_path(TICKET_A)))
@@ -661,7 +700,15 @@ fn a_parent_groups_tickets_and_never_blocks_them() {
     for (id, parent) in [(RELATED_E, RELATED_F), (RELATED_F, RELATED_E)] {
         let item = ticket(&listed, id);
         assert_eq!(item.parent.as_ref().unwrap().id, parent);
-        assert_eq!(codes(item), [(ProblemCode::ParentCycle, Some(parent))]);
+        // They wait for each other as well, which is a problem of its own,
+        // named by the lowest ID of that cycle.
+        assert_eq!(
+            codes(item),
+            [
+                (ProblemCode::DependencyCycle, Some(RELATED_E)),
+                (ProblemCode::ParentCycle, Some(parent)),
+            ]
+        );
         let shown = service.show_item(&repo, &item_id(id)).unwrap();
         assert_eq!(shown.problems, item.problems);
         assert_eq!(shown.index.state, IndexState::Current);
@@ -1043,7 +1090,11 @@ fn two_branches_each_valid_alone_form_a_cycle_and_share_a_short_code_and_neither
             Path::new(&item.context.worktree),
             context_worktree(root, id)
         );
-        assert_eq!(codes(item), []);
+        // The short code is no problem. The cycle is, on both of them.
+        assert_eq!(
+            codes(item),
+            [(ProblemCode::DependencyCycle, Some(TICKET_A))]
+        );
         assert!(item.title.is_some() && item.closure.is_some());
     }
     let listed = all_tickets(service, &repo);
@@ -1479,5 +1530,96 @@ fn a_file_changed_since_the_refresh_decides_its_own_readiness_when_read_whole() 
     refresh_completely(service, root);
     assert!(ready(service, &repo).items.is_empty());
     assert_eq!(service.ticket_cycles(&repo).unwrap().items.len(), 3);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_cycle_through_a_closed_ticket_is_reported_and_blocks_nothing() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let service = &enabled.service;
+    // A waits for B, B for C, and C, which is closed, for A.
+    write_ticket(root, TICKET_A, &deps(&[TICKET_B]));
+    write_ticket(root, TICKET_B, &deps(&[TICKET_C]));
+    write(
+        root,
+        &ticket_path(TICKET_C),
+        &ticket_source(TICKET_C, "C", &format!("{CLOSURE}{}", deps(&[TICKET_A]))),
+    );
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+
+    // B's only dependency is closed, so B is ready, and A waits for B and
+    // for nothing else.
+    assert_eq!(ids(&ready(service, &repo)), [TICKET_B]);
+    let blocked_list = blocked(service, &repo);
+    assert_eq!(ids(&blocked_list), [TICKET_A]);
+    assert_eq!(
+        reasons(&blocked_list.items[0]),
+        [(ReadinessReasonCode::OpenDependency, vec![TICKET_B], true)]
+    );
+    let plan = plan(service, &repo);
+    assert_eq!(batches(&plan), [(1, vec![TICKET_B]), (2, vec![TICKET_A])]);
+    assert!(plan.unplannable.is_empty());
+    assert_eq!(
+        ids(&service.ticket_critical_path(&repo).unwrap()),
+        [TICKET_B, TICKET_A]
+    );
+    // The cycle is there all the same, and each of the three says so.
+    let cycles = service.ticket_cycles(&repo).unwrap();
+    assert_eq!(cycles.items.len(), 1);
+    assert_eq!(cycles.items[0].ids, [TICKET_A, TICKET_B, TICKET_C]);
+    let listed = all_tickets(service, &repo);
+    for id in [TICKET_A, TICKET_B, TICKET_C] {
+        let item = ticket(&listed, id);
+        assert_eq!(
+            codes(item),
+            [(ProblemCode::DependencyCycle, Some(TICKET_A))],
+            "{id}"
+        );
+        let shown = service.show_item(&repo, &item_id(id)).unwrap();
+        assert_eq!(shown.problems, item.problems);
+        assert_eq!(shown.readiness, item.readiness);
+        assert_eq!(shown.index.state, IndexState::Current);
+    }
+    assert_eq!(state(ticket(&listed, TICKET_C)), ReadinessState::Closed);
+    assert_git_transport_uninitialized();
+}
+
+/// More dependencies than a read could afford to compare each with each.
+const MANY_DEPENDENCIES: usize = 20_000;
+
+#[test]
+fn a_ticket_with_very_many_dependencies_is_read_from_the_index_with_all_of_them() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let service = &enabled.service;
+    let targets: Vec<String> = (0..MANY_DEPENDENCIES)
+        .map(|number| format!("01ARZ3NDEKTSV4RRFFQ6{number:06X}"))
+        .collect();
+    write_ticket(
+        root,
+        TICKET_A,
+        &deps(&targets.iter().map(String::as_str).collect::<Vec<_>>()),
+    );
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+
+    let listed = all_tickets(service, &repo);
+
+    let a = ticket(&listed, TICKET_A);
+    assert_eq!(a.deps.len(), MANY_DEPENDENCIES);
+    assert_eq!(
+        a.deps.iter().map(|dep| dep.id.as_str()).collect::<Vec<_>>(),
+        targets
+    );
+    assert_eq!(reasons(a).len(), MANY_DEPENDENCIES);
+    assert_eq!(codes(a), []);
+    let down = tree(service, &repo, TICKET_A, DependencyDirection::Down, None);
+    assert_eq!(down.dependencies.len(), MANY_DEPENDENCIES);
+    assert_eq!(
+        plan(service, &repo).unplannable[0].reasons.len(),
+        MANY_DEPENDENCIES
+    );
     assert_git_transport_uninitialized();
 }

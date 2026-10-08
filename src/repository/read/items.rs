@@ -6,7 +6,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
@@ -280,6 +280,11 @@ impl<'a> Targets<'a> {
                 .collect(),
         }
     }
+
+    /// The ticket in `row` as the graph takes it.
+    fn stored_node(&self, row: &StoredItem) -> TicketNode {
+        self.node(&row.id, row.closed_at.is_some(), &row.relationships)
+    }
 }
 
 /// What a ticket's relationships are read against: what every ID names,
@@ -287,7 +292,8 @@ impl<'a> Targets<'a> {
 /// item the index holds.
 pub(super) struct Related<'a> {
     targets: Targets<'a>,
-    nodes: Vec<TicketNode>,
+    /// The effective copy of every ticket, which the graph was made from.
+    tickets: Vec<&'a StoredItem>,
     pub(super) graph: TicketGraph,
 }
 
@@ -296,16 +302,26 @@ impl<'a> Related<'a> {
     /// `comments` the ID of every stored comment.
     pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
         let targets = Targets::of(rows, comments);
-        let nodes: Vec<TicketNode> = rows
+        let tickets: Vec<&StoredItem> = rows
             .iter()
+            .copied()
             .filter(|row| row.kind == ItemDtoKind::Ticket)
-            .map(|row| targets.node(&row.id, row.closed_at.is_some(), &row.relationships))
             .collect();
-        let graph = TicketGraph::new(nodes.clone());
+        let graph = TicketGraph::new(tickets.iter().map(|row| targets.stored_node(row)).collect());
         Self {
             targets,
-            nodes,
+            tickets,
             graph,
+        }
+    }
+
+    /// The same for a read that returns no ticket: what every ID names,
+    /// and a graph of nothing, which no document is looked up in.
+    fn for_documents(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
+        Self {
+            targets: Targets::of(rows, comments),
+            tickets: Vec::new(),
+            graph: TicketGraph::new(Vec::new()),
         }
     }
 
@@ -313,10 +329,10 @@ impl<'a> Related<'a> {
     /// the index stored for that ID, if it stored anything.
     fn graph_with(&self, ticket: TicketNode) -> TicketGraph {
         let mut nodes: Vec<TicketNode> = self
-            .nodes
+            .tickets
             .iter()
-            .filter(|node| node.id != ticket.id)
-            .cloned()
+            .filter(|row| row.id != ticket.id)
+            .map(|row| self.targets.stored_node(row))
             .collect();
         nodes.push(ticket);
         TicketGraph::new(nodes)
@@ -528,7 +544,8 @@ fn item_with_row(items: &mut [StoredItem], row_id: i64) -> Result<&mut StoredIte
 /// Adds to each of `items`, which are in row order, the edges and the
 /// relationship problems stored under its row.
 ///
-/// A row is checked as it is read. An edge belongs to a ticket and names
+/// A row is checked as it is read, in time that does not grow with the
+/// number of edges a ticket already has. An edge belongs to a ticket and names
 /// another item by a well-formed ID, a ticket has at most one parent, and a
 /// problem's detail is an item ID or nothing: discovery stores nothing
 /// else, so anything else fails the read. A problem code this build does
@@ -548,6 +565,10 @@ fn stored_relationships(
           ORDER BY edges.id ASC",
     )?;
     let mut rows = statement.query([repo.registration_id()])?;
+    // The dependencies read so far, by item row. The index's own unique
+    // constraint keeps an edge from being stored twice; a stored row is
+    // checked all the same.
+    let mut seen: BTreeSet<(i64, String)> = BTreeSet::new();
     while let Some(row) = rows.next()? {
         let item = item_with_row(items, row.get(0)?)?;
         let target: String = row.get(1)?;
@@ -562,7 +583,7 @@ fn stored_relationships(
             "parent" if item.relationships.parent.is_none() => {
                 item.relationships.parent = Some(target);
             }
-            "deps" if !item.relationships.deps.contains(&target) => {
+            "deps" if seen.insert((item.row_id, target.clone())) => {
                 item.relationships.deps.push(target);
             }
             _ => return Err(invalid_stored_data()),
@@ -719,10 +740,12 @@ pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<Pr
 /// same ID, is not repeated.
 ///
 /// `graph` holds the ticket as `relationships` has it. It gives the
-/// readiness, and `parent_cycle`, with the parent's ID, for a ticket whose
-/// `parent` links lead back to it. Such a ticket is a root, and is still
-/// shown the parent its file names. A document is no ticket of the graph
-/// and gets neither.
+/// readiness; `dependency_cycle`, with the lowest ID of the cycle, for
+/// every ticket on a dependency cycle, closed ones and ones the cycle does
+/// not block included; and `parent_cycle`, with the parent's ID, for a
+/// ticket whose `parent` links lead back to it. Such a ticket is a root,
+/// and is still shown the parent its file names. A document is no ticket
+/// of the graph and gets none of these.
 ///
 /// Every ID here was parsed as one, from the file or from the index, so a
 /// problem's `target_id` is never text taken from front matter.
@@ -748,6 +771,9 @@ fn relate(
     dto.deps = relationships.deps.iter().filter_map(&mut target).collect();
     if let Some(id) = &dto.id {
         dto.readiness = graph.readiness(id);
+        if let Some(lowest) = graph.dependency_cycle(id) {
+            problems.push((ProblemCode::DependencyCycle, Some(lowest.to_owned())));
+        }
         if graph.on_parent_cycle(id) {
             problems.push((ProblemCode::ParentCycle, relationships.parent.clone()));
         }
@@ -1291,7 +1317,10 @@ impl RepositoryService {
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
             let comments = stored_comment_ids(connection, repo)?;
-            let related = Related::of(&rows, &comments);
+            let related = match kind {
+                ItemDtoKind::Document => Related::for_documents(&rows, &comments),
+                ItemDtoKind::Ticket => Related::of(&rows, &comments),
+            };
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()

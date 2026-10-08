@@ -96,7 +96,7 @@
       }
     },
     "readiness": {
-      "description": "closed for a ticket with closure metadata. An open ticket is ready when every dependency is a closed ticket and it is on no dependency cycle, and blocked otherwise. reasons is empty unless it is blocked.",
+      "description": "closed for a ticket with closure metadata. An open ticket is ready when every dependency is a closed ticket, and blocked otherwise: a closed dependency never blocks, whatever it depends on. reasons is empty unless it is blocked.",
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["state", "reasons"],
