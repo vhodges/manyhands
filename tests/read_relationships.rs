@@ -1690,3 +1690,206 @@ fn a_relationship_read_is_not_complete_when_the_refresh_could_not_read_every_tic
     );
     assert_git_transport_uninitialized();
 }
+
+/// Commits `source` at `path` on `branch`, creating the branch at HEAD when
+/// it does not exist, without touching the working tree.
+fn commit_on_branch(
+    repository: &git2::Repository,
+    branch: &str,
+    path: &str,
+    source: &str,
+    seconds: i64,
+) -> git2::Oid {
+    let reference = format!("refs/heads/{branch}");
+    let parent = match repository.find_reference(&reference) {
+        Ok(reference) => reference.peel_to_commit().unwrap(),
+        Err(_) => repository.head().unwrap().peel_to_commit().unwrap(),
+    };
+    let blob = repository.blob(source.as_bytes()).unwrap();
+    let tree = git2::build::TreeUpdateBuilder::new()
+        .upsert(path, blob, git2::FileMode::Blob)
+        .create_updated(repository, &parent.tree().unwrap())
+        .unwrap();
+    let signature = git2::Signature::new(
+        "Manyhands Test",
+        "manyhands-test@example.invalid",
+        &git2::Time::new(seconds, 0),
+    )
+    .unwrap();
+    let commit = repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "ticket",
+            &repository.find_tree(tree).unwrap(),
+            &[&parent],
+        )
+        .unwrap();
+    repository
+        .reference(&reference, commit, true, "ticket")
+        .unwrap();
+    commit
+}
+
+/// Merges `branch` into the checked-out primary branch with a merge commit,
+/// as integrating a ticket does, and checks the result out.
+fn merge_into_primary(repository: &git2::Repository, branch: &str, seconds: i64) {
+    let ours = repository.head().unwrap().peel_to_commit().unwrap();
+    let theirs = repository
+        .find_reference(&format!("refs/heads/{branch}"))
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    let mut merged = repository.merge_commits(&ours, &theirs, None).unwrap();
+    assert!(!merged.has_conflicts(), "{branch} merges cleanly");
+    let tree = repository
+        .find_tree(merged.write_tree_to(repository).unwrap())
+        .unwrap();
+    let signature = git2::Signature::new(
+        "Manyhands Test",
+        "manyhands-test@example.invalid",
+        &git2::Time::new(seconds, 0),
+    )
+    .unwrap();
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[&ours, &theirs],
+        )
+        .unwrap();
+    repository
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+}
+
+// The same two branches as above, each valid alone, after both have been
+// merged: the cycle and the shared short code are now on the primary
+// branch, where no item worktree is left to read them from.
+#[test]
+fn two_merged_branches_form_a_cycle_and_share_a_short_code_on_the_primary_branch() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let service = &enabled.service;
+    write_ticket(root, TICKET_A, "");
+    write_ticket(root, TICKET_B, "");
+    write_ticket(root, TICKET_C, &deps(&[TICKET_A]));
+    let paths = [TICKET_A, TICKET_B, TICKET_C].map(ticket_path);
+    commit(
+        &fixture,
+        &paths.iter().map(String::as_str).collect::<Vec<_>>(),
+        1_000,
+    );
+    let slug = format!("slug: {SHARED_SLUG}\n");
+    for (seconds, id, other) in [(2_000, TICKET_A, TICKET_B), (3_000, TICKET_B, TICKET_A)] {
+        let branch = format!("manyhands/ticket/{id}");
+        commit_on_branch(
+            &fixture.repository,
+            &branch,
+            &ticket_path(id),
+            &ticket_source(id, id, &format!("{slug}{}", deps(&[other]))),
+            seconds,
+        );
+        // Each branch alone has no cycle: the other ticket depends on
+        // nothing there.
+        let tip = fixture
+            .repository
+            .find_reference(&format!("refs/heads/{branch}"))
+            .unwrap()
+            .peel_to_tree()
+            .unwrap();
+        let other_blob = tip
+            .get_path(Path::new(&ticket_path(other)))
+            .unwrap()
+            .to_object(&fixture.repository)
+            .unwrap();
+        assert!(!String::from_utf8_lossy(other_blob.as_blob().unwrap().content()).contains("deps"));
+    }
+    merge_into_primary(
+        &fixture.repository,
+        &format!("manyhands/ticket/{TICKET_A}"),
+        4_000,
+    );
+    merge_into_primary(
+        &fixture.repository,
+        &format!("manyhands/ticket/{TICKET_B}"),
+        5_000,
+    );
+    for id in [TICKET_A, TICKET_B] {
+        let merged = fs::read_to_string(root.join(ticket_path(id))).unwrap();
+        assert!(merged.contains("deps: [") && merged.contains(SHARED_SLUG));
+    }
+    assert!(!root.join(".manyhands/worktrees").exists());
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    let blocked = blocked(service, &repo);
+    let cycles = service.ticket_cycles(&repo).unwrap();
+    let found = service.find_tickets_by_slug(&repo, SHARED_SLUG).unwrap();
+    let plan = plan(service, &repo);
+
+    assert_eq!(sorted_ids(&blocked), [TICKET_A, TICKET_B, TICKET_C]);
+    for (id, other) in [(TICKET_A, TICKET_B), (TICKET_B, TICKET_A)] {
+        assert_eq!(
+            reasons(ticket(&blocked, id)),
+            [
+                (ReadinessReasonCode::OpenDependency, vec![other], true),
+                (
+                    ReadinessReasonCode::DependencyCycle,
+                    vec![TICKET_A, TICKET_B],
+                    true
+                ),
+            ]
+        );
+    }
+    assert!(ready(service, &repo).items.is_empty());
+    assert_eq!(cycles.items.len(), 1);
+    assert_eq!(cycles.items[0].kind, CycleKind::Deps);
+    assert_eq!(cycles.items[0].ids, [TICKET_A, TICKET_B]);
+    assert!(cycles.complete);
+    assert_eq!(cycles.index.state, IndexState::Current);
+    assert!(plan.batches.is_empty());
+    assert_eq!(unplannable(&plan).len(), 3);
+    assert!(
+        service
+            .ticket_critical_path(&repo)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // Both matches are read from the primary branch.
+    let canonical_root = fs::canonicalize(root).unwrap();
+    assert_eq!(sorted_ids(&found), [TICKET_A, TICKET_B]);
+    for item in &found.items {
+        assert_eq!(item.slug.as_deref(), Some(SHARED_SLUG));
+        assert_eq!(item.context.kind, ItemContextKind::Primary);
+        assert_eq!(item.context.branch.as_deref(), Some("main"));
+        assert_eq!(Path::new(&item.context.worktree), canonical_root);
+        assert_eq!(
+            codes(item),
+            [(ProblemCode::DependencyCycle, Some(TICKET_A))]
+        );
+    }
+    // A complete read of either says the same from the merged file.
+    for (id, other) in [(TICKET_A, TICKET_B), (TICKET_B, TICKET_A)] {
+        let shown = service.show_item(&repo, &item_id(id)).unwrap();
+        assert_eq!(shown.context.kind, ItemContextKind::Primary);
+        assert_eq!(shown.deps.len(), 1);
+        assert_eq!(shown.deps[0].id, other);
+        assert_eq!(
+            codes(&shown),
+            [(ProblemCode::DependencyCycle, Some(TICKET_A))]
+        );
+        assert_eq!(shown.index.state, IndexState::Current);
+    }
+
+    // Nothing was repaired.
+    assert!(before == support::repository_and_worktree_snapshot(&fixture));
+    assert_git_transport_uninitialized();
+}
