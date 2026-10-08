@@ -6,12 +6,51 @@ const ADVERTISED: &str = "1111111111111111111111111111111111111111";
 const TRACKING: &str = "2222222222222222222222222222222222222222";
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
-    let data = tempfile::tempdir().unwrap();
-    let root = tempfile::tempdir().unwrap();
+    fixture_in(&std::env::temp_dir())
+}
+
+fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    // Match canonical registry lookups, including Windows verbatim prefixes and
+    // macOS /var aliases, before creating either fixture directory.
+    let parent = parent.canonicalize().unwrap();
+    let data = tempfile::tempdir_in(&parent).unwrap();
+    let root = tempfile::tempdir_in(&parent).unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",[root.path().to_str().unwrap()]).unwrap();
     (data, root, service)
+}
+
+#[cfg(unix)]
+#[test]
+fn state_fixture_symlink_parent_configures_and_reads_registered_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().canonicalize().unwrap();
+    let real = parent.join("real");
+    let alias = parent.join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let (data, root, service) = fixture_in(&alias);
+
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+    })
+    .unwrap();
+    assert_eq!(
+        service.remote_snapshot(root.path()).unwrap().observations(),
+        &[advertised()]
+    );
+    assert_eq!(data.path(), data.path().canonicalize().unwrap());
+    assert_eq!(root.path(), root.path().canonicalize().unwrap());
+    let registered: String = Connection::open(data.path().join(REGISTRY_FILE))
+        .unwrap()
+        .query_row("SELECT root_path FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(registered, root.path().to_str().unwrap());
 }
 
 #[test]

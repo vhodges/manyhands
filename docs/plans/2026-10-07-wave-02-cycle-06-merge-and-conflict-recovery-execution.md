@@ -1046,3 +1046,145 @@ eight dirty/untracked paths; no operation/conflict is in progress. Main's unrela
 in an explicitly unaccepted WIP snapshot for clean no-op rebase preflight, using
 the approved preservation authority. This is not Task 4 acceptance. Pending first
 step is independent specification then quality review of the native-helper seam.
+
+Unaccepted preservation checkpoint is `fb6d234d31c958275e6c24ddae6686f2eb5776ff`.
+Rebase onto freshly fetched `60b0324` was a clean no-op; ancestry and clean status
+passed. Accepted Task 3 remains `9c7253f`; earlier checkpoints need no remapping.
+The reviewed source tree from the last writer is unchanged by preflight. Do not
+repeat the unchanged Linux full suite solely to resume; seek the pending review.
+
+### Shared Unix seam reviewed; Windows entry — 2026-10-08
+
+Specification reviewer `ses_ee4e19292ffefcpB6WZ5NFyeoz` found a fixture portability
+defect: macOS /var aliases could mismatch canonical libgit2 workdirs and lexical
+hook keys, or make ancestor-refusal tests reject the system alias rather than the
+intended fixture mutation. Worker `ses_ee60ad283ffet61HIC7U2OlkIL` changed only
+sync_tests.rs: canonicalize temporary parents before fixture creation, add a
+deliberate alias-parent regression and hook-fired/positive-read attestations.
+Production strict no-follow traversal stays unchanged.
+
+Worker demonstrated the new alias regression red before the fix, then 6 native
+and 104 sync tests green, plus Devenv all-feature check, fmt, strict all-target/
+all-feature clippy and diff check. Spec re-review approved round 1, no remaining
+causal blocker. Fresh code-quality reviewer `ses_ee4d77b4affeFtOWpMkasGZQJs` approved
+the actual Unix-helper source/wiring and fixture fix under the best-effort ruling.
+Native macOS evidence remains pending; the documented storage limits stand.
+
+Continue one bounded Windows implementation writer, with the reviewed Unix source
+at fb6d234 as its source baseline and the uncommitted alias test fix preserved.
+No whole-Task-4 acceptance/checkpoint or delivery authority follows from this seam.
+
+### Windows primitive checkpoint reviewed — 2026-10-08
+
+Worker `ses_ee4d41ecaffe7LUs65TgfgGmAY` completed a lower-level Windows checkpoint,
+not the full public resolution port: retained ancestor/no-reparse handles, path
+policy, volume/file identity and stable stamps, absent-only hard-link publication,
+matching-image retirement, same-volume guarded replacement, and repository owned
+read/replacement dispatch. New private windows.rs/windows_path.rs/windows_tests.rs
+live under native_resolution/. remote/sync.rs remains unchanged and Windows still
+refuses at ResolutionIndexLock acquisition until the next wiring seam.
+
+Specification reviewer `ses_ee4bdc9e1ffeW1dSGWyeUAowLZ` found a concrete hard-link
+retirement defect: disposition through an ownership image opened by the anchor
+name could delete that anchor instead of the requested sentinel name. Fixed to
+open/verify and retire the requested target handle, close handles then prove
+absence; a native regression preserves the anchor while retiring index.lock.
+Spec re-review approved. Quality reviewer `ses_ee4b65b55ffeMR7JlUYeL58NGQ` found
+ordinary readers unnecessarily requested DELETE access, incompatible with stock
+libgit2 readers omitting delete sharing. Fixed ordinary images to request read/
+write only, with DELETE limited to the fresh retirement target; three native
+sharing regressions cover existing and retained images. Quality re-review approved.
+
+Host-runnable Windows path policy demonstrated red/green (2 tests). Linux 104 sync
+tests, required check/fmt/strict clippy, full all-feature suite (281 library tests
+plus integration/SSH/doc runners) and CLI passed before Windows-only review fixes.
+Final fixes passed host path tests, fmt/check/strict clippy and diff check without
+repeating the unaffected broad suite. Native primitive/integration regressions
+were added without ignore/skip conditions but are unrun: Windows cross-check
+failed E0463 because target core/standard libraries are unavailable. Static API
+review used the actual direct locked windows-sys 0.61.2; no new dependency.
+
+Proceed to journal-backed Windows sentinel/index/metadata lifecycle and shared
+ref/log proof wiring. Native compile/runtime, sharing execution and directory-
+entry durability evidence remain factual gaps; best-effort ruling stands.
+
+### Windows wiring and whole-Task-4 review — 2026-10-08
+
+Worker `ses_ee4aecf58ffeZX1DI4HQaBFYh7` completed Windows journal-backed
+baseline/sentinel/output acquisition, private stock-index serialization and native
+installation, per-member metadata retirement, release reconciliation and shared
+ref/log authority/final-proof wiring. Added private remote/windows_resolution.rs
+and native installation/replay/privacy/foreign-state tests without ignore/skip.
+Specification reviewer `ses_ee491823effeh8VmYuZ5vVf28m` and quality reviewer
+`ses_ee48dc0ecffeUt63xELVCC6mrx` approved this source seam. Linux full/static/CLI
+passes were attributed; Windows target-core E0463 still prevented native checking.
+
+Whole-Task-4 spec reviewer `ses_ee47ce0a8ffe05X0GvViQT5x8r`, against accepted
+Task 3 base 9c7253f, found four cross-seam gaps missed by bounded reviews: legitimate
+clean merge entries rejected as outside-token dirt; active parent reservation not
+released after local completion; refresh-required not marked; unrelated baseline
+relationship diagnostics globally blocking resolution. A minor generic-subject
+contract mismatch was also identified. Worker `ses_ee47466f3ffewtsPSphLrPYahf`
+added regression-first fixes in remote sync/state/reservation and tests: separate
+worktree dirt from recorded HEAD-to-index merge entries, fenced local finalization
+to Interrupted/reconciliation_required after released sentinel, atomic refresh
+invalidation with checkpoint, affected/baseline-scoped validation, and approved
+subjects for new candidates only. Frozen candidates and publication authority
+remain unchanged; SQL failures roll back observation and exact retry reuses effects.
+
+Spec round 1 closed those findings but found one restart regression: Applied/released
+resolution could enter the generic old-HEAD fast-forward path. Round 2 now branches
+on phase before mutation: Applied requires exact candidate/result/tree, old/third
+HEAD refuses without Git effects; Applying retains accepted Task 3 recovery.
+Red/green regressions cover old/third restored HEAD, clean merged code, local
+authoring after release, refresh/finalization faults and unrelated old diagnostics.
+Spec round 2 approved with no remaining P1/P2. Fresh whole-task quality reviewer
+`ses_ee440831effe0IgrVSKlX7bdb3` approved the complete actual tree with no important
+causal findings under the best-effort ruling. Native gates remain pending.
+
+Final worker-attributed Linux verification on the amended Rust tree passed Devenv
+all-feature locked check, fmt check, strict all-target/all-feature clippy, full
+all-feature locked tests (292 library tests plus all integration/SSH/doc suites),
+and CLI smoke. Focused candidate 19 and sync 115 also pass. No unchanged-tree
+broad rerun is needed for verification-checkpoint bookkeeping.
+
+### Native CI publication authority and preparation — 2026-10-08
+
+Owner authorized push for manual CI, noting previous macOS/Windows failures and
+disabled automatic triggers. Workflow remains workflow_dispatch-only; build jobs
+remain Linux x86_64/aarch64, Windows x86_64/aarch64 MSVC and macOS ARM64. Inspect
+actual run results rather than inferring platform success. Added affected Task-4
+reservation/foundation/enablement/authoring/discovery integration tests to the
+existing native headless command, preserving all prior credential/SSH tests and
+release artifacts. Native-runner direct Cargo uses the existing AGENTS exception.
+
+Prior run 37475030123 built release binaries on all five targets but failed the
+test step on both Windows jobs and macOS; Linux jobs passed. Another ticket's
+manual run 37777664096 is unrelated evidence and must not be modified or counted.
+
+Fresh ticket remote is 2dbd3b4, its sole local-missing commit being the original
+ticket checkpoint. Its entire patch creates this ticket, identical to rebased
+checkpoint 18aced7; current ticket retains its subsequent approved evolution.
+Publish without force: preserve that equivalent checkpoint by an explicit
+history-only merge and verify the reviewed file tree is unchanged. A moved remote
+must be inspected again, not overwritten. Verification checkpoint remains
+unaccepted Task-4 work until native results and remaining gates are handled.
+No PR, merge, ticket closure or cleanup authority was added.
+
+### Previous native fixture failure corrected before dispatch — 2026-10-08
+
+Downloaded failed logs for run 37475030123. All 25 state/reservation unit failures
+on macOS and Windows stem from RepositoryNotRegistered in fixtures: raw tempdir
+paths were manually inserted while production canonicalizes before registry lookup.
+Current fixture source retained that mismatch. Worker
+`ses_ee4396fb5ffeVmkjClsqg4L9Vi` changed only state_tests.rs/reservation_tests.rs:
+canonicalize explicit fixture parents before tempdir creation, preserving production
+canonical guards. Linux deliberate alias-parent regressions first failed with the
+same RepositoryNotRegistered, then passed; existing sync alias control also passed
+(3 total), state 28 and reservation 28 plus required static checks/diff passed.
+No global TMPDIR mutation, ignore/skip or production workaround was added.
+Independent spec `ses_ee435ef12ffeU3OkR6KWbAibem` and quality
+`ses_ee434d1aeffeA37gdLoS2eYoM3` approved this narrowly scoped test correction.
+Native success remains unproved until the new matrix actually runs. Rust production
+matches the whole-task reviewed/full-tested tree; this extra test-only correction
+does not justify repeating unchanged broad validation before publication.

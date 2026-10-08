@@ -30,6 +30,9 @@ mod discovery;
 pub mod keys;
 #[cfg(unix)]
 mod native_resolution;
+#[cfg(windows)]
+#[path = "repository/native_resolution/windows.rs"]
+mod native_resolution;
 mod recovery;
 mod remote;
 pub mod transport;
@@ -6142,7 +6145,18 @@ fn owned_file_bytes_with_mode_policy(
     Ok(Some(bytes))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn owned_file_bytes(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    native_resolution::read_owned(root, relative)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn owned_file_bytes(
     _root: &Path,
     _relative: &Path,
@@ -6159,7 +6173,6 @@ pub(crate) fn owned_file_bytes(
     ))
 }
 
-#[cfg(unix)]
 fn owned_prewrite_digest(bytes: Option<&[u8]>) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
     digest.update(b"manyhands-resolution-prewrite-v1\0");
@@ -6833,7 +6846,28 @@ pub(crate) fn write_owned_document_if_prewrite_digest(
         operation,
         repository_root,
     );
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let repository = git2::Repository::open(root).map_err(|error| {
+            RepositoryError::git(operation, Some(repository_root.to_owned()), error)
+        })?;
+        native_resolution::replace_owned(
+            root,
+            relative,
+            repository.path(),
+            bytes,
+            expected_prewrite_digest,
+        )
+        .map_err(|error| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::ExternalChange,
+                error,
+            )
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (root, relative, bytes, expected_prewrite_digest);
         // Do not silently downgrade durable resolution to path-based writes.

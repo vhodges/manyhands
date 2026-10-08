@@ -736,12 +736,23 @@ impl RepositoryService {
             if !is_sync(&record.target) || !record.reconciliation_required {
                 return Err(state::recovery_required());
             }
-            for ordinal in 0..=1 {
+            // Prefer the latest stage. A locally completed resolution retains
+            // its publication handoff until explicit restart observes Fetch.
+            for ordinal in (0..=1).rev() {
                 if let Some(step) = state::integration_step(tx, record.id, ordinal)?
-                    && step.phase == state::IntegrationStepPhase::Applying
                     && step.candidate_oid.is_some()
                 {
-                    return Ok(Some(step));
+                    let released_resolution: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1 AND attempt.integration_step_id=(SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2) AND attempt.phase='applied' AND artifact.phase='released' AND artifact.ref_phase='observed')",
+                        params![record.id, ordinal], |row| row.get(0),
+                    ).map_err(|_| state::recovery_required())?;
+                    if step.phase == state::IntegrationStepPhase::Applying
+                        || (step.phase == state::IntegrationStepPhase::Applied
+                            && step.result_oid != record.sync_evidence.local_oid
+                            && released_resolution)
+                    {
+                        return Ok(Some(step));
+                    }
                 }
             }
             Ok(None)
@@ -896,6 +907,43 @@ impl RepositoryService {
                 id,
                 &reacquired,
             )))
+        })
+    }
+
+    /// Release only local execution ownership after verified metadata/sentinel
+    /// retirement. Retain the original synchronization and frozen child evidence
+    /// for explicit re-fetch/publication reconciliation, never published authority.
+    pub(super) fn finalize_synchronization_resolution(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        checkpoint: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            let (step, candidate, phase, _, _, _) =
+                state::resolution_candidate_for_attempt(tx, &record, attempt)?
+                    .ok_or_else(state::recovery_required)?;
+            let artifact = state::resolution_index_artifact(tx, &record, attempt)?
+                .ok_or_else(state::recovery_required)?;
+            if record.phase != RemoteOperationPhase::Reconciling
+                || !record.reconciliation_required
+                || record.authority.is_some()
+                || phase != "applied"
+                || candidate != checkpoint
+                || step.phase != state::IntegrationStepPhase::Applied
+                || step.result_oid != Some(checkpoint)
+                || artifact.phase != "released"
+                || artifact.ref_phase != "observed"
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                params![record.id, now(), owner.epoch],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(())
         })
     }
 

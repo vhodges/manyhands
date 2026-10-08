@@ -1,5 +1,29 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Resumed after owner pause — 2026-10-08
+
+Owner requested "Please continue". Fresh main remains `60b0324`; identified dirty
+work was preserved in unaccepted WIP `fb6d234`, and clean ticket rebase was a no-op.
+Accepted Task 3 review base remains `9c7253f`.
+
+Unix-native and Windows primitive/protocol seams now have independent spec/quality
+approval. Whole-Task-4 review found cross-seam merge-entry, owner-release, refresh,
+validation-scope and completed-restart gaps; regression-first fixes closed them
+in two rounds. Final whole-task spec and quality reviews approve the source under
+the best-effort ruling, conditional on native gates. Latest Linux full verification
+passed 292 library tests and all integration/SSH/doc suites plus required static
+checks and CLI. Final test-only prior-CI fixture correction additionally passes
+two new alias regressions, state 28/reservation 28 and static checks, independently
+reviewed. No disabled tests or production canonical-root workaround.
+
+Owner authorized push and MANUAL native CI, noting previous macOS/Windows failures.
+Workflow stays dispatch-only; affected Task-4 integration tests were added to the
+existing five-target headless command. Next: publish reviewed verification tree
+without force, preserving sole equivalent remote checkpoint 2dbd3b4 via verified
+history-only reconciliation; dispatch native matrix and inspect/fix actual failures.
+Task 4 remains unaccepted until these gates are handled; Tasks 5–7 not started.
+No PR/merge/closure/cleanup authorization. Ledger records all agents and decisions.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.
