@@ -257,7 +257,7 @@ result_codes! {
     RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),
         "The repository is not enabled in Manyhands.";
     RepositoryInaccessible => "repository_inaccessible", Some(FailureClass::Blocked),
-        "The registered repository root cannot be read.";
+        "The repository cannot be read.";
     InvalidId => "invalid_id", Some(FailureClass::Input),
         "That ID is not a canonical ULID.";
     ItemNotFound => "item_not_found", Some(FailureClass::Input),

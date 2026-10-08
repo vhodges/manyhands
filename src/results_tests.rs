@@ -80,7 +80,7 @@ fn result_code_messages_are_fixed() {
         "That path is inside a repository but is not its root or a linked worktree root.",
         "The repository has no working tree.",
         "The repository is not enabled in Manyhands.",
-        "The registered repository root cannot be read.",
+        "The repository cannot be read.",
         "That ID is not a canonical ULID.",
         "No item has that ID.",
         "No canonical resource exists at that path.",
