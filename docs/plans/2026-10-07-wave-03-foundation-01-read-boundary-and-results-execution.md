@@ -1106,3 +1106,17 @@ above.
 F1 is review-ready at `f959106` plus the document commits. Not authorized and
 not done: pull request, merge, ticket closure, worktree cleanup, further
 workflow dispatch, pushing the six new ticket branches.
+
+## Closure and publication — 2026-10-08
+
+The product owner authorized, in this order: closing this ticket on its
+branch so that it merges closed, pushing the branch, opening a pull request,
+and pushing the follow-up ticket branches. The ticket was closed at
+`2026-10-08T21:30:10Z` with `closed_at` and `closed_by`, which is what the canonical
+schema, and F1's own closure rule, count as closed.
+
+The product owner also decided the question of an item held on primary and in
+its own worktree: keep one effective copy, and add a flag pointing at the
+commit. Raised as `01M4EPRY203WRKEDQH8403T35B`.
+
+Merge and worktree cleanup are not authorized.
