@@ -80,7 +80,7 @@ pub(super) fn at_root(mut error: ReadError, root: &Path) -> ReadError {
 }
 
 /// Opens the repository at exactly `path`, never one above it.
-fn open_exactly(path: &Path) -> Result<Repository, git2::Error> {
+pub(super) fn open_exactly(path: &Path) -> Result<Repository, git2::Error> {
     Repository::open_ext(path, RepositoryOpenFlags::NO_SEARCH, &[] as &[&OsStr])
 }
 

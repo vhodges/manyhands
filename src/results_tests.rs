@@ -843,12 +843,35 @@ fn redact_url_replaces_a_remote_helper_location_whole() {
         "fd::7",
         "transport::address/with/a/path",
         "ext::ssh://git@example.com/repo.git",
+        "git-remote+x.y::address",
+        "9p::address",
     ] {
         assert_eq!(redact_url(input), REDACTED, "{input}");
     }
-    // After a separator, `::` is path text.
-    for kept in ["/srv/a::b/repo", "relative/a::b", "git@host:team/a::b"] {
+    // Only a transport name directly before the `::` makes a helper form,
+    // as Git reads it. Elsewhere `::` is path text, or part of an IPv6
+    // address in the scp-like form.
+    for kept in [
+        "/srv/a::b/repo",
+        "relative/a::b",
+        "git@host:team/a::b",
+        "[::1]:repo",
+        "[::1]:team/repo.git",
+        "git@[2001:db8::1]:team/repo.git",
+        "[2001:db8::1]:repo",
+        "::address",
+        "+ext::address",
+    ] {
         assert_eq!(redact_url(kept), kept);
+    }
+    // A credential before an IPv6 host is still one.
+    for input in [
+        "user:hunter2@[::1]:repo",
+        "user:hunter2@[2001:db8::1]:team/repo.git",
+        "//user:hunter2@[::1]/repo",
+    ] {
+        let redacted = redact_url(input);
+        assert_eq!(redacted, REDACTED, "{input}");
     }
 }
 

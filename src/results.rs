@@ -570,7 +570,8 @@ impl Serialize for OperationFailureCode {
 /// a surviving secret is not. That includes any location without a
 /// `scheme://` that holds a control character, a line break or a tab
 /// among them, and Git's remote-helper form `<transport>::<address>`, whose
-/// address is handed to a program. A space is not one: a local path with
+/// address is handed to a program. A caller that knows a remote has a helper
+/// configured must not publish its locations at all: this sees only text. A space is not one: a local path with
 /// spaces is returned as written.
 pub fn redact_url(url: &str) -> String {
     let redacted = match url.split_once("://") {
@@ -591,13 +592,23 @@ fn has_whitespace_or_control(text: &str) -> bool {
         .any(|character| character.is_whitespace() || character.is_control())
 }
 
-/// Recognizes Git's remote-helper form, `<transport>::<address>`: a `::`
-/// with no path separator before it. What follows is passed to the program
-/// `git-remote-<transport>`, and for `ext` it is a command line.
+/// Recognizes Git's remote-helper form, `<transport>::<address>`, as Git
+/// itself reads it: the location starts with a transport name, an ASCII
+/// letter or digit followed by letters, digits, `+`, `.` and `-`, and then
+/// `::`. What follows is passed to the program `git-remote-<transport>`,
+/// and for `ext` it is a command line.
+///
+/// A `::` anywhere else is not one: `[::1]:repo` is an scp-like location
+/// on an IPv6 host.
 fn is_remote_helper_location(url: &str) -> bool {
-    url.split(['/', '\\'])
-        .next()
-        .is_some_and(|first| first.contains("::"))
+    let transport = url
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || b"+.-".contains(byte))
+        .count();
+    url.as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphanumeric)
+        && url[transport..].starts_with("::")
 }
 
 fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {

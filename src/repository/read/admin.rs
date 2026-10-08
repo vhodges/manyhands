@@ -3,14 +3,14 @@
 
 use std::path::Path;
 
-use git2::{Config, ConfigLevel};
+use git2::{Config, ConfigLevel, Repository};
 use time::OffsetDateTime;
 
 use super::{
     Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
     IdentitySource, ProblemDto, ReadError, RemoteDto, RemoteListDto, RepositoryInspectionDto,
     RepositoryListDto, RepositorySummaryDto, ResolvedRepository, index_state,
-    resolve::{at_root, selected_repository},
+    resolve::{at_root, open_exactly, selected_repository},
 };
 use crate::{
     canonical,
@@ -20,7 +20,7 @@ use crate::{
         SuppliedIdentityConfig, read_configuration_guarded, remote_info_for, resolve_identity,
     },
     results::{
-        ProblemCode, ResultCode, absolute_path_string, redact_url, relative_path_string,
+        ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
         timestamp_string,
     },
 };
@@ -117,13 +117,37 @@ fn inspected_configuration(configuration: ConfigurationInspection) -> Configurat
     }
 }
 
-/// Remotes in name order, their locations redacted.
-fn remote_dtos(remotes: Vec<RemoteInfo>, publication_remote: Option<&str>) -> Vec<RemoteDto> {
+/// Whether Git reaches the remote `name` through a remote helper it is
+/// configured with, `remote.<name>.vcs`. Its locations are then whatever
+/// that program takes, so nothing about their form says what they hold.
+/// A configuration that cannot be read is taken to configure one.
+fn has_remote_helper(repository: &Repository, name: &str) -> bool {
+    match repository.config().and_then(|mut config| config.snapshot()) {
+        Ok(config) => config.get_entry(&format!("remote.{name}.vcs")).is_ok(),
+        Err(_) => true,
+    }
+}
+
+/// Remotes in name order, their locations redacted: each in part, as
+/// `redact_url` does it, or whole for a remote with a helper configured.
+fn remote_dtos(
+    repository: &Repository,
+    remotes: Vec<RemoteInfo>,
+    publication_remote: Option<&str>,
+) -> Vec<RemoteDto> {
+    let location = |helper: bool, url: &str| {
+        if helper {
+            REDACTED.to_owned()
+        } else {
+            redact_url(url)
+        }
+    };
     let mut remotes: Vec<_> = remotes
         .into_iter()
-        .map(|remote| RemoteDto {
-            fetch_location: redact_url(&remote.fetch_url),
-            push_location: redact_url(&remote.push_url),
+        .map(|remote| (has_remote_helper(repository, &remote.name), remote))
+        .map(|(helper, remote)| RemoteDto {
+            fetch_location: location(helper, &remote.fetch_url),
+            push_location: location(helper, &remote.push_url),
             publication_eligible: remote.publication_eligible,
             selected_for_publication: publication_remote == Some(remote.name.as_str()),
             name: remote.name,
@@ -222,6 +246,11 @@ impl RepositoryService {
             return Err(ReadError::invalid_path());
         };
         let configuration = inspected_configuration(inspection.configuration);
+        // The inspection opened the root; it is opened again here only to
+        // ask whether each remote has a helper configured.
+        let repository = open_exactly(Path::new(&root)).map_err(|error| {
+            ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)
+        })?;
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -233,6 +262,7 @@ impl RepositoryService {
                 IdentityInspection::Required => IdentityAvailability::Required,
             },
             remotes: remote_dtos(
+                &repository,
                 inspection.remotes,
                 configuration.publication_remote.as_deref(),
             ),
@@ -317,7 +347,7 @@ impl RepositoryService {
             ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => None,
         };
         Ok(RemoteListDto {
-            items: remote_dtos(remotes, publication_remote),
+            items: remote_dtos(&repository, remotes, publication_remote),
             complete: true,
         })
     }

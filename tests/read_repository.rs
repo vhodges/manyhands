@@ -1148,3 +1148,48 @@ fn a_directory_the_owner_does_not_list_as_a_worktree_is_not_a_repository() {
     );
     assert_git_transport_uninitialized();
 }
+
+// With `remote.<name>.vcs` set, Git hands the remote's locations to the
+// helper `git-remote-<vcs>` whatever they look like.
+#[test]
+fn the_locations_of_a_remote_with_a_helper_configured_are_redacted_whole() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    for name in ["helped", "plain"] {
+        fixture
+            .repository
+            .remote(name, "https://example.invalid/team/repo.git")
+            .unwrap();
+    }
+    fixture
+        .repository
+        .remote_set_pushurl("helped", Some("/srv/git/push.git"))
+        .unwrap();
+    fixture
+        .repository
+        .config()
+        .unwrap()
+        .set_str("remote.helped.vcs", "foo")
+        .unwrap();
+
+    let listed = enabled.service.list_remotes_redacted(&repo).unwrap().items;
+    let inspected = enabled
+        .service
+        .inspect_repository(&fixture.root)
+        .unwrap()
+        .remotes;
+
+    assert_eq!(listed, inspected);
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].name, "helped");
+    assert_eq!(listed[0].fetch_location, "[redacted]");
+    assert_eq!(listed[0].push_location, "[redacted]");
+    assert_eq!(listed[1].name, "plain");
+    assert_eq!(
+        listed[1].fetch_location,
+        "https://example.invalid/team/repo.git"
+    );
+    assert_eq!(listed[1].push_location, listed[1].fetch_location);
+    assert_git_transport_uninitialized();
+}
