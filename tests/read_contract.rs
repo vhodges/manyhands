@@ -7,12 +7,13 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        Accessibility, ChangeSource, ClosureState, ConfigurationState, DependencyState,
-        IdentityAvailability, IdentitySource, IndexProblemDto, IndexState, IndexStatusState,
-        ItemContextKind, ItemDto, ItemDtoKind, KeyOwnership, KeyPrivateSourceState,
-        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
-        OperationScope, PollingInterval, PollingOutcome, ProblemDto, ReadinessReasonCode,
-        ReadinessState, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+        Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
+        DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
+        IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
+        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
+        OperationFamily, OperationNextAction, OperationScope, PollingInterval, PollingOutcome,
+        ProblemDto, ReadinessFilter, ReadinessReasonCode, ReadinessState, RepositoryService,
+        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
         transport::SshAuthority,
     },
     results::{
@@ -774,6 +775,30 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
         (
+            "unplannable_reason.schema.json",
+            "code",
+            UnplannableReasonCode::ALL
+                .map(UnplannableReasonCode::as_str)
+                .to_vec(),
+        ),
+        (
+            "cycle.schema.json",
+            "kind",
+            CycleKind::ALL.map(CycleKind::as_str).to_vec(),
+        ),
+        (
+            "dependency_tree.schema.json",
+            "direction",
+            DependencyDirection::ALL
+                .map(DependencyDirection::as_str)
+                .to_vec(),
+        ),
+        (
+            "dependency_tree_node.schema.json",
+            "state",
+            DependencyState::ALL.map(DependencyState::as_str).to_vec(),
+        ),
+        (
             "key.schema.json",
             "ownership",
             KeyOwnership::ALL.map(KeyOwnership::as_str).to_vec(),
@@ -1172,6 +1197,250 @@ fn ticket_relationship_problems_match_their_schema_and_golden() {
         &envelope,
     );
     assert_git_transport_uninitialized();
+}
+
+/// The relationship fixture, resolved, with every ticket of it as the list
+/// has it: the placeholders of any read of it come from those.
+fn relationship_contract() -> (
+    support::TestRepository,
+    support::EnabledRepository,
+    ResolvedRepository,
+    Vec<ItemDto>,
+) {
+    let (fixture, enabled) = items::relationship_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let tickets = enabled
+        .service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap()
+        .items;
+    assert_eq!(tickets.len(), 7);
+    (fixture, enabled, repo, tickets)
+}
+
+fn assert_relationship_contract(
+    name: &str,
+    data_schema: &str,
+    enabled: &support::EnabledRepository,
+    repo: &ResolvedRepository,
+    tickets: &[ItemDto],
+    envelope: &impl serde::Serialize,
+) {
+    assert_item_contract(
+        name,
+        Some(data_schema),
+        repo.root().to_str().unwrap(),
+        &tickets.iter().collect::<Vec<_>>(),
+        &[enabled.data_directory.path().to_str().unwrap()],
+        envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+fn listed_ids(list: &manyhands::repository::ItemListDto) -> Vec<&str> {
+    list.items
+        .iter()
+        .map(|item| item.id.as_deref().unwrap())
+        .collect()
+}
+
+#[test]
+fn ticket_ready_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let list = enabled
+        .service
+        .ticket_readiness(
+            &repo,
+            &TicketFilter {
+                readiness: Some(ReadinessFilter::Ready),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(listed_ids(&list), [items::RELATED_B]);
+    let envelope = Envelope::read_success("ticket ready", repo.scope(), list);
+    assert_relationship_contract(
+        "ticket_ready",
+        "item_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_blocked_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let list = enabled
+        .service
+        .ticket_readiness(
+            &repo,
+            &TicketFilter {
+                readiness: Some(ReadinessFilter::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Latest change first.
+    assert_eq!(
+        listed_ids(&list),
+        [
+            items::RELATED_G,
+            items::RELATED_F,
+            items::RELATED_E,
+            items::RELATED_D,
+            items::RELATED_C,
+        ]
+    );
+    let envelope = Envelope::read_success("ticket blocked", repo.scope(), list);
+    assert_relationship_contract(
+        "ticket_blocked",
+        "item_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_deps_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let tree = enabled
+        .service
+        .ticket_dependencies(
+            &repo,
+            &items::item_id(items::RELATED_D),
+            DependencyDirection::Both,
+            Some(2),
+        )
+        .unwrap();
+
+    assert_eq!(tree.dependencies.len(), 3);
+    assert!(tree.dependents.is_empty());
+    let envelope = Envelope::read_success("ticket deps", item_scope(&repo, items::RELATED_D), tree);
+    assert_relationship_contract(
+        "ticket_deps",
+        "dependency_tree.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_children_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let list = enabled
+        .service
+        .ticket_children(&repo, &items::item_id(items::RELATED_B))
+        .unwrap();
+
+    assert_eq!(listed_ids(&list), [items::RELATED_G, items::RELATED_C]);
+    let envelope =
+        Envelope::read_success("ticket children", item_scope(&repo, items::RELATED_B), list);
+    assert_relationship_contract(
+        "ticket_children",
+        "item_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_cycles_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let cycles = enabled.service.ticket_cycles(&repo).unwrap();
+
+    assert_eq!(
+        cycles
+            .items
+            .iter()
+            .map(|cycle| cycle.kind)
+            .collect::<Vec<_>>(),
+        [CycleKind::Deps, CycleKind::Parent]
+    );
+    let envelope = Envelope::read_success("ticket cycles", repo.scope(), cycles);
+    assert_relationship_contract(
+        "ticket_cycles",
+        "cycle_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_plan_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let plan = enabled
+        .service
+        .ticket_plan(&repo, &TicketFilter::default())
+        .unwrap();
+
+    assert_eq!(plan.batches.len(), 2);
+    assert_eq!(plan.unplannable.len(), 4);
+    let envelope = Envelope::read_success("ticket plan", repo.scope(), plan);
+    assert_relationship_contract(
+        "ticket_plan",
+        "plan.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_critical_path_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let path = enabled.service.ticket_critical_path(&repo).unwrap();
+
+    assert_eq!(listed_ids(&path), [items::RELATED_B, items::RELATED_C]);
+    let envelope = Envelope::read_success("ticket critical-path", repo.scope(), path);
+    assert_relationship_contract(
+        "ticket_critical_path",
+        "item_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn ticket_find_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let found = enabled
+        .service
+        .find_tickets_by_slug(&repo, &items::SHARED_SLUG.to_uppercase())
+        .unwrap();
+
+    assert_eq!(listed_ids(&found), [items::RELATED_C, items::RELATED_B]);
+    let envelope = Envelope::read_success("ticket find", repo.scope(), found);
+    assert_relationship_contract(
+        "ticket_find",
+        "item_list.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
 }
 
 /// Planted in front matter that fails to parse, where the parser's message

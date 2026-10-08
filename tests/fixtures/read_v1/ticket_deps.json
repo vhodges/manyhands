@@ -1,0 +1,74 @@
+{
+  "code": "ok",
+  "command": "ticket deps",
+  "data": {
+    "complete": true,
+    "dependencies": [
+      {
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+        "repeated": false,
+        "slug": null,
+        "state": "unresolved",
+        "title": null,
+        "truncated": false
+      },
+      {
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR2",
+        "repeated": false,
+        "slug": "mh-vh-k9x2b",
+        "state": "open",
+        "title": "C",
+        "truncated": false
+      },
+      {
+        "depth": 2,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+        "repeated": false,
+        "slug": "mh-vh-k9x2b",
+        "state": "open",
+        "title": "B",
+        "truncated": true
+      }
+    ],
+    "dependents": [],
+    "depth": 2,
+    "direction": "both",
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "ticket": {
+      "depth": 0,
+      "id": "01ARZ3NDEKTSV4RRFFQ69G5FR3",
+      "repeated": false,
+      "slug": null,
+      "state": "open",
+      "title": "D",
+      "truncated": false
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FR3",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

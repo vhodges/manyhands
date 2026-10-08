@@ -346,3 +346,65 @@ pub fn write_comment(
         &comment_source(item, id, parent, created_at, extra),
     )
 }
+
+pub const RELATED_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR0";
+pub const RELATED_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
+pub const RELATED_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR2";
+pub const RELATED_D: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR3";
+pub const RELATED_E: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR4";
+pub const RELATED_F: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
+pub const RELATED_G: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR6";
+
+/// The short code two tickets of the relationship fixture share.
+pub const SHARED_SLUG: &str = "mh-vh-k9x2b";
+
+/// The repository the relationship fixtures are read from: seven tickets,
+/// each committed ten seconds after the one before, and indexed.
+///
+/// - A is closed.
+/// - B depends on A, so it is ready. It has the shared short code.
+/// - C depends on B and has B as its parent, and the same short code.
+/// - D depends on C and on a ticket no context holds.
+/// - E and F depend on each other, and each is the other's parent.
+/// - G depends on E and has B as its parent.
+pub fn relationship_repository() -> (TestRepository, EnabledRepository) {
+    let fixture = super::born_repository();
+    let enabled = super::enabled_repository(&fixture);
+    let slug = format!("slug: {SHARED_SLUG}\n");
+    let tickets = [
+        (RELATED_A, "A", CLOSURE.to_owned()),
+        (RELATED_B, "B", format!("{slug}deps: [{RELATED_A}]\n")),
+        (
+            RELATED_C,
+            "C",
+            format!("{slug}parent: {RELATED_B}\ndeps: [{RELATED_B}]\n"),
+        ),
+        (
+            RELATED_D,
+            "D",
+            format!("deps: [{RELATED_C}, {TICKET_ABSENT}]\n"),
+        ),
+        (
+            RELATED_E,
+            "E",
+            format!("parent: {RELATED_F}\ndeps: [{RELATED_F}]\n"),
+        ),
+        (
+            RELATED_F,
+            "F",
+            format!("parent: {RELATED_E}\ndeps: [{RELATED_E}]\n"),
+        ),
+        (
+            RELATED_G,
+            "G",
+            format!("parent: {RELATED_B}\ndeps: [{RELATED_E}]\n"),
+        ),
+    ];
+    for ((id, title, extra), seconds) in tickets.iter().zip((COMMITTED_AT..).step_by(10)) {
+        let path = ticket_path(id);
+        write(&fixture.root, &path, &ticket_source(id, title, extra));
+        commit(&fixture, &[&path], seconds);
+    }
+    refresh_completely(&enabled.service, &fixture.root);
+    (fixture, enabled)
+}

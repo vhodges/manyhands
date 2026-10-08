@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket plan",
+  "description": "Open tickets in batches that can each be worked at once, and the open tickets that closing tickets can never reach. Batches are in batch order and their tickets, like the unplannable ones, in ID order. A batch keeps the number it has in the plan of every ticket, and a batch a filter left empty is not listed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batches", "unplannable", "complete", "index"],
+  "properties": {
+    "batches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["batch", "items"],
+        "properties": {
+          "batch": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "item.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "unplannable": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ticket", "reasons"],
+        "properties": {
+          "ticket": {
+            "$ref": "item.schema.json"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "unplannable_reason.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}
