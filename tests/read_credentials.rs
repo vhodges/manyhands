@@ -836,15 +836,50 @@ fn public_key_text_is_the_canonical_encoding_of_the_key() {
         assert!(public_key.matches_registration);
     }
 
-    // The longest line returned is 1024 bytes.
-    let commented = |length: usize| format!("{key} {}", "c".repeat(length - key.len() - 1));
-    fs::write(&public, format!("{}\n", commented(1024))).unwrap();
+    // The longest comment returned is 256 bytes.
+    let commented = |length: usize| format!("{key} {}", "c".repeat(length));
+    fs::write(&public, format!("{}\n", commented(256))).unwrap();
     assert_eq!(
         fixture.service.public_key_text(id).unwrap().public_key,
-        commented(1024)
+        commented(256)
     );
-    fs::write(&public, format!("{}\n", commented(1025))).unwrap();
-    assert_public_key_unavailable(&fixture, id, "a line of 1025 bytes");
+    fs::write(&public, format!("{}\n", commented(257))).unwrap();
+    assert_public_key_unavailable(&fixture, id, "a comment of 257 bytes");
+    assert_git_transport_uninitialized();
+}
+
+// The bound is on the comment, not the line: a large key is a long line.
+#[test]
+fn a_large_rsa_public_key_is_returned() {
+    let fixture = fixture();
+    let id = fixture.keys.imported.id;
+    let public = fixture.keys.imported.public_key_path.clone().unwrap();
+    // A well-formed `ssh-rsa` key with an 8192-bit modulus. The modulus is
+    // not the product of two primes; nothing here uses the key.
+    let mut modulus = [0xa5u8; 1024];
+    modulus[1023] = 0x01;
+    let key = ssh_key::PublicKey::new(
+        ssh_key::public::KeyData::Rsa(ssh_key::public::RsaPublicKey {
+            e: ssh_key::Mpint::from_positive_bytes(&[0x01, 0x00, 0x01]).unwrap(),
+            n: ssh_key::Mpint::from_positive_bytes(&modulus).unwrap(),
+        }),
+        "large@example",
+    );
+    let line = key.to_openssh().unwrap();
+    assert!(line.starts_with("ssh-rsa "));
+    assert!(line.ends_with(" large@example"));
+    assert!(line.len() > 1024, "{}", line.len());
+    fs::write(&public, format!("{line}\n")).unwrap();
+
+    let public_key = fixture.service.public_key_text(id).unwrap();
+
+    assert_eq!(public_key.public_key, line);
+    assert_eq!(
+        public_key.fingerprint,
+        key.fingerprint(ssh_key::HashAlg::Sha256).to_string()
+    );
+    assert!(!public_key.matches_registration);
+    assert_no_secret("key public", &public_key);
     assert_git_transport_uninitialized();
 }
 

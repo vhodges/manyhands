@@ -72,8 +72,10 @@ fn key_dto(registration: &SharedKeyRegistration) -> Result<KeyDto, ReadError> {
     })
 }
 
-/// The longest public key line a read returns.
-const LONGEST_PUBLIC_KEY_LINE: usize = 1024;
+/// The longest comment a read returns with a public key. The key itself is
+/// bounded by the 16 KiB a public key file may hold, so a large key is not
+/// refused for the length of its line.
+const LONGEST_PUBLIC_KEY_COMMENT: usize = 256;
 
 /// What an armored private key says of itself, which no comment may say.
 const PRIVATE_KEY_ARMOR: &str = "PRIVATE KEY";
@@ -89,21 +91,21 @@ fn plain_text(text: &str) -> bool {
 ///
 /// Nothing of the file is returned as it was read. The key is parsed and
 /// written out again, and the only free text in the result is the key's
-/// comment, which must be plain text that does not name a private key.
-/// A file that is anything else, or whose line would be longer than 1024
-/// bytes, has no public key to show.
+/// comment, which must be plain text of at most 256 bytes that does not
+/// name a private key. A file that is anything else has no public key to
+/// show.
 fn canonical_public_key(contents: &[u8]) -> Option<(String, String)> {
     let public_key = openssh_public_key(std::str::from_utf8(contents).ok()?)?;
     let comment = public_key.comment();
-    if !plain_text(comment) || comment.contains(PRIVATE_KEY_ARMOR) {
+    if comment.len() > LONGEST_PUBLIC_KEY_COMMENT
+        || !plain_text(comment)
+        || comment.contains(PRIVATE_KEY_ARMOR)
+    {
         return None;
     }
     let line = public_key.to_openssh().ok()?;
     // Checked again on what is returned, whatever the encoder made of it.
-    if line.len() > LONGEST_PUBLIC_KEY_LINE
-        || !plain_text(&line)
-        || line.contains(PRIVATE_KEY_ARMOR)
-    {
+    if !plain_text(&line) || line.contains(PRIVATE_KEY_ARMOR) {
         return None;
     }
     Some((line, public_key_fingerprint(&public_key)))
