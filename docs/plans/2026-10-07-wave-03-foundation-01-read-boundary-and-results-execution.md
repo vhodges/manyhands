@@ -91,7 +91,29 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 3: complete; review accepted with fixes (one blocker), range
   `a1223c0..9639595`.
 - Task 4: complete; review accepted with fixes, range `9fbe74d..a04acb3`.
-- Tasks 5–10: pending.
+- Task 5: implemented at `f4c1c63`, range `dffa110..f4c1c63`; **review,
+  controller verification and rulings pending** (see "Resume here").
+- Tasks 6–10: pending.
+
+## Resume here — paused 2026-10-07
+
+The product owner paused the work after the Task 5 implementer finished and
+before its review, because of contention on the machine. Nothing is running.
+
+Next steps, in order:
+
+1. Confirm the worktree is clean at `f4c1c63` and main has not moved; if main
+   moved, do not rebase mid-Cycle without a reason, and record the decision.
+2. Dispatch a fresh, read-only reviewer for `dffa110..f4c1c63` against the
+   plan's Task 5, the design's "Effective Copy", "Item Reads" and index
+   sections, and the rulings below. Give it the flagged items in the Task 5
+   evidence entry to rule on, with the write-path changes and `show_path`'s
+   file access as the first priorities.
+3. Send fixes back to an implementer; verify; record rulings.
+4. Controller rerun of the Task 5 focused and regression tests, then the full
+   gate (`check`, `fmt --check`, clippy, `cargo test --all-features --locked`,
+   CLI smoke). The full suite has not run since the baseline.
+5. Record Task 5 complete; start Task 6.
 
 ## Decisions and rulings
 
@@ -358,3 +380,66 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
   `remote_synchronization` and the full suite.
 - The first commit's tests were written after the code and checked by nine
   mutations. The review-fix tests were seen failing first.
+
+### Task 5 — item lists and complete reads, range `dffa110..f4c1c63` (UNREVIEWED)
+
+Everything in this entry is the implementer's report. The controller has not
+rerun any command and no review has happened.
+
+- `39e3036` index migration and persistence; `f4c1c63` reads, schemas,
+  goldens and tests.
+- Write-path changes as reported: `migrate_registry` adds
+  `discovered_items.closed_by`, `discovered_items.unknown_metadata` and
+  `repositories.refreshed_at`, and sets `refresh_required = 1` on every
+  registration when it adds any; `persist_context`'s item insert writes the
+  two item columns; the two statements that clear `refresh_required`, in
+  `persist_rebuild_observation` and `reconcile_disappeared_contexts`, also set
+  `refreshed_at`. `serialize_item`, the save paths and the snapshot types are
+  reported untouched. `canonical.rs` gains one public wrapper,
+  `item_path_kind`.
+- Existing assertions changed as reported: the exact `repositories` column
+  list in `tests/repository_enablement.rs`; a `refreshed_at` expectation in
+  `tests/read_repository.rs`.
+- Reported results, each exit 0: `cargo test --locked --lib` 218;
+  `read_contract` 36; `read_boundary` 15; `read_repository` 21;
+  `read_credentials` 25; `read_items` 35; `discovery_rebuild` 67;
+  `local_authoring` 112; `recovery_foundation_gate` 50;
+  `repository_enablement` 73; `canonical_foundation` 29; `remote_reservation`
+  9; `--doc` 9; `cargo fmt --check`; clippy with warnings denied;
+  `cargo check --all-features --locked`. Not run: the SSH suites and the full
+  suite.
+- Test-first as reported: the index tests were seen failing in stages; the
+  read behavior tests failed only against a skeleton and were then checked by
+  eight mutations; four test groups were not mutation-checked.
+
+Flagged by the implementer, awaiting review and rulings:
+
+1. `owned_file_bytes` is Unix-only; a non-Unix reader was added and is
+   unexecuted.
+2. Enabling already completes a refresh, so `never_refreshed` arises only for
+   a migrated index or an incomplete enable-time refresh.
+3. The design's concurrent-migration paragraph is wrong: probe and `ALTER`
+   share one deferred transaction, so the loser of a race gets `SQLITE_BUSY`
+   at open, as for every existing additive migration.
+4. A committed, unchanged file in an item worktree is usually reported as
+   `uncommitted`, because the save path does not update that worktree's Git
+   index. Existing discovery behavior, now visible as `change_source`.
+5. `ItemDto` has an `index` object the design's table lacks.
+6. `changed_at` and `change_source` are nullable.
+7. `context.kind` has a third value, `unverified`.
+8. Stored `unknown_metadata` is a wrapper object recording whether a value was
+   not representable; keys sort by byte order at every depth.
+9. Recovery action `index.refresh` with `{"root": …}`; when it is attached.
+10. Observation token byte layout.
+11. Orderings, including where nonconforming entries sort.
+12. Index-state precedence: `never_refreshed`, then `stale`, then `current`.
+13. `show_path` details: a duplicate-ID file is returned with its ID; a
+    non-effective copy in another item's worktree is readable; a bad path is
+    `invalid_path` even under the exclusive lock.
+14. Gap: a nonconforming ticket in a non-ULID directory is listed but
+    `show_path` refuses it, so "readable by exact path" fails for that shape.
+15. Staleness detection is partial: a body-only edit within the same second
+    as the refresh is not flagged.
+16. A metadata pre-check precedes the guarded open in the file reader.
+17. Provisional DTOs and schemas for Task 9's readiness reasons exist only to
+    satisfy the closed-schema lint.
