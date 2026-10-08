@@ -3,6 +3,14 @@
 //! Every read that touches the index goes through `read_session`: the shared
 //! index lock, a read-only connection and a transaction that is rolled back.
 //! A read returns a DTO or a `ReadError`; neither carries backend text.
+//!
+//! Four reads touch no index data and use no session: `repository_identity`,
+//! `list_remotes_redacted`, the Git part of `inspect_repository` and
+//! `new_item_id`. They are never `busy` while the index is locked
+//! exclusively. The first two take a resolved repository and, having no
+//! session, do not check that its registration still exists either: they
+//! answer for a repository removed from Manyhands since it was resolved,
+//! where every other read of it is `repository_not_registered`.
 
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]

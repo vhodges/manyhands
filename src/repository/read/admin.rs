@@ -242,6 +242,11 @@ impl RepositoryService {
 
     /// The identity a commit in this repository would carry, and the Git
     /// configuration level it comes from.
+    ///
+    /// This reads Git configuration only and uses no read session. It is
+    /// never `busy` under the exclusive index lock, and it does not check
+    /// that the registration still exists: for a repository removed from
+    /// Manyhands since it was resolved it still answers.
     pub fn repository_identity(&self, repo: &ResolvedRepository) -> Result<IdentityDto, ReadError> {
         self.identity_with_provider(repo, &mut RepositoryIdentityConfig)
     }
@@ -290,6 +295,11 @@ impl RepositoryService {
     /// The repository's remotes in name order, with any credential removed
     /// from their locations, and which of them publication uses. Nothing
     /// is contacted.
+    ///
+    /// This reads Git and the configuration file only and uses no read
+    /// session. It is never `busy` under the exclusive index lock, and it
+    /// does not check that the registration still exists: for a repository
+    /// removed from Manyhands since it was resolved it still answers.
     pub fn list_remotes_redacted(
         &self,
         repo: &ResolvedRepository,
