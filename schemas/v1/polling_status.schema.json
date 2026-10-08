@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 polling status",
-  "description": "The stored polling policy and what polling last observed. next_eligible_at is always null in this version.",
+  "description": "The stored polling policy and what polling last observed. next_eligible_at is null when it is not known when the next attempt is due.",
   "type": "object",
   "additionalProperties": false,
   "required": [

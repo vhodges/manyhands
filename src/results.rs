@@ -463,8 +463,6 @@ problem_codes! {
         "List each dependency once.";
     InvalidSlug => "invalid_slug", Some("invalid-slug"),
         "Correct the short code, or remove it.";
-    PathNotUtf8 => "path_not_utf8", None,
-        "Rename the file so that its path is valid UTF-8.";
     MetadataNotRepresentable => "metadata_not_representable", None,
         "Rewrite the metadata so that it can be represented as JSON.";
     RelationshipNotATicket => "relationship_not_a_ticket", None,

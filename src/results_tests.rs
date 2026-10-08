@@ -413,7 +413,6 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "relationship_self_reference",
             "duplicate_dependency",
             "invalid_slug",
-            "path_not_utf8",
             "metadata_not_representable",
             "relationship_not_a_ticket",
             "dependency_cycle",
