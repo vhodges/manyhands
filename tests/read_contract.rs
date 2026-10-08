@@ -11,7 +11,7 @@ use manyhands::{
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
         KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
-        OperationFamily, OperationNextAction, OperationScope, PollingInterval, PollingOutcome,
+        OperationFamily, OperationNextAction, OperationOwner, PollingInterval, PollingOutcome,
         ProblemDto, ReadinessFilter, ReadinessReasonCode, ReadinessState, RepositoryService,
         ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
         transport::SshAuthority,
@@ -846,8 +846,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         ),
         (
             "operation.schema.json",
-            "scope",
-            OperationScope::ALL.map(OperationScope::as_str).to_vec(),
+            "owner",
+            OperationOwner::ALL.map(OperationOwner::as_str).to_vec(),
         ),
         (
             "operation.schema.json",

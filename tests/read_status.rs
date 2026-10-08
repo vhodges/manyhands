@@ -9,7 +9,7 @@ use std::fs;
 use manyhands::{
     repository::{
         AuthoringKind, IndexState, IndexStatusState, OperationAction, OperationDto,
-        OperationFamily, OperationId, OperationNextAction, OperationScope, PollingInterval,
+        OperationFamily, OperationId, OperationNextAction, OperationOwner, PollingInterval,
         PollingOutcome, RecoveryInspection, RefreshOutcome, RemoteOperationAction,
         RemoteOperationSafePoint, RemoteOperationTarget, RemoteOutcomeCategory, RemoteRefPlan,
         RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome, ResolvedRepository,
@@ -127,7 +127,7 @@ fn index_status_of_a_registration_never_refreshed_names_the_operation_that_would
     assert_eq!(operation_ids(&status.pending_operations), [Some(&*id)]);
     let pending = &status.pending_operations[0];
     assert_eq!(pending.family, OperationFamily::Local);
-    assert_eq!(pending.scope, OperationScope::Repository);
+    assert_eq!(pending.owner, OperationOwner::Repository);
     assert_eq!(pending.action, OperationAction::Enable);
     assert_ne!(pending.state, "completed");
     assert_eq!(pending.next_action, Some(OperationNextAction::Resume));
@@ -489,7 +489,7 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
         json!({
             "operation_id": OPERATION_A,
             "family": "key_material",
-            "scope": "application",
+            "owner": "application",
             "action": "generate_key",
             "state": "retained_for_inspection",
             "completed_step": null,
@@ -502,7 +502,7 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
         })
     );
     assert_eq!(remote.family, OperationFamily::Remote);
-    assert_eq!(remote.scope, OperationScope::Repository);
+    assert_eq!(remote.owner, OperationOwner::Repository);
     assert_eq!(remote.action, OperationAction::Poll);
     assert_eq!(remote.state, "reserved");
     assert_eq!(remote.completed_step, None);
@@ -514,7 +514,7 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
         json!({
             "operation_id": OPERATION_C,
             "family": "local",
-            "scope": "repository",
+            "owner": "repository",
             "action": "save_ticket",
             "state": "authoring_checkpoint_observed",
             "completed_step": "authoring_checkpoint_observed",
@@ -633,7 +633,7 @@ fn a_finished_operation_is_found_by_its_id_and_carries_its_failure_code() {
         ("completed", None)
     );
     assert_eq!(completed.next_action, None);
-    assert_eq!(completed.scope, OperationScope::Application);
+    assert_eq!(completed.owner, OperationOwner::Application);
     assert_eq!(completed.updated_at, None);
     let deleting = show(OPERATION_C);
     assert_eq!(deleting.action, OperationAction::DeleteKey);
@@ -818,7 +818,7 @@ fn operations_of_another_repository_are_not_this_ones() {
     let list = service.list_operations(&repo).unwrap();
 
     assert_eq!(operation_ids(&list.items), [Some(OPERATION_B)]);
-    assert_eq!(list.items[0].scope, OperationScope::Application);
+    assert_eq!(list.items[0].owner, OperationOwner::Application);
     assert_eq!(
         service
             .show_operation(&repo, operations::operation_id(OPERATION_A))

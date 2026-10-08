@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 
 use super::{
     IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction, OperationDto,
-    OperationFamily, OperationListDto, OperationNextAction, OperationScope, PollingOutcome,
+    OperationFamily, OperationListDto, OperationNextAction, OperationOwner, PollingOutcome,
     PollingStatusDto, ReadError, ResolvedRepository,
     items::{behind, effective_rows, invalid_stored_data, stored_index_state, stored_items},
 };
@@ -169,7 +169,7 @@ fn local_operations(
             dto: OperationDto {
                 operation_id,
                 family: OperationFamily::Local,
-                scope: OperationScope::Repository,
+                owner: OperationOwner::Repository,
                 action,
                 state: stored_name(&state)?,
                 completed_step: completed_step.as_deref().map(stored_name).transpose()?,
@@ -321,7 +321,7 @@ fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, R
         dto: OperationDto {
             operation_id: Some(record.operation_id.to_string()),
             family: OperationFamily::Remote,
-            scope: OperationScope::Repository,
+            owner: OperationOwner::Repository,
             action: remote_action(record.target.action()),
             state: state.to_owned(),
             completed_step: record
@@ -440,7 +440,7 @@ fn key_material_operations(
             dto: OperationDto {
                 operation_id: Some(operation_id),
                 family: OperationFamily::KeyMaterial,
-                scope: OperationScope::Application,
+                owner: OperationOwner::Application,
                 action,
                 state: state.to_owned(),
                 completed_step: None,

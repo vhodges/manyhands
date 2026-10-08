@@ -175,7 +175,7 @@ fn host_pins(
                 host: authority.host,
                 port: authority.port,
                 algorithm: identity.algorithm,
-                sha256: identity.sha256,
+                fingerprint: identity.sha256,
                 reapproval_required,
             })
         })

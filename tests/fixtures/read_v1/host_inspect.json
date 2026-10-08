@@ -3,10 +3,10 @@
   "command": "host inspect",
   "data": {
     "algorithm": "ssh-rsa",
+    "fingerprint": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
     "host": "git.example.invalid",
     "port": 2222,
-    "reapproval_required": true,
-    "sha256": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
+    "reapproval_required": true
   },
   "effects": {
     "checkpoint": "not_requested",

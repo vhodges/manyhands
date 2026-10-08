@@ -3,7 +3,7 @@
   "title": "Manyhands JSON v1 SSH host pin",
   "type": "object",
   "additionalProperties": false,
-  "required": ["host", "port", "algorithm", "sha256", "reapproval_required"],
+  "required": ["host", "port", "algorithm", "fingerprint", "reapproval_required"],
   "properties": {
     "host": {
       "type": "string"
@@ -14,7 +14,7 @@
     "algorithm": {
       "type": "string"
     },
-    "sha256": {
+    "fingerprint": {
       "type": "string"
     },
     "reapproval_required": {

@@ -250,15 +250,16 @@ pub struct HostPinListDto {
     pub reapproval_required: bool,
 }
 
-/// One pinned host key. `reapproval_required` is the application-wide
-/// marker left when the pin registry was lost, so it is the same for every
-/// pin of one read.
+/// One pinned host key. `fingerprint` has the form a key's `fingerprint` has:
+/// `SHA256:` and the digest of the host's public key.
+/// `reapproval_required` is the application-wide marker left when the pin
+/// registry was lost, so it is the same for every pin of one read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HostPinDto {
     pub host: String,
     pub port: u16,
     pub algorithm: String,
-    pub sha256: String,
+    pub fingerprint: String,
     pub reapproval_required: bool,
 }
 
@@ -657,9 +658,11 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation belongs to. A key-material operation belongs to
-    /// the application and is listed with every repository.
-    OperationScope {
+    /// What an operation belongs to: the `owner` of an operation. A
+    /// key-material operation belongs to the application and is listed
+    /// with every repository. This is not the envelope's `scope`, which
+    /// says what a result is about.
+    OperationOwner {
         Repository => "repository",
         Application => "application",
     }
@@ -746,7 +749,7 @@ pub struct OperationDto {
     /// Null only for a local operation recorded before operations had IDs.
     pub operation_id: Option<String>,
     pub family: OperationFamily,
-    pub scope: OperationScope,
+    pub owner: OperationOwner,
     /// A synchronization with no remote to publish to is a local operation
     /// whose action is `synchronize_primary` or `synchronize_context`.
     pub action: OperationAction,

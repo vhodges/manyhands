@@ -7,7 +7,7 @@
   "required": [
     "operation_id",
     "family",
-    "scope",
+    "owner",
     "action",
     "state",
     "completed_step",
@@ -26,7 +26,7 @@
       "type": "string",
       "enum": ["local", "remote", "key_material"]
     },
-    "scope": {
+    "owner": {
       "type": "string",
       "enum": ["repository", "application"]
     },

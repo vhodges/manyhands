@@ -43,7 +43,7 @@ pub use dto::{
     IndexStateDto, IndexStatusDto, IndexStatusState, ItemContextDto, ItemContextKind, ItemDto,
     ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
     KeyPublicMetadataState, NewIdDto, OperationAction, OperationDto, OperationFamily,
-    OperationListDto, OperationNextAction, OperationScope, PlanBatchDto, PlanDto, PollingOutcome,
+    OperationListDto, OperationNextAction, OperationOwner, PlanBatchDto, PlanDto, PollingOutcome,
     PollingStatusDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
     ReadinessReasonDto, ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto,
     RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto,

@@ -870,7 +870,7 @@ fn pin(host: &str, port: u16, algorithm: &str, sha256: &str, reapproval: bool) -
         host: host.to_owned(),
         port,
         algorithm: algorithm.to_owned(),
-        sha256: sha256.to_owned(),
+        fingerprint: sha256.to_owned(),
         reapproval_required: reapproval,
     }
 }

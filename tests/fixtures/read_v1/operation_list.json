@@ -13,7 +13,7 @@
         "key_id": "<key-id>",
         "next_action": "inspect_retained_files",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
-        "scope": "application",
+        "owner": "application",
         "state": "retained_for_inspection",
         "updated_at": null,
         "worktree": null
@@ -27,7 +27,7 @@
         "key_id": null,
         "next_action": null,
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1",
-        "scope": "repository",
+        "owner": "repository",
         "state": "reserved",
         "updated_at": "2023-11-14T22:15:00Z",
         "worktree": null
@@ -41,7 +41,7 @@
         "key_id": null,
         "next_action": "resume",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA2",
-        "scope": "repository",
+        "owner": "repository",
         "state": "authoring_destination_observed",
         "updated_at": "2023-11-14T22:13:20Z",
         "worktree": "<repository>"
@@ -55,7 +55,7 @@
         "key_id": null,
         "next_action": "resume",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA4",
-        "scope": "repository",
+        "owner": "repository",
         "state": "interrupted",
         "updated_at": "2023-11-14T22:15:00Z",
         "worktree": null
@@ -69,7 +69,7 @@
         "key_id": null,
         "next_action": "resume",
         "operation_id": null,
-        "scope": "repository",
+        "owner": "repository",
         "state": "failed",
         "updated_at": "2023-11-14T22:13:20Z",
         "worktree": null

@@ -14,7 +14,7 @@
         "key_id": null,
         "next_action": "resume",
         "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
-        "scope": "repository",
+        "owner": "repository",
         "state": "failed",
         "updated_at": "2023-11-14T22:13:20Z",
         "worktree": null
