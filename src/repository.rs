@@ -5040,7 +5040,32 @@ fn persist_context(
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, stored_path, code, guidance, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
+    // An excluded item's effective copy is in its own context, which reports
+    // that item's problems; this context's copy of it is not shown at all.
+    let excluded_paths = observed
+        .items
+        .iter()
+        .filter(|item| observed.excluded_item_ids.contains(&item.id))
+        .map(|item| item.path.as_path())
+        .collect::<BTreeSet<_>>();
+    let excluded_directories = observed
+        .excluded_item_ids
+        .iter()
+        .flat_map(|id| {
+            [
+                Path::new(".manyhands/comments").join(id.to_string()),
+                Path::new(".manyhands/tickets").join(id.to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
     for problem in observed.validation_problems {
+        if excluded_paths.contains(problem.path.as_path())
+            || excluded_directories
+                .iter()
+                .any(|directory| problem.path.starts_with(directory))
+        {
+            continue;
+        }
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, problem.path.to_str(), validation_code_name(problem.code.clone()), problem.message, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }

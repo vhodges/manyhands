@@ -269,6 +269,13 @@ fn observe_active_contexts(
         }
         let mut sources = Vec::new();
         collect_root_sources(&expected_path, &mut sources, &mut context_problems);
+        scope_to_authoring_item(
+            &expected_path,
+            kind,
+            &path_id,
+            &mut sources,
+            &mut context_problems,
+        );
         let validation = canonical::validate_context(sources.clone());
         if !validation
             .items
@@ -513,6 +520,38 @@ fn parse_authoring_branch(
         return None;
     }
     Some((kind, item_id))
+}
+
+/// An item worktree is a full checkout, so it also holds a copy of every other
+/// item as of its branch point. Only the item its authoring branch identifies,
+/// and that item's comments, belong to the context; every other item is
+/// observed from the primary context.
+fn scope_to_authoring_item(
+    worktree: &Path,
+    kind: crate::repository::AuthoringKind,
+    item_id: &canonical::ItemId,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    let comments = Path::new(".manyhands/comments").join(item_id.to_string());
+    let ticket = Path::new(".manyhands/tickets").join(item_id.to_string());
+    sources.retain(|(path, source)| {
+        path.starts_with(&comments)
+            || canonical::parse_item(path, source)
+                .is_ok_and(|item| authoring_item_matches(&item, kind, item_id))
+    });
+    problems.retain(|problem| match problem {
+        RootObservationProblem::Source { path, .. } => {
+            path.strip_prefix(worktree).is_ok_and(|relative| {
+                relative.starts_with(&comments)
+                    || (kind == crate::repository::AuthoringKind::Ticket
+                        && relative.starts_with(&ticket))
+            })
+        }
+        RootObservationProblem::Configuration(_)
+        | RootObservationProblem::Branch { .. }
+        | RootObservationProblem::Context { .. } => true,
+    });
 }
 
 fn authoring_item_matches(
