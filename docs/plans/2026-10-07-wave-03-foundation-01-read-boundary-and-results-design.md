@@ -489,9 +489,12 @@ pub fn new_item_id(&self) -> NewIdDto;
 ```
 
 `IndexStatusDto`: `state` (`current`, `stale`, `never_refreshed`,
-`unavailable`), `refreshed_at`, counts of contexts, items and problems, and
-any pending index operation. Unlike the list reads, this read succeeds when
-the index is unavailable, because reporting that is its job.
+`unavailable`), `refreshed_at`, counts of contexts, items and problems, the
+stored problems themselves (code, path, worktree), and every pending local
+operation. Unlike the list reads, this read succeeds when the index is
+unavailable, because reporting that is its job; a process that cannot resolve
+the repository because the index is unavailable gets that failure from
+resolution instead and never reaches this read.
 
 `PollingStatusDto`: `enabled`, `paused`, `interval_seconds`,
 `backoff_seconds`, `recovery_suspended`, `latest_outcome`,
@@ -500,8 +503,17 @@ always null in this Cycle.
 
 `OperationDto` unifies the three stores: `operation_id`, `family` (`local`,
 `remote`, `key_material`), `scope` (`repository` or `application`),
-`action`, `state`, `completed_step`, `next_action`, `item_id`, `context`,
-`updated_at` and `failure_code`.
+`action`, `state`, `completed_step`, `next_action`, `item_id`, `key_id`,
+`worktree`, `updated_at` and `failure_code`.
+
+- **Membership.** The list holds every stored operation that
+  `operation resume` could act on or that still has work outstanding, and
+  nothing that accumulates without bound: local operations not completed;
+  key-material operations not completed or failed; the remote operation
+  holding the reservation; a remote synchronization that is interrupted or
+  failed; and a remote operation with index work or reconciliation
+  outstanding. Polls that have ended are never listed. `show_operation` finds
+  any stored operation by ID, finished or not.
 
 - **Ordering.** By operation ID. An operation ID is a ULID, so this is
   creation order, which is the CLI RFC's "start time then ID". A legacy local
@@ -513,8 +525,10 @@ always null in this Cycle.
   repository. They appear in every repository's list with
   `scope: "application"`.
 - **Failure.** `failure_code` comes from the key-material failure code or the
-  remote outcome category, mapped to a result code; it is null for local
-  operations. The `redacted_error` column exists in the schema and nothing
+  remote outcome category, mapped to a closed registry of operation failure
+  codes kept beside the result codes (amended 2026-10-08: not to result
+  codes, which are the envelope's vocabulary and carry a message and failure
+  class); it is null for local operations. The `redacted_error` column exists in the schema and nothing
   writes it; it is not read.
 
 It carries no body, URL or backend text.

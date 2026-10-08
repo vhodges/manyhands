@@ -97,13 +97,14 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 5: complete; two independent reviews accepted with fixes, range
   `dffa110..bcbe2e6`; full gate passed at `bcbe2e6`.
 - Task 6: complete; review accepted with fixes, range `a65fb40..540a2a1`.
-- Tasks 7–10: pending.
+- Task 7: complete; review accepted with fixes, range `8f9499f..52714e0`.
+- Tasks 8–10: pending.
 
 ## Resume here — 2026-10-08
 
-Tasks 5 and 6 are complete. The full gate last passed at `bcbe2e6` (Task 5);
-Task 6 has focused runs only. Next: Task 7 (status and operation reads,
-`read/status.rs`), by a fresh implementer, then an independent review.
+Tasks 5, 6 and 7 are complete. The full gate last passed at `bcbe2e6`
+(Task 5); Tasks 6 and 7 have focused runs only. Next: Task 8 (relationship
+view and index edges), by a fresh implementer, then an independent review.
 
 All cargo runs are local through Devenv. A same-day trial of running cargo on
 remote sprites was abandoned by the product owner: both sprites lost their
@@ -233,6 +234,73 @@ Accepted limits:
 Accepted limits: thread depth recurses, bounded only by the refresh's
 1,024-entry cap on a comment directory; comment files are read whole under the
 shared lock; `complete: false` is tested only for the symbolic-link causes.
+
+## Task 7 rulings — 2026-10-08
+
+- **Operation list membership** (controller ruling extending the plan's
+  wording; the design is amended): every stored operation that
+  `operation resume` could act on or that still has work outstanding, and
+  nothing that accumulates without bound.
+  - Local: state not `completed`.
+  - Key-material: phase not `completed`, or a failure code.
+  - Remote: the reservation holder (no `next_action`; the store does not say
+    whether anything is still running it); a synchronization in phase
+    `interrupted` or `failed` (`next_action: resume`, because the reservation
+    code re-reserves both); an operation with `index_pending` (`resume`); an
+    operation with `reconciliation_required`.
+  - Never listed: an ended poll of any priority; an ended promote or close,
+    which have no restart path.
+  - No current caller leaves a synchronization `interrupted` or `failed`; one
+    that dies keeps its active phase and is listed as the holder. Listing is
+    by phase only, so a listed operation can still be refused when resumed.
+- **`show_operation`** finds any stored operation, finished or not. One ID can
+  be in two stores (a synchronization and its index hand-off); the list shows
+  both, local first, and `show` prefers a listed operation, then local,
+  remote, key-material.
+- **Failure codes** are a separate closed registry, `OperationFailureCode`,
+  not result codes. The design is amended. An unknown stored key-material
+  code is `unknown_failure`.
+- **Local-only synchronization.** A local refresh record whose target starts
+  with `synchronization-local-v1/` is reported as `synchronize_primary` or
+  `synchronize_context` with its item, by a strict parse; a malformed one is
+  `internal_error`. The target is never published.
+- **`OperationDto`** fields: `operation_id`, `family`, `scope`, `action`,
+  `state`, `completed_step`, `next_action`, `item_id`, `key_id`, `worktree`,
+  `updated_at`, `failure_code`. `worktree` (not `context`) is the stored
+  absolute path for local operations. `state` and `completed_step` are
+  strings: closed in code for remote and key-material, and for local a stored
+  name shaped `[a-z][a-z0-9_]*` of at most 64 bytes, else `internal_error`.
+- **`index_status`** runs inside the read session and maps an unavailable
+  index to state `unavailable`; an exclusive lock is still `busy`. This
+  supersedes the Task 2 sentence that it checks availability without a
+  session. A process that resolves the repository after the index became
+  unavailable gets `index_unavailable` from resolution and never sees the
+  state; the facade Cycle decides whether to map it. `problems` lists every
+  stored problem for the registration; `pending_operations` is every pending
+  local operation; staleness is the lists' rule.
+- **`polling_status`** reads the policy row, the current batch's time and the
+  active operation only. `latest_observed_at` is that batch's stored time; no
+  time is stored for `latest_outcome` and none is invented;
+  `next_eligible_at` is always null.
+- **Invalid stored rows** fail the whole read with `internal_error`. A SQLite
+  failure keeps its class: `busy`, or `index_unavailable` with the rebuild
+  action.
+- `tests/read_status.rs` is a new test target for the Task 10 workflow list.
+
+Accepted limits:
+
+- Operations of a root with no registration (an interrupted registration
+  removal, an enable before registration) cannot be reached through these
+  reads.
+- A successful `unavailable` status carries no recovery action.
+- `index_status` loads every item row to count them, so one invalid item row
+  fails it.
+- Remote operations do not expose `index_pending`, `reconciliation_required`
+  or a branch, and polling does not expose `history_unknown`; adding them
+  later is a schema change.
+- No test forces a busy or corrupt database inside the remote readers.
+- Task 7's tests were written after the code and checked by sixteen
+  mutations; none was seen failing before its fix.
 
 ## Decisions and rulings
 
@@ -601,3 +669,31 @@ from this work without asking.
 - Not evidence for: the read integration targets (`read_*`), which the
   workflow does not run yet (Task 10), and the non-Unix reader's behavior,
   which was compiled but not exercised.
+
+### Task 7 — status and operation reads, range `8f9499f..52714e0`
+
+- `11997f6` operation failure code registry; `617746a` the four reads;
+  `a8c6b75` schemas, goldens and tests; `800e268` and `52714e0` review fixes.
+- No index, migration or write-path change. Visibility only:
+  `recovery::action_name`, `keys::generation::failure_code` and a test-only
+  re-export, for the vocabulary tests; `read::items::effective_rows`. Two
+  SELECT-only readers were added to `remote/state.rs`.
+- Independent review of `8f9499f..a8c6b75`: accept with fixes, no blocker. It
+  found no side effect and no leak. One major contract finding (resumable
+  remote operations were not listed) and six minor ones; all addressed.
+- `800e268` and `52714e0` were not independently re-reviewed.
+- Controller rerun at `52714e0`, through Devenv on Linux: `cargo test --locked
+  --lib` 236; `read_status` 23; `read_contract` 44; `read_boundary` 17;
+  `read_items` 48; `read_comments` 19; `recovery_foundation_gate` 50;
+  `remote_reservation` 9; `key_material` 39 passed, 0 failed;
+  `cargo fmt --check` and clippy with warnings denied over all targets and
+  features exit 0; no `unsafe` under `src/repository/read/`.
+- With `--nocapture`, `recovery_foundation_gate` also prints a "0 passed; 1
+  failed" result for `common_git_lease_child`. It is the captured output of a
+  child process that an existing test starts; that test file is unchanged by
+  F1 and the target reports 50 passed. The controller did not investigate
+  further.
+- Implementer at `52714e0`: `remote_synchronization` 35 SSH cases passed.
+- Not run for this task: the full suite.
+- Test-first: none. Nine mutations of the first commit and seven of the fixes
+  were each caught by a test.
