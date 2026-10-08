@@ -48,8 +48,8 @@ Line numbers are in `src/repository.rs` at `6cf5d7f`.
 
 ## Expected Behavior
 
-- When an operation returns an error, its journal row was begun by that
-  call, and the call wrote nothing durable or rolled back what it wrote,
+- When one of the operations listed above returns an error, its journal row
+  was begun by that call, and the call wrote nothing durable or rolled back what it wrote,
   the row is completed. A different operation on the repository then
   proceeds.
 - A row stays pending when an effect was made and work remains.
@@ -58,6 +58,13 @@ Line numbers are in `src/repository.rs` at `6cf5d7f`.
   after a write.
 - Creating an editing context as part of a save is not an effect for this
   purpose. Initializing a repository is.
+- Refresh and rebuild are not covered: existing tests require their rows to
+  stay pending after a failure. A failed refresh or rebuild therefore still
+  blocks other operations until it is repeated.
+- Consider having each operation report what it wrote to its caller, in its
+  error as well as its result. The F2 boundary otherwise has to infer it
+  from the journal and from Git, and that inference failed review three
+  times during F2 planning.
 
 ## Constraints Already Known
 
@@ -69,7 +76,13 @@ Line numbers are in `src/repository.rs` at `6cf5d7f`.
   - a create that failed after the repository was initialized
     (`tests/recovery_foundation_gate.rs`, near line 1388);
   - two failures inside a standalone `prepare_context`
-    (`tests/local_authoring.rs`, near lines 5689 and 6466).
+    (`tests/local_authoring.rs`, near lines 5689 and 6466);
+  - a failed rebuild and two failed refreshes
+    (`tests/recovery_foundation_gate.rs`, near line 951;
+    `tests/discovery_rebuild.rs`, near lines 1575 and 2100).
+- A lookup of one operation by ID that says absent, pending with its step,
+  or completed does not exist; the public reads return pending rows only.
+  F2 needs it and adds it in its own plan unless it lands here first.
 - `create_and_enable` resumes only while its row is pending. If `enable`
   rolls back inside a create and the row is then completed, a repeat of the
   create with the same operation ID meets a non-empty directory. Decide
@@ -77,20 +90,30 @@ Line numbers are in `src/repository.rs` at `6cf5d7f`.
 
 ## To Decide On This Ticket
 
-Two cases remain after the fix. Both exist today, and the F2 boundary makes
+Three cases remain after the fix. All exist today, and the F2 boundary makes
 them reachable by users.
 
-1. A save interrupted between its file write and its checkpoint keeps its
-   row, correctly. It is finished only by repeating the same operation with
-   the same body. If the caller no longer has the body, or someone else has
-   since committed different content to the same file, nothing clears the
-   row and the repository stays blocked. Decide whether the library needs a
+1. A row is pending from the moment it is written, so a process killed at
+   any point after that leaves it; the fix completes rows only for calls
+   that return. It is cleared only by repeating the same operation with the
+   same input, for a save the same body. If the caller no longer has it, or
+   someone else has since committed different content to the same file,
+   nothing clears the row and the repository stays blocked. Decide whether the library needs a
    way to abandon an operation, and what abandoning does with the
    uncommitted file. The CLI RFC names no such command.
 2. A process killed after `enable` or `set_publication_remote` wrote the
    configuration file and before it committed leaves the worktree dirty.
    The repeat is refused as a dirty worktree (`7620-7638`, `3254`), and
    authoring is then blocked.
+
+3. A synchronization that stops with an error after it reserved (a divergent
+   remote, a rejected push, a host needing approval, a locked key, a
+   transport failure) appears to leave its reservation active: nothing
+   finishes the row on those returns (`src/repository/remote/sync.rs`, from
+   line 520). While it is active, local operations are refused
+   (`src/repository/recovery.rs:280-285`) and other synchronizations are
+   busy. Read from the code, not reproduced; F2 Task 13 reproduces or
+   refutes it. If it holds it belongs with Wave 02 Cycle 06, not here.
 
 Decide these before Wave 03 C3 makes saves reachable through the CLI.
 
