@@ -3287,10 +3287,29 @@ fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
 #[test]
 fn recovery_before_repository_initialization_removes_only_owned_target_then_retries() {
     let data = tempfile::tempdir().unwrap();
-    let parent = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let created = parent.path().join("created");
     let existing = parent.path().join("existing");
     std::fs::create_dir(&existing).unwrap();
+
+    // Observe this backend's installed template before the app runs. Git
+    // distributions ship different comments; all of their bytes must survive.
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("main");
+    let probe = Repository::init_opts(parent.path().join("template-probe"), &options).unwrap();
+    let template = support::exclude_bytes(&probe).unwrap_or_default();
+    drop(probe);
+    let delimiter: &[u8] = match template.iter().position(|byte| *byte == b'\n') {
+        Some(offset) if offset > 0 && template[offset - 1] == b'\r' => b"\r\n",
+        _ => b"\n",
+    };
+    let mut owned_line = b".manyhands/worktrees/".to_vec();
+    owned_line.extend_from_slice(delimiter);
+    let mut expected_exclude = template;
+    if !expected_exclude.is_empty() && !expected_exclude.ends_with(b"\n") {
+        expected_exclude.extend_from_slice(delimiter);
+    }
+    expected_exclude.extend_from_slice(&owned_line);
 
     for root in [&created, &existing] {
         let service = failing_service(data.path(), FailurePoint::BeforeRepositoryInitialization);
@@ -3333,7 +3352,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
                 .into_bytes()
         );
         let exclude = support::exclude_bytes(&repository).unwrap();
-        assert!(exclude.ends_with(b".manyhands/worktrees/\n"));
+        assert!(exclude.ends_with(&owned_line));
         assert_eq!(
             exclude
                 .windows(b".manyhands/worktrees/".len())
@@ -3341,12 +3360,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
                 .count(),
             1
         );
-        if root == &created {
-            assert_eq!(
-                exclude,
-                b"# File patterns to ignore; see `git help ignore` for more information.\n# Lines that start with '#' are comments.\n.manyhands/worktrees/\n"
-            );
-        }
+        assert_eq!(exclude, expected_exclude);
         let registry = registry_row(data.path(), root).unwrap();
         assert_eq!(registry.0, "accessible");
         assert_eq!(registry.2, 0);

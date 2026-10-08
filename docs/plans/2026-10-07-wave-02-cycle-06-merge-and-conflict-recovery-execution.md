@@ -1239,3 +1239,36 @@ CLI completed successfully with an appropriate 40-minute suite budget; all SSH
 Independent spec `ses_ee406346cffe2JVWc1SQp12K7z` and quality
 `ses_ee4048c90ffevjaEILObiSP4mK` approved this actual CI-fix set. Native re-run is
 still required; no Task 4 acceptance follows from the local correction.
+
+Published reviewed CI fixes as d108e73c5428a51e9c7be9036f241ceb27150871 through
+normal push; manually dispatched second native run on that exact source:
+https://github.com/vhodges/manyhands/actions/runs/37795672482
+Inspect actual five-target results, including Windows tests previously hidden by
+the compile error. No native pass or Task 4 acceptance is inferred while pending.
+
+### Native run 2: builds pass, integration fixtures corrected — 2026-10-08
+
+Run 37795672482 built and verified release binaries on all five targets. macOS
+library tests passed, but discovery had five raw/canonical fixture mismatches;
+Windows test compilation stopped on four unguarded Unix symlink calls in discovery;
+Linux library/foundation passed, but enablement had one vendor-template literal
+mismatch. These later failures were previously hidden by earlier build/test stops.
+Logs: /tmp/opencode/cycle06-native-37795672482-failures.log. No successful whole
+native job is inferred from successful release builds.
+
+Worker `ses_ee3f2e600ffeTgeJNNL4hfIkn6` changed only discovery_rebuild.rs and
+repository_enablement.rs. Portable file/directory symlink helpers now use proper
+Unix/Windows APIs and fail honestly on fixture capability errors, without skips.
+Canonical registry/trigger/context/race keys retain alias requests; five deliberate
+alias regressions reproduced the macOS failure modes and now pass while preserving
+cache-only/nonmutation/corruption/cascade/multi-root/race assertions. An independent
+pre-application init_opts probe captures the installed Git template, so recovery
+asserts full raw template preservation plus one owned rule rather than Nix-only
+comment text. Both creation cases retain cleanup/commit/config/registration checks.
+Shared support and production are unchanged.
+
+Headless and all-feature discovery 74 and enablement 76 pass, with required static
+checks and diff check. Independent spec `ses_ee3eccb60ffeHYOQh7Frnmcw6H` and
+quality `ses_ee3eb2572ffe9uUM6fdmsYylWK` approved the bounded fixes. Next publish
+and run the same complete native coverage; Windows runtime remains unexecuted
+because compilation of the newly included discovery target previously failed.
