@@ -4,6 +4,10 @@ use crate::repository::OwnedPathBoundary;
 use crate::repository::remote::reservation::commit_observation_batch;
 use crate::repository::{EnableRepositoryRequest, FailurePoint, REGISTRY_FILE};
 use std::fs;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 struct NoPrompt;
 impl SessionCredentialProvider for NoPrompt {
     fn request_passphrase(
@@ -2347,22 +2351,23 @@ fn review_primary_resolution_releases_whole_repository_authoring_without_restart
         service.save_document(save()).unwrap(),
         SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
     ));
+    let submitted = service.submit_comment(SubmitCommentRequest {
+        target: AuthoringTarget {
+            root: root.path().into(),
+            kind: AuthoringKind::Document,
+            item_id,
+            intent: ContextIntent::Edit,
+            operation_id: OperationId::new(),
+        },
+        comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        parent_id: None,
+        body: "available after local completion".into(),
+        expected_destination: ExpectedPathObservation::Missing,
+    });
     assert!(
-        service
-            .submit_comment(SubmitCommentRequest {
-                target: AuthoringTarget {
-                    root: root.path().into(),
-                    kind: AuthoringKind::Document,
-                    item_id,
-                    intent: ContextIntent::Edit,
-                    operation_id: OperationId::new()
-                },
-                comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
-                parent_id: None,
-                body: "available after local completion".into(),
-                expected_destination: ExpectedPathObservation::Missing,
-            })
-            .is_ok()
+        submitted.is_ok(),
+        "comment authoring after primary release; category={:?}",
+        submitted.as_ref().err().map(|error| error.kind)
     );
 }
 
@@ -2476,11 +2481,22 @@ fn review_resolution_releases_parent_after_verified_cleanup_and_replays_original
                 .unwrap()
             )
         );
+        let saved = restarted.save_ticket(edit());
+        assert!(
+            saved.is_ok(),
+            "ticket authoring after parent release; category={:?}",
+            saved.as_ref().err().map(|error| error.kind)
+        );
         assert!(matches!(
-            restarted.save_ticket(edit()).unwrap(),
+            saved.unwrap(),
             SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
         ));
-        assert!(restarted.submit_comment(comment()).is_ok());
+        let submitted = restarted.submit_comment(comment());
+        assert!(
+            submitted.is_ok(),
+            "comment authoring after parent release; category={:?}",
+            submitted.as_ref().err().map(|error| error.kind)
+        );
     }
 }
 
@@ -3416,7 +3432,10 @@ fn index_lock_revalidates_target_change_after_preflight_without_clobbering_it() 
     let external = b"external target change while index.lock is held\n".to_vec();
     let target = root.path().join("docs/document.md");
     let hook_external = external.clone();
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
     set_resolution_index_lock_hook(root.path().to_owned(), move || {
+        observed.store(true, Ordering::SeqCst);
         fs::write(target, &hook_external).unwrap()
     });
     let request = ResolveSynchronizationRequest::new(
@@ -3430,8 +3449,13 @@ fn index_lock_revalidates_target_change_after_preflight_without_clobbering_it() 
         )],
         None,
     );
+    let outcome = service.resolve_synchronization(request).unwrap();
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "target-change lock hook fired"
+    );
     assert!(matches!(
-        service.resolve_synchronization(request).unwrap(),
+        outcome,
         ResolveSynchronizationOutcome::StaleObservation
     ));
     assert_eq!(
@@ -3445,6 +3469,331 @@ fn index_lock_revalidates_target_change_after_preflight_without_clobbering_it() 
             .join("index.lock")
             .exists()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn alias_registered_lock_hook_fires_at_canonical_dispatch_and_preserves_external_change() {
+    let (root, _data, service, request) = protocol_resolution_fixture();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("root");
+    std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+    assert!(
+        alias != root.path().canonicalize().unwrap(),
+        "hook registration deliberately uses an alias"
+    );
+    let target = root.path().join("docs/document.md");
+    let changed = b"external change at alias-registered lock boundary";
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
+    set_resolution_index_lock_hook(alias, move || {
+        observed.store(true, Ordering::SeqCst);
+        fs::write(target, changed).unwrap();
+    });
+    let outcome = service.resolve_synchronization(request).unwrap();
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "alias-registered lock callback fired"
+    );
+    assert!(matches!(
+        outcome,
+        ResolveSynchronizationOutcome::StaleObservation
+    ));
+    assert_eq!(
+        fs::read(root.path().join("docs/document.md")).unwrap(),
+        changed
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn alias_registered_install_hook_panics_only_in_its_own_worktree() {
+    let (root, _data, service, request) = protocol_resolution_fixture();
+    let (other, _other_data, other_service, other_request) = protocol_resolution_fixture();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("root");
+    std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
+    set_resolution_index_install_hook(alias, move || {
+        observed.store(true, Ordering::SeqCst);
+        panic!("alias-registered installation fault");
+    });
+    assert!(matches!(
+        other_service
+            .resolve_synchronization(other_request)
+            .unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "other worktree cannot consume callback"
+    );
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        service.resolve_synchronization(request)
+    }));
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "alias-registered install callback fired"
+    );
+    assert!(
+        stopped.is_err(),
+        "installation boundary propagated injected panic"
+    );
+    assert!(
+        git2::Repository::open(root.path())
+            .unwrap()
+            .path()
+            .join("index.lock")
+            .exists()
+    );
+    assert!(
+        !git2::Repository::open(other.path())
+            .unwrap()
+            .path()
+            .join("index.lock")
+            .exists()
+    );
+}
+
+#[test]
+fn represented_root_hooks_all_fire_at_real_resolution_boundaries() {
+    type Register = fn(PathBuf, Box<dyn FnOnce() + Send>);
+    let (root, _data, service, request) = protocol_resolution_fixture();
+    let marker = root.path().join("hook-spelling");
+    fs::create_dir(&marker).unwrap();
+    let represented = marker.join("..");
+    let registrations: [(&str, Register); 7] = [
+        ("lock", set_resolution_index_lock_hook),
+        ("scratch", set_resolution_index_scratch_hook),
+        ("persist", set_resolution_index_persist_hook),
+        ("install", set_resolution_index_install_hook),
+        ("effect", set_resolution_index_effect_hook),
+        ("refresh", set_resolution_ref_refresh_hook),
+        ("retire", set_resolution_index_retire_hook),
+    ];
+    let fired = Arc::new(std::sync::Mutex::new(Vec::new()));
+    for (stage, register) in registrations {
+        let observed = fired.clone();
+        register(
+            represented.clone(),
+            Box::new(move || {
+                observed.lock().unwrap().push(stage);
+            }),
+        );
+    }
+    assert!(matches!(
+        service.resolve_synchronization(request).unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+    assert_eq!(
+        *fired.lock().unwrap(),
+        [
+            "lock", "scratch", "persist", "install", "effect", "refresh", "retire"
+        ],
+        "every registered callback must fire at its real effect boundary"
+    );
+}
+
+#[test]
+fn absent_test_hook_root_keeps_its_exact_fallback_key() {
+    let parent = fixture_tempdir();
+    let absent = parent.path().join("absent");
+    assert!(!absent.exists());
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
+    set_resolution_index_lock_hook(absent.clone(), move || {
+        observed.store(true, Ordering::SeqCst);
+    });
+    run_resolution_index_lock_hook(parent.path());
+    assert!(!fired.load(Ordering::SeqCst));
+    run_resolution_index_lock_hook(&absent);
+    assert!(fired.load(Ordering::SeqCst));
+    assert!(
+        !absent.exists(),
+        "test-only lookup cannot create a missing root"
+    );
+}
+
+#[test]
+fn own_authoring_registered_path_spelling_is_not_another_worktree() {
+    let (root, _data, service) = fixture();
+    let item_id: canonical::ItemId = "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap();
+    let target = || AuthoringTarget {
+        root: root.path().into(),
+        kind: AuthoringKind::Document,
+        item_id: item_id.clone(),
+        intent: ContextIntent::Create,
+        operation_id: OperationId::new(),
+    };
+    let context = match service.prepare_context(target()).unwrap() {
+        ContextProvisionOutcome::Created(context) | ContextProvisionOutcome::Reused(context) => {
+            context
+        }
+        ContextProvisionOutcome::IndexPending { context } => context,
+    };
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let marker = root.path().join("registered-spelling");
+    fs::create_dir(&marker).unwrap();
+    // Existing, real directory components give libgit2 a noncanonical spelling
+    // of the very same deterministic worktree (no symlink authorization).
+    let registered = marker
+        .join("..")
+        .join(".manyhands/worktrees")
+        .join(item_id.to_string());
+    fs::write(
+        repository
+            .path()
+            .join("worktrees")
+            .join(item_id.to_string())
+            .join("gitdir"),
+        format!("{}\n", registered.join(".git").display()),
+    )
+    .unwrap();
+    let metadata = repository.find_worktree(&item_id.to_string()).unwrap();
+    assert!(
+        metadata.path() != context.worktree.canonicalize().unwrap(),
+        "registered spelling is noncanonical"
+    );
+    assert!(
+        metadata.path().canonicalize().unwrap() == context.worktree.canonicalize().unwrap(),
+        "registered spelling names the same physical worktree"
+    );
+    let reused = service.prepare_context(target());
+    assert!(
+        reused.is_ok(),
+        "same physical authoring worktree must be reusable; category={:?}",
+        reused.as_ref().err().map(|error| error.kind)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn own_authoring_registered_symlink_alias_does_not_authorize_reuse() {
+    let (root, _data, service) = fixture();
+    let item_id: canonical::ItemId = "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap();
+    let target = || AuthoringTarget {
+        root: root.path().into(),
+        kind: AuthoringKind::Document,
+        item_id: item_id.clone(),
+        intent: ContextIntent::Create,
+        operation_id: OperationId::new(),
+    };
+    let context = match service.prepare_context(target()).unwrap() {
+        ContextProvisionOutcome::Created(context) | ContextProvisionOutcome::Reused(context) => {
+            context
+        }
+        ContextProvisionOutcome::IndexPending { context } => context,
+    };
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("untrusted-root");
+    std::os::unix::fs::symlink(&context.root, &alias).unwrap();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let registered = alias.join(".manyhands/worktrees").join(item_id.to_string());
+    fs::write(
+        repository
+            .path()
+            .join("worktrees")
+            .join(item_id.to_string())
+            .join("gitdir"),
+        format!("{}\n", registered.join(".git").display()),
+    )
+    .unwrap();
+    let linked = git2::Repository::open(&context.worktree).unwrap();
+    let before = (
+        linked.head().unwrap().target(),
+        fs::read(linked.path().join("index")).unwrap(),
+    );
+    assert!(
+        matches!(service.prepare_context(target()),
+        Err(error) if error.kind == RepositoryErrorKind::MismatchedAuthoringContext),
+        "an untrusted registered root alias must remain refused"
+    );
+    assert_eq!(
+        (
+            linked.head().unwrap().target(),
+            fs::read(linked.path().join("index")).unwrap()
+        ),
+        before
+    );
+}
+
+#[test]
+fn own_authoring_registered_path_guard_refuses_different_and_unavailable_locations() {
+    for case in [
+        "different_root",
+        "missing_registered",
+        "missing_intended",
+        "both_missing",
+    ] {
+        let (root, _data, service) = fixture();
+        let (other_root, _other_data, _other_service) = fixture();
+        let item_id: canonical::ItemId = "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap();
+        let target = || AuthoringTarget {
+            root: root.path().into(),
+            kind: AuthoringKind::Document,
+            item_id: item_id.clone(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        };
+        let context = match service.prepare_context(target()).unwrap() {
+            ContextProvisionOutcome::Created(context)
+            | ContextProvisionOutcome::Reused(context) => context,
+            ContextProvisionOutcome::IndexPending { context } => context,
+        };
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let other = git2::Repository::open(other_root.path()).unwrap();
+        let head = other.head().unwrap().peel_to_commit().unwrap();
+        other.branch(&context.branch, &head, false).unwrap();
+        other
+            .set_head(&format!("refs/heads/{}", context.branch))
+            .unwrap();
+        let registered = match case {
+            "different_root" => other_root.path().to_owned(),
+            "missing_registered" => other_root.path().join("absent"),
+            "both_missing" => {
+                fs::rename(&context.worktree, root.path().join("displaced")).unwrap();
+                assert!(!context.worktree.exists());
+                other_root.path().join("absent")
+            }
+            "missing_intended" => {
+                let moved = root.path().join("displaced");
+                fs::rename(&context.worktree, &moved).unwrap();
+                assert!(!context.worktree.exists());
+                moved
+            }
+            _ => unreachable!(),
+        };
+        fs::write(
+            repository
+                .path()
+                .join("worktrees")
+                .join(item_id.to_string())
+                .join("gitdir"),
+            format!("{}\n", registered.join(".git").display()),
+        )
+        .unwrap();
+        let before = (
+            repository.head().unwrap().target(),
+            fs::read(repository.path().join("index")).unwrap(),
+            other.head().unwrap().target(),
+            fs::read(other.path().join("index")).unwrap(),
+        );
+        assert!(
+            matches!(service.prepare_context(target()),
+            Err(error) if error.kind == RepositoryErrorKind::MismatchedAuthoringContext),
+            "different or unavailable registered/intended locations must refuse"
+        );
+        assert_eq!(
+            (
+                repository.head().unwrap().target(),
+                fs::read(repository.path().join("index")).unwrap(),
+                other.head().unwrap().target(),
+                fs::read(other.path().join("index")).unwrap()
+            ),
+            before
+        );
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -3707,7 +4056,10 @@ fn windows_public_resolution_final_proof_rejects_changed_branch_and_exact_oid() 
                 assert!(service.resolve_synchronization(request.clone()).is_err());
             }
             let hook_root = root.path().to_owned();
+            let fired = Arc::new(AtomicBool::new(false));
+            let observed = fired.clone();
             set_resolution_ref_refresh_hook(root.path().to_owned(), move || {
+                observed.store(true, Ordering::SeqCst);
                 let repository = git2::Repository::open(hook_root).unwrap();
                 let candidate = repository.refname_to_id("HEAD").unwrap();
                 if third_commit {
@@ -3748,6 +4100,10 @@ fn windows_public_resolution_final_proof_rejects_changed_branch_and_exact_oid() 
             } else {
                 service.resolve_synchronization(request.clone())
             };
+            assert!(
+                fired.load(Ordering::SeqCst),
+                "native final-proof ref-refresh fault fired"
+            );
             assert!(matches!(
                 result,
                 Err(SynchronizationError::RecoveryRequired)
@@ -4271,10 +4627,16 @@ fn index_lock_hooks_are_independent_across_worktrees() {
     let other_target = other_root.path().join("docs/document.md");
     let first_hook_external = hook_external.clone();
     let second_hook_external = other_external.clone();
+    let first_fired = Arc::new(AtomicBool::new(false));
+    let second_fired = Arc::new(AtomicBool::new(false));
+    let first_observed = first_fired.clone();
+    let second_observed = second_fired.clone();
     set_resolution_index_lock_hook(hook_root.path().to_owned(), move || {
+        first_observed.store(true, Ordering::SeqCst);
         fs::write(hook_target, first_hook_external).unwrap()
     });
     set_resolution_index_lock_hook(other_root.path().to_owned(), move || {
+        second_observed.store(true, Ordering::SeqCst);
         fs::write(other_target, second_hook_external).unwrap()
     });
     let request = |root: &std::path::Path,
@@ -4302,12 +4664,24 @@ fn index_lock_hooks_are_independent_across_worktrees() {
             .unwrap(),
         ResolveSynchronizationOutcome::StaleObservation
     ));
+    assert!(
+        second_fired.load(Ordering::SeqCst),
+        "second worktree lock hook fired"
+    );
+    assert!(
+        !first_fired.load(Ordering::SeqCst),
+        "first worktree hook remains independent"
+    );
     assert!(matches!(
         hook_service
             .resolve_synchronization(request(hook_root.path(), hook_operation, &hook_inspection))
             .unwrap(),
         ResolveSynchronizationOutcome::StaleObservation
     ));
+    assert!(
+        first_fired.load(Ordering::SeqCst),
+        "first worktree lock hook fired"
+    );
     assert_eq!(
         fs::read(other_root.path().join("docs/document.md")).unwrap(),
         other_external
@@ -5288,10 +5662,18 @@ fn release_observation_transaction_failure_recovers_absence_and_refuses_foreign_
         let (root, data, service, request) = protocol_resolution_fixture();
         let database = data.path().join(REGISTRY_FILE);
         let hook_database = database.clone();
+        let fired = Arc::new(AtomicBool::new(false));
+        let observed = fired.clone();
         set_resolution_index_retire_hook(root.path().to_owned(), move || {
+            observed.store(true, Ordering::SeqCst);
             rusqlite::Connection::open(hook_database).unwrap().execute_batch("CREATE TRIGGER fail_release_observation BEFORE UPDATE OF phase ON remote_resolution_index_artifacts WHEN NEW.phase='released' BEGIN SELECT RAISE(ABORT,'test observation fault'); END;").unwrap();
         });
-        assert!(service.resolve_synchronization(request.clone()).is_err());
+        let outcome = service.resolve_synchronization(request.clone());
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "release-observation retire hook fired"
+        );
+        assert!(outcome.is_err());
         let repository = git2::Repository::open(root.path()).unwrap();
         let candidate = repository.head().unwrap().target().unwrap();
         let lock = repository.path().join("index.lock");
@@ -5343,15 +5725,20 @@ fn pre_ref_installed_index_old_head_reuses_candidate_and_preserves_foreign_backe
     let (root, data, service, request) = protocol_resolution_fixture();
     let repository = git2::Repository::open(root.path()).unwrap();
     let old_head = repository.head().unwrap().target().unwrap();
-    set_resolution_index_install_hook(root.path().to_owned(), || {
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
+    set_resolution_index_install_hook(root.path().to_owned(), move || {
+        observed.store(true, Ordering::SeqCst);
         panic!("test termination after installation")
     });
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        service.resolve_synchronization(request.clone())
+    }));
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || service.resolve_synchronization(request.clone())
-        ))
-        .is_err()
+        fired.load(Ordering::SeqCst),
+        "pre-ref installation hook fired"
     );
+    assert!(stopped.is_err());
     assert_eq!(repository.head().unwrap().target(), Some(old_head));
     assert!(repository.path().join("index.lock").exists());
     let backend_lock = repository.path().join("refs/heads/main.lock");
@@ -6916,19 +7303,24 @@ fn assert_ref_log_final_proof_rejects_stale_target(reconcile: bool, third_commit
 fn ref_log_proof_no_effect_intent_restarts_with_original_images() {
     let (root, data, service, request) = protocol_resolution_fixture();
     let database = data.path().join(REGISTRY_FILE);
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
     set_resolution_index_install_hook(root.path().to_owned(), move || {
+        observed.store(true, Ordering::SeqCst);
         rusqlite::Connection::open(database)
             .unwrap()
             .execute_batch("UPDATE remote_resolution_index_artifacts SET ref_phase='intent';")
             .unwrap();
         panic!("fixture stop after intent, before backend");
     });
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        service.resolve_synchronization(request.clone())
+    }));
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || service.resolve_synchronization(request.clone())
-        ))
-        .is_err()
+        fired.load(Ordering::SeqCst),
+        "no-effect intent installation hook fired"
     );
+    assert!(stopped.is_err());
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(
         restarted.resolve_synchronization(request).unwrap(),
@@ -7456,15 +7848,20 @@ fn ref_log_proof_manifest_observation_failure_recovers_only_private_preparation(
 #[test]
 fn ref_log_proof_legacy_missing_all_evidence_refuses_even_old_no_effect_state() {
     let (root, data, service, request) = protocol_resolution_fixture();
-    set_resolution_index_install_hook(root.path().to_owned(), || {
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = fired.clone();
+    set_resolution_index_install_hook(root.path().to_owned(), move || {
+        observed.store(true, Ordering::SeqCst);
         panic!("fixture old HEAD with candidate")
     });
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        service.resolve_synchronization(request.clone())
+    }));
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || service.resolve_synchronization(request.clone())
-        ))
-        .is_err()
+        fired.load(Ordering::SeqCst),
+        "legacy-evidence installation hook fired"
     );
+    assert!(stopped.is_err());
     let repository = git2::Repository::open(root.path()).unwrap();
     let old = repository.head().unwrap().target();
     let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();

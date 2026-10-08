@@ -42,12 +42,20 @@ static RESOLUTION_REF_REFRESH_HOOK: std::sync::OnceLock<ResolutionIndexLockHook>
     std::sync::OnceLock::new();
 
 #[cfg(test)]
+fn resolution_hook_root(root: &Path) -> PathBuf {
+    // Fixture aliases and libgit2's plain Windows paths must key the same
+    // test callback as canonical public roots. Missing roots retain their key;
+    // this best-effort lookup is never used for production authorization.
+    root.canonicalize().unwrap_or_else(|_| root.to_owned())
+}
+
+#[cfg(test)]
 fn set_resolution_index_lock_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
     RESOLUTION_INDEX_LOCK_HOOK
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-lock hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
@@ -56,7 +64,7 @@ fn set_resolution_index_persist_hook(root: PathBuf, hook: impl FnOnce() + Send +
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-persist hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
@@ -65,7 +73,7 @@ fn set_resolution_index_scratch_hook(root: PathBuf, hook: impl FnOnce() + Send +
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-scratch hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
@@ -74,7 +82,7 @@ fn set_resolution_index_install_hook(root: PathBuf, hook: impl FnOnce() + Send +
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-install hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
@@ -83,7 +91,7 @@ fn set_resolution_index_effect_hook(root: PathBuf, hook: impl FnOnce() + Send + 
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-effect hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
@@ -92,26 +100,21 @@ fn set_resolution_index_retire_hook(root: PathBuf, hook: impl FnOnce() + Send + 
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution index-retire hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
 fn set_resolution_ref_refresh_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
-    // Public resolution uses a canonical root; Windows canonicalization adds a
-    // verbatim prefix while fixture and libgit2 workdir paths are plain absolute.
-    #[cfg(windows)]
-    let root = root
-        .canonicalize()
-        .expect("resolution ref-refresh hook root");
     RESOLUTION_REF_REFRESH_HOOK
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution ref-refresh hook")
-        .push((root, Box::new(hook)));
+        .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
 #[cfg(test)]
 fn run_resolution_index_hook(hooks: &std::sync::OnceLock<ResolutionIndexLockHook>, root: &Path) {
+    let root = resolution_hook_root(root);
     let hook = {
         let mut hooks = hooks
             .get_or_init(|| std::sync::Mutex::new(Vec::new()))
@@ -119,7 +122,7 @@ fn run_resolution_index_hook(hooks: &std::sync::OnceLock<ResolutionIndexLockHook
             .expect("resolution index hook");
         hooks
             .iter()
-            .position(|(expected_root, _)| expected_root == root)
+            .position(|(expected_root, _)| expected_root == &root)
             .map(|position| hooks.remove(position).1)
     };
     if let Some(hook) = hook {

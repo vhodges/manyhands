@@ -846,9 +846,31 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
 
 #[test]
 fn pending_create_blocks_a_different_create_before_repository_initialization() {
-    let data = tempfile::tempdir().unwrap();
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("created");
+    assert_pending_create_blocks_different_create(parent.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn alias_parent_pending_create_blocks_different_create_without_root_or_cache_mutation() {
+    let parent = tempfile::tempdir().unwrap();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("parent");
+    std::os::unix::fs::symlink(parent.path(), &alias).unwrap();
+    assert!(
+        alias != alias.canonicalize().unwrap(),
+        "request uses a parent alias"
+    );
+    assert_pending_create_blocks_different_create(&alias);
+    assert!(!parent.path().join("created").exists());
+}
+
+fn assert_pending_create_blocks_different_create(parent: &std::path::Path) {
+    let data = tempfile::tempdir().unwrap();
+    let root = parent.join("created");
+    assert!(!root.exists());
+    // Creation keys canonicalize the existing parent, never the absent root.
+    let registered_root = parent.canonicalize().unwrap().join("created");
     let service = RepositoryService::open_at(data.path()).unwrap();
     service
         .with_registry_connection_for_testing(|connection| {
@@ -857,7 +879,10 @@ fn pending_create_blocks_a_different_create_before_repository_initialization() {
                     "INSERT INTO operation_records (
                         root_path, operation_ulid, action, target, state, observed_at
                      ) VALUES (?1, ?2, 'create_and_enable', 'main', 'created', 0)",
-                    params![root.to_str().unwrap(), OperationId::new().to_string()],
+                    params![
+                        registered_root.to_str().unwrap(),
+                        OperationId::new().to_string()
+                    ],
                 )
                 .unwrap();
         })
@@ -2078,6 +2103,8 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     context.worktree,
                     fixture
                         .root
+                        .canonicalize()
+                        .unwrap()
                         .join(".manyhands/worktrees")
                         .join(support::document_id().to_string())
                 );

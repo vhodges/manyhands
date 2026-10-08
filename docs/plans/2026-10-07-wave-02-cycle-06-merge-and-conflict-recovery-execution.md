@@ -1321,3 +1321,46 @@ Spec `ses_ee2e5b1b1ffeql3VtSxhSPsWJc` and quality
 `ses_ee2e1e5f0ffe12GBg2EOGkzsRq` approved this actual correction diff, conditional
 on native results. FileRenameInfoEx and APFS branch execution still need the next
 matrix; local success is not native Windows/macOS success. Task 4 remains unaccepted.
+
+Published those reviewed corrections as 4776157b779ba233f03f22eebfb4c9c7e0df1790
+through normal push; fourth native matrix is manually running:
+https://github.com/vhodges/manyhands/actions/runs/37837512832
+Inspect the exact source results, including all five new Windows controls and
+the macOS authoring cases. No pending result accepts Task 4.
+
+### Native run 4: runtime rename verified; remaining representation fixes — 2026-10-08
+
+Run 37837512832 again fully passed both Linux jobs. New Windows rename controls
+and most resolution cases passed on both architectures (261 library pass/8 fail).
+Remaining failures were six missed fault callbacks and two post-resolution own-
+authoring checks. macOS moved past authoring and failed two foundation fixtures:
+an absent-root pending-create key and one replay-path expectation. Logs reside at
+/tmp/opencode/cycle06-native-37837512832-failures.log.
+
+Worker `ses_ee2c191f0ffeduZNiUrvKoIfMp` verified all Windows callback sites exist;
+registration used raw fixture spelling while dispatch used paths from canonical
+repository opens. Test-only registration/dispatch now share best-effort canonical
+identity with identical raw fallback. Alias regressions reproduced missed stale/
+panic callbacks and verify execution, independence, absence fallback and actual
+seven-stage order; old native fault cases explicitly attest callbacks.
+
+The production own-worktree guard compared canonical intended paths with raw
+registration metadata. It now compares existing canonical locations while requiring
+the registered spelling's chain to contain only real directories, no symlinks or
+Windows reparse points. Different/missing/both-missing controls refuse. An initial
+canonical-only version failed the symlink control; strict final guard passes and
+retains branch/item/kind/common-root validations and pre-effect placement.
+
+Foundation test keys now use canonical existing parent plus absent leaf, preserving
+alias API input and root/cache nonmutation. A new alias case first reproduced the
+incorrect creation and now refuses; full replay expects canonical path only.
+No Windows rename rewrite or production creation-guard workaround was added.
+
+Devenv sync 127, authoring 120, foundation 51, SSH synchronization 41, static gates,
+CLI and one complete long-budget all-feature run pass (766 unit/integration tests,
+9 doctests and 190 SSH cases). Independent spec
+`ses_ee2a01fd1ffeX1ZAtffu3DfPqH` and quality
+`ses_ee29de16affeK4RCHkRyovADnL` approve this actual diff. New native execution
+must confirm the remaining callbacks and authoring/foundation cases; Task 4 is
+not yet accepted. The log did not print both Windows hook keys, so root spelling
+cause is source/regression evidence, not a claim of a logged native key-pair dump.

@@ -7762,7 +7762,45 @@ fn branch_checked_out_in_another_worktree(
             .find_worktree(name)
             .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
         let path = worktree.path();
-        if expected.as_deref() == Some(path) {
+        // libgit2 can register a plain native path while the validated intended
+        // location is canonical (verbatim on Windows). Only an existing path
+        // resolving to that location is ours; absent/unavailable paths refuse.
+        let registered = path.canonicalize().map_err(|error| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                error,
+            )
+        })?;
+        if expected.as_deref() == Some(registered.as_path()) {
+            // Representation equivalence cannot make an untrusted root alias
+            // ours. Check the registered spelling too before exempting it from
+            // the other-worktree guard; later context validation stays intact.
+            for ancestor in path.ancestors() {
+                let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
+                    RepositoryError::new(
+                        operation,
+                        Some(root.to_owned()),
+                        RepositoryErrorKind::MismatchedAuthoringContext,
+                        error,
+                    )
+                })?;
+                let redirected = metadata.file_type().is_symlink();
+                #[cfg(windows)]
+                let redirected = {
+                    use std::os::windows::fs::MetadataExt;
+                    redirected || metadata.file_attributes() & 0x400 != 0
+                };
+                if redirected || !metadata.is_dir() {
+                    return Err(RepositoryError::new(
+                        operation,
+                        Some(root.to_owned()),
+                        RepositoryErrorKind::MismatchedAuthoringContext,
+                        "the registered authoring worktree path must contain only real directories",
+                    ));
+                }
+            }
             continue;
         }
         let linked = Repository::open(path).map_err(|error| {
