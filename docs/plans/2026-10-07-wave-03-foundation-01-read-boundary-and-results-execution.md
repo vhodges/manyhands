@@ -577,3 +577,27 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
   mutations were tried, five caught and one fixed with a new assertion; five
   review-fix tests were seen failing against the old code; three were only
   run passing.
+
+### Native build run at `a65fb40` — 2026-10-08
+
+One manual dispatch of the Build workflow on this branch, run
+`37777664096`. It was dispatched on an instruction the product owner meant
+for another session; they let it stand. No further dispatch is authorized
+from this work without asking.
+
+- Release build of both binaries with all features: passed on all five
+  targets (Linux x86_64 and aarch64, Windows x86_64 and aarch64, macOS
+  aarch64). This is the first compilation of the non-Unix file reader.
+- Test step (library tests and the eight credential and transport targets):
+  passed on both Linux targets; failed on macOS (39 library tests) and on
+  both Windows targets (43).
+- Every failing test is under `repository::remote::` (`reservation`, `state`,
+  `sync`). None is under `repository::read::` or `results::`, so F1's unit
+  tests pass on Windows and macOS. Most fail at one line,
+  `reservation_tests.rs:18`, with `RepositoryNotRegistered`, as in the last
+  run on main (`37475030123`, 2026-10-06, 25 failures per platform; main has
+  gained tests in those modules since). F1 changes nothing under
+  `src/repository/remote/`.
+- Not evidence for: the read integration targets (`read_*`), which the
+  workflow does not run yet (Task 10), and the non-Unix reader's behavior,
+  which was compiled but not exercised.
