@@ -3826,10 +3826,39 @@ impl RepositoryService {
         )?;
         let requested_config =
             canonical_configuration(&request.primary_branch, &root, RepositoryOperation::Enable)?;
-        let unborn = repository.is_empty().map_err(|error| {
-            RepositoryError::git(RepositoryOperation::Enable, Some(root.clone()), error)
-        })?;
-        if !unborn {
+        let unborn = match repository.head() {
+            Ok(_) => false,
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => true,
+            Err(error) => {
+                return Err(RepositoryError::git(
+                    RepositoryOperation::Enable,
+                    Some(root.clone()),
+                    error,
+                ));
+            }
+        };
+        if unborn {
+            // An unborn HEAD can coexist with other branches. Only create the
+            // confirmed primary when it is absent; rollback owns no existing ref.
+            match repository.find_reference(&format!("refs/heads/{}", request.primary_branch)) {
+                Ok(_) => {
+                    return Err(RepositoryError::new(
+                        RepositoryOperation::Enable,
+                        Some(root),
+                        RepositoryErrorKind::WrongCheckedOutBranch,
+                        "the requested primary branch is not checked out at the repository root",
+                    ));
+                }
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                Err(error) => {
+                    return Err(RepositoryError::git(
+                        RepositoryOperation::Enable,
+                        Some(root.clone()),
+                        error,
+                    ));
+                }
+            }
+        } else {
             let branch = checked_out_branch(&repository, &root, RepositoryOperation::Enable)?;
             if branch != request.primary_branch {
                 return Err(RepositoryError::new(

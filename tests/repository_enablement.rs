@@ -2427,6 +2427,119 @@ fn remove_registration_rejects_missing_and_file_roots_without_deleting_existing_
 }
 
 #[test]
+fn enable_unborn_head_main_ignores_a_different_initial_branch_default() {
+    assert_enable_unborn_main_with_master_default("main");
+}
+
+#[test]
+fn enable_unborn_head_main_repoints_to_confirmed_trunk_despite_initial_branch_default() {
+    assert_enable_unborn_main_with_master_default("trunk");
+}
+
+fn assert_enable_unborn_main_with_master_default(primary_branch: &str) {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("main");
+    let repository = Repository::init_opts(root.path(), &options).unwrap();
+    Config::open(&repository.path().join("config"))
+        .unwrap()
+        .set_str("init.defaultBranch", "master")
+        .unwrap();
+    assert_eq!(
+        repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert_eq!(repository.references().unwrap().count(), 0);
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    let outcome = service
+        .enable(EnableRepositoryRequest {
+            root: root.path().to_owned(),
+            primary_branch: primary_branch.to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Unborn Author".to_owned(),
+                email: "unborn@example.invalid".to_owned(),
+            }),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
+
+    let EnableRepositoryOutcome::Enabled { commit_oid } = outcome else {
+        panic!("expected a first initialization commit");
+    };
+    assert_eq!(repository.head().unwrap().shorthand(), Some(primary_branch));
+    assert_eq!(support::head_commit(&repository), Some(commit_oid));
+    assert_eq!(
+        repository.find_commit(commit_oid).unwrap().parent_count(),
+        0
+    );
+    assert_eq!(repository.references().unwrap().count(), 1);
+    assert_eq!(
+        repository
+            .config()
+            .unwrap()
+            .get_string("init.defaultBranch")
+            .unwrap(),
+        "master"
+    );
+    assert_eq!(
+        canonical::parse_repository_config(
+            std::str::from_utf8(&head_configuration(&repository)).unwrap()
+        )
+        .unwrap()
+        .primary_branch,
+        primary_branch
+    );
+    assert_eq!(registry_row_count(data.path()), 1);
+}
+
+#[test]
+fn enable_unborn_head_refuses_an_existing_requested_primary_without_mutation() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    let primary_commit = support::head_commit(&fixture.repository).unwrap();
+    fixture.repository.set_head("refs/heads/unborn").unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index.clear().unwrap();
+    index.write().unwrap();
+    std::fs::remove_file(fixture.root.join("fixture.txt")).unwrap();
+    assert_eq!(
+        fixture.repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert!(fixture.repository.statuses(None).unwrap().is_empty());
+    let before = repository_snapshot(&fixture.repository, &fixture.root);
+    let index_before = support::index_bytes(&fixture.repository);
+
+    let error = service
+        .enable(EnableRepositoryRequest {
+            root: fixture.root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Unborn Author".to_owned(),
+                email: "unborn@example.invalid".to_owned(),
+            }),
+            operation_id: support::operation_id(),
+        })
+        .unwrap_err();
+
+    assert_eq!(
+        repository_snapshot(&fixture.repository, &fixture.root),
+        before
+    );
+    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    assert_eq!(error.kind, RepositoryErrorKind::WrongCheckedOutBranch);
+    assert_eq!(
+        fixture.repository.refname_to_id("refs/heads/main").unwrap(),
+        primary_commit
+    );
+    assert!(!fixture.root.join(canonical::CONFIG_PATH).exists());
+    assert_eq!(registry_row_count(data.path()), 0);
+}
+
+#[test]
 fn enable_unborn_trunk_creates_its_first_commit_without_master() {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
@@ -3032,6 +3145,11 @@ fn enable_existing_valid_configuration_needs_no_identity_and_writes_no_identity_
 fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
     let data = tempfile::tempdir().unwrap();
     let fixture = support::unborn_repository();
+    let mut config = Config::open(&fixture.repository.path().join("config")).unwrap();
+    config.set_str("user.name", "Recovery Author").unwrap();
+    config
+        .set_str("user.email", "recovery@example.invalid")
+        .unwrap();
     std::fs::write(
         fixture.repository.path().join("info/exclude"),
         b"before\r\n",
@@ -3100,6 +3218,11 @@ fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
 fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
     let data = tempfile::tempdir().unwrap();
     let fixture = support::unborn_repository();
+    let mut config = Config::open(&fixture.repository.path().join("config")).unwrap();
+    config.set_str("user.name", "Recovery Author").unwrap();
+    config
+        .set_str("user.email", "recovery@example.invalid")
+        .unwrap();
     std::fs::write(
         fixture.repository.path().join("info/exclude"),
         b"before\r\n",

@@ -1403,7 +1403,15 @@ fn create_replay_after_repository_initialization_uses_the_observed_step() {
     assert!(failing.create_and_enable(request.clone()).is_err());
     drop(failing);
     let repository = git2::Repository::open(&root).unwrap();
-    assert!(repository.is_empty().unwrap());
+    assert_eq!(
+        repository.find_reference("HEAD").unwrap().symbolic_target(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(
+        repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert_eq!(repository.references().unwrap().count(), 0);
 
     let replay = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(

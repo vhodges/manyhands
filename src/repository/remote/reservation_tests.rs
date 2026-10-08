@@ -1819,12 +1819,30 @@ fn sync_reconciled_ancestor_requires_explicit_restart_and_keeps_recorded_candida
 
 #[test]
 fn sync_owner_target_root_generation_and_active_index_are_fenced() {
+    sync_owner_target_root_generation_and_active_index_are_fenced_in(&std::env::temp_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_fencing_fixture_symlink_secondary_parent_preserves_root_fencing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().canonicalize().unwrap();
+    let real = parent.join("real");
+    let alias = parent.join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    sync_owner_target_root_generation_and_active_index_are_fenced_in(&alias);
+}
+
+fn sync_owner_target_root_generation_and_active_index_are_fenced_in(parent: &Path) {
     use state::SynchronizationCheckpoint as C;
-    let (data, root, service) = fixture();
+    let (data, root, service) = fixture_in(parent);
     let owner = sync_owner(&service, root.path());
     sync_push_prepared(&service, root.path(), &owner);
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    let second = tempfile::tempdir().unwrap();
+    // Like the primary fixture, register the canonical spelling of this root.
+    let second = tempfile::tempdir_in(parent.canonicalize().unwrap()).unwrap();
     connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[second.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, second.path(), |tx, id| {
         state::configure(tx, id, Some(&plan()), false)
