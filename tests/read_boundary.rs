@@ -618,7 +618,7 @@ fn every_item_read(
         outcome(
             service
                 .list_comments(repo, &items::item_id(items::DOCUMENT_A))
-                .map(|list| assert_eq!(list.items.len(), 2)),
+                .map(|list| assert_eq!(list.items.len(), 3)),
         ),
         outcome(
             service

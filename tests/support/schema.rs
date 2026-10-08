@@ -1,7 +1,7 @@
 //! A JSON Schema checker for the keyword subset the published schemas use:
 //! `type` (a name or an array of names), `properties`, `required`,
-//! `additionalProperties` (boolean), `items`, `enum`, and `$ref` to a
-//! sibling file. The annotations `$schema`, `$id`, `title` and `description`
+//! `additionalProperties` (boolean), `items`, `enum`, `minimum`, and `$ref`
+//! to a sibling file. The annotations `$schema`, `$id`, `title` and `description`
 //! are accepted and ignored. Any other keyword is an error, so a schema
 //! cannot rely on a constraint this checker does not enforce.
 
@@ -118,6 +118,14 @@ fn validate_schema(
             "items" if !allows("array") => {
                 return Err(format!("{location}: the type cannot be an array"));
             }
+            "minimum" if !allows("integer") && !allows("number") => {
+                return Err(format!("{location}: the type cannot be a number"));
+            }
+            "minimum" => {
+                if !value.is_number() {
+                    return Err(format!("{location}: expected a number"));
+                }
+            }
             "properties" => {
                 let Some(properties) = value.as_object() else {
                     return Err(format!("{location}: expected an object"));
@@ -195,6 +203,13 @@ fn check_node(
             "{location}: {instance} is not one of the allowed values"
         ));
     }
+    if let (Some(minimum), Some(number)) = (schema.get("minimum"), instance.as_number())
+        && is_less(number, minimum)
+    {
+        return Err(format!(
+            "{location}: {instance} is less than the minimum {minimum}"
+        ));
+    }
     if let Some(object) = instance.as_object() {
         let properties = schema.get("properties").and_then(Value::as_object);
         for name in schema
@@ -248,6 +263,18 @@ fn same_value(left: &Value, right: &Value) -> bool {
                     .all(|(key, left)| right.get(key).is_some_and(|right| same_value(left, right)))
         }
         _ => left == right,
+    }
+}
+
+/// Whether `number` is below `minimum`. Two integers are compared as
+/// integers, so that none is rounded on the way.
+fn is_less(number: &serde_json::Number, minimum: &Value) -> bool {
+    match (
+        number.as_i128(),
+        minimum.as_number().and_then(serde_json::Number::as_i128),
+    ) {
+        (Some(number), Some(minimum)) => number < minimum,
+        _ => number.as_f64() < minimum.as_f64(),
     }
 }
 

@@ -227,8 +227,14 @@ fn reads_of_a_thousand_item_repository_are_characterized() {
     assert_eq!(list.items.len(), TICKETS);
     assert_eq!(listed_documents, DOCUMENTS);
     assert_eq!(item.deps.len(), 2);
-    assert_eq!(comments.items.len(), COMMENTS_PER_TICKET - 1);
-    assert_eq!(comments.items[0].replies.len(), 1);
+    assert_eq!(comments.items.len(), COMMENTS_PER_TICKET);
+    assert_eq!(comments.items[1].depth, 1);
+    let threads = comments
+        .items
+        .iter()
+        .filter(|comment| comment.depth == 0)
+        .count();
+    assert_eq!(threads, COMMENTS_PER_TICKET - 1);
     assert_eq!(edges, CHAINS * (CHAIN_LENGTH - 1) + DIAMONDS * 4);
     assert_eq!(closed, TICKETS / 10);
     let planned: usize = plan.batches.iter().map(|batch| batch.items.len()).sum();
@@ -255,8 +261,7 @@ fn reads_of_a_thousand_item_repository_are_characterized() {
     );
     println!("show_item: {show_item:.1} ms (a ticket with two dependencies)");
     println!(
-        "list_comments: {list_comments:.1} ms ({COMMENTS_PER_TICKET} comments in {} threads)",
-        comments.items.len()
+        "list_comments: {list_comments:.1} ms ({COMMENTS_PER_TICKET} comments in {threads} threads)"
     );
     println!(
         "ticket_plan: {ticket_plan:.1} ms ({planned} tickets in {} batches, {} unplannable)",

@@ -62,7 +62,7 @@ fn sample_schemas() -> tempfile::TempDir {
                 "note": {"type": ["string", "null"]},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "owner": {"$ref": "owner.schema.json", "description": "Who holds it."},
-                "count": {"type": "integer"},
+                "count": {"type": "integer", "minimum": 0},
                 "version": {"type": "integer", "enum": [1]},
             },
         }),
@@ -100,6 +100,9 @@ fn schema_checker_accepts_a_conforming_instance() {
     instance["count"] = json!(3);
     instance["version"] = json!(1);
     schema::check(schemas.path(), "sample.schema.json", &instance).unwrap();
+    // The minimum itself is allowed.
+    instance["count"] = json!(0);
+    schema::check(schemas.path(), "sample.schema.json", &instance).unwrap();
     // A number is the same value however it is written.
     instance["version"] = json!(1.0);
     schema::check(schemas.path(), "sample.schema.json", &instance).unwrap();
@@ -130,6 +133,10 @@ fn schema_checker_rejects_each_kind_of_nonconforming_instance() {
     reject(
         &|instance| instance["count"] = json!(1.5),
         "$.count: expected type",
+    );
+    reject(
+        &|instance| instance["count"] = json!(-1),
+        "$.count: -1 is less than the minimum 0",
     );
     reject(
         &|instance| instance["id"] = Value::Null,
@@ -203,6 +210,7 @@ fn schema_checker_rejects_a_schema_outside_the_keyword_subset() {
         ),
         (json!({"required": "id"}), "expected an array of names"),
         (json!({"enum": []}), "expected a non-empty array"),
+        (json!({"minimum": "0"}), "/minimum: expected a number"),
         (json!({"title": 1}), "/title: expected a string"),
         (
             json!({"$ref": "bad.schema.json", "type": "object"}),
@@ -250,6 +258,10 @@ fn schema_checker_rejects_a_schema_outside_the_keyword_subset() {
         (
             json!({"type": "object", "items": {"type": "string"}}),
             "/items: the type cannot be an array",
+        ),
+        (
+            json!({"type": ["string", "null"], "minimum": 0}),
+            "/minimum: the type cannot be a number",
         ),
     ];
     for (schema, expected) in cases {
@@ -1671,9 +1683,9 @@ fn comment_list_matches_its_schema_and_golden() {
         list.clone(),
     );
 
-    assert_eq!(list.items.len(), 3);
-    assert_eq!(list.items[0].replies.len(), 1);
-    assert_eq!(list.items[2].id, None);
+    assert_eq!(list.items.len(), 4);
+    assert_eq!(list.items[1].depth, 1);
+    assert_eq!(list.items[3].id, None);
     let mut placeholders = vec![(repo.root().to_str().unwrap(), "<repository>")];
     if let Some(refreshed_at) = &list.index.refreshed_at {
         placeholders.push((refreshed_at, "<refreshed-at>"));

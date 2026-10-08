@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 comment",
-  "description": "A nonconforming entry has a null id, parent_id, author, created_at and body, and no replies.",
+  "description": "A nonconforming entry has a null id, parent_id, author, created_at and body, and a depth of 0. A root comment has a depth of 0 and a reply one more than its parent's.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
     "path",
     "unknown_metadata",
     "problems",
-    "replies"
+    "depth"
   ],
   "properties": {
     "id": {
@@ -48,11 +48,9 @@
         "$ref": "problem.schema.json"
       }
     },
-    "replies": {
-      "type": "array",
-      "items": {
-        "$ref": "comment.schema.json"
-      }
+    "depth": {
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

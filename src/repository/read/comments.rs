@@ -103,9 +103,8 @@ fn take_author(unknown: &mut serde_yaml::Mapping) -> Result<Option<String>, ()> 
     }
 }
 
-/// A comment and the replies beneath it, in the order they are given.
-fn comment_dto(thread: canonical::CommentThread, directory: &str) -> CommentDto {
-    let mut comment = thread.comment;
+/// A comment that is `depth` replies below a root comment.
+fn comment_dto(mut comment: canonical::Comment, depth: u32, directory: &str) -> CommentDto {
     // Validation accepted the comment, so its file is named for its ID.
     let path = format!("{directory}{}.md", comment.id);
     let mut problems = Vec::new();
@@ -125,12 +124,29 @@ fn comment_dto(thread: canonical::CommentThread, directory: &str) -> CommentDto 
         path,
         unknown_metadata: unknown.values,
         problems,
-        replies: thread
-            .replies
-            .into_iter()
-            .map(|reply| comment_dto(reply, directory))
-            .collect(),
+        depth,
     }
+}
+
+/// The threads as one list: each comment, then its replies in the order
+/// they are given, each followed by its own. The canonical order puts a
+/// reply only beneath the comment its file names, so a reply's `parent_id`
+/// is the ID of the nearest earlier comment one level up. A chain of
+/// replies is walked without recursion, however long it is.
+fn flattened(threads: Vec<canonical::CommentThread>, directory: &str) -> Vec<CommentDto> {
+    let mut comments = Vec::new();
+    // The comments still to list at each depth, the deepest last.
+    let mut pending = vec![threads.into_iter()];
+    while let Some(level) = pending.last_mut() {
+        let Some(thread) = level.next() else {
+            pending.pop();
+            continue;
+        };
+        let depth = u32::try_from(pending.len() - 1).unwrap_or(u32::MAX);
+        comments.push(comment_dto(thread.comment, depth, directory));
+        pending.push(thread.replies.into_iter());
+    }
+    comments
 }
 
 /// A file among an item's comments that is not a comment of it.
@@ -145,7 +161,7 @@ fn nonconforming_entry(item: &str, path: &str, codes: &[ProblemCode]) -> Comment
         path: path.to_owned(),
         unknown_metadata: serde_json::Map::new(),
         problems: codes.iter().map(|code| problem(*code, path)).collect(),
-        replies: Vec::new(),
+        depth: 0,
     }
 }
 
@@ -196,9 +212,11 @@ impl RepositoryService {
     /// otherwise the primary copy. `context` says which.
     ///
     /// Root comments are in `created_at` and then ID order, and so are the
-    /// replies beneath each comment, to any depth. `author` is a comment's
-    /// `created_by` value and null when it has none; Git history is never
-    /// read.
+    /// replies to each comment, to any depth. The list is flat: a comment
+    /// is followed at once by its replies, each of them by its own, and
+    /// `depth` says how far below a root comment each one is. `author` is
+    /// a comment's `created_by` value and null when it has none; Git
+    /// history is never read.
     ///
     /// The index says which files there are: those it holds as the item's
     /// comments, and those directly inside the item's comment directory it
@@ -364,15 +382,12 @@ impl RepositoryService {
             collect_indexed(&threads, &directory, &mut current);
             is_behind |= current != indexed;
 
-            let items: Vec<CommentDto> = threads
-                .into_iter()
-                .map(|thread| comment_dto(thread, &directory))
-                .chain(
-                    entries
-                        .iter()
-                        .map(|(path, codes)| nonconforming_entry(&id, path, codes)),
-                )
-                .collect();
+            let mut items = flattened(threads, &directory);
+            items.extend(
+                entries
+                    .iter()
+                    .map(|(path, codes)| nonconforming_entry(&id, path, codes)),
+            );
             Ok(CommentListDto {
                 items,
                 complete,

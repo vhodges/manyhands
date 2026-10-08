@@ -475,10 +475,16 @@ pub struct ItemContextDto {
     pub head_oid: Option<String>,
 }
 
-/// An item's comment threads: the root comments in `created_at` and then ID
-/// order, each with its replies in the same order beneath it, followed by a
+/// An item's comment threads as one flat list: the root comments in
+/// `created_at` and then ID order, each followed at once by its replies in
+/// the same order and each of those by its own, to any depth; then a
 /// nonconforming entry, in path order, for each file among the item's
 /// comments that is not a comment of it.
+///
+/// Nothing is nested, however long a chain of replies is: the threads are
+/// rebuilt from `depth` and `parent_id`. An entry's `parent_id` is null
+/// exactly when its `depth` is 0, and is otherwise the `id` of the nearest
+/// earlier entry whose `depth` is one less.
 ///
 /// `context` is the item's effective copy, which every comment was read
 /// from. `index` is `stale` when the item's file or a comment's is newer
@@ -501,8 +507,9 @@ pub struct CommentListDto {
 /// A comment, or a file where one should be.
 ///
 /// A nonconforming entry has no `id`, `parent_id`, `author`, `created_at`
-/// or `body` and no replies; its `path` and `problems` say what is wrong
-/// and where. Everything else here was read from the comment's file. The
+/// or `body` and a `depth` of 0; its `path` and `problems` say what is
+/// wrong and where. Everything else here was read from the comment's file,
+/// but for `depth`, which is where the comment is in its thread. The
 /// reason is found by checking the file again, except `duplicate_id` and
 /// `cross_item_parent`, which take the whole context to find and are what
 /// the last refresh stored.
@@ -529,7 +536,10 @@ pub struct CommentDto {
     /// `metadata_not_representable`, and `invalid_field` for a `created_by`
     /// that is not a non-empty string.
     pub problems: Vec<ProblemDto>,
-    pub replies: Vec<CommentDto>,
+    /// How many comments are above this one in its thread: 0 for a root
+    /// comment and for a nonconforming entry, and one more than its
+    /// parent's for a reply.
+    pub depth: u32,
 }
 
 contract_enum!(

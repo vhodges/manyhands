@@ -18,45 +18,45 @@
         "author": "Ada Lovelace <ada@example.invalid>",
         "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE0.\n",
         "created_at": "2026-09-30T12:35:00Z",
+        "depth": 0,
         "id": "01ARZ3NDEKTSV4RRFFQ69G5FE0",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
         "parent_id": null,
         "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE0.md",
         "problems": [],
-        "replies": [
-          {
-            "author": null,
-            "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE1.\n",
-            "created_at": "2026-09-30T12:36:00Z",
-            "id": "01ARZ3NDEKTSV4RRFFQ69G5FE1",
-            "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
-            "parent_id": "01ARZ3NDEKTSV4RRFFQ69G5FE0",
-            "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE1.md",
-            "problems": [],
-            "replies": [],
-            "unknown_metadata": {}
-          }
-        ],
         "unknown_metadata": {
           "reviewed": true
         }
       },
       {
         "author": null,
+        "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE1.\n",
+        "created_at": "2026-09-30T12:36:00Z",
+        "depth": 1,
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FE1",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+        "parent_id": "01ARZ3NDEKTSV4RRFFQ69G5FE0",
+        "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE1.md",
+        "problems": [],
+        "unknown_metadata": {}
+      },
+      {
+        "author": null,
         "body": "Body of 01ARZ3NDEKTSV4RRFFQ69G5FE2.\n",
         "created_at": "2026-09-30T12:37:00Z",
+        "depth": 0,
         "id": "01ARZ3NDEKTSV4RRFFQ69G5FE2",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
         "parent_id": null,
         "path": ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FC0/01ARZ3NDEKTSV4RRFFQ69G5FE2.md",
         "problems": [],
-        "replies": [],
         "unknown_metadata": {}
       },
       {
         "author": null,
         "body": null,
         "created_at": null,
+        "depth": 0,
         "id": null,
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
         "parent_id": null,
@@ -69,7 +69,6 @@
             "target_id": null
           }
         ],
-        "replies": [],
         "unknown_metadata": {}
       }
     ]

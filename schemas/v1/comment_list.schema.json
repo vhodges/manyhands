@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 comment threads of one item",
-  "description": "Root comments in order, each with its replies, followed by the nonconforming entries.",
+  "description": "A flat list: root comments in order, each followed at once by its replies and each reply by its own, then the nonconforming entries. An entry's parent_id is null exactly when its depth is 0, and is otherwise the id of the nearest earlier entry whose depth is one less.",
   "type": "object",
   "additionalProperties": false,
   "required": ["items", "complete", "context", "index"],

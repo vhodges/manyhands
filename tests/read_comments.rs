@@ -57,7 +57,34 @@ fn time(second: u8) -> String {
 }
 
 fn comments(service: &RepositoryService, repo: &ResolvedRepository, item: &str) -> CommentListDto {
-    service.list_comments(repo, &item_id(item)).unwrap()
+    let list = service.list_comments(repo, &item_id(item)).unwrap();
+    assert_threaded(&list.items);
+    list
+}
+
+/// What rebuilding the threads from the flat list relies on: an entry has
+/// no parent exactly when its depth is 0, and otherwise its parent is the
+/// nearest earlier entry one level up.
+fn assert_threaded(comments: &[CommentDto]) {
+    for (index, comment) in comments.iter().enumerate() {
+        let above = comment.depth.checked_sub(1).and_then(|depth| {
+            comments[..index]
+                .iter()
+                .rev()
+                .find(|earlier| earlier.depth == depth)
+        });
+        match above {
+            None => assert_eq!((comment.depth, &comment.parent_id), (0, &None), "{index}"),
+            Some(parent) => {
+                assert!(parent.id.is_some(), "{index}");
+                assert_eq!(comment.parent_id, parent.id, "{index}");
+            }
+        }
+    }
+}
+
+fn depths(comments: &[CommentDto]) -> Vec<u32> {
+    comments.iter().map(|comment| comment.depth).collect()
 }
 
 fn ids(comments: &[CommentDto]) -> Vec<Option<&str>> {
@@ -90,7 +117,7 @@ fn assert_nonconforming(comment: &CommentDto, item: &str, path: &str, expected: 
     assert_eq!(comment.body, None);
     assert_eq!(comment.path, path);
     assert!(comment.unknown_metadata.is_empty());
-    assert!(comment.replies.is_empty());
+    assert_eq!(comment.depth, 0);
     assert_eq!(codes(comment), expected, "{path}");
     for problem in &comment.problems {
         assert_eq!(problem.path.as_deref(), Some(path));
@@ -141,18 +168,26 @@ fn roots_and_replies_are_ordered_by_time_then_id_to_depth_three_with_bodies() {
     assert_eq!(list.context.kind, ItemContextKind::Primary);
     assert_eq!(Path::new(&list.context.worktree), repo.root());
     // The earlier root first; the two created in one second in ID order.
+    // Each comment is followed at once by its replies, the earlier first,
+    // and each of those by its own.
     assert_eq!(
         ids(&list.items),
-        [Some(COMMENT_B), Some(COMMENT_A), Some(COMMENT_F)]
+        [
+            Some(COMMENT_B),
+            Some(COMMENT_D),
+            Some(COMMENT_E),
+            Some(COMMENT_C),
+            Some(COMMENT_A),
+            Some(COMMENT_F)
+        ]
     );
+    assert_eq!(depths(&list.items), [0, 1, 2, 1, 0, 0]);
     let first = &list.items[0];
-    assert_eq!(ids(&first.replies), [Some(COMMENT_D), Some(COMMENT_C)]);
-    let second_level = &first.replies[0];
-    assert_eq!(ids(&second_level.replies), [Some(COMMENT_E)]);
-    let third_level = &second_level.replies[0];
-    assert!(third_level.replies.is_empty());
-    assert!(list.items[1].replies.is_empty());
-    assert!(first.replies[1].replies.is_empty());
+    let second_level = &list.items[1];
+    let third_level = &list.items[2];
+    assert_eq!(list.items[3].parent_id.as_deref(), Some(COMMENT_B));
+    assert_eq!(list.items[4].parent_id, None);
+    assert_eq!(list.items[5].parent_id, None);
 
     assert_eq!(first.item_id, TICKET_A);
     assert_eq!(first.parent_id, None);
@@ -178,11 +213,58 @@ fn roots_and_replies_are_ordered_by_time_then_id_to_depth_three_with_bodies() {
         third_level.body.as_deref(),
         Some(format!("Body of {COMMENT_E}.\n").as_str())
     );
-    for comment in [first, second_level, third_level, &list.items[2]] {
+    for comment in &list.items {
         assert_eq!(comment.author, None);
         assert!(comment.problems.is_empty());
         assert!(comment.unknown_metadata.is_empty());
     }
+    assert_git_transport_uninitialized();
+}
+
+/// How deeply the arrays and objects of `value` are nested.
+fn nesting(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => 1 + values.iter().map(nesting).max().unwrap_or(0),
+        Value::Object(fields) => 1 + fields.values().map(nesting).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+#[test]
+fn a_long_chain_of_replies_is_listed_flat_and_nests_no_deeper_than_one_comment() {
+    const LENGTH: usize = 200;
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    let chain: Vec<String> = (0..LENGTH)
+        .map(|index| format!("01ARZ3NDEKTSV4RRFFQ69G{index:04}"))
+        .collect();
+    // Every comment is a reply to the one before it, all made in the same
+    // second.
+    for (index, id) in chain.iter().enumerate() {
+        let parent = index.checked_sub(1).map(|parent| chain[parent].as_str());
+        write_comment(root, TICKET_A, id, parent, &time(1), "");
+    }
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(list.index.state, IndexState::Current);
+    assert_eq!(
+        ids(&list.items),
+        chain.iter().map(|id| Some(id.as_str())).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        depths(&list.items),
+        (0..u32::try_from(LENGTH).unwrap()).collect::<Vec<_>>()
+    );
+    // A parser with the default recursion limit reads it, as it reads the
+    // list of a single comment: the list, its items, a comment, and what a
+    // comment holds.
+    let json = serde_json::to_string(&list).unwrap();
+    let parsed: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["items"].as_array().unwrap().len(), LENGTH);
+    assert_eq!(nesting(&parsed), 4);
     assert_git_transport_uninitialized();
 }
 
@@ -322,7 +404,7 @@ fn files_that_are_not_comments_end_the_root_list_with_null_ids_paths_and_codes()
         ids(&list.items),
         [Some(COMMENT_A), None, None, None, None, None]
     );
-    assert!(list.items[0].replies.is_empty());
+    assert_eq!(depths(&list.items), [0; 6]);
     // In path order after every comment.
     let reply_to_nothing = comment_path(TICKET_A, COMMENT_B);
     let reply_to_that = comment_path(TICKET_A, COMMENT_C);
@@ -483,8 +565,8 @@ fn an_uncommitted_comment_is_read_and_unrelated_commits_change_nothing() {
 
     let before = comments(&enabled.service, &repo, TICKET_A);
 
-    assert_eq!(ids(&before.items), [Some(COMMENT_A)]);
-    assert_eq!(ids(&before.items[0].replies), [Some(COMMENT_B)]);
+    assert_eq!(ids(&before.items), [Some(COMMENT_A), Some(COMMENT_B)]);
+    assert_eq!(depths(&before.items), [0, 1]);
     assert_eq!(before.items[0].author.as_deref(), Some(ADA));
     assert_eq!(before.index.state, IndexState::Current);
 
@@ -579,7 +661,8 @@ fn comments_changed_since_the_refresh_are_read_as_they_are_and_the_index_is_stal
     let repo = enabled.service.resolve_repository(root).unwrap();
     let stored = comments(&enabled.service, &repo, TICKET_A);
     assert_eq!(stored.index.state, IndexState::Current);
-    assert_eq!(ids(&stored.items[0].replies), [Some(COMMENT_B)]);
+    assert_eq!(ids(&stored.items), [Some(COMMENT_A), Some(COMMENT_B)]);
+    assert_eq!(depths(&stored.items), [0, 1]);
 
     // A reply made a root, with a modification time that hides the edit:
     // what the index stored for it is no longer so.
@@ -592,7 +675,7 @@ fn comments_changed_since_the_refresh_are_read_as_they_are_and_the_index_is_stal
     let reparented = comments(&enabled.service, &repo, TICKET_A);
 
     assert_eq!(ids(&reparented.items), [Some(COMMENT_A), Some(COMMENT_B)]);
-    assert!(reparented.items[0].replies.is_empty());
+    assert_eq!(depths(&reparented.items), [0, 0]);
     assert_eq!(reparented.index.state, IndexState::Stale);
     assert_eq!(reparented.index.refreshed_at, stored.index.refreshed_at);
 
@@ -968,8 +1051,11 @@ fn a_comment_id_two_items_share_is_reported_from_what_the_refresh_stored() {
     set_modified(&shared, SystemTime::now() + Duration::from_secs(30));
     let changed = comments(&enabled.service, &repo, TICKET_A);
 
-    assert_eq!(ids(&changed.items), [Some(COMMENT_A), Some(COMMENT_C)]);
-    assert_eq!(ids(&changed.items[0].replies), [Some(COMMENT_B)]);
+    assert_eq!(
+        ids(&changed.items),
+        [Some(COMMENT_A), Some(COMMENT_B), Some(COMMENT_C)]
+    );
+    assert_eq!(depths(&changed.items), [0, 1, 0]);
     assert_eq!(changed.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
 }
