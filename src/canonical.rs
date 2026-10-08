@@ -117,6 +117,157 @@ pub struct Ticket {
     pub unknown: Mapping,
 }
 
+/// The optional ticket front matter keys that relate one ticket to others
+/// and give it a short code. They are not fields of `Ticket`: they stay in
+/// `Ticket::unknown`, where the serializer keeps them as it keeps any key it
+/// does not define, and `ticket_relationships` reads them from there.
+pub const RELATIONSHIP_KEYS: [&str; 3] = ["slug", "parent", "deps"];
+
+/// Why a relationship value was ignored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelationshipProblemCode {
+    /// `deps` is not a sequence, or a `deps` entry or `parent` is not a
+    /// string.
+    WrongType,
+    /// A `deps` entry or `parent` is a string that is not an item ID.
+    InvalidId,
+    /// A `deps` entry or `parent` names the ticket itself.
+    SelfReference,
+    /// A `deps` entry repeats an earlier one.
+    DuplicateDependency,
+    /// `slug` is not a string that follows the short code grammar.
+    InvalidSlug,
+}
+
+impl RelationshipProblemCode {
+    pub const ALL: [Self; 5] = [
+        Self::WrongType,
+        Self::InvalidId,
+        Self::SelfReference,
+        Self::DuplicateDependency,
+        Self::InvalidSlug,
+    ];
+}
+
+/// One ignored relationship value. `detail` is the item ID the problem is
+/// about, when the value was one; it is never text taken from the file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelationshipProblem {
+    pub code: RelationshipProblemCode,
+    pub detail: Option<ItemId>,
+}
+
+/// A ticket's `slug`, `parent` and `deps`, as far as they are valid.
+///
+/// `deps` is in the file's order, each ID once. A value that is not valid
+/// is left out of its field and listed in `problems`, in the order slug,
+/// parent, then each `deps` entry; none of them makes the ticket
+/// nonconforming. Whether a target exists, and whether it is a ticket,
+/// cannot be known from one file and is not checked here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TicketRelationships {
+    pub slug: Option<String>,
+    pub parent: Option<ItemId>,
+    pub deps: Vec<ItemId>,
+    pub problems: Vec<RelationshipProblem>,
+}
+
+/// Reads the relationship keys from `ticket.unknown`, which is left as it
+/// is.
+pub fn ticket_relationships(ticket: &Ticket) -> TicketRelationships {
+    let mut view = TicketRelationships::default();
+    let mut ignore = |code, detail| view.problems.push(RelationshipProblem { code, detail });
+
+    let slug = match ticket.unknown.get("slug") {
+        None => None,
+        Some(value) => {
+            let slug = value.as_str().filter(|slug| is_valid_slug(slug));
+            if slug.is_none() {
+                ignore(RelationshipProblemCode::InvalidSlug, None);
+            }
+            slug.map(str::to_owned)
+        }
+    };
+    let parent = ticket.unknown.get("parent").and_then(|value| {
+        match relationship_target(&ticket.id, value) {
+            Ok(parent) => Some(parent),
+            Err((code, detail)) => {
+                ignore(code, detail);
+                None
+            }
+        }
+    });
+    let mut deps = Vec::new();
+    match ticket.unknown.get("deps") {
+        None => {}
+        Some(Value::Sequence(entries)) => {
+            for entry in entries {
+                match relationship_target(&ticket.id, entry) {
+                    Ok(dependency) if deps.contains(&dependency) => ignore(
+                        RelationshipProblemCode::DuplicateDependency,
+                        Some(dependency),
+                    ),
+                    Ok(dependency) => deps.push(dependency),
+                    Err((code, detail)) => ignore(code, detail),
+                }
+            }
+        }
+        Some(_) => ignore(RelationshipProblemCode::WrongType, None),
+    }
+
+    view.slug = slug;
+    view.parent = parent;
+    view.deps = deps;
+    view
+}
+
+/// The other ticket a `parent` value or a `deps` entry names, or why it
+/// names none.
+fn relationship_target(
+    ticket: &ItemId,
+    value: &Value,
+) -> Result<ItemId, (RelationshipProblemCode, Option<ItemId>)> {
+    let text = value
+        .as_str()
+        .ok_or((RelationshipProblemCode::WrongType, None))?;
+    let target: ItemId = text
+        .parse()
+        .map_err(|_| (RelationshipProblemCode::InvalidId, None))?;
+    if target == *ticket {
+        return Err((RelationshipProblemCode::SelfReference, Some(target)));
+    }
+    Ok(target)
+}
+
+/// Whether `value` is a short code: an optional prefix of one to eight
+/// lowercase letters or digits, initials of two or three, and a code of
+/// five to eight lowercase Crockford Base32 characters, joined by hyphens.
+///
+/// Only the lowercase spelling is one. A short code is matched without
+/// regard to case when it is looked up, and stored as it is displayed.
+pub fn is_valid_slug(value: &str) -> bool {
+    const CROCKFORD_BASE32_LOWERCASE: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    let alphanumeric = |part: &str, lengths: std::ops::RangeInclusive<usize>| {
+        lengths.contains(&part.len())
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    let parts: Vec<&str> = value.split('-').collect();
+    let (prefix, initials, code) = match parts.as_slice() {
+        [initials, code] => (None, initials, code),
+        [prefix, initials, code] => (Some(prefix), initials, code),
+        _ => return false,
+    };
+    prefix.is_none_or(|prefix| alphanumeric(prefix, 1..=8))
+        && alphanumeric(initials, 2..=3)
+        && (5..=8).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| CROCKFORD_BASE32_LOWERCASE.contains(&byte))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: ItemId,
