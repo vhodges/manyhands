@@ -32,6 +32,16 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: F1, F2 and D1–D2. `zorite-editor` is selected; record the pinned release and its exact load normalizations in the design before the implementation plan is approved.
 
+## Added Scope (2026-10-07)
+
+Ticket relationships and short codes, per the
+[RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
+rebased onto main.
+
+Metadata controls edit `deps` and `parent` by choosing tickets and explain a
+rejected cycle before any save.
+
 ## Exit Evidence
 
 Golden rich/source round-trips, untouched-byte preservation
