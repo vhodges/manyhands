@@ -47,6 +47,18 @@ the optional repository prefix. Exit evidence adds: golden vectors for the
 short-code and initials derivations, and a short code unchanged by rename,
 identity change and prefix change.
 
+## From F1 Planning (2026-10-07)
+
+Write the optional comment field `created_by`, the confirmed Git identity, when
+a comment is created, as the canonical schema RFC now defines. F1 only reads
+it. Also own the canonical written form of `deps`: the existing serializer
+re-emits all front matter on every save, so values are preserved and
+formatting is not.
+
+Decided by the product owner on 2026-10-07 during F1 planning; the
+RFC and Wave amendments are on the F1 branch
+(`manyhands/ticket/01M4CC0VMQ7R15A7M9SPN3KB67`) and reach main when it merges.
+
 ## Exit Evidence
 
 Real save and clean-sync fixtures prove stale preview
