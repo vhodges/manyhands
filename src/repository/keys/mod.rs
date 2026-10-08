@@ -16,6 +16,8 @@ pub use session::{
 pub(crate) mod storage;
 pub use storage::KeyStore;
 
+#[cfg(test)]
+pub(super) use generation::failure_code as stored_failure_code;
 pub(super) use registry::{
     StoredSharedKeysError, bounded_public_key_contents, migrate_material_schema,
     openssh_public_key, public_key_fingerprint, stored_shared_key_registrations,

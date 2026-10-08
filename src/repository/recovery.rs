@@ -622,7 +622,7 @@ pub(super) fn pending_for_root(
         .collect()
 }
 
-fn action_name(operation: RepositoryOperation) -> &'static str {
+pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
     match operation {
         RepositoryOperation::CreateAndEnable => "create_and_enable",
         RepositoryOperation::Enable => "enable",

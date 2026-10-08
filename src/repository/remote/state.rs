@@ -1410,7 +1410,7 @@ pub(in super::super) fn read_operations(
     read_operation_rows(connection, repository_id, false)
 }
 
-pub(in super::super) fn read_operation_rows(
+pub(super) fn read_operation_rows(
     connection: &Connection,
     repository_id: i64,
     active_only: bool,
@@ -1432,7 +1432,7 @@ pub(in super::super) fn read_operation_rows(
         .collect()
 }
 
-pub(in super::super) fn read_operation(
+pub(super) fn read_operation(
     connection: &Connection,
     repository_id: i64,
     operation_id: crate::repository::OperationId,
@@ -1446,6 +1446,93 @@ pub(in super::super) fn read_operation(
         .optional()
         .map_err(|_| recovery_required())?
         .transpose()
+}
+
+/// The remote operations the status reads look at: the one with this ID,
+/// or every one that is not known to be finished. Those are the rows in a
+/// phase that holds the reservation, the synchronizations that stopped
+/// short of an authoritative outcome, and the rows with index or
+/// reconciliation work recorded as outstanding; a poll that ended is never
+/// among them, so the result does not grow with the number of polls.
+///
+/// Nothing is written, and a SQLite failure is returned as it is, so that
+/// a read can tell a busy or unreadable index from a row that is there and
+/// invalid. Each row is checked as `read_operation` checks it.
+pub(in super::super) fn select_status_operations(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: Option<&str>,
+) -> rusqlite::Result<Vec<Result<StoredRemoteOperation, RepositoryError>>> {
+    let mut statement = connection.prepare(
+        "SELECT * FROM remote_operation_records
+          WHERE repository_id=?1
+            AND (operation_ulid=?2
+                 OR (?2 IS NULL
+                     AND (phase NOT IN ('completed','interrupted','cancelled','failed')
+                          OR (action IN ('synchronize_context','synchronize_primary')
+                              AND phase IN ('interrupted','failed'))
+                          OR index_pending=1
+                          OR reconciliation_required=1)))
+          ORDER BY id",
+    )?;
+    statement
+        .query_map(params![repository_id, operation_id], |row| {
+            Ok(operation_from_row(row))
+        })?
+        .collect()
+}
+
+/// The stored polling policy and the outcome of the latest attempt, for
+/// the status read: `None` when the registration has no policy row.
+///
+/// Only these columns are read and checked. A SQLite failure is returned
+/// as it is; the inner error is a value that is there and invalid.
+#[allow(clippy::type_complexity)]
+pub(in super::super) fn select_polling_status(
+    connection: &Connection,
+    repository_id: i64,
+) -> rusqlite::Result<
+    Option<Result<(RemotePollingConfiguration, Option<RemoteOutcomeCategory>), RepositoryError>>,
+> {
+    let values = connection
+        .query_row(
+            "SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,
+                    recovery_suspended,latest_outcome
+               FROM remote_polling_state WHERE repository_id=?1",
+            [repository_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(
+        values.map(|(enabled, paused, interval, backoff, suspended, latest)| {
+            let seconds = |value: i64| u64::try_from(value).map_err(|_| recovery_required());
+            Ok((
+                RemotePollingConfiguration::new(
+                    flag(enabled)?,
+                    flag(paused)?,
+                    PollingInterval::from_seconds(seconds(interval)?)
+                        .map_err(|_| recovery_required())?,
+                    backoff
+                        .map(|backoff| {
+                            AutomaticBackoff::from_seconds(seconds(backoff)?)
+                                .map_err(|_| recovery_required())
+                        })
+                        .transpose()?,
+                    flag(suspended)?,
+                ),
+                latest.as_deref().map(outcome).transpose()?,
+            ))
+        }),
+    )
 }
 
 pub(super) fn generation(

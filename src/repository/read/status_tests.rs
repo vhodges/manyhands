@@ -1,4 +1,5 @@
 use super::*;
+use crate::repository::keys::KeyMaterialErrorKind;
 
 #[test]
 fn a_local_state_is_passed_on_only_when_it_has_the_form_of_a_name() {
@@ -170,5 +171,194 @@ fn a_remote_outcome_other_than_completion_is_a_failure_code() {
     for (outcome, code) in cases {
         assert_eq!(remote_failure(outcome).unwrap().as_str(), code);
         assert_eq!(polling_outcome(outcome).as_str(), code);
+    }
+}
+
+/// Every repository operation. The `match` has no wildcard arm, so a
+/// variant added later does not compile until it is listed here.
+fn repository_operations() -> Vec<RepositoryOperation> {
+    use RepositoryOperation::*;
+    let all = vec![
+        OpenRegistry,
+        RegisterSharedKey,
+        SelectSharedKey,
+        ClearSharedKeySelection,
+        UnregisterSharedKey,
+        ListSharedKeys,
+        PreflightGeneratedKeyDeletion,
+        Inspect,
+        CreateAndEnable,
+        Enable,
+        RemoveRegistration,
+        ListRemotes,
+        AddRemote,
+        RemoveRemote,
+        SetPublicationRemote,
+        PrepareContext,
+        SaveDocument,
+        SaveTicket,
+        SubmitComment,
+        RefreshRepository,
+        RebuildRepository,
+        RepositorySnapshot,
+        Read,
+    ];
+    for operation in &all {
+        match operation {
+            OpenRegistry
+            | RegisterSharedKey
+            | SelectSharedKey
+            | ClearSharedKeySelection
+            | UnregisterSharedKey
+            | ListSharedKeys
+            | PreflightGeneratedKeyDeletion
+            | Inspect
+            | CreateAndEnable
+            | Enable
+            | RemoveRegistration
+            | ListRemotes
+            | AddRemote
+            | RemoveRemote
+            | SetPublicationRemote
+            | PrepareContext
+            | SaveDocument
+            | SaveTicket
+            | SubmitComment
+            | RefreshRepository
+            | RebuildRepository
+            | RepositorySnapshot
+            | Read => {}
+        }
+    }
+    all
+}
+
+#[test]
+fn every_action_the_recovery_store_writes_is_one_the_read_knows() {
+    let mut written = std::collections::BTreeSet::new();
+    for operation in repository_operations() {
+        let stored = crate::repository::recovery::action_name(operation);
+        // What the store writes for an operation that is not recoverable;
+        // no such operation begins a record.
+        if stored == "other" {
+            continue;
+        }
+        let action = local_action(stored);
+        assert!(action.is_some(), "{operation:?} is stored as {stored:?}");
+        written.insert(action.unwrap().as_str());
+    }
+    let known: std::collections::BTreeSet<_> = OperationAction::ALL[..12]
+        .iter()
+        .map(|action| action.as_str())
+        .collect();
+    assert_eq!(written, known);
+}
+
+/// Every key-material error kind, listed the same way.
+fn key_material_error_kinds() -> Vec<KeyMaterialErrorKind> {
+    use KeyMaterialErrorKind::*;
+    let all = vec![
+        InvalidLabel,
+        InvalidPassphrase,
+        HomeUnavailable,
+        RegistryUnavailable,
+        Busy,
+        NotRegistered,
+        SelectedKeyMustBeCleared,
+        ImportedKey,
+        OwnershipUnverified,
+        UnsafePath,
+        ProtectionUnavailable,
+        SourceMissing,
+        SourceUnreadable,
+        NotRegularFile,
+        InvalidGeneratedKey,
+        UnlockFailed,
+        SourceChanged,
+        SelectionChanged,
+        OperationMismatch,
+        ConfirmationRequired,
+        RandomnessUnavailable,
+        GenerationFailed,
+        StorageUnavailable,
+    ];
+    for kind in &all {
+        match kind {
+            InvalidLabel
+            | InvalidPassphrase
+            | HomeUnavailable
+            | RegistryUnavailable
+            | Busy
+            | NotRegistered
+            | SelectedKeyMustBeCleared
+            | ImportedKey
+            | OwnershipUnverified
+            | UnsafePath
+            | ProtectionUnavailable
+            | SourceMissing
+            | SourceUnreadable
+            | NotRegularFile
+            | InvalidGeneratedKey
+            | UnlockFailed
+            | SourceChanged
+            | SelectionChanged
+            | OperationMismatch
+            | ConfirmationRequired
+            | RandomnessUnavailable
+            | GenerationFailed
+            | StorageUnavailable => {}
+        }
+    }
+    all
+}
+
+#[test]
+fn every_failure_a_key_material_operation_stores_is_in_the_registry() {
+    let mut stored = std::collections::BTreeSet::new();
+    for kind in key_material_error_kinds() {
+        let code = crate::repository::keys::stored_failure_code(kind);
+        assert_ne!(
+            OperationFailureCode::from_stored_key_material(code),
+            OperationFailureCode::UnknownFailure,
+            "{kind:?} is stored as {code:?}"
+        );
+        stored.insert(code);
+    }
+    let registered: std::collections::BTreeSet<_> = OperationFailureCode::ALL
+        .into_iter()
+        .filter_map(OperationFailureCode::stored_key_material)
+        .collect();
+    assert_eq!(stored, registered);
+}
+
+#[test]
+fn a_local_synchronization_target_names_what_was_synchronized() {
+    const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+    let oid = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(
+        local_synchronization(&format!("primary/{oid}")).unwrap(),
+        (OperationAction::SynchronizePrimary, None)
+    );
+    for kind in ["document", "ticket"] {
+        assert_eq!(
+            local_synchronization(&format!("{kind}/{ITEM}/{oid}")).unwrap(),
+            (OperationAction::SynchronizeContext, Some(ITEM.to_owned())),
+        );
+    }
+    for rest in [
+        String::new(),
+        "primary".to_owned(),
+        "primary/not-an-oid".to_owned(),
+        format!("primary/{}", oid.to_uppercase()),
+        format!("primary/{oid}/extra"),
+        format!("primary/{ITEM}/{oid}"),
+        format!("comment/{ITEM}/{oid}"),
+        format!("ticket/{oid}"),
+        format!("ticket/not-an-item/{oid}"),
+        format!("ticket/{ITEM}/{}", &oid[..39]),
+        format!("ticket/{ITEM}/{oid}/extra"),
+    ] {
+        let error = local_synchronization(&rest).unwrap_err();
+        assert_eq!(error.code(), ResultCode::InternalError, "{rest:?}");
     }
 }

@@ -523,8 +523,10 @@ pub struct IndexStatusDto {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexProblemDto {
     pub code: ProblemCode,
-    /// As the index stored it: relative to `worktree` when the problem is
-    /// about something inside it, and null when the problem has no path.
+    /// As the index stored it, and null when the problem has no path:
+    /// relative to `worktree` when the refresh could make it so, which is
+    /// when the problem is about something inside that working tree, and
+    /// absolute otherwise.
     pub path: Option<String>,
     /// Null for a problem about the registration as a whole.
     pub worktree: Option<String>,
@@ -606,8 +608,9 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation does. The first twelve are local, the next five
-    /// remote and the last two key-material.
+    /// What an operation does. The local store records the first twelve,
+    /// the remote store the next five and the key-material store the last
+    /// two; a local synchronization is reported under its remote name.
     OperationAction {
         CreateAndEnable => "create_and_enable",
         Enable => "enable",
@@ -632,8 +635,13 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an unfinished operation waits for. `resume` is to ask for
-    /// `action` again with the same operation ID; the other three are what
+    /// What a listed operation waits for.
+    ///
+    /// `resume` is to ask for `action` again with the same operation ID;
+    /// for a remote synchronization that stopped, as a restart. An
+    /// operation with a null `operation_id` was recorded before operations
+    /// had IDs and is always a refresh or a rebuild: asking for that action
+    /// again under any ID takes it up. The other three are what
     /// key-material recovery offers.
     OperationNextAction {
         Resume => "resume",
@@ -643,14 +651,30 @@ contract_enum!(
     }
 );
 
-/// The operations that have not finished, ordered by operation ID, which is
+/// The operations with work outstanding, ordered by operation ID, which is
 /// the order they were started in; an operation recorded before operations
 /// had IDs follows the rest, in the order it was stored.
 ///
-/// These are the local operations that have not completed, the remote
-/// operation that holds the reservation, and the key-material operations
-/// that have not completed or that failed. An operation that is not listed
-/// can still be read by its ID.
+/// These are:
+///
+/// - the local operations that have not completed;
+/// - the remote operation that holds the reservation, in any phase but
+///   `completed`, `interrupted`, `cancelled` and `failed`;
+/// - the remote synchronizations that are `interrupted` or `failed`, which
+///   can be resumed;
+/// - the remote synchronizations that are `completed` while the index has
+///   not caught up with them, and any remote operation with reconciliation
+///   recorded as required;
+/// - the key-material operations that have not completed or that failed.
+///
+/// A poll that ended is never listed, however it ended, so the list does
+/// not grow with the number of polls. An operation that is not listed can
+/// still be read by its ID.
+///
+/// One operation ID can be listed twice. A synchronization whose index
+/// hand-off is pending is a remote operation, and once that hand-off has
+/// begun it is also a local refresh under the same ID; resuming either is
+/// resuming the other. The local one sorts first.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationListDto {
     pub items: Vec<OperationDto>,
@@ -665,23 +689,37 @@ pub struct OperationDto {
     pub operation_id: Option<String>,
     pub family: OperationFamily,
     pub scope: OperationScope,
+    /// A synchronization with no remote to publish to is a local operation
+    /// whose action is `synchronize_primary` or `synchronize_context`.
     pub action: OperationAction,
     /// The store's own name for where the operation stands, in
     /// lower_snake_case: a local operation's state, a remote operation's
-    /// phase or a key-material operation's phase. `completed` means the
-    /// same in all three.
+    /// phase or a key-material operation's phase.
+    ///
+    /// `completed` is the last of them in all three, and it does not by
+    /// itself mean nothing is left to do: a remote synchronization is
+    /// `completed` once Git holds its outcome, while the index may still
+    /// have to catch up, and a key generation can be `completed` and have
+    /// lost its files since. Such an operation is still listed, and
+    /// `next_action` says what it waits for.
     pub state: String,
     /// The last step a local or remote operation recorded as done, and
     /// null when it recorded none. Always null for a key-material
     /// operation, whose `state` is that step.
     pub completed_step: Option<String>,
-    /// Null when the operation completed, and for a remote operation,
-    /// whose store does not say.
+    /// Null when nothing is left to do. Also null for a remote operation
+    /// that holds the reservation, whose store does not say whether
+    /// anything is still running it, and for one that cannot be resumed.
     pub next_action: Option<OperationNextAction>,
+    /// The item a remote operation or a local synchronization is about.
+    /// Null for other local operations, which do not record one.
     pub item_id: Option<String>,
+    /// The key a key-material operation is about, as the key reads name
+    /// it. Null for the other two families.
+    pub key_id: Option<String>,
     /// The working tree a local operation last worked in, as an absolute
     /// path. Null for the other two families.
-    pub context: Option<String>,
+    pub worktree: Option<String>,
     /// When the store last changed the record. Null for a key-material
     /// operation, which stores no time.
     pub updated_at: Option<String>,

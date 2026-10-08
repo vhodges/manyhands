@@ -19,7 +19,7 @@ use crate::{
     canonical::ItemId,
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
-        RemoteOutcomeCategory, RepositoryOperation, RepositoryService,
+        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
         remote::state::{self, StoredRemoteOperation},
     },
     results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
@@ -83,12 +83,45 @@ fn local_action(stored: &str) -> Option<OperationAction> {
     }
 }
 
+/// What the target of a refresh begins with when the refresh is the local
+/// half of a synchronization that had no remote to publish to.
+const LOCAL_SYNCHRONIZATION_TARGET: &str = "synchronization-local-v1/";
+
+/// Whether `text` is a full object ID as Git writes one.
+fn is_object_id(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// What a local synchronization's target says was synchronized: the
+/// primary branch, or one item's branch. The target is
+/// `synchronization-local-v1/primary/<oid>` or
+/// `synchronization-local-v1/<document|ticket>/<item>/<oid>`, as
+/// synchronization writes it; `rest` is what follows the prefix. Anything
+/// else under that prefix was not written by it.
+fn local_synchronization(rest: &str) -> Result<(OperationAction, Option<String>), ReadError> {
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts[..] {
+        ["primary", oid] if is_object_id(oid) => Ok((OperationAction::SynchronizePrimary, None)),
+        ["document" | "ticket", item, oid]
+            if is_object_id(oid) && ItemId::from_str(item).is_ok() =>
+        {
+            Ok((OperationAction::SynchronizeContext, Some(item.to_owned())))
+        }
+        _ => Err(invalid_stored_data()),
+    }
+}
+
 /// The local operations recorded for the repository's root: the one with
 /// this ID, whatever its state, or every one that has not completed, in the
 /// order they were stored.
 ///
 /// A record is matched by root, as recovery matches it, because one made
 /// while the repository was being enabled can precede its registration.
+/// Its target is read only to recognize a local synchronization, which the
+/// store records as a refresh, and is never passed on.
 fn local_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -96,7 +129,7 @@ fn local_operations(
 ) -> Result<Vec<StoredOperation>, ReadError> {
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,
-                observed_at
+                observed_at, target
            FROM operation_records
           WHERE root_path = ?1
             AND ((?2 IS NULL AND state != 'completed') OR operation_ulid = ?2)
@@ -110,6 +143,7 @@ fn local_operations(
         let item_id: Option<String> = row.get(2)?;
         let state: String = row.get(4)?;
         let completed_step: Option<String> = row.get(5)?;
+        let target: Option<String> = row.get(7)?;
         if operation_id
             .as_deref()
             .is_some_and(|id| OperationId::parse(id).is_err())
@@ -119,6 +153,16 @@ fn local_operations(
         {
             return Err(invalid_stored_data());
         }
+        let action = local_action(&action).ok_or_else(invalid_stored_data)?;
+        let synchronized = target
+            .as_deref()
+            .and_then(|target| target.strip_prefix(LOCAL_SYNCHRONIZATION_TARGET));
+        let (action, item_id) = match synchronized {
+            // Only a refresh carries such a target.
+            Some(rest) if action == OperationAction::Refresh => local_synchronization(rest)?,
+            Some(_) => return Err(invalid_stored_data()),
+            None => (action, item_id),
+        };
         let listed = state != LOCAL_COMPLETED;
         operations.push(StoredOperation {
             listed,
@@ -126,14 +170,15 @@ fn local_operations(
                 operation_id,
                 family: OperationFamily::Local,
                 scope: OperationScope::Repository,
-                action: local_action(&action).ok_or_else(invalid_stored_data)?,
+                action,
                 state: stored_name(&state)?,
                 completed_step: completed_step.as_deref().map(stored_name).transpose()?,
                 // Recovery resumes a local operation by asking for the same
                 // action again under the same ID.
                 next_action: listed.then_some(OperationNextAction::Resume),
                 item_id,
-                context: row.get(3)?,
+                key_id: None,
+                worktree: row.get(3)?,
                 updated_at: Some(stored_time(row.get(6)?)?),
                 failure_code: None,
             },
@@ -232,8 +277,45 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
     }
 }
 
+/// Whether the operation list includes a remote operation, and what the
+/// operation waits for.
+///
+/// - One in a phase that holds the reservation is listed. Its store does
+///   not say whether anything is still running it, so nothing is offered.
+/// - A synchronization that was interrupted or that failed is listed and
+///   can be resumed: asked for again under its ID with a restart, it is
+///   given the reservation back. A cancelled one is never given it, and a
+///   promotion or closure has no restart.
+/// - A synchronization that completed and whose index hand-off is still
+///   pending is listed and can be resumed: asked for again, it does only
+///   that hand-off.
+/// - One with reconciliation recorded as required is listed whatever its
+///   phase, because Git may hold what it started.
+///
+/// A poll that ended is not listed, whatever became of it. A new poll
+/// takes its place, and listing each would grow without bound.
+fn remote_standing(record: &StoredRemoteOperation) -> (bool, Option<OperationNextAction>) {
+    let (_, holds_reservation) = remote_phase(record.phase);
+    let is_synchronization = matches!(
+        record.target.action(),
+        RemoteOperationAction::SynchronizeContext | RemoteOperationAction::SynchronizePrimary
+    );
+    let stopped = matches!(
+        record.phase,
+        RemoteOperationPhase::Interrupted | RemoteOperationPhase::Failed
+    );
+    if holds_reservation {
+        (true, None)
+    } else if is_synchronization && (stopped || record.index_pending) {
+        (true, Some(OperationNextAction::Resume))
+    } else {
+        (record.index_pending || record.reconciliation_required, None)
+    }
+}
+
 fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, ReadError> {
-    let (state, listed) = remote_phase(record.phase);
+    let (state, _) = remote_phase(record.phase);
+    let (listed, next_action) = remote_standing(record);
     Ok(StoredOperation {
         listed,
         dto: OperationDto {
@@ -245,9 +327,10 @@ fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, R
             completed_step: record
                 .completed_step
                 .map(|step| remote_step(step).to_owned()),
-            next_action: None,
+            next_action,
             item_id: record.target.item().map(|(_, id)| id.to_string()),
-            context: None,
+            key_id: None,
+            worktree: None,
             updated_at: Some(stored_time(record.updated_at)?),
             failure_code: record.outcome.and_then(remote_failure),
         },
@@ -255,20 +338,35 @@ fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, R
 }
 
 /// The registration's remote operations: the one with this ID, whatever
-/// its phase, or the one that holds the reservation. The remote store
-/// checks every value of a row it returns.
+/// its phase, or the ones the list includes. A SQLite failure keeps its
+/// meaning; a row the remote store's own checks reject is invalid.
+fn remote_records(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: Option<&str>,
+) -> Result<Vec<StoredRemoteOperation>, ReadError> {
+    state::select_status_operations(connection, repo.registration_id(), id)?
+        .into_iter()
+        .map(|record| record.map_err(|_| invalid_stored_data()))
+        .collect()
+}
+
 fn remote_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
-    id: Option<OperationId>,
+    id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
-    let records = match id {
-        Some(id) => state::read_operation(connection, repo.registration_id(), id)?
-            .into_iter()
-            .collect(),
-        None => state::read_operation_rows(connection, repo.registration_id(), true)?,
-    };
-    records.iter().map(remote_operation).collect()
+    remote_records(connection, repo, id)?
+        .iter()
+        .map(remote_operation)
+        // The store narrows the rows; this decides which are listed.
+        .filter(|operation| {
+            id.is_some()
+                || operation
+                    .as_ref()
+                    .map_or(true, |operation| operation.listed)
+        })
+        .collect()
 }
 
 /// A key-material phase under its contract name, or `None` for a phase
@@ -307,14 +405,14 @@ fn key_material_next_action(
 
 /// The application's key-material operations: the one with this ID,
 /// whatever its phase, or every one that has not completed or that
-/// failed, in the order they were stored. Neither the key's paths nor its
-/// label is read.
+/// failed, in the order they were stored. Of the key only its ID is read:
+/// neither its paths nor its label.
 fn key_material_operations(
     connection: &Connection,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     let mut statement = connection.prepare(
-        "SELECT operation_id, action, phase, failure_code
+        "SELECT operation_id, action, phase, failure_code, key_id
            FROM key_material_operations
           WHERE (?1 IS NULL AND (phase <> 'completed' OR failure_code IS NOT NULL))
              OR operation_id = ?1
@@ -333,7 +431,8 @@ fn key_material_operations(
             _ => return Err(invalid_stored_data()),
         };
         let state = key_material_state(action, &phase).ok_or_else(invalid_stored_data)?;
-        if OperationId::parse(&operation_id).is_err() {
+        let key_id: String = row.get(4)?;
+        if OperationId::parse(&operation_id).is_err() || SharedKeyId::parse(&key_id).is_err() {
             return Err(invalid_stored_data());
         }
         operations.push(StoredOperation {
@@ -347,7 +446,8 @@ fn key_material_operations(
                 completed_step: None,
                 next_action: key_material_next_action(action, state, failure.is_some()),
                 item_id: None,
-                context: None,
+                key_id: Some(key_id),
+                worktree: None,
                 updated_at: None,
                 failure_code: failure
                     .as_deref()
@@ -390,7 +490,11 @@ fn index_problems(
         let code: String = row.get(0)?;
         problems.push(IndexProblemDto {
             code: ProblemCode::from_stored(&code),
-            path: row.get(1)?,
+            // A problem about the working tree itself is stored with a path
+            // that is empty once made relative to it.
+            path: row
+                .get::<_, Option<String>>(1)?
+                .filter(|path| !path.is_empty()),
             worktree: row.get(2)?,
         });
     }
@@ -472,8 +576,11 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let registration = repo.registration_id();
-            let snapshot = state::read_snapshot(connection, registration)?;
-            let polling = snapshot.polling();
+            // Only the policy row and the current batch's time are read, so
+            // an observation this read does not report cannot fail it.
+            let (polling, latest_outcome) = state::select_polling_status(connection, registration)?
+                .ok_or_else(invalid_stored_data)?
+                .map_err(|_| invalid_stored_data())?;
             let observed_at: Option<i64> = connection
                 .query_row(
                     "SELECT observed_at FROM remote_observation_batches
@@ -482,28 +589,31 @@ impl RepositoryService {
                     |row| row.get(0),
                 )
                 .optional()?;
-            let active = state::read_operation_rows(connection, registration, true)?;
+            let active = remote_records(connection, repo, None)?
+                .into_iter()
+                .find(|record| remote_phase(record.phase).1);
             Ok(PollingStatusDto {
                 enabled: polling.enabled(),
                 paused: polling.paused(),
                 interval_seconds: polling.interval().as_secs(),
                 backoff_seconds: polling.automatic_backoff().map(|delay| delay.as_secs()),
                 recovery_suspended: polling.recovery_suspended(),
-                latest_outcome: snapshot.latest_outcome().map(polling_outcome),
+                latest_outcome: latest_outcome.map(polling_outcome),
                 latest_observed_at: observed_at.map(stored_time).transpose()?,
-                active_operation_id: active
-                    .first()
-                    .map(|operation| operation.operation_id.to_string()),
+                active_operation_id: active.map(|operation| operation.operation_id.to_string()),
                 next_eligible_at: None,
             })
         })
         .map_err(|error| repo.failure(error))
     }
 
-    /// The operations that have not finished: the repository's local
-    /// operations that have not completed, the remote operation that holds
-    /// its reservation, and the application's key-material operations that
-    /// have not completed or that failed.
+    /// The operations with work outstanding: the repository's local
+    /// operations that have not completed; its remote operation that holds
+    /// the reservation, its synchronizations that can be resumed and any
+    /// remote operation with index or reconciliation work recorded; and
+    /// the application's key-material operations that have not completed
+    /// or that failed. A poll that ended is never listed, so the list does
+    /// not grow with the number of polls.
     ///
     /// They are ordered by operation ID, which is the order they were
     /// started in. A local operation recorded before operations had IDs
@@ -560,7 +670,7 @@ impl RepositoryService {
             let text = id.to_string();
             local_operations(connection, repo, Some(&text))?
                 .into_iter()
-                .chain(remote_operations(connection, repo, Some(id))?)
+                .chain(remote_operations(connection, repo, Some(&text))?)
                 .chain(key_material_operations(connection, Some(&text))?)
                 .min_by_key(|operation| (!operation.listed, family_rank(operation.dto.family)))
                 .map(|operation| operation.dto)
