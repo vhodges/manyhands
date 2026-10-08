@@ -57,13 +57,15 @@ lifecycle. A1–A9 below refer to the Cycle acceptance IDs.
   worktree isolation. Do not claim race-free expected-inode namespace operations
   or continuous foreign-lock exclusion under arbitrary substitution. Still reject
   observed stale state and preserve ambiguous recovery/foreign locks.
-- Separate owner recovery amendment (2026-10-08): ambiguous live locks created
-  internally by libgit2 after a crash may require operator intervention. Preserve
-  them/effects; no automatic ownership inference/deletion by age, PID, or content.
-  Operator quiescence and verified stale-lock handling precede identical retry,
-  exact actual-state revalidation, and recorded-candidate reuse. Other owned
-  resolution effects still recover automatically. This is not authority for
-  wider manual recovery or platform/dependency changes. Owner separately approved
+- Separate owner backend recovery amendment (2026-10-08): interrupted or failed
+  libgit2 ref/reflog effects, including partial logs and ambiguous locks, may need
+  operator recovery. This supersedes lock-only intervention. Preserve effects;
+  no automatic lock inference/deletion by age/PID/content or log repair/rewrite.
+  Operator quiescence and verified backend metadata repair precede identical
+  retry, proof of recorded baseline or complete-candidate ref/log state, exact
+  actual-state revalidation, and candidate reuse. Other owned sentinel/path/index/
+  metadata effects remain automatic. No custom backend, broader manual canonical
+  recovery, or platform/dependency change is authorized. Owner separately approved
   the [Task 4 protocol redesign](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md)
   and sequential local implementation on 2026-10-08; retain all review/gates.
 - Preserve exact fetch mappings, no `FETCH_HEAD` update/pruning, independent

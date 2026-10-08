@@ -681,7 +681,7 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_operation_records")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_operation_records")
         .unwrap();
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
@@ -782,7 +782,7 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
     })
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    connection.execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;").unwrap();
+    connection.execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;").unwrap();
     drop(connection);
     let reopened = RepositoryService::open_at(data.path()).unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -822,7 +822,7 @@ fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populat
     let (data, _root, _service) = fixture();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
         .unwrap();
     connection
         .execute_batch(&legacy_preflight_schema())
@@ -866,7 +866,7 @@ fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populat
         )
         .unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
         .unwrap();
     connection
         .execute_batch(&legacy_preflight_schema())
@@ -940,7 +940,7 @@ fn weakened_complete_task2_evidence_schema_requires_recovery() {
         let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;",
+                "DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;",
             )
             .unwrap();
         connection.execute_batch(&schema).unwrap();
@@ -1041,4 +1041,107 @@ fn idempotent_sync_migration_does_not_scan_retained_operation_history() {
         "idempotent migration walked completed remote history: {before} -> {after} VM steps"
     );
     transaction.commit().unwrap();
+}
+
+#[test]
+fn index_artifact_schema_migration_is_additive_and_rejects_weakened_provenance() {
+    let (data, root, service) = fixture();
+    let operation = crate::repository::OperationId::new();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            operation,
+            &RemoteOperationTarget::for_primary_synchronization(&plan()),
+            RemoteOperationPriority::Manual,
+            123,
+        )
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let (parent,generation): (i64,i64) = connection.query_row("SELECT id,configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",[operation.to_string()],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts;")
+        .unwrap();
+    connection.execute("INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(?1,?2,0,0,'primary',?3,?4,?5,zeroblob(32),zeroblob(32),'resolution_prepared')",params![parent,generation,ADVERTISED,TRACKING,ADVERTISED]).unwrap();
+    let attempt = crate::repository::OperationId::new();
+    connection.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),zeroblob(32),'paths_applying')",params![attempt.to_string(),parent,generation]).unwrap();
+    drop(connection);
+    let _reopened = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT phase FROM remote_resolution_attempts WHERE attempt_ulid=?1",
+                [attempt.to_string()],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "paths_applying"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_index_artifacts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0,
+        "legacy attempts gain no inferred ownership"
+    );
+    connection.execute_batch("DROP TRIGGER remote_resolution_index_artifact_immutable; CREATE TRIGGER remote_resolution_index_artifact_immutable BEFORE UPDATE ON remote_resolution_index_artifacts BEGIN SELECT 1; END;").unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()),Err(error) if error.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+}
+
+#[test]
+fn orphan_index_artifact_evidence_fails_startup_audit() {
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_resolution_index_artifacts(attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,phase) VALUES(999,1,2,zeroblob(32),zeroblob(32),1,3,'intent');").unwrap();
+    drop(connection);
+    assert!(
+        matches!(RepositoryService::open_at(data.path()),Err(error) if error.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+}
+
+#[test]
+fn ref_log_evidence_additive_migration_partial_schema_and_orphans_fail_closed() {
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts;")
+        .unwrap();
+    drop(connection);
+    RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_ref_log_artifacts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(connection.execute("INSERT INTO remote_resolution_ref_log_artifacts(attempt_id,role,device,inode,digest) VALUES(99,'arbitrary-path',1,2,zeroblob(32))", []).is_err());
+    connection
+        .execute_batch("DROP TRIGGER remote_resolution_ref_log_artifact_immutable;")
+        .unwrap();
+    drop(connection);
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+    );
+
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_resolution_ref_log_artifacts(attempt_id,role,device,inode,digest) VALUES(99,'baseline',1,2,zeroblob(32));").unwrap();
+    drop(connection);
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+    );
 }

@@ -6054,6 +6054,35 @@ pub(crate) fn owned_file_bytes(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<Option<Vec<u8>>, RepositoryError> {
+    owned_file_bytes_with_mode_policy(root, relative, operation, repository_root, false)
+}
+
+/// Resolution images must be regular and non-executable on the same no-follow
+/// descriptor used to read their bytes, not a separate pathname metadata check.
+pub(crate) fn owned_resolution_file_bytes(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    #[cfg(unix)]
+    {
+        owned_file_bytes_with_mode_policy(root, relative, operation, repository_root, true)
+    }
+    #[cfg(not(unix))]
+    {
+        owned_file_bytes(root, relative, operation, repository_root)
+    }
+}
+
+#[cfg(unix)]
+fn owned_file_bytes_with_mode_policy(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+    require_non_executable: bool,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
     run_owned_path_hook(root, relative, OwnedPathBoundary::Read);
     let parent_path = relative.parent().ok_or_else(|| {
         authoring_error(
@@ -6090,7 +6119,7 @@ pub(crate) fn owned_file_bytes(
     let metadata = file
         .metadata()
         .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
-    if !metadata.is_file() {
+    if !metadata.is_file() || (require_non_executable && metadata.mode() & 0o111 != 0) {
         return Err(authoring_error(
             operation,
             repository_root,

@@ -4617,7 +4617,6 @@ dependencies = [
  "russh",
  "serde",
  "serde_yaml",
- "sha1",
  "ssh-key 0.6.7",
  "tempfile",
  "time",

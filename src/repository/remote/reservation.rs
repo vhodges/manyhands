@@ -926,6 +926,72 @@ impl RepositoryService {
         })
     }
 
+    pub(super) fn prepare_synchronization_ref_log_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        role: &str,
+        artifact: &state::ResolutionRefLogArtifact,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_ref_log_artifact(tx, &record, attempt, role, artifact)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_index_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        artifact: &state::ResolutionIndexArtifact,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_index_artifact(tx, &record, attempt, artifact)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_index_output(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        output: (u64, u64, [u8; 32]),
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_index_output(tx, &record, attempt, output)
+        })
+    }
+
+    pub(super) fn advance_synchronization_resolution_ref_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        next: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::advance_resolution_ref_effect(tx, &record, attempt, next)
+        })
+    }
+
+    pub(super) fn advance_synchronization_index_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        next: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::advance_resolution_index_artifact(tx, &record, attempt, next)
+        })
+    }
+
     #[allow(dead_code)] // Task 4 supplies observed owned-path writes.
     pub(super) fn begin_synchronization_resolution_path_effects(
         &self,

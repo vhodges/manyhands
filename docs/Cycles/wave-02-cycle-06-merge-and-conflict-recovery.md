@@ -225,15 +225,19 @@ longer promises race-free pathname preservation or continuous foreign-lock
 exclusion against arbitrary concurrent namespace substitution bypassing the
 cooperative protocol. The concurrency answer alone approves no other change.
 
-**Owner recovery amendment — 2026-10-08:** ambiguous live locks created inside
-libgit2 may require operator intervention after a crash. Manyhands must preserve
-the lock/effects and return redacted recovery-required; it must never infer lock
-ownership from contents, age, or PID alone or delete ambiguous locks automatically.
-An operator quiesces relevant writers, verifies and handles the stale lock, then
-retries the identical operation. Retry revalidates actual refs/index/worktree/
-metadata and reuses recorded candidates. Other owned resolution effects remain
-automatically recoverable. This narrow exception does not approve broader manual
-recovery or platform/dependency changes. Owner separately approved the
+**Owner backend recovery amendment — 2026-10-08:** interrupted or failed
+libgit2 ref/reflog updates may require operator intervention for ambiguous locks
+and incomplete log/ref effects, including partial logs. This supersedes the
+earlier lock-only exception. Manyhands preserves effects and returns fixed
+redacted recovery-required; it never infers lock ownership from contents, age,
+or PID alone or automatically deletes ambiguous locks or repairs/rewrites logs.
+An operator quiesces relevant writers, verifies and repairs affected backend
+metadata while preserving unrelated history, then retries the identical operation.
+Retry proves an allowed recorded baseline or completed-candidate state, revalidates
+refs/logs/index/worktree/metadata, reuses the candidate, and refuses third states.
+Other owned sentinel/path/index/metadata effects remain automatically recoverable.
+This backend-only exception does not approve wider manual canonical recovery,
+custom backend machinery, or platform/dependency changes. Owner separately approved the
 [Task 4 protocol amendment](../plans/2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md)
 and sequential local implementation on 2026-10-08; all acceptance gates remain.
 

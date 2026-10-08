@@ -12,7 +12,8 @@ id: "01M4C800000000000000000000"
 
 ## Authority and scope
 
-Ticket: `01K7F6H9J2N4Q6S8V0X2Z4B6DE`. Task 3 HEAD: `6bd1f18`.
+Ticket: `01K7F6H9J2N4Q6S8V0X2Z4B6DE`. Task 3 review base: `51fe6f2`
+(`6bd1f18` before rebase). Unaccepted preservation WIP: `45a139b`.
 Preserve the existing Task 4 work; Tasks 5–7 remain pending. The owner approved
 this technical amendment and sequential implementation on 2026-10-08. No delivery,
 cleanup, task acceptance, or native verification waiver is granted.
@@ -32,12 +33,17 @@ References: [Cycle](../Cycles/wave-02-cycle-06-merge-and-conflict-recovery.md),
    Worktrees reduce file collisions but do not isolate shared refs. Observed stale
    changes still reject; arbitrary namespace replacement is not promised perfect
    pathname preservation or continuous foreign-lock exclusion.
-2. **Narrow manual backend-lock recovery:** an ambiguous live lock created inside
-   libgit2 after a crash is preserved with a redacted recovery-required outcome.
-   An operator quiesces writers, verifies and handles the stale lock, then retries
-   the same operation. No automatic stale-lock deletion or ownership inference
-   from contents, age, or PID alone. Other owned resolution effects must still
-   recover automatically. This is not permission for agents to remove such locks.
+2. **Operator backend ref/reflog recovery:** after independently verified stock-
+   API characterization, owner broadened the lock-only exception (2026-10-08).
+   Interrupted or failed libgit2 ref/reflog effects, including partial logs and
+   ambiguous locks, are preserved with fixed redacted recovery-required. An
+   operator quiesces writers, verifies/repairs affected backend metadata while
+   preserving unrelated history, then retries the same operation. Retry must
+   prove an allowed baseline or completed-candidate ref/log state. No automatic
+   stale-lock deletion, content/age/PID-only ownership inference, log repair,
+   history rewriting or custom backend. Other owned sentinel/path/index/metadata
+   effects must still recover automatically. Agents do not perform the operator
+   repair.
 
 Unchanged: ordered two-parent commits, complete eligible canonical conflict sets,
 no arbitrary staging/rollback/publication, scoped exact caller bytes, all-side
@@ -86,7 +92,7 @@ sentinel; checkout must not independently rewrite the live index.
 | Private serialization partial | Live index/sentinel unchanged; reconcile/rebuild only owned private preparation. |
 | Intended index installed, old HEAD | Verify paths/tree/index/metadata/sentinel; complete only the recorded ref transition. |
 | Candidate HEAD, checkpoint observation missing | Verify exact parents/result and record completion; never recreate a candidate. |
-| Backend-created live lock blocks progress, ownership ambiguous | Preserve effects/lock; require the approved operator intervention, then same-ID exact-state reconciliation. |
+| Backend locks or incomplete/uncertain ref/log effects block progress | Preserve all effects; require operator verification/repair, then same-ID proof of an allowed baseline or complete-candidate state. Never blindly repeat logging or repair it automatically. |
 | Some merge metadata members already absent | Reconcile each fixed member independently; absent is completed, matching owned remnant can retire, foreign remnant stops. |
 | Sentinel release intent; owned/absent/foreign lock | Finish verified owned release or observe absence; never retire/adopt foreign identity. |
 
@@ -94,6 +100,33 @@ Reconcile known effects before fresh-operation preflight. No blind rollback,
 second candidate/ref checkpoint, network work, or user interaction under the lease.
 Audit every reachable backend-created live lock, not just loose branch locks;
 separate ref and reflog effects where the backend does not commit them atomically.
+
+### Ref/reflog evidence and the approved operator boundary
+
+Before a backend ref invocation, bind the target branch and target-worktree HEAD
+log roles, frozen signer/time/message authority, and baseline/intended result
+images using permitted immutable digests, lengths, identities, OIDs and fixed
+roles. Read live log metadata without following links or using public reflog
+reads that create absent files. Do not persist raw log text, signatures, secrets
+or arbitrary paths in SQLite/journals. Prepare expensive read-only evidence
+outside the short lease and revalidate before effects.
+
+Under the held sentinel and ref exclusion, old ref plus exact original log images
+may execute the missing native transition with frozen parameters. Candidate ref
+plus exact intended log images may record completion without another append.
+Old ref with complete/partial/mixed/foreign log effects, candidate with unproved
+logs, or ambiguous live locks must preserve state and stop for operator recovery.
+Operator repair is not by itself authority: identical retry must verify an allowed
+recorded state and the rest of the frozen operation. No attempt to finish partial
+tails, silently normalize history, replace whole logs, or infer lock ownership.
+Legacy evidence cannot be invented; incomplete unproved attempts remain recovery-
+required. Do not retrofit new proof onto legacy completed records by assumption.
+
+Use only stock APIs for a normal ref update with explicit frozen signatures;
+transaction nodes are not atomic, and supplying reflogs causes whole-file
+replacement and suppresses implicit HEAD logging. Those supplied-log repair
+paths are not authorized. Preserve the current uncertainty fence until the new
+actual-state checks prove a missing or completed effect.
 
 Validate closure and other canonical invariants against **all** recorded sides.
 Conflicting immutable evidence requires external recovery before writes; an open
@@ -136,8 +169,9 @@ candidate-only recovery dispatch. Keep one writer in the existing ticket worktre
    metadata retirement and sentinel release. Also inject observation transaction
    failures, byte-identical foreign locks, old HEAD with installed resolved index,
    REUC/NAME/cache extensions and altered same-ID input. Prove cooperating writers
-   are blocked during effects and unblocked afterward. Ambiguous backend-lock
-   tests must preserve locks and converge only after simulated operator action.
+   are blocked during effects and unblocked afterward. Interrupted backend ref/log
+   tests must preserve uncertain effects and converge only after operator repair
+   to a proved allowed state; no automatic log repair or blind duplicate append.
 
 Review each bounded checkpoint; after at most three review rounds, return unresolved
 protocol/feasibility issues for decision rather than repeat an unlimited patch loop.
