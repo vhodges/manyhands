@@ -66,6 +66,19 @@ fn hold_index_lock(
     )
 }
 
+/// The index and its journal files, which no read may change.
+fn index_file_bytes(enabled: &support::EnabledRepository) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files: Vec<_> = index_files(enabled)
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 fn registered_repositories(service: &RepositoryService) -> i64 {
     service
         .read_session_for_testing(|connection| {
@@ -95,10 +108,48 @@ fn read_session_reads_the_index_of_an_enabled_repository() {
 fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    fixture
+        .repository
+        .remote("origin", "ssh://git@example.invalid/team/repo.git")
+        .unwrap();
+    let linked = fixture.root.join(".manyhands/worktrees/linked");
+    fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    fixture
+        .repository
+        .worktree("linked", &linked, None)
+        .unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
+    let index_before = index_file_bytes(&enabled);
 
     assert_eq!(registered_repositories(&enabled.service), 1);
     let _ = enabled.service.new_item_id();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    assert_eq!(enabled.service.resolve_repository(&linked).unwrap(), repo);
+    enabled
+        .service
+        .resolve_repository(&fixture.root.join(".manyhands"))
+        .unwrap_err();
+    assert_eq!(enabled.service.list_repositories().unwrap().items.len(), 1);
+    assert!(
+        enabled
+            .service
+            .inspect_repository(&fixture.root)
+            .unwrap()
+            .registered
+    );
+    enabled.service.inspect_repository(&linked).unwrap();
+    enabled.service.repository_identity(&repo).unwrap();
+    assert_eq!(
+        enabled
+            .service
+            .list_remotes_redacted(&repo)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    assert!(index_before == index_file_bytes(&enabled));
 
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
     assert_git_transport_uninitialized();
@@ -124,6 +175,27 @@ fn read_session_is_busy_while_another_process_holds_the_exclusive_lock() {
     let envelope = error.to_envelope::<Value>("item list");
     assert_eq!(envelope.outcome, Outcome::Error);
     assert!(envelope.recovery.is_empty());
+
+    // Every read that uses the session is refused the same way, and says
+    // which repository it could not read once it knows.
+    let root = fs::canonicalize(&fixture.root).unwrap();
+    let busy = [
+        enabled.service.list_repositories().unwrap_err(),
+        enabled
+            .service
+            .resolve_repository(&fixture.root)
+            .unwrap_err(),
+        enabled
+            .service
+            .inspect_repository(&fixture.root)
+            .unwrap_err(),
+    ];
+    for (error, repository) in busy.iter().zip([None, root.to_str(), root.to_str()]) {
+        assert_eq!(error.code(), ResultCode::Busy);
+        assert_eq!(error.scope.repository.as_deref(), repository);
+        assert!(error.recovery.is_empty());
+    }
+    assert!(started.elapsed() < NOT_BLOCKED);
 
     // The lock, not the index, was the obstacle.
     holder.release();
@@ -303,6 +375,21 @@ fn new_item_id_needs_no_session() {
     let id = enabled.service.new_item_id().id;
 
     assert_eq!(ItemId::from_str(&id).unwrap().to_string(), id);
+    assert_git_transport_uninitialized();
+}
+
+// Identity and remotes are read from Git alone once the repository is
+// resolved, so the index lock does not stand in their way.
+#[test]
+fn identity_and_remotes_of_a_resolved_repository_need_no_session() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let _holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheWrite);
+
+    enabled.service.repository_identity(&repo).unwrap();
+    enabled.service.list_remotes_redacted(&repo).unwrap();
+
     assert_git_transport_uninitialized();
 }
 

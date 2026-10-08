@@ -43,6 +43,8 @@ macro_rules! contract_enum {
     };
 }
 
+pub(crate) use contract_enum;
+
 contract_enum!(Outcome {
     Success => "success",
     Noop => "noop",

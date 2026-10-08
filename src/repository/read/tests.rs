@@ -304,3 +304,131 @@ fn a_sqlite_failure_maps_the_same_way_raw_or_wrapped() {
         ResultCode::InternalError
     );
 }
+
+#[test]
+fn every_identity_level_has_its_contract_name() {
+    use git2::ConfigLevel;
+
+    let cases = [
+        (ConfigLevel::Local, IdentitySource::Repository, "repository"),
+        (ConfigLevel::Global, IdentitySource::Global, "global"),
+        (ConfigLevel::XDG, IdentitySource::Xdg, "xdg"),
+        (ConfigLevel::System, IdentitySource::System, "system"),
+        (
+            ConfigLevel::ProgramData,
+            IdentitySource::ProgramData,
+            "program_data",
+        ),
+        (ConfigLevel::App, IdentitySource::Application, "application"),
+    ];
+    for (level, source, name) in cases {
+        assert_eq!(admin::identity_source(level), Some(source), "{level:?}");
+        assert_eq!(source.as_str(), name);
+    }
+    // Levels identity resolution does not read are never named, and `none`
+    // is kept for an identity that was not found.
+    assert_eq!(admin::identity_source(ConfigLevel::Worktree), None);
+    assert_eq!(admin::identity_source(ConfigLevel::Highest), None);
+    assert_eq!(IdentitySource::ALL.len(), cases.len() + 1);
+    assert_eq!(IdentitySource::None.as_str(), "none");
+}
+
+#[test]
+fn a_failure_at_a_root_names_it_in_scope_and_in_the_rebuild_only() {
+    let root = Path::new("/work/repository");
+    let rebuild = serde_json::json!([{
+        "action": "index.rebuild",
+        "operation_id": null,
+        "arguments": {"root": "/work/repository"},
+    }]);
+
+    let unavailable = resolve::at_root(ReadError::new(ResultCode::IndexUnavailable), root);
+    assert_eq!(
+        unavailable.scope.repository.as_deref(),
+        Some("/work/repository")
+    );
+    assert_eq!(
+        serde_json::to_value(&unavailable.recovery).unwrap(),
+        rebuild
+    );
+
+    for code in ResultCode::ALL {
+        if matches!(code, ResultCode::Ok | ResultCode::IndexUnavailable) {
+            continue;
+        }
+        let error = resolve::at_root(ReadError::new(code), root);
+        assert_eq!(error.code(), code);
+        assert_eq!(error.scope.repository.as_deref(), Some("/work/repository"));
+        assert!(error.recovery.is_empty(), "{code:?}");
+    }
+
+    // A scope the failure already names is the more exact one.
+    let named = ReadError::new(ResultCode::Busy).with_scope(Scope {
+        repository: Some("/work/other".to_owned()),
+        item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        ..Scope::default()
+    });
+    let named = resolve::at_root(named, root);
+    assert_eq!(named.scope.repository.as_deref(), Some("/work/other"));
+    assert_eq!(
+        named.scope.item_id.as_deref(),
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_that_is_not_utf8_is_left_out_instead_of_being_converted() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let root = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
+    let error = resolve::at_root(ReadError::new(ResultCode::IndexUnavailable), root);
+
+    assert_eq!(error.scope.repository, None);
+    assert_eq!(
+        serde_json::to_value(&error.recovery).unwrap(),
+        serde_json::json!([{"action": "index.rebuild", "operation_id": null, "arguments": {}}])
+    );
+}
+
+#[test]
+fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
+    let unknown = |configuration: ConfigurationDto| {
+        assert_eq!(configuration.state, ConfigurationState::Invalid);
+        assert_eq!(configuration.primary_branch, None);
+        assert_eq!(configuration.publication_remote, None);
+        assert_eq!(
+            configuration.problems,
+            [ProblemDto {
+                code: ProblemCode::UnknownProblem,
+                path: Some(".manyhands/config.toml".to_owned()),
+            }]
+        );
+    };
+
+    unknown(admin::stored_configuration(
+        Some("some-later-state"),
+        Some("main".to_owned()),
+        Some("origin".to_owned()),
+        None,
+    ));
+    // Valid without a primary branch is not a configuration.
+    unknown(admin::stored_configuration(
+        Some("valid"),
+        None,
+        Some("origin".to_owned()),
+        None,
+    ));
+    unknown(admin::stored_configuration(
+        Some("invalid"),
+        None,
+        None,
+        Some("some-later-code"),
+    ));
+    unknown(admin::stored_configuration(
+        Some("invalid"),
+        None,
+        None,
+        None,
+    ));
+}

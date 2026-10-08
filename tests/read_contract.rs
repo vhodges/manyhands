@@ -6,7 +6,10 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 
 use manyhands::{
     canonical::ItemId,
-    repository::{ProblemDto, RepositoryService},
+    repository::{
+        Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
+        ProblemDto, RepositoryService,
+    },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect, Outcome,
         ProblemCode, PublicationEffect, ResultCode, Scope, WriteEffect,
@@ -679,6 +682,35 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "code",
             ProblemCode::ALL.map(ProblemCode::as_str).to_vec(),
         ),
+        (
+            "repository_summary.schema.json",
+            "accessibility",
+            Accessibility::ALL.map(Accessibility::as_str).to_vec(),
+        ),
+        (
+            "repository_configuration.schema.json",
+            "state",
+            ConfigurationState::ALL
+                .map(ConfigurationState::as_str)
+                .to_vec(),
+        ),
+        (
+            "repository_index.schema.json",
+            "state",
+            IndexState::ALL.map(IndexState::as_str).to_vec(),
+        ),
+        (
+            "repository_inspection.schema.json",
+            "identity",
+            IdentityAvailability::ALL
+                .map(IdentityAvailability::as_str)
+                .to_vec(),
+        ),
+        (
+            "identity.schema.json",
+            "source",
+            IdentitySource::ALL.map(IdentitySource::as_str).to_vec(),
+        ),
     ]
 }
 
@@ -775,6 +807,175 @@ fn a_degraded_index_matches_the_failure_golden() {
             sentinels: &[directory, "not sqlite", "manyhands.sqlite3"],
         },
         &error.to_envelope::<Value>("document list"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// A credential planted in a remote URL; no envelope may carry it.
+const CREDENTIAL: &str = "SENTINEL-9d2e";
+
+fn repository_scope(root: &str) -> Scope {
+    Scope {
+        repository: Some(root.to_owned()),
+        ..Scope::default()
+    }
+}
+
+/// Two remotes: one with a credential in each location, and one that
+/// publication can use and the configuration selects.
+fn add_fixture_remotes(fixture: &support::TestRepository) {
+    fixture
+        .repository
+        .remote(
+            "origin",
+            &format!("https://user:{CREDENTIAL}@example.invalid/team/repo.git"),
+        )
+        .unwrap();
+    fixture
+        .repository
+        .remote_set_pushurl(
+            "origin",
+            Some(&format!(
+                "https://example.invalid/team/repo.git?token={CREDENTIAL}"
+            )),
+        )
+        .unwrap();
+    fixture
+        .repository
+        .remote("publish", "ssh://git@example.invalid/team/repo.git")
+        .unwrap();
+    fs::write(
+        fixture.root.join(".manyhands/config.toml"),
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"publish\"\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn repo_list_matches_its_schema_and_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+
+    let list = enabled.service.list_repositories().unwrap();
+    let root = list.items[0].root.clone();
+    let enabled_at = list.items[0].enabled_at.clone().unwrap();
+    let envelope = Envelope::read_success("repo list", Scope::default(), list);
+
+    assert_eq!(Path::new(&root), fs::canonicalize(&fixture.root).unwrap());
+    golden::assert_contract(
+        &ContractCase {
+            name: "repo_list",
+            data_schema: Some("repository_list.schema.json"),
+            placeholders: &[(&root, "<repository>"), (&enabled_at, "<timestamp>")],
+            sentinels: &[enabled.data_directory.path().to_str().unwrap()],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn repo_inspect_matches_its_schema_and_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    add_fixture_remotes(&fixture);
+
+    let inspection = enabled.service.inspect_repository(&fixture.root).unwrap();
+    let root = inspection.root.clone();
+    let envelope = Envelope::read_success("repo inspect", repository_scope(&root), inspection);
+
+    golden::assert_contract(
+        &ContractCase {
+            name: "repo_inspect",
+            data_schema: Some("repository_inspection.schema.json"),
+            placeholders: &[(&root, "<repository>")],
+            sentinels: &[CREDENTIAL],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn repo_identity_matches_its_schema_and_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let identity = enabled.service.repository_identity(&repo).unwrap();
+    let envelope = Envelope::read_success("repo identity", repo.scope(), identity);
+
+    golden::assert_contract(
+        &ContractCase {
+            name: "repo_identity",
+            data_schema: Some("identity.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn remote_list_matches_its_schema_and_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    add_fixture_remotes(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let remotes = enabled.service.list_remotes_redacted(&repo).unwrap();
+    let envelope = Envelope::read_success("remote list", repo.scope(), remotes);
+
+    // The credential really is in the repository, so the scan can fail.
+    assert!(
+        fixture
+            .repository
+            .find_remote("origin")
+            .unwrap()
+            .url()
+            .unwrap()
+            .contains(CREDENTIAL)
+    );
+    assert!(
+        !serde_json::to_string(&envelope)
+            .unwrap()
+            .contains(CREDENTIAL)
+    );
+    golden::assert_contract(
+        &ContractCase {
+            name: "remote_list",
+            data_schema: Some("remote_list.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[CREDENTIAL],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_path_inside_a_repository_matches_the_failure_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let subdirectory = fixture.root.join("nested");
+    fs::create_dir_all(&subdirectory).unwrap();
+    let root = fs::canonicalize(&fixture.root).unwrap();
+
+    let error = enabled
+        .service
+        .resolve_repository(&subdirectory)
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::NotRepositoryRoot);
+    golden::assert_contract(
+        &ContractCase {
+            name: "failure_not_repository_root",
+            data_schema: None,
+            placeholders: &[(root.to_str().unwrap(), "<repository>")],
+            sentinels: &["nested"],
+        },
+        &error.to_envelope::<Value>("remote list"),
     );
     assert_git_transport_uninitialized();
 }

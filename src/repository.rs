@@ -1525,7 +1525,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(SaveOutcome::IdentityRequired { context });
@@ -1901,7 +1901,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(SaveOutcome::IdentityRequired { context });
@@ -2324,7 +2324,7 @@ impl RepositoryService {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
             let effective_config = effective_config.unwrap_or(&config);
-            let Some(identity) =
+            let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
                 return Ok(CommentSubmissionOutcome::IdentityRequired { context });
@@ -3310,7 +3310,7 @@ impl RepositoryService {
         let local_config = repository
             .config()
             .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
-        let Some(identity) = resolve_identity(&local_config, &local_config, &root, operation)?
+        let Some((identity, _)) = resolve_identity(&local_config, &local_config, &root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
             return Err(RepositoryError::new(
@@ -3844,7 +3844,7 @@ impl RepositoryService {
                     &root,
                     RepositoryOperation::Enable,
                 )?;
-                let Some(identity) = resolve_identity(
+                let Some((identity, _)) = resolve_identity(
                     &local_config,
                     &effective_config,
                     &root,
@@ -8015,11 +8015,11 @@ fn resolve_identity(
     effective_config: &Config,
     root: &Path,
     operation: RepositoryOperation,
-) -> Result<Option<CommitIdentity>, RepositoryError> {
+) -> Result<Option<(CommitIdentity, ConfigLevel)>, RepositoryError> {
     if let Some(identity) =
         complete_identity_at_level(local_config, ConfigLevel::Local, root, operation)?
     {
-        return Ok(Some(identity));
+        return Ok(Some((identity, ConfigLevel::Local)));
     }
     for level in [
         ConfigLevel::Global,
@@ -8031,7 +8031,7 @@ fn resolve_identity(
         if let Some(identity) =
             complete_identity_at_level(effective_config, level, root, operation)?
         {
-            return Ok(Some(identity));
+            return Ok(Some((identity, level)));
         }
     }
     Ok(None)
@@ -8688,10 +8688,11 @@ mod tests {
                 RepositoryOperation::Inspect,
             )
             .unwrap()
-            .map(|identity| (identity.name, identity.email)),
+            .map(|(identity, level)| (identity.name, identity.email, level)),
             Some((
                 "Global Name".to_owned(),
-                "global@example.invalid".to_owned()
+                "global@example.invalid".to_owned(),
+                ConfigLevel::Global
             ))
         );
     }

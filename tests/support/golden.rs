@@ -22,7 +22,15 @@ pub const ENVELOPE_SCHEMA: &str = "envelope.schema.json";
 /// Every contract case, by fixture name. A case that is not listed here is
 /// refused, and a fixture file with no entry fails `tests/read_contract.rs`,
 /// so the directory holds exactly the envelopes some test still produces.
-pub const CASES: &[&str] = &["failure_index_unavailable", "id_new"];
+pub const CASES: &[&str] = &[
+    "failure_index_unavailable",
+    "failure_not_repository_root",
+    "id_new",
+    "remote_list",
+    "repo_identity",
+    "repo_inspect",
+    "repo_list",
+];
 
 /// A shorter value is too likely to occur inside unrelated data.
 const SHORTEST_PLACEHOLDER_TARGET: usize = 8;

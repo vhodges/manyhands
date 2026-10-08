@@ -22,12 +22,34 @@ use crate::{
     results::{Envelope, ProblemCode, RecoveryAction, ResultCode, Scope},
 };
 
+mod admin;
 mod dto;
+mod resolve;
 
-pub use dto::{NewIdDto, ProblemDto};
+pub use dto::{
+    Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
+    IdentitySource, IndexState, IndexStateDto, NewIdDto, ProblemDto, RemoteDto, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
+};
+pub use resolve::ResolvedRepository;
 
 /// The recovery action a degraded index calls for.
 const REBUILD_INDEX_ACTION: &str = "index.rebuild";
+
+/// The argument of a recovery action that names a repository root.
+const ROOT_ARGUMENT: &str = "root";
+
+/// A recovery action that takes a repository root, when one is known.
+fn root_action(action: &str, root: Option<&str>) -> RecoveryAction {
+    RecoveryAction {
+        action: action.to_owned(),
+        operation_id: None,
+        arguments: root
+            .map(|root| (ROOT_ARGUMENT.to_owned(), root.into()))
+            .into_iter()
+            .collect(),
+    }
+}
 
 /// Why a read returned no data.
 ///
@@ -50,11 +72,7 @@ impl ReadError {
         );
         let code = failure_code(code);
         let recovery = match code {
-            ResultCode::IndexUnavailable => vec![RecoveryAction {
-                action: REBUILD_INDEX_ACTION.to_owned(),
-                operation_id: None,
-                arguments: serde_json::Map::new(),
-            }],
+            ResultCode::IndexUnavailable => vec![root_action(REBUILD_INDEX_ACTION, None)],
             _ => Vec::new(),
         };
         Self {
