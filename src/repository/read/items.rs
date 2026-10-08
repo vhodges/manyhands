@@ -761,7 +761,9 @@ pub(super) fn stored_problems(
 /// stopped part of the way through, a directory that holds them.
 ///
 /// A refresh stores that as a `source` problem at the directory, relative
-/// to the context, and completes, so the index still reads `current`.
+/// to the context and written with the platform's separator, and
+/// completes, so the index still reads `current`. Paths are therefore
+/// compared by their components and never as text.
 ///
 /// - Tickets are each in a directory of their own directly under
 ///   `.manyhands/tickets`, so only that directory, or `.manyhands` above
@@ -769,26 +771,37 @@ pub(super) fn stored_problems(
 /// - Documents can be in any directory under `docs`, and the limit on how
 ///   many entries a refresh reads is for that whole tree, so it is stored
 ///   at whichever directory the refresh was in. Every problem at `docs` or
-///   below it counts, except at a path ending in `.md`: that is one file
-///   the refresh could not read, as an unreadable ticket file is, and not
-///   a directory. A directory that is itself named `*.md` is not told
-///   apart from such a file.
+///   below it counts, except at a path whose name ends in `.md`: that is
+///   one file the refresh could not read, as an unreadable ticket file is,
+///   and not a directory. A directory that is itself named `*.md` is not
+///   told apart from such a file.
+/// - For either kind, `.manyhands/worktrees`: the effective copy of an
+///   item can be in an item worktree, and when the directory that holds
+///   them could not be read, was not a directory or had more entries than
+///   a refresh reads, an item there is missing or is served from the
+///   primary copy. A problem at one worktree is about one item and does
+///   not count, as one unreadable file does not.
 ///
 /// A problem in any context of the registration counts: each can hold the
 /// effective copy of an item.
 pub(super) fn is_completely_observed(kind: ItemDtoKind, problems: &[StoredProblem]) -> bool {
     !problems.iter().any(|problem| {
+        let path = Path::new(&problem.path);
         problem.code == ProblemCode::SourceUnreadable
-            && match kind {
-                ItemDtoKind::Document => {
-                    problem.path == DOCUMENTS_DIRECTORY
-                        || (problem.path.starts_with(DOCUMENT_PREFIX)
-                            && !problem.path.ends_with(".md"))
-                }
-                ItemDtoKind::Ticket => {
-                    problem.path == TICKETS_DIRECTORY || problem.path == MANAGED_DIRECTORY
-                }
-            }
+            && (path == Path::new(WORKTREES_DIRECTORY)
+                || match kind {
+                    ItemDtoKind::Document => {
+                        let is_file = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.ends_with(".md"));
+                        path == Path::new(DOCUMENTS_DIRECTORY)
+                            || (path.starts_with(DOCUMENTS_DIRECTORY) && !is_file)
+                    }
+                    ItemDtoKind::Ticket => {
+                        path == Path::new(TICKETS_DIRECTORY) || path == Path::new(MANAGED_DIRECTORY)
+                    }
+                })
     })
 }
 

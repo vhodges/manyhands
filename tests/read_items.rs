@@ -4583,6 +4583,15 @@ fn a_list_is_not_complete_when_the_refresh_could_not_read_all_of_its_directory()
             true,
             true,
         ),
+        // Where item worktrees are: either kind's effective copy can be in
+        // one the refresh never saw.
+        (".manyhands/worktrees", false, false),
+        // One worktree is one item's.
+        (
+            ".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC9",
+            true,
+            true,
+        ),
         (".manyhands/comments", true, true),
         ("", true, true),
         ("docsx", true, true),
@@ -4627,6 +4636,12 @@ fn a_list_is_not_complete_when_the_refresh_could_not_read_all_of_its_directory()
     assert_git_transport_uninitialized();
 }
 
+/// A relative path as the index stores it, with the platform's separator.
+fn native_path(components: &[&str]) -> Option<String> {
+    let path: PathBuf = components.iter().collect();
+    Some(path.to_str().unwrap().to_owned())
+}
+
 /// The `(path, code)` of every stored problem.
 fn stored_problem_rows(data_directory: &Path) -> Vec<(Option<String>, String)> {
     index(data_directory)
@@ -4663,7 +4678,7 @@ fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
 
     assert!(
         stored_problem_rows(enabled.data_directory.path())
-            .contains(&(Some("docs/sub".to_owned()), "source".to_owned()))
+            .contains(&(native_path(&["docs", "sub"]), "source".to_owned()))
     );
     let documents = enabled.service.list_documents(&repo).unwrap();
     assert!(!documents.complete);
@@ -4681,7 +4696,7 @@ fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
             .into_iter()
             .filter(|(_, code)| code == "source")
             .collect::<Vec<_>>(),
-        [(Some(".manyhands/tickets".to_owned()), "source".to_owned())]
+        [(native_path(&[".manyhands", "tickets"]), "source".to_owned())]
     );
     let tickets = all_tickets(&enabled.service, &repo);
     assert!(!tickets.complete);

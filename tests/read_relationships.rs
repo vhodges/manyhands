@@ -1670,9 +1670,10 @@ fn a_relationship_read_is_not_complete_when_the_refresh_could_not_read_every_tic
     insert("docs", "source");
     insert(&ticket_path(TICKET_ABSENT), "source");
     insert(".manyhands/tickets", "context");
+    insert(&format!(".manyhands/worktrees/{TICKET_ABSENT}"), "source");
     assert_eq!(complete(), [true; 7]);
 
-    for path in [".manyhands/tickets", ".manyhands"] {
+    for path in [".manyhands/tickets", ".manyhands", ".manyhands/worktrees"] {
         index(enabled.data_directory.path())
             .execute("DELETE FROM problems WHERE code = 'source'", [])
             .unwrap();

@@ -342,7 +342,8 @@ pub struct ItemListDto {
     /// False when the last refresh could not read, or stopped part of the
     /// way through, a directory that holds items of the kind listed: `docs`
     /// or a directory under it for documents; `.manyhands/tickets` or
-    /// `.manyhands` for tickets and for every relationship query. Items
+    /// `.manyhands` for tickets and for every relationship query; and for
+    /// all of them `.manyhands/worktrees`, where item worktrees are. Items
     /// may then be missing, and `index.state` can still be `current`: a
     /// refresh stops at the same place again.
     pub complete: bool,
