@@ -86,11 +86,35 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 ## Task state
 
 - Baseline: passed at `6346caa` (evidence below).
-- Tasks 1–10: pending.
+- Task 1: complete; review accepted with fixes, range `2824eff..ae757b0`.
+- Tasks 2–10: pending.
 
 ## Decisions and rulings
 
-None yet beyond the approved documents.
+Task 1:
+
+- **Redaction errs toward redacting.** A location is replaced by `[redacted]`
+  whenever its form is doubtful. Accepted false positives include a non-SSH
+  URL with `@` in its path (`https://host/@org/repo`), an scp-like location
+  with `@` in its first path segment, hosts outside `[A-Za-z0-9._-]` or a
+  bracketed address, and `git+ssh://` with `@` after the host. Cost if wrong:
+  a harmless remote shows as `[redacted]`; loosen per case with a test.
+- **Only the literal `ssh` scheme keeps a user name.** Every other scheme
+  loses its whole user-info.
+- **`file:///` locations are returned as written**, including a fragment.
+- **Helpers return absent, not empty.** `relative_path_string` gives `None`
+  for an empty, absolute, parent-traversing or non-UTF-8 path, so a caller
+  must not read `None` as only "not UTF-8". `timestamp_string` gives `None`
+  outside years 0000–9999.
+- **`Envelope::failure` asserts in debug builds** that its code is not `ok`.
+- **Additions beyond the design:** one enum per `effects` field,
+  `ResultCode::ALL`, `REDACTED`, and `Default` for `Scope`.
+- **Message text is fixed** and pinned by a test; it becomes part of the
+  published contract with Task 2's golden fixtures.
+
+Known and accepted: an SSH URL whose user position holds a token, or whose
+user is percent-encoded `user:password`, is kept as written, because SSH user
+names are configuration by the approved design.
 
 ## Verification and review
 
@@ -111,3 +135,19 @@ Through Devenv on Linux, each command exit 0:
 
 The effective-copy precondition is covered by the nine tests the defect ticket
 added to `tests/discovery_rebuild.rs`, which ran in this suite.
+
+### Task 1 — result model and redaction, range `2824eff..ae757b0`
+
+- `b658f69` implementation; `788378d` review fixes; `ae757b0` further
+  redaction fix found by the implementer.
+- Independent review of `b658f69`: accept with fixes. Contract confirmed
+  against the CLI RFC and design. Three should-fix findings (two redaction
+  leak classes, one test that could not fail) and five minor ones, all
+  addressed in `788378d`.
+- `ae757b0` was not independently re-reviewed; the controller reran its tests.
+- `cargo test --locked --lib results`: 18 passed, 0 failed (controller rerun).
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked --
+  -D warnings`, `cargo check --all-features --locked`: pass (implementer, at
+  `ae757b0`).
+- Not run for this task: the full suite. Windows path behavior is reasoned,
+  not executed.
