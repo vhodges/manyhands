@@ -1,6 +1,6 @@
 {
-  "code": "index_unavailable",
-  "command": "document list",
+  "code": "item_not_found",
+  "command": "document show",
   "data": null,
   "effects": {
     "checkpoint": "not_requested",
@@ -11,12 +11,12 @@
     "publication": "not_requested",
     "write": "not_requested"
   },
-  "message": "The index is degraded and must be rebuilt.",
+  "message": "No item has that ID.",
   "operation_id": null,
-  "outcome": "blocked",
+  "outcome": "error",
   "recovery": [
     {
-      "action": "index.rebuild",
+      "action": "index.refresh",
       "arguments": {
         "root": "<repository>"
       },
@@ -27,7 +27,7 @@
   "schema_version": 1,
   "scope": {
     "branch": null,
-    "item_id": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
     "remote": null,
     "repository": "<repository>",
     "worktree": null

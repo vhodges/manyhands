@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 item context",
+  "description": "The working tree an item was read from, as the index last observed it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "branch", "worktree", "head_oid"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["primary", "unverified", "active"]
+    },
+    "branch": {
+      "type": ["string", "null"]
+    },
+    "worktree": {
+      "type": "string"
+    },
+    "head_oid": {
+      "type": ["string", "null"]
+    }
+  }
+}

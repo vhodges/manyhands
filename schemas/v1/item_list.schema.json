@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 documents or tickets",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete", "index"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "item.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

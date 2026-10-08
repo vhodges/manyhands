@@ -23,8 +23,11 @@ pub const ENVELOPE_SCHEMA: &str = "envelope.schema.json";
 /// refused, and a fixture file with no entry fails `tests/read_contract.rs`,
 /// so the directory holds exactly the envelopes some test still produces.
 pub const CASES: &[&str] = &[
+    "document_list",
+    "document_show",
     "failure_authority_not_found",
     "failure_index_unavailable",
+    "failure_item_not_found",
     "failure_key_not_found",
     "failure_not_repository_root",
     "failure_public_key_unavailable",
@@ -38,6 +41,9 @@ pub const CASES: &[&str] = &[
     "repo_identity",
     "repo_inspect",
     "repo_list",
+    "ticket_list",
+    "ticket_list_nonconforming",
+    "ticket_show",
 ];
 
 /// A shorter value is too likely to occur inside unrelated data.

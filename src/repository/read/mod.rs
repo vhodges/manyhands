@@ -10,6 +10,7 @@
 use std::{error::Error, fmt, path::Path};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
+use time::OffsetDateTime;
 
 use super::{
     RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService, cache_read_guard,
@@ -19,25 +20,32 @@ use super::{
 };
 use crate::{
     canonical,
-    results::{Envelope, ProblemCode, RecoveryAction, ResultCode, Scope},
+    results::{Envelope, ProblemCode, RecoveryAction, ResultCode, Scope, timestamp_string},
 };
 
 mod admin;
 mod credentials;
 mod dto;
+mod items;
 mod resolve;
 
 pub use dto::{
-    Accessibility, ConfigurationDto, ConfigurationState, HostPinDto, HostPinListDto,
-    IdentityAvailability, IdentityDto, IdentitySource, IndexState, IndexStateDto, KeyDto,
-    KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto, ProblemDto,
-    PublicKeyDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
-    RepositorySummaryDto,
+    Accessibility, ChangeSource, ClosureDto, ClosureState, ConfigurationDto, ConfigurationState,
+    DependencyDto, DependencyState, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
+    IdentitySource, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
+    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
+    KeyPublicMetadataState, NewIdDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
+    ReadinessReasonDto, ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto,
+    RepositoryListDto, RepositorySummaryDto,
 };
+pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;
 
 /// The recovery action a degraded index calls for.
 const REBUILD_INDEX_ACTION: &str = "index.rebuild";
+
+/// The recovery action for an index that no longer matches the repository.
+const REFRESH_INDEX_ACTION: &str = "index.refresh";
 
 /// The argument of a recovery action that names a repository root.
 const ROOT_ARGUMENT: &str = "root";
@@ -51,6 +59,22 @@ fn root_action(action: &str, root: Option<&str>) -> RecoveryAction {
             .map(|root| (ROOT_ARGUMENT.to_owned(), root.into()))
             .into_iter()
             .collect(),
+    }
+}
+
+/// How far a registration's index is behind its repository, from the two
+/// columns that say so. A registration no refresh or rebuild has completed
+/// for is `never_refreshed` whatever else is stored.
+fn index_state(refresh_required: bool, refreshed_at: Option<i64>) -> IndexStateDto {
+    IndexStateDto {
+        state: match refreshed_at {
+            None => IndexState::NeverRefreshed,
+            Some(_) if refresh_required => IndexState::Stale,
+            Some(_) => IndexState::Current,
+        },
+        refreshed_at: refreshed_at
+            .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok())
+            .and_then(timestamp_string),
     }
 }
 

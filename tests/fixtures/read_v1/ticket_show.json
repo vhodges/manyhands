@@ -1,0 +1,62 @@
+{
+  "code": "ok",
+  "command": "ticket show",
+  "data": {
+    "body": "Body of Closed ticket.\n",
+    "change_source": "git_commit",
+    "changed_at": "2023-11-14T22:16:40Z",
+    "closure": {
+      "closed_at": "2026-09-30T12:34:56Z",
+      "closed_by": "Ada Lovelace <ada@example.invalid>",
+      "state": "closed"
+    },
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "deps": [],
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "kind": "ticket",
+    "observation": "v1:a21d2c7633dd80c71a3ee16d1bd1c2873bef6fa59b52c21954c2f5caf2e59fe8",
+    "parent": null,
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC1/ticket.md",
+    "problems": [],
+    "project": null,
+    "readiness": null,
+    "slug": null,
+    "source": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC1\ntitle: Closed ticket\ntype: bug\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\nclosed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of Closed ticket.\n",
+    "status": "done",
+    "team": null,
+    "title": "Closed ticket",
+    "type": "bug",
+    "unknown_metadata": {}
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

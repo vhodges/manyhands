@@ -554,6 +554,19 @@ fn classify_canonical_path(path: &Path) -> Result<CanonicalPath, ValidationProbl
     }
 }
 
+/// The kind of item a repository-relative path can hold, by the path alone:
+/// `docs/**/*.md`, `.manyhands/tickets/<id>/ticket.md` or
+/// `.manyhands/comments/<item id>/<id>.md`. Any other path, and any path
+/// that is absolute, empty or has a `.`, `..` or empty component, is
+/// `InvalidPath`. Nothing is read.
+pub fn item_path_kind(path: &Path) -> Result<ItemKind, ValidationProblem> {
+    Ok(match classify_canonical_path(path)? {
+        CanonicalPath::Document => ItemKind::Document,
+        CanonicalPath::Ticket(_) => ItemKind::Ticket,
+        CanonicalPath::Comment { .. } => ItemKind::Comment,
+    })
+}
+
 fn has_invalid_raw_path_segments(path: &str) -> bool {
     path.split('/')
         .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))

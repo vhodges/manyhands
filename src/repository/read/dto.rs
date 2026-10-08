@@ -113,8 +113,9 @@ pub struct ConfigurationDto {
     pub problems: Vec<ProblemDto>,
 }
 
-/// Provisional until the index-status work (Task 5), which fills
-/// `refreshed_at` and reports `never_refreshed`.
+/// `never_refreshed` exactly when `refreshed_at` is null: no refresh or
+/// rebuild of this registration has completed. Otherwise `stale` when a
+/// refresh is required, and `current` when none is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IndexStateDto {
     pub state: IndexState,
@@ -247,4 +248,162 @@ pub struct HostPinDto {
     pub algorithm: String,
     pub sha256: String,
     pub reapproval_required: bool,
+}
+
+contract_enum!(
+    /// The two kinds of item. A comment is not an item.
+    ItemDtoKind {
+        Document => "document",
+        Ticket => "ticket",
+    }
+);
+
+contract_enum!(
+    /// Whether a ticket carries lifecycle closure metadata. Its `status`
+    /// text does not decide this.
+    ClosureState {
+        Open => "open",
+        Closed => "closed",
+    }
+);
+
+contract_enum!(
+    /// What a dependency's target is, among the tickets now present.
+    DependencyState {
+        Open => "open",
+        Closed => "closed",
+        Unresolved => "unresolved",
+    }
+);
+
+contract_enum!(ReadinessState {
+    Ready => "ready",
+    Blocked => "blocked",
+    Closed => "closed",
+});
+
+contract_enum!(
+    /// Why an open ticket is blocked.
+    ReadinessReasonCode {
+        OpenDependency => "open_dependency",
+        UnresolvedDependency => "unresolved_dependency",
+        DependencyCycle => "dependency_cycle",
+    }
+);
+
+contract_enum!(
+    /// The working tree an item was read from: the repository root on its
+    /// primary branch, the root when that could not be verified, or the
+    /// worktree created to edit the item.
+    ItemContextKind {
+        Primary => "primary",
+        Unverified => "unverified",
+        Active => "active",
+    }
+);
+
+contract_enum!(
+    /// Where an item's content-change time comes from.
+    ChangeSource {
+        GitCommit => "git_commit",
+        Uncommitted => "uncommitted",
+    }
+);
+
+/// Documents ordered by path and then ID; tickets by content-change time,
+/// latest first, and then ID. Nonconforming entries have no ID: among
+/// documents they sort by path with the rest, and among tickets they
+/// follow every ticket, ordered by path.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ItemListDto {
+    pub items: Vec<ItemDto>,
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// A document or a ticket, or a file where one should be.
+///
+/// A nonconforming entry has no `id` and no metadata; its `path`, `context`
+/// and `problems` say what is wrong and where. In a list `body`, `source`
+/// and `observation` are always null, and nothing here was read from a
+/// file: every value is what the index stored.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ItemDto {
+    pub id: Option<String>,
+    pub kind: ItemDtoKind,
+    /// Relative to `context.worktree`, with forward slashes.
+    pub path: String,
+    pub title: Option<String>,
+    #[serde(rename = "type")]
+    pub ticket_type: Option<String>,
+    pub status: Option<String>,
+    pub project: Option<String>,
+    pub team: Option<String>,
+    /// Null for a document and for a nonconforming entry.
+    pub closure: Option<ClosureDto>,
+    pub slug: Option<String>,
+    pub parent: Option<String>,
+    pub deps: Vec<DependencyDto>,
+    pub readiness: Option<ReadinessDto>,
+    /// Front matter keys Manyhands does not define, in key order at every
+    /// depth. A value JSON cannot express is null and is reported in
+    /// `problems` as `metadata_not_representable`.
+    pub unknown_metadata: serde_json::Map<String, serde_json::Value>,
+    pub body: Option<String>,
+    /// The file as it is on disk. Null when it is not valid UTF-8.
+    pub source: Option<String>,
+    /// Opaque. It changes when `context.branch`, `path` or the file's
+    /// bytes change.
+    pub observation: Option<String>,
+    pub context: ItemContextDto,
+    /// Null when the index holds no item at this path: for a nonconforming
+    /// entry, and for a file read by path that the index does not list.
+    pub changed_at: Option<String>,
+    pub change_source: Option<ChangeSource>,
+    pub problems: Vec<ProblemDto>,
+    /// In a list, the list's index state. In a complete read it is `stale`
+    /// when the index is otherwise current and the file is no longer what
+    /// the index stored.
+    pub index: IndexStateDto,
+}
+
+/// `closed_at` and `closed_by` are both set exactly when `state` is
+/// `closed`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ClosureDto {
+    pub state: ClosureState,
+    pub closed_at: Option<String>,
+    pub closed_by: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DependencyDto {
+    pub id: String,
+    pub state: DependencyState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReadinessDto {
+    pub state: ReadinessState,
+    pub reasons: Vec<ReadinessReasonDto>,
+}
+
+/// `ids` is the dependency for `open_dependency` and
+/// `unresolved_dependency`, and the tickets of the cycle for
+/// `dependency_cycle`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReadinessReasonDto {
+    pub code: ReadinessReasonCode,
+    pub ids: Vec<String>,
+}
+
+/// As the index stored it at the last refresh. `branch` and `head_oid` are
+/// null for a root with no branch checked out, or no commit, and for a
+/// root the index holds no observation of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemContextDto {
+    pub kind: ItemContextKind,
+    pub branch: Option<String>,
+    pub worktree: String,
+    pub head_oid: Option<String>,
 }

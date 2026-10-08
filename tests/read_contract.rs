@@ -7,9 +7,11 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, ProblemDto, RepositoryService,
-        SharedKeyId, transport::SshAuthority,
+        Accessibility, ChangeSource, ClosureState, ConfigurationState, DependencyState,
+        IdentityAvailability, IdentitySource, IndexState, ItemContextKind, ItemDto, ItemDtoKind,
+        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, ProblemDto,
+        ReadinessReasonCode, ReadinessState, RepositoryService, ResolvedRepository, SharedKeyId,
+        TicketFilter, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect, Outcome,
@@ -20,7 +22,7 @@ use serde_json::{Value, json};
 use support::{
     credentials::{self, SECRET_SENTINELS},
     golden::{self, ContractCase},
-    schema,
+    items, schema,
 };
 
 mod support;
@@ -436,10 +438,12 @@ fn every_published_schema_uses_only_the_checked_keywords() {
 }
 
 /// The only objects the contract leaves open, by file and location: the
-/// envelope's `data`, which each DTO schema describes, and a recovery
+/// envelope's `data`, which each DTO schema describes; an item's
+/// `unknown_metadata`, whose keys are the file's own; and a recovery
 /// action's `arguments`, which each action defines.
-const OPEN_OBJECTS: [(&str, &str); 2] = [
+const OPEN_OBJECTS: [(&str, &str); 3] = [
     ("envelope.schema.json", "/properties/data"),
+    ("item.schema.json", "/properties/unknown_metadata"),
     ("recovery_action.schema.json", "/properties/arguments"),
 ];
 
@@ -619,12 +623,20 @@ fn every_golden_fixture_is_canonical_text() {
     assert_git_transport_uninitialized();
 }
 
+/// The strings of the `enum` of `property`, which is a property name or a
+/// dotted path through nested objects. A nullable enumeration also lists
+/// `null`, which its `type` already allows and which is not a string.
 fn schema_enum(file: &str, property: &str) -> Vec<String> {
     let schema = read_json(&schema::schema_directory().join(file));
-    schema["properties"][property]["enum"]
+    let mut node = &schema;
+    for name in property.split('.') {
+        node = &node["properties"][name];
+    }
+    node["enum"]
         .as_array()
         .unwrap_or_else(|| panic!("{file}: {property} has no enum"))
         .iter()
+        .filter(|value| !value.is_null())
         .map(|value| value.as_str().unwrap().to_owned())
         .collect()
 }
@@ -712,6 +724,43 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "identity.schema.json",
             "source",
             IdentitySource::ALL.map(IdentitySource::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "closure.state",
+            ClosureState::ALL.map(ClosureState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "readiness.state",
+            ReadinessState::ALL.map(ReadinessState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "change_source",
+            ChangeSource::ALL.map(ChangeSource::as_str).to_vec(),
+        ),
+        (
+            "item_context.schema.json",
+            "kind",
+            ItemContextKind::ALL.map(ItemContextKind::as_str).to_vec(),
+        ),
+        (
+            "dependency.schema.json",
+            "state",
+            DependencyState::ALL.map(DependencyState::as_str).to_vec(),
+        ),
+        (
+            "readiness_reason.schema.json",
+            "code",
+            ReadinessReasonCode::ALL
+                .map(ReadinessReasonCode::as_str)
+                .to_vec(),
         ),
         (
             "key.schema.json",
@@ -807,27 +856,252 @@ fn id_new_matches_its_schema_and_golden() {
     assert_git_transport_uninitialized();
 }
 
-// `document list` is the command Task 5's read will answer; until then the
-// envelope comes from the session itself, which is what fails.
+/// The values of an item envelope that differ from run to run: where the
+/// repository is, when it was refreshed, and the commit its root is at.
+fn item_placeholders(root: &str, items: &[&ItemDto]) -> Vec<(String, &'static str)> {
+    let mut placeholders = vec![(root.to_owned(), "<repository>")];
+    for item in items {
+        if let Some(refreshed_at) = &item.index.refreshed_at {
+            placeholders.push((refreshed_at.clone(), "<refreshed-at>"));
+        }
+        if let Some(head_oid) = &item.context.head_oid {
+            placeholders.push((head_oid.clone(), "<head-oid>"));
+        }
+    }
+    placeholders.sort();
+    placeholders.dedup();
+    placeholders
+}
+
+fn assert_item_contract(
+    name: &str,
+    data_schema: Option<&str>,
+    root: &str,
+    items: &[&ItemDto],
+    sentinels: &[&str],
+    envelope: &impl serde::Serialize,
+) {
+    let placeholders = item_placeholders(root, items);
+    let placeholders: Vec<(&str, &str)> = placeholders
+        .iter()
+        .map(|(value, placeholder)| (value.as_str(), *placeholder))
+        .collect();
+    golden::assert_contract(
+        &ContractCase {
+            name,
+            data_schema,
+            placeholders: &placeholders,
+            sentinels,
+        },
+        envelope,
+    );
+}
+
+fn item_scope(repo: &ResolvedRepository, id: &str) -> Scope {
+    Scope {
+        item_id: Some(id.to_owned()),
+        ..repo.scope()
+    }
+}
+
+#[test]
+fn document_list_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let envelope = Envelope::read_success("document list", repo.scope(), list.clone());
+
+    assert_eq!(list.items.len(), 2);
+    assert_item_contract(
+        "document_list",
+        Some("item_list.schema.json"),
+        repo.root().to_str().unwrap(),
+        &list.items.iter().collect::<Vec<_>>(),
+        &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn document_show_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let item = enabled
+        .service
+        .show_item(&repo, &items::item_id(items::DOCUMENT_A))
+        .unwrap();
+    let envelope = Envelope::read_success(
+        "document show",
+        item_scope(&repo, items::DOCUMENT_A),
+        item.clone(),
+    );
+
+    assert_item_contract(
+        "document_show",
+        Some("item.schema.json"),
+        repo.root().to_str().unwrap(),
+        &[&item],
+        &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn ticket_list_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let list = enabled
+        .service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap();
+    let envelope = Envelope::read_success("ticket list", repo.scope(), list.clone());
+
+    assert_eq!(list.items.len(), 2);
+    assert_item_contract(
+        "ticket_list",
+        Some("item_list.schema.json"),
+        repo.root().to_str().unwrap(),
+        &list.items.iter().collect::<Vec<_>>(),
+        &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn ticket_show_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let item = enabled
+        .service
+        .show_item(&repo, &items::item_id(items::TICKET_B))
+        .unwrap();
+    let envelope = Envelope::read_success(
+        "ticket show",
+        item_scope(&repo, items::TICKET_B),
+        item.clone(),
+    );
+
+    assert_item_contract(
+        "ticket_show",
+        Some("item.schema.json"),
+        repo.root().to_str().unwrap(),
+        &[&item],
+        &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// Planted in front matter that fails to parse, where the parser's message
+/// repeats it and the index stores that message.
+const PARSER_SENTINEL: &str = "SENTINEL-c40a";
+
+#[test]
+fn a_nonconforming_ticket_list_entry_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let root = &fixture.root;
+    items::write(
+        root,
+        &items::ticket_path(items::TICKET_C),
+        &format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\n\
+             {PARSER_SENTINEL}: 1\n{PARSER_SENTINEL}: 2\n---\n"
+        ),
+    );
+    items::refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // The sentinel really is in the index, so the scan can fail.
+    let stored: String = items::index(enabled.data_directory.path())
+        .query_row(
+            "SELECT guidance FROM problems WHERE code = 'malformed-front-matter'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(stored.contains(PARSER_SENTINEL), "{stored}");
+
+    // The filter matches no ticket; the entry is there all the same.
+    let list = enabled
+        .service
+        .list_tickets(
+            &repo,
+            &TicketFilter {
+                status: Some("no such status".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let envelope = Envelope::read_success("ticket list", repo.scope(), list.clone());
+
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].id, None);
+    assert_item_contract(
+        "ticket_list_nonconforming",
+        Some("item_list.schema.json"),
+        repo.root().to_str().unwrap(),
+        &list.items.iter().collect::<Vec<_>>(),
+        &[
+            PARSER_SENTINEL,
+            enabled.data_directory.path().to_str().unwrap(),
+        ],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
 #[test]
 fn a_degraded_index_matches_the_failure_golden() {
-    let data = tempfile::tempdir().unwrap();
-    fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
-    let service = RepositoryService::open_at(data.path()).unwrap();
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let (data, service) = items::degraded_service(enabled);
 
-    let error = service.read_session_for_testing(|_| Ok(())).unwrap_err();
-    let directory = data.path().to_str().unwrap();
+    let error = service.list_documents(&repo).unwrap_err();
 
     assert_eq!(error.code(), ResultCode::IndexUnavailable);
     golden::assert_contract(
         &ContractCase {
             name: "failure_index_unavailable",
             data_schema: None,
-            placeholders: &[],
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
             // The data directory is not the caller's business.
-            sentinels: &[directory, "not sqlite", "manyhands.sqlite3"],
+            sentinels: &[
+                data.path().to_str().unwrap(),
+                "not sqlite",
+                "manyhands.sqlite3",
+            ],
         },
         &error.to_envelope::<Value>("document list"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_item_whose_file_is_gone_matches_the_failure_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    fs::remove_file(fixture.root.join("docs/guide.md")).unwrap();
+
+    let error = enabled
+        .service
+        .show_item(&repo, &items::item_id(items::DOCUMENT_A))
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::ItemNotFound);
+    golden::assert_contract(
+        &ContractCase {
+            name: "failure_item_not_found",
+            data_schema: None,
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[enabled.data_directory.path().to_str().unwrap()],
+        },
+        &error.to_envelope::<Value>("document show"),
     );
     assert_git_transport_uninitialized();
 }
@@ -880,6 +1154,10 @@ fn repo_list_matches_its_schema_and_golden() {
     let list = enabled.service.list_repositories().unwrap();
     let root = list.items[0].root.clone();
     let enabled_at = list.items[0].enabled_at.clone().unwrap();
+    // Enabling refreshes the index, within a second or so of registering it:
+    // the two times may or may not be the same text, so they share a name.
+    let refreshed_at = list.items[0].index.refreshed_at.clone().unwrap();
+    assert_eq!(list.items[0].index.state, IndexState::Current);
     let envelope = Envelope::read_success("repo list", Scope::default(), list);
 
     assert_eq!(Path::new(&root), fs::canonicalize(&fixture.root).unwrap());
@@ -887,7 +1165,11 @@ fn repo_list_matches_its_schema_and_golden() {
         &ContractCase {
             name: "repo_list",
             data_schema: Some("repository_list.schema.json"),
-            placeholders: &[(&root, "<repository>"), (&enabled_at, "<timestamp>")],
+            placeholders: &[
+                (&root, "<repository>"),
+                (&enabled_at, "<timestamp>"),
+                (&refreshed_at, "<timestamp>"),
+            ],
             sentinels: &[enabled.data_directory.path().to_str().unwrap()],
         },
         &envelope,

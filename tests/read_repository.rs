@@ -265,11 +265,34 @@ fn list_repositories_reports_every_registration_in_root_order_from_the_index_alo
                 IndexState::Current
             }
         );
-        assert_eq!(item.index.refreshed_at, None);
+        // Enabling completed a refresh of each of them.
+        assert!(item.index.refreshed_at.is_some());
         assert_eq!(item.problem_count, 0);
     }
     assert!(list.items.iter().any(|item| item.root == removed_root));
     assert!(!Path::new(&removed_root).exists());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn list_repositories_reports_never_refreshed_until_a_refresh_completes() {
+    let never = support::items::never_refreshed_repository();
+
+    let before = never.service.list_repositories().unwrap();
+    assert!(matches!(
+        support::items::refresh_as(&never.service, &never.fixture.root, never.operation_id),
+        manyhands::repository::RefreshOutcome::Refreshed { .. }
+    ));
+    let after = never.service.list_repositories().unwrap();
+
+    assert_eq!(before.items.len(), 1);
+    assert_eq!(before.items[0].index.state, IndexState::NeverRefreshed);
+    assert_eq!(before.items[0].index.refreshed_at, None);
+    assert_eq!(after.items[0].index.state, IndexState::Current);
+    let refreshed_at = after.items[0].index.refreshed_at.as_deref().unwrap();
+    // RFC 3339 in UTC with second precision.
+    assert_eq!(refreshed_at.len(), "2026-10-07T00:00:00Z".len());
+    assert!(refreshed_at.ends_with('Z'));
     assert_git_transport_uninitialized();
 }
 

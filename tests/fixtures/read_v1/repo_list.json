@@ -14,7 +14,7 @@
         },
         "enabled_at": "<timestamp>",
         "index": {
-          "refreshed_at": null,
+          "refreshed_at": "<timestamp>",
           "state": "current"
         },
         "problem_count": 0,

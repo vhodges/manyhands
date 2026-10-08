@@ -1,0 +1,101 @@
+{
+  "code": "ok",
+  "command": "document list",
+  "data": {
+    "complete": true,
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "items": [
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:13:20Z",
+        "closure": null,
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "document",
+        "observation": null,
+        "parent": null,
+        "path": "docs/guide.md",
+        "problems": [],
+        "project": null,
+        "readiness": null,
+        "slug": null,
+        "source": null,
+        "status": null,
+        "team": null,
+        "title": "Guide",
+        "type": null,
+        "unknown_metadata": {
+          "audience": "everyone"
+        }
+      },
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:13:20Z",
+        "closure": null,
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FD1",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "document",
+        "observation": null,
+        "parent": null,
+        "path": "docs/notes/plan.md",
+        "problems": [],
+        "project": null,
+        "readiness": null,
+        "slug": null,
+        "source": null,
+        "status": null,
+        "team": null,
+        "title": "Plan",
+        "type": null,
+        "unknown_metadata": {}
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

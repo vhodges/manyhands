@@ -11,11 +11,14 @@ use std::{
 
 use manyhands::{
     canonical::ItemId,
-    repository::{LeaseKind, RepositoryService, SharedKeyId, transport::SshAuthority},
+    repository::{
+        ClosureFilter, LeaseKind, ReadError, RepositoryService, ResolvedRepository, SharedKeyId,
+        TicketFilter, transport::SshAuthority,
+    },
     results::{Outcome, ResultCode},
 };
 use serde_json::Value;
-use support::credentials;
+use support::{credentials, items};
 
 mod support;
 
@@ -467,6 +470,187 @@ fn identity_and_remotes_of_a_resolved_repository_need_no_session() {
     enabled.service.repository_identity(&repo).unwrap();
     enabled.service.list_remotes_redacted(&repo).unwrap();
 
+    assert_git_transport_uninitialized();
+}
+
+/// A repository with every kind of thing an item read meets: a primary
+/// document and ticket, an item worktree with its own document, and a file
+/// that is not an item.
+fn repository_with_items() -> (support::TestRepository, support::EnabledRepository) {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let root = &fixture.root;
+    items::write(
+        root,
+        "docs/a.md",
+        &items::document_source(items::DOCUMENT_A, "A", "extra: kept\n"),
+    );
+    items::write(
+        root,
+        &items::ticket_path(items::TICKET_A),
+        &items::ticket_source(items::TICKET_A, "A", items::CLOSURE),
+    );
+    items::commit(
+        &fixture,
+        &["docs/a.md", &items::ticket_path(items::TICKET_A)],
+        1_000,
+    );
+    items::create_document_context(&enabled.service, root, items::DOCUMENT_B, "docs/b.md");
+    items::write(
+        root,
+        "docs/marker.md",
+        "---\nmanyhands_managed: true\n---\n",
+    );
+    items::refresh_completely(&enabled.service, root);
+    (fixture, enabled)
+}
+
+/// Every item read, with inputs that succeed and inputs that fail. Returns
+/// how many succeeded.
+fn every_item_read(
+    service: &RepositoryService,
+    repo: &ResolvedRepository,
+    root: &std::path::Path,
+) -> Vec<Result<(), ResultCode>> {
+    let worktree = root.join(".manyhands/worktrees").join(items::DOCUMENT_B);
+    let closed = TicketFilter {
+        closure: ClosureFilter::Closed,
+        status: Some("open".to_owned()),
+        ..Default::default()
+    };
+    let path = std::path::Path::new;
+    let ticket = items::ticket_path(items::TICKET_A);
+    let outcome = |result: Result<(), ReadError>| result.map_err(|error| error.code());
+    vec![
+        outcome(service.list_documents(repo).map(drop)),
+        outcome(
+            service
+                .list_tickets(repo, &TicketFilter::default())
+                .map(drop),
+        ),
+        outcome(service.list_tickets(repo, &closed).map(drop)),
+        outcome(
+            service
+                .show_item(repo, &items::item_id(items::DOCUMENT_A))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_item(repo, &items::item_id(items::DOCUMENT_B))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_item(repo, &items::item_id(items::TICKET_A))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_item(repo, &items::item_id(items::DOCUMENT_C))
+                .map(drop),
+        ),
+        outcome(service.show_path(repo, None, path("docs/a.md")).map(drop)),
+        outcome(service.show_path(repo, None, path(&ticket)).map(drop)),
+        outcome(
+            service
+                .show_path(repo, None, path("docs/marker.md"))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_path(repo, Some(&worktree), path("docs/b.md"))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_path(repo, Some(&worktree), path("docs/a.md"))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .show_path(repo, None, path("docs/absent.md"))
+                .map(drop),
+        ),
+        outcome(service.show_path(repo, None, path(".git/config")).map(drop)),
+    ]
+}
+
+#[test]
+fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
+    let (fixture, enabled) = repository_with_items();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let data_before = credentials::data_directory_files(enabled.data_directory.path());
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let outcomes = every_item_read(&enabled.service, &repo, &fixture.root);
+
+    assert_eq!(
+        outcomes,
+        [
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::ItemNotFound),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::PathNotFound),
+            Err(ResultCode::InvalidPath),
+        ]
+    );
+    credentials::assert_reads_left_the_data_directory(
+        &data_before,
+        &credentials::data_directory_files(enabled.data_directory.path()),
+    );
+    assert!(before == support::repository_and_worktree_snapshot(&fixture));
+    // Objects, refs, reflogs and each worktree's administrative files.
+    assert!(git_before == support::repository_git_file_bytes(&fixture));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn item_reads_are_busy_under_the_exclusive_lock_and_succeed_under_the_shared_one() {
+    let (fixture, enabled) = repository_with_items();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let root = fs::canonicalize(&fixture.root).unwrap();
+    let unlocked = every_item_read(&enabled.service, &repo, &fixture.root);
+
+    let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheWrite);
+    let started = Instant::now();
+    let outcomes = every_item_read(&enabled.service, &repo, &fixture.root);
+    let error = enabled.service.list_documents(&repo).unwrap_err();
+    assert!(
+        started.elapsed() < NOT_BLOCKED * 3,
+        "{:?}",
+        started.elapsed()
+    );
+    holder.release();
+
+    // The last is refused for its path before any lock is asked for.
+    let (invalid, busy) = outcomes.split_last().unwrap();
+    assert_eq!(invalid, &Err(ResultCode::InvalidPath));
+    assert!(
+        busy.iter().all(|outcome| outcome == &Err(ResultCode::Busy)),
+        "{outcomes:?}"
+    );
+    assert_eq!(error.code(), ResultCode::Busy);
+    assert_eq!(error.scope.repository.as_deref(), root.to_str());
+    assert!(error.recovery.is_empty());
+
+    let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheRead);
+    let started = Instant::now();
+    assert_eq!(
+        every_item_read(&enabled.service, &repo, &fixture.root),
+        unlocked
+    );
+    assert!(started.elapsed() < NOT_BLOCKED);
+    holder.release();
     assert_git_transport_uninitialized();
 }
 
