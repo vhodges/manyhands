@@ -99,7 +99,8 @@ pub(super) struct ObservedItem {
 ///
 /// `values` holds every key that is a string, in key order at every depth.
 /// A YAML value JSON cannot express is `null` there: a mapping with a key
-/// that is not a string, a tagged value, and a number that is not finite. A
+/// that is not a string, a tagged value, a number that is not finite, and a
+/// sequence or mapping nested more than `MAX_UNKNOWN_METADATA_DEPTH` deep. A
 /// top-level key that is not a string cannot be a JSON key and is left out.
 /// `not_representable` says that at least one of those happened, since a
 /// `null` or an absent key alone cannot.
@@ -115,7 +116,7 @@ impl UnknownMetadata {
 
     pub(super) fn from_yaml(unknown: &serde_yaml::Mapping) -> Self {
         let mut not_representable = false;
-        let values = match yaml_mapping_to_json(unknown, &mut not_representable, true) {
+        let values = match yaml_mapping_to_json(unknown, &mut not_representable, 0) {
             serde_json::Value::Object(values) => values,
             _ => serde_json::Map::new(),
         };
@@ -163,9 +164,33 @@ impl UnknownMetadata {
     }
 }
 
+/// How deep a sequence or mapping may be nested in an item's unknown
+/// metadata, counting a top-level key's own value as 1. One nested deeper is
+/// `null` and flagged.
+///
+/// YAML front matter is read up to 128 containers deep, while the stored
+/// JSON text reads back only to its parser's own limit, which the two
+/// objects the column wraps the values in count against. This is well under
+/// both, so whatever is stored reads back.
+pub(super) const MAX_UNKNOWN_METADATA_DEPTH: usize = 64;
+
 /// `value` as JSON, or `null` with `not_representable` set where it has no
-/// JSON form.
-fn yaml_to_json(value: &serde_yaml::Value, not_representable: &mut bool) -> serde_json::Value {
+/// JSON form. `depth` is how deep `value` is nested if it is a sequence or
+/// a mapping, counting itself.
+fn yaml_to_json(
+    value: &serde_yaml::Value,
+    not_representable: &mut bool,
+    depth: usize,
+) -> serde_json::Value {
+    if depth > MAX_UNKNOWN_METADATA_DEPTH
+        && matches!(
+            value,
+            serde_yaml::Value::Sequence(_) | serde_yaml::Value::Mapping(_)
+        )
+    {
+        *not_representable = true;
+        return serde_json::Value::Null;
+    }
     match value {
         serde_yaml::Value::Null => serde_json::Value::Null,
         serde_yaml::Value::Bool(value) => (*value).into(),
@@ -185,10 +210,10 @@ fn yaml_to_json(value: &serde_yaml::Value, not_representable: &mut bool) -> serd
         }
         serde_yaml::Value::Sequence(values) => values
             .iter()
-            .map(|value| yaml_to_json(value, not_representable))
+            .map(|value| yaml_to_json(value, not_representable, depth + 1))
             .collect(),
         serde_yaml::Value::Mapping(mapping) => {
-            yaml_mapping_to_json(mapping, not_representable, false)
+            yaml_mapping_to_json(mapping, not_representable, depth)
         }
         serde_yaml::Value::Tagged(_) => {
             *not_representable = true;
@@ -199,11 +224,12 @@ fn yaml_to_json(value: &serde_yaml::Value, not_representable: &mut bool) -> serd
 
 /// A YAML mapping as a JSON object with its keys in order. A key that is
 /// not a string makes a nested mapping `null`; at the top level, where the
-/// result must stay an object, that one key is left out instead.
+/// result must stay an object, that one key is left out instead. `depth` is
+/// how deep the mapping is nested, and 0 for the top level.
 fn yaml_mapping_to_json(
     mapping: &serde_yaml::Mapping,
     not_representable: &mut bool,
-    top_level: bool,
+    depth: usize,
 ) -> serde_json::Value {
     let mut entries = Vec::with_capacity(mapping.len());
     for (key, value) in mapping {
@@ -211,7 +237,7 @@ fn yaml_mapping_to_json(
             Some(key) => entries.push((key, value)),
             None => {
                 *not_representable = true;
-                if !top_level {
+                if depth > 0 {
                     return serde_json::Value::Null;
                 }
             }
@@ -223,7 +249,12 @@ fn yaml_mapping_to_json(
     serde_json::Value::Object(
         entries
             .into_iter()
-            .map(|(key, value)| (key.to_owned(), yaml_to_json(value, not_representable)))
+            .map(|(key, value)| {
+                (
+                    key.to_owned(),
+                    yaml_to_json(value, not_representable, depth + 1),
+                )
+            })
             .collect(),
     )
 }

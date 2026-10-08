@@ -4294,3 +4294,178 @@ fn a_ticket_the_index_holds_twice_shows_only_its_effective_rows_relationships() 
     assert_eq!(listed_a(TICKET_A, true), own_worktree);
     assert_eq!(listed_a(TICKET_A, false), primary);
 }
+
+/// How many sequences `value` is nested in, and what the innermost holds.
+fn nesting(mut value: &Value) -> (usize, &Value) {
+    let mut depth = 0;
+    while let Value::Array(values) = value {
+        depth += 1;
+        value = &values[0];
+    }
+    (depth, value)
+}
+
+/// The deepest container of unknown metadata that is kept.
+const KEPT_DEPTH: usize = 64;
+
+#[test]
+fn unknown_metadata_nested_past_a_fixed_depth_is_null_and_always_reads_back() {
+    for depth in [63, 64, 65, 126, 127] {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        let path = ticket_path(TICKET_A);
+        write(
+            root,
+            &path,
+            &ticket_source(
+                TICKET_A,
+                "Deep",
+                &format!("deep: {}1{}\n", "[".repeat(depth), "]".repeat(depth)),
+            ),
+        );
+        write(
+            root,
+            &ticket_path(TICKET_B),
+            &ticket_source(TICKET_B, "Plain", "extra: kept\n"),
+        );
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+
+        // One deep key fails no read of the registration.
+        let list = enabled
+            .service
+            .list_tickets(&repo, &TicketFilter::default())
+            .unwrap_or_else(|error| panic!("depth {depth}: {error:?}"));
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.id.as_deref() == Some(TICKET_B)),
+            "depth {depth}"
+        );
+        enabled.service.list_documents(&repo).unwrap();
+        enabled
+            .service
+            .show_item(&repo, &item_id(TICKET_B))
+            .unwrap();
+        let listed = list
+            .items
+            .iter()
+            .find(|item| item.path == path)
+            .unwrap_or_else(|| panic!("depth {depth}"));
+        if listed.id.is_none() {
+            // The front matter is nested further than YAML itself is read.
+            assert_eq!(codes(listed), [ProblemCode::MalformedFrontMatter]);
+            assert!(depth > 126, "depth {depth}");
+            continue;
+        }
+        let shown = enabled
+            .service
+            .show_item(&repo, &item_id(TICKET_A))
+            .unwrap_or_else(|error| panic!("depth {depth}: {error:?}"));
+
+        for item in [listed, &shown] {
+            let (kept, innermost) = nesting(&item.unknown_metadata["deep"]);
+            if depth <= KEPT_DEPTH {
+                assert_eq!((kept, innermost), (depth, &json!(1)), "depth {depth}");
+                assert!(item.problems.is_empty(), "depth {depth}");
+            } else {
+                assert_eq!(
+                    (kept, innermost),
+                    (KEPT_DEPTH, &Value::Null),
+                    "depth {depth}"
+                );
+                assert_eq!(
+                    codes(item),
+                    [ProblemCode::MetadataNotRepresentable],
+                    "depth {depth}"
+                );
+            }
+        }
+        assert_eq!(shown.index.state, IndexState::Current, "depth {depth}");
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn stored_unknown_metadata_that_cannot_be_read_back_is_empty_and_reported() {
+    let deeper_than_json_reads = format!(
+        r#"{{"not_representable":false,"values":{{"deep":{}1{}}}}}"#,
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    for stored in [
+        "not json",
+        r#"{"values":{}}"#,
+        r#"["not_representable","values"]"#,
+        deeper_than_json_reads.as_str(),
+    ] {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        let path = ticket_path(TICKET_A);
+        write(
+            root,
+            &path,
+            &ticket_source(TICKET_A, "Tampered", "extra: kept\n"),
+        );
+        write(
+            root,
+            &ticket_path(TICKET_B),
+            &ticket_source(TICKET_B, "Plain", "extra: kept\n"),
+        );
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+        index(enabled.data_directory.path())
+            .execute(
+                "UPDATE discovered_items SET unknown_metadata = ?1 WHERE item_id = ?2",
+                [stored, TICKET_A],
+            )
+            .unwrap();
+
+        let list = enabled
+            .service
+            .list_tickets(&repo, &TicketFilter::default())
+            .unwrap_or_else(|error| panic!("{stored}: {error:?}"));
+        let item = |id: &str| {
+            list.items
+                .iter()
+                .find(|item| item.id.as_deref() == Some(id))
+                .unwrap()
+        };
+
+        assert!(item(TICKET_A).unknown_metadata.is_empty(), "{stored}");
+        assert_eq!(
+            codes(item(TICKET_A)),
+            [ProblemCode::MetadataNotRepresentable],
+            "{stored}"
+        );
+        assert_eq!(
+            item(TICKET_A).problems[0].path.as_deref(),
+            Some(path.as_str())
+        );
+        // The rest of the row is still what the index stored.
+        assert_eq!(item(TICKET_A).title.as_deref(), Some("Tampered"));
+        assert_eq!(
+            Value::Object(item(TICKET_B).unknown_metadata.clone()),
+            json!({"extra": "kept"})
+        );
+        assert!(item(TICKET_B).problems.is_empty());
+        // The complete read answers from the file, and says the index
+        // does not hold what the file does.
+        let shown = enabled
+            .service
+            .show_item(&repo, &item_id(TICKET_A))
+            .unwrap_or_else(|error| panic!("{stored}: {error:?}"));
+        assert_eq!(
+            Value::Object(shown.unknown_metadata),
+            json!({"extra": "kept"})
+        );
+        assert!(shown.problems.is_empty());
+        assert_eq!(shown.index.state, IndexState::Stale);
+        enabled
+            .service
+            .show_item(&repo, &item_id(TICKET_B))
+            .unwrap();
+        enabled.service.ticket_cycles(&repo).unwrap();
+    }
+    assert_git_transport_uninitialized();
+}

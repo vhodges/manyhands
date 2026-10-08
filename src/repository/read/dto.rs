@@ -381,8 +381,10 @@ pub struct ItemDto {
     pub readiness: Option<ReadinessDto>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
-    /// are not here. A value JSON cannot express is null and is reported
-    /// in `problems` as `metadata_not_representable`.
+    /// are not here. A value JSON cannot express, and a list or mapping
+    /// nested more than 64 deep, is null and is reported in `problems` as
+    /// `metadata_not_representable`. So is metadata the index stored and
+    /// can no longer read, which a list then shows as empty.
     pub unknown_metadata: serde_json::Map<String, serde_json::Value>,
     pub body: Option<String>,
     /// The file as it is on disk. Null when it is not valid UTF-8.
