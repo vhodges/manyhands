@@ -12,7 +12,10 @@ Cycle: [approved Cycle](../Cycles/wave-03-foundation-01-read-boundary-and-result
 The product owner approved the Cycle, design and plan on 2026-10-07 and then
 asked to start implementing F1 using **subagent-driven development**.
 Implementation and local checkpoint commits on this branch are authorized.
-Push, pull request, merge, ticket closure and worktree cleanup are not.
+Pull request, merge, ticket closure and worktree cleanup are not. Push was not
+authorized until 2026-10-08, when the product owner authorized pushing this
+ticket branch to origin (so a remote builder could fetch it); the branch has
+been kept current there since. No force-push.
 
 The plan's precondition is met: defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G` (one
 effective copy per item) was merged to main as `60b0324` and pushed.
@@ -91,29 +94,93 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 3: complete; review accepted with fixes (one blocker), range
   `a1223c0..9639595`.
 - Task 4: complete; review accepted with fixes, range `9fbe74d..a04acb3`.
-- Task 5: implemented at `f4c1c63`, range `dffa110..f4c1c63`; **review,
-  controller verification and rulings pending** (see "Resume here").
+- Task 5: complete; two independent reviews accepted with fixes, range
+  `dffa110..bcbe2e6`; full gate passed at `bcbe2e6`.
 - Tasks 6–10: pending.
 
-## Resume here — paused 2026-10-07
+## Resume here — 2026-10-08
 
-The product owner paused the work after the Task 5 implementer finished and
-before its review, because of contention on the machine. Nothing is running.
+Task 5 is complete at `bcbe2e6` and the full gate passed there. Next: Task 6
+(comment reads, `read/comments.rs`, using `created_by`, no Git history walk),
+by a fresh implementer, then an independent review.
 
-Next steps, in order:
+All cargo runs are local through Devenv. A same-day trial of running cargo on
+remote sprites was abandoned by the product owner: both sprites lost their
+network-backed disk under build load. Nothing remote remains.
 
-1. Confirm the worktree is clean at `f4c1c63` and main has not moved; if main
-   moved, do not rebase mid-Cycle without a reason, and record the decision.
-2. Dispatch a fresh, read-only reviewer for `dffa110..f4c1c63` against the
-   plan's Task 5, the design's "Effective Copy", "Item Reads" and index
-   sections, and the rulings below. Give it the flagged items in the Task 5
-   evidence entry to rule on, with the write-path changes and `show_path`'s
-   file access as the first priorities.
-3. Send fixes back to an implementer; verify; record rulings.
-4. Controller rerun of the Task 5 focused and regression tests, then the full
-   gate (`check`, `fmt --check`, clippy, `cargo test --all-features --locked`,
-   CLI smoke). The full suite has not run since the baseline.
-5. Record Task 5 complete; start Task 6.
+Carried to the Task 10 handoff, each to be raised as its own defect ticket:
+
+- Nothing writes an `accessibility` other than `accessible`, so a deleted
+  registered repository lists as accessible (from Task 3).
+- Refresh persists the root, each active context and the disappeared-context
+  cleanup in separate transactions, so the index can briefly, or after a
+  `RetryRequired`, hold an item twice or not at all. Reads tolerate it; the
+  write path should be made atomic.
+- A committed, unchanged file in an item worktree is usually stored as
+  `uncommitted`, because the save path does not update that worktree's Git
+  index. Now visible as `change_source`.
+
+## Task 5 rulings — 2026-10-08
+
+Settled by the controller after two independent reviews; none changes the
+approved Cycle contract.
+
+- **Index state.** `never_refreshed` only when `refreshed_at` is null and the
+  registration has no context row. A migrated index reports `stale` with
+  `refreshed_at: null` (Cycle decision 6).
+- **`refreshed_at`** is a time taken before the refresh or rebuild first
+  observes, not its final commit. Staleness compares file modification time
+  with it, so a change that preserves an old modification time is not
+  detected and a file dated in the future always reads as stale.
+- **An item the index holds more than once.** Candidates are tried in this
+  order: the row in the item's own worktree (`.manyhands/worktrees/<id>`),
+  then a non-active row, then, as a last resort, a copy in another item's
+  worktree. Whenever more than one row exists, or the last resort is used, the
+  index is reported `stale`. `show_item` moves on only when a candidate has
+  nothing behind it; a real error from a candidate is returned.
+- **Lists and `show_item` can differ during a refresh.** A list checks that
+  the worktree directory exists; `show_item` opens the file. Documented on
+  the list DTO.
+- **`show_path`** accepts a canonical item path, or a path under `docs/` or
+  `.manyhands/tickets/` that has a stored conformity problem in the named
+  context. Every path must be plain relative (no NUL, backslash, `.`, `..`,
+  empty component, or `.manyhands/worktrees`). A nonconforming entry whose
+  path fails that check is still listed; it cannot be shown. A well-formed
+  path that is neither is refused inside the session, with `index.refresh`
+  attached when the index is not current.
+- **`context.kind`** has a third value, `unverified`, including for a root the
+  index has no context row for.
+- **File reader.** Reads use `guarded_file`: an `openat` walk with
+  `O_NOFOLLOW` on every component, the leaf opened non-blocking without
+  becoming a controlling terminal, type and modification time taken from the
+  opened descriptor. Missing, and a name too long to exist, are "not found";
+  a link, a non-directory component, a socket or any non-regular file is "not
+  a file" (`invalid_path` for `show_path`, so `docs/a.md/b.md` is
+  `invalid_path`); anything else is `repository_inaccessible`.
+- **Migration.** The three columns are added by a step that probes without a
+  lock and, only when something is missing, takes an immediate transaction,
+  probes again and adds what is missing. Two processes opening an old index
+  both succeed. The design's paragraph describing a duplicate-column race is
+  superseded by this.
+- **Accepted as implemented:** `ItemDto.index`; nullable `changed_at` and
+  `change_source`; the stored `unknown_metadata` wrapper with byte-ordered
+  keys; the `index.refresh` recovery action with `{"root"}`; the observation
+  token layout; the orderings; bad-path validation before the lock.
+- **Provisional:** the readiness-reason DTOs and schemas under `schemas/v1`
+  exist only to satisfy the closed-schema lint and may change in Task 9.
+  `TicketFilter.slug` and `readiness` are accepted and ignored until Tasks 8
+  and 9.
+
+Accepted limits:
+
+- The non-Unix file reader is check-then-use, weaker than the Unix one, and
+  has never been compiled or executed. A native obligation.
+- An item file is read whole into memory while the shared index lock is held;
+  there is no size cap. This predates F1.
+- An open that meets a write lease fails as `repository_inaccessible` instead
+  of waiting.
+- The tests added with the two rounds of review fixes were written with their
+  fixes and have only been run passing.
 
 ## Decisions and rulings
 
@@ -381,65 +448,50 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
 - The first commit's tests were written after the code and checked by nine
   mutations. The review-fix tests were seen failing first.
 
-### Task 5 — item lists and complete reads, range `dffa110..f4c1c63` (UNREVIEWED)
-
-Everything in this entry is the implementer's report. The controller has not
-rerun any command and no review has happened.
+### Task 5 — item lists and complete reads, range `dffa110..bcbe2e6`
 
 - `39e3036` index migration and persistence; `f4c1c63` reads, schemas,
-  goldens and tests.
-- Write-path changes as reported: `migrate_registry` adds
-  `discovered_items.closed_by`, `discovered_items.unknown_metadata` and
-  `repositories.refreshed_at`, and sets `refresh_required = 1` on every
-  registration when it adds any; `persist_context`'s item insert writes the
-  two item columns; the two statements that clear `refresh_required`, in
-  `persist_rebuild_observation` and `reconcile_disappeared_contexts`, also set
-  `refreshed_at`. `serialize_item`, the save paths and the snapshot types are
-  reported untouched. `canonical.rs` gains one public wrapper,
+  goldens and tests; `b081c3a` and `5ac0228` first review fixes and their
+  formatting; `f7c3146` and `bcbe2e6` second review fixes.
+- First independent review, of `dffa110..f4c1c63`: accept with fixes, no
+  blocker. Three contract-level findings (a migrated index reporting
+  `never_refreshed`; an item held twice failing the read; a listed
+  nonconforming path that `show_path` refused) and five minor ones. It could
+  not construct a read outside the repository. All addressed in `b081c3a`.
+- Second independent review, of `4b37526..5ac0228`: accept with fixes, no
+  blocker, no way past `guarded_file`. One major finding (a real error from
+  the worktree copy hidden behind the primary copy), six minor ones and
+  several notes. Addressed in `f7c3146` and `bcbe2e6`, except the limits
+  recorded under "Task 5 rulings".
+- `f7c3146` and `bcbe2e6` were not independently re-reviewed.
+- Controller run of the full gate at `bcbe2e6`, through Devenv on Linux, each
+  command exit 0: `cargo check --all-features --locked`; `cargo fmt --check`;
+  `cargo clippy --all-targets --all-features --locked -- -D warnings`;
+  `cargo test --all-features --locked --no-fail-fast` with 815 passed and 0
+  failed in the standard harness (including lib 221, `read_items` 48,
+  `read_contract` 36, `read_credentials` 25, `read_repository` 21,
+  `read_boundary` 15, `discovery_rebuild` 67, `local_authoring` 112,
+  `repository_enablement` 73, `recovery_foundation_gate` 50) and 15, 35, 31
+  and 103 SSH cases passed in the four custom-harness suites;
+  `cargo run --locked --bin manyhands-cli`. This is the first full-suite run
+  since the baseline (622 passed there).
+- Implementer at `bcbe2e6`: `read_items` with `--nocapture` printed no
+  `SKIPPED` line, so the two permission tests ran their assertions.
+- A partial run on a remote sprite at `5ac0228` is not evidence: three
+  existing tests failed there for environment reasons (mode 000 does not bind
+  for that user; a different Git exclude template) and pass locally.
+- Write-path changes: `migrate_registry` is followed by the column step
+  described in the rulings, which sets `refresh_required = 1` when it adds
+  anything; `persist_context`'s item insert writes `closed_by` and
+  `unknown_metadata`; the two statements that clear `refresh_required` also
+  set `refreshed_at`. `canonical.rs` gains one public wrapper,
   `item_path_kind`.
-- Existing assertions changed as reported: the exact `repositories` column
-  list in `tests/repository_enablement.rs`; a `refreshed_at` expectation in
-  `tests/read_repository.rs`.
-- Reported results, each exit 0: `cargo test --locked --lib` 218;
-  `read_contract` 36; `read_boundary` 15; `read_repository` 21;
-  `read_credentials` 25; `read_items` 35; `discovery_rebuild` 67;
-  `local_authoring` 112; `recovery_foundation_gate` 50;
-  `repository_enablement` 73; `canonical_foundation` 29; `remote_reservation`
-  9; `--doc` 9; `cargo fmt --check`; clippy with warnings denied;
-  `cargo check --all-features --locked`. Not run: the SSH suites and the full
-  suite.
-- Test-first as reported: the index tests were seen failing in stages; the
-  read behavior tests failed only against a skeleton and were then checked by
-  eight mutations; four test groups were not mutation-checked.
-
-Flagged by the implementer, awaiting review and rulings:
-
-1. `owned_file_bytes` is Unix-only; a non-Unix reader was added and is
-   unexecuted.
-2. Enabling already completes a refresh, so `never_refreshed` arises only for
-   a migrated index or an incomplete enable-time refresh.
-3. The design's concurrent-migration paragraph is wrong: probe and `ALTER`
-   share one deferred transaction, so the loser of a race gets `SQLITE_BUSY`
-   at open, as for every existing additive migration.
-4. A committed, unchanged file in an item worktree is usually reported as
-   `uncommitted`, because the save path does not update that worktree's Git
-   index. Existing discovery behavior, now visible as `change_source`.
-5. `ItemDto` has an `index` object the design's table lacks.
-6. `changed_at` and `change_source` are nullable.
-7. `context.kind` has a third value, `unverified`.
-8. Stored `unknown_metadata` is a wrapper object recording whether a value was
-   not representable; keys sort by byte order at every depth.
-9. Recovery action `index.refresh` with `{"root": …}`; when it is attached.
-10. Observation token byte layout.
-11. Orderings, including where nonconforming entries sort.
-12. Index-state precedence: `never_refreshed`, then `stale`, then `current`.
-13. `show_path` details: a duplicate-ID file is returned with its ID; a
-    non-effective copy in another item's worktree is readable; a bad path is
-    `invalid_path` even under the exclusive lock.
-14. Gap: a nonconforming ticket in a non-ULID directory is listed but
-    `show_path` refuses it, so "readable by exact path" fails for that shape.
-15. Staleness detection is partial: a body-only edit within the same second
-    as the refresh is not flagged.
-16. A metadata pre-check precedes the guarded open in the file reader.
-17. Provisional DTOs and schemas for Task 9's readiness reasons exist only to
-    satisfy the closed-schema lint.
+- Existing assertions changed: the exact `repositories` column list in
+  `tests/repository_enablement.rs`; a `refreshed_at` expectation in
+  `tests/read_repository.rs`; in `tests/read_boundary.rs` the last item read
+  is `../outside.md`, because a well-formed non-canonical path is now refused
+  inside the session.
+- Test-first, as the implementer reported: the index tests were seen failing
+  in stages; the first read tests failed only against a skeleton and were then
+  checked by eight mutations; four test groups were not mutation-checked; the
+  review-fix tests were only run passing.
