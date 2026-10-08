@@ -765,3 +765,31 @@ fn a_list_of_documents_is_related_without_a_graph_of_tickets() {
     assert_eq!(related.targets.state(DOCUMENT), None);
     assert_eq!(related.graph.readiness_state(SELF), None);
 }
+
+/// `serde_json::Map::remove` moves the last key into the removed key's place
+/// when the map keeps insertion order, as it does in the desktop build.
+#[test]
+fn relationship_keys_are_removed_without_reordering_the_keys_that_stay() {
+    let mut values = serde_json::Map::new();
+    for key in ["alpha", "deps", "middle", "parent", "slug", "zeta"] {
+        values.insert(key.to_owned(), key.into());
+    }
+
+    remove_relationship_keys(&mut values);
+
+    assert_eq!(
+        values.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["alpha", "middle", "zeta"]
+    );
+
+    // A key in the middle, with every later key still after it.
+    let mut values = serde_json::Map::new();
+    for key in ["a", "b", "parent", "c", "d", "e"] {
+        values.insert(key.to_owned(), key.into());
+    }
+    remove_relationship_keys(&mut values);
+    assert_eq!(
+        serde_json::Value::Object(values).to_string(),
+        r#"{"a":"a","b":"b","c":"c","d":"d","e":"e"}"#
+    );
+}

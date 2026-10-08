@@ -519,9 +519,7 @@ pub(super) fn stored_items(
                     // An index written before a ticket's relationship keys
                     // were fields of their own stored them here.
                     if kind == ItemDtoKind::Ticket {
-                        for key in canonical::RELATIONSHIP_KEYS {
-                            unknown.values.remove(key);
-                        }
+                        remove_relationship_keys(&mut unknown.values);
                     }
                     unknown
                 }
@@ -537,6 +535,16 @@ pub(super) fn stored_items(
     }
     stored_relationships(connection, repo, &mut items)?;
     Ok(items)
+}
+
+/// Takes a ticket's relationship keys out of metadata the index stored,
+/// leaving every other key where it was.
+///
+/// Not `Map::remove`: where `serde_json` keeps insertion order, as it does
+/// in the desktop build, that moves the last key into the removed key's
+/// place, and the keys are published in order.
+fn remove_relationship_keys(values: &mut serde_json::Map<String, serde_json::Value>) {
+    values.retain(|key, _| !canonical::RELATIONSHIP_KEYS.contains(&key.as_str()));
 }
 
 /// The item stored in the row `row_id`, among `items` in row order.
