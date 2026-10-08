@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M4CKWWRA1DHFPMWKPNK7CQ1G"
 title: "Discovery must index one effective copy per item across item worktrees"
 type: "defect"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -76,6 +76,25 @@ on the F1 branch:
 - Existing discovery, authoring and recovery tests pass unchanged, or each
   changed expectation is explained in the review.
 - No canonical Markdown or Git state is changed by the fix.
+
+## Accepted Limitations (2026-10-07)
+
+The product owner accepted these after two code reviews:
+
+- A ticket worktree does not scan `docs/`, so a hand-made document there that
+  reuses the ticket's ID is not reported until the branch merges and primary
+  validates it.
+- A stray or malformed managed file that is not a worktree's own item is
+  neither listed nor reported until merge.
+- Comments are matched by directory, `.manyhands/comments/<id>/`. A comment
+  for the item stored elsewhere is not read; a file in that directory naming
+  another item is reported as a problem.
+
+## Closure (2026-10-07)
+
+The product owner authorized closing this ticket on its branch and merging to
+local main. No push or worktree removal is authorized. F1
+(`01M4CC0VMQ7R15A7M9SPN3KB67`) is unblocked by that merge.
 
 ## Related
 
