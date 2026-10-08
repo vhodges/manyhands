@@ -2662,7 +2662,11 @@ fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
 fn a_copy_in_the_items_worktree_that_cannot_be_read_is_not_hidden_behind_the_primary_copy() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
-    let primary = write(root, "docs/a.md", &document_source(DOCUMENT_A, "Primary", ""));
+    let primary = write(
+        root,
+        "docs/a.md",
+        &document_source(DOCUMENT_A, "Primary", ""),
+    );
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
     insert_item_worktree_row(
@@ -2704,7 +2708,11 @@ fn a_copy_in_the_items_worktree_that_cannot_be_read_is_not_hidden_behind_the_pri
 fn a_broken_row_for_the_items_worktree_fails_the_read_instead_of_falling_back() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
-    write(root, "docs/a.md", &document_source(DOCUMENT_A, "Primary", ""));
+    write(
+        root,
+        "docs/a.md",
+        &document_source(DOCUMENT_A, "Primary", ""),
+    );
     write(root, "plain.md", "not an item\n");
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
@@ -2762,6 +2770,29 @@ fn a_copy_of_an_item_in_another_items_worktree_is_never_the_effective_one() {
     assert_eq!(list.index.state, IndexState::Stale);
     assert_eq!(shown.context.kind, ItemContextKind::Primary);
     assert_eq!(shown.source.as_deref(), Some(primary.as_str()));
+    assert_eq!(shown.index.state, IndexState::Stale);
+
+    // With no row for the primary copy, that copy in another item's worktree
+    // is the only place the index knows the item to be. It is answered
+    // from as a last resort, and the index says it is behind.
+    index(enabled.data_directory.path())
+        .execute(
+            "DELETE FROM discovered_items WHERE context_id IN
+                (SELECT id FROM contexts WHERE kind != 'active')",
+            [],
+        )
+        .unwrap();
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap();
+
+    assert_eq!(ids(&list), [Some(DOCUMENT_A)]);
+    assert_eq!(list.items[0].context.kind, ItemContextKind::Active);
+    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(shown.context.kind, ItemContextKind::Active);
+    assert_eq!(shown.title.as_deref(), Some("Other worktree"));
     assert_eq!(shown.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
 }
@@ -2890,7 +2921,6 @@ fn a_well_formed_path_no_list_shows_suggests_a_refresh_when_the_index_is_behind(
     assert_eq!(show().unwrap().id, None);
     assert_git_transport_uninitialized();
 }
-
 
 #[cfg(unix)]
 #[test]

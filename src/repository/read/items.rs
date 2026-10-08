@@ -742,20 +742,29 @@ fn is_own_worktree_row(repo: &ResolvedRepository, row: &StoredItem) -> bool {
             .is_some_and(|directory| directory == Path::new(WORKTREES_DIRECTORY).join(&row.id))
 }
 
+const OWN_WORKTREE: u8 = 0;
+const OTHER_WORKTREE: u8 = 2;
+
 /// The order in which the rows of one item are tried: its own worktree's,
 /// then one outside any item worktree, then a copy in another item's.
+///
+/// That last kind is never the effective copy and is never preferred. It is
+/// still answered from when the index offers nothing better, as a last
+/// resort, because it is the only place the index knows the item to be; the
+/// index is then reported as behind.
 fn row_rank(repo: &ResolvedRepository, row: &StoredItem) -> u8 {
     if is_own_worktree_row(repo, row) {
-        0
+        OWN_WORKTREE
     } else if row.context.kind != ItemContextKind::Active {
         1
     } else {
-        2
+        OTHER_WORKTREE
     }
 }
 
-/// One row for each item, and whether the index held any item more than
-/// once.
+/// One row for each item, and whether the index is known to be behind: it
+/// held an item more than once, or held one only as a copy in another
+/// item's worktree.
 ///
 /// A refresh stores the root, each item worktree and the removal of
 /// worktrees that are gone in separate transactions, so a read can find an
@@ -772,24 +781,27 @@ fn effective_rows<'a>(
     for item in stored {
         by_id.entry(&item.id).or_default().push(item);
     }
-    let mut duplicated = false;
+    let mut is_behind = false;
     let rows = by_id
         .into_values()
         .map(|mut rows| {
-            if rows.len() == 1 {
-                return rows[0];
-            }
-            duplicated = true;
+            is_behind |= rows.len() > 1;
             rows.sort_by_key(|row| row_rank(repo, row));
-            rows.iter()
-                .find(|row| row_rank(repo, row) != 0 || context_exists(repo, &row.context))
+            let row = rows
+                .iter()
+                .find(|row| {
+                    rows.len() == 1
+                        || row_rank(repo, row) != OWN_WORKTREE
+                        || context_exists(repo, &row.context)
+                })
                 .copied()
-                .unwrap_or(rows[0])
+                .unwrap_or(rows[0]);
+            is_behind |= row_rank(repo, row) == OTHER_WORKTREE;
+            row
         })
         .collect();
-    (rows, duplicated)
+    (rows, is_behind)
 }
-
 
 impl RepositoryService {
     /// Every managed document, ordered by path and then ID, with a
@@ -826,8 +838,8 @@ impl RepositoryService {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
             let problems = stored_problems(connection, repo)?;
-            let (rows, duplicated) = effective_rows(repo, &stored);
-            let index = if duplicated { behind(&index) } else { index };
+            let (rows, is_behind) = effective_rows(repo, &stored);
+            let index = if is_behind { behind(&index) } else { index };
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
@@ -931,6 +943,13 @@ impl RepositoryService {
             }
             let Some((row, file)) = found else {
                 return Err(item_not_found(repo, true));
+            };
+            // Answered from a copy in another item's worktree: a last resort,
+            // and the index is behind for offering nothing better.
+            let index = if row_rank(repo, row) == OTHER_WORKTREE {
+                behind(&index)
+            } else {
+                index
             };
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);

@@ -6061,11 +6061,7 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
         let component = name(component)?;
         let is_file = components.peek().is_none();
         let flags = if is_file {
-            libc::O_RDONLY
-                | libc::O_NOFOLLOW
-                | libc::O_NONBLOCK
-                | libc::O_NOCTTY
-                | libc::O_CLOEXEC
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC
         } else {
             directory_flags
         };
