@@ -62,13 +62,21 @@ fn root_action(action: &str, root: Option<&str>) -> RecoveryAction {
     }
 }
 
-/// How far a registration's index is behind its repository, from the two
-/// columns that say so. A registration no refresh or rebuild has completed
-/// for is `never_refreshed` whatever else is stored.
-fn index_state(refresh_required: bool, refreshed_at: Option<i64>) -> IndexStateDto {
+/// How far a registration's index is behind its repository.
+///
+/// `never_refreshed` is a registration with no refresh time and no observed
+/// context: nothing has ever been stored for it. An index that holds
+/// contexts and no refresh time was written before that time was recorded;
+/// it has rows worth listing and is `stale`, with a null `refreshed_at`.
+fn index_state(
+    refresh_required: bool,
+    refreshed_at: Option<i64>,
+    has_contexts: bool,
+) -> IndexStateDto {
     IndexStateDto {
         state: match refreshed_at {
-            None => IndexState::NeverRefreshed,
+            None if !has_contexts => IndexState::NeverRefreshed,
+            None => IndexState::Stale,
             Some(_) if refresh_required => IndexState::Stale,
             Some(_) => IndexState::Current,
         },

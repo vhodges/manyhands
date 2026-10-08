@@ -113,9 +113,12 @@ pub struct ConfigurationDto {
     pub problems: Vec<ProblemDto>,
 }
 
-/// `never_refreshed` exactly when `refreshed_at` is null: no refresh or
-/// rebuild of this registration has completed. Otherwise `stale` when a
-/// refresh is required, and `current` when none is.
+/// `never_refreshed` when nothing has been stored for the registration: no
+/// refresh or rebuild has completed and the index holds no context for it.
+/// Otherwise `stale` when a refresh is required, or when the index was
+/// written before refresh times were recorded, and `current` when neither.
+/// `refreshed_at` is the time the last completed refresh or rebuild began
+/// observing, and null when none is recorded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IndexStateDto {
     pub state: IndexState,
@@ -367,8 +370,9 @@ pub struct ItemDto {
     pub index: IndexStateDto,
 }
 
-/// `closed_at` and `closed_by` are both set exactly when `state` is
-/// `closed`.
+/// `closed_at` is set exactly when `state` is `closed`. `closed_by` is set
+/// with it, except in a list from an index written before `closed_by` was
+/// stored, where it is null until the next refresh.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClosureDto {
     pub state: ClosureState,

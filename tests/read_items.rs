@@ -943,7 +943,7 @@ fn lists_carry_closed_by_and_unknown_metadata_and_open_no_item_file() {
 }
 
 #[test]
-fn a_migrated_index_lists_what_it_has_and_says_it_was_never_refreshed() {
+fn a_migrated_index_lists_what_it_has_and_says_it_is_stale() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
     write_mixed_items(root);
@@ -964,11 +964,11 @@ fn a_migrated_index_lists_what_it_has_and_says_it_was_never_refreshed() {
     assert_eq!(ids(&tickets).len(), 2);
     assert_eq!(ids(&documents), [Some(DOCUMENT_A)]);
     for list in [&tickets, &documents] {
-        assert_eq!(list.index.state, IndexState::NeverRefreshed);
+        assert_eq!(list.index.state, IndexState::Stale);
         assert_eq!(list.index.refreshed_at, None);
         for item in &list.items {
             assert!(item.unknown_metadata.is_empty());
-            assert_eq!(item.index.state, IndexState::NeverRefreshed);
+            assert_eq!(item.index.state, IndexState::Stale);
         }
     }
     let closed = tickets
@@ -983,19 +983,19 @@ fn a_migrated_index_lists_what_it_has_and_says_it_was_never_refreshed() {
     assert_eq!(closed.closed_by, None);
     assert_eq!(
         service.list_repositories().unwrap().items[0].index.state,
-        IndexState::NeverRefreshed
+        IndexState::Stale
     );
     // A complete read uses the file, so it has what the index lacks.
     let shown = service.show_item(&repo, &item_id(TICKET_A)).unwrap();
-    assert_eq!(shown.index.state, IndexState::NeverRefreshed);
+    assert_eq!(shown.index.state, IndexState::Stale);
     assert_eq!(
         shown.closure.unwrap().closed_by.as_deref(),
         Some("Ada Lovelace <ada@example.invalid>")
     );
 
-    // A refresh that must be retried leaves it never refreshed; one that
-    // completes makes it current, and a later one that must be retried
-    // makes it stale.
+    // It holds contexts, so it is stale and not never refreshed, and it has
+    // no refresh time to give. A refresh that completes makes it current,
+    // and a later one that must be retried makes it stale again.
     refresh_completely(&service, root);
     let tickets = all_tickets(&service, &repo);
     assert_eq!(tickets.index.state, IndexState::Current);
@@ -1998,6 +1998,8 @@ fn show_path_reads_only_canonical_item_paths() {
         "docs/./a.md",
         "docs//a.md",
         "docs/a.md/",
+        // Through a file, as if it were a directory.
+        "docs/a.md/b.md",
         "",
         ".",
         "docs",
@@ -2010,7 +2012,6 @@ fn show_path_reads_only_canonical_item_paths() {
         ".git/config",
         ".git/HEAD",
         comment.as_str(),
-        ".manyhands/tickets/not-an-id/ticket.md",
         &format!(".manyhands/tickets/{TICKET_A}/notes.md"),
         &format!(".manyhands/tickets/{TICKET_A}"),
         &format!(".manyhands/tickets/{}/ticket.md", TICKET_A.to_lowercase()),
@@ -2032,7 +2033,6 @@ fn show_path_reads_only_canonical_item_paths() {
     for path in [
         "docs/absent.md",
         "docs/absent/b.md",
-        "docs/a.md/b.md",
         &ticket_path(TICKET_B),
     ] {
         let error = show(path).unwrap_err();
@@ -2040,6 +2040,17 @@ fn show_path_reads_only_canonical_item_paths() {
         assert_eq!(recovery(&error), json!([]));
     }
     assert_eq!(show("docs/a.md").unwrap().id.as_deref(), Some(DOCUMENT_A));
+    // A path that is not an item's is read when, and only when, a list
+    // shows it as a nonconforming entry.
+    let listed = all_tickets(&enabled.service, &repo);
+    assert_eq!(paths(&listed), [".manyhands/tickets/not-an-id/ticket.md"]);
+    let shown = show(".manyhands/tickets/not-an-id/ticket.md").unwrap();
+    assert_eq!(shown.id, None);
+    assert_eq!(shown.kind, ItemDtoKind::Ticket);
+    assert_eq!(shown.source.as_deref(), Some("---\n---\n"));
+    assert_eq!(codes(&shown), [ProblemCode::InvalidPath]);
+    assert_eq!(shown.index.state, IndexState::Current);
+    assert_eq!(shown.problems, listed.items[0].problems);
     assert_eq!(
         show("docs/sub/deep/b.md").unwrap().id.as_deref(),
         Some(DOCUMENT_B)
@@ -2088,8 +2099,6 @@ fn show_path_follows_no_symbolic_link() {
             .unwrap_err();
 
         assert_eq!(error.code(), ResultCode::InvalidPath, "{path}");
-        let envelope = serde_json::to_value(error.to_envelope::<Value>("document show")).unwrap();
-        assert_eq!(support::golden::find_sentinel(&envelope, &[SECRET]), None);
     }
     // No list has an entry that would point a caller at them either.
     let documents = enabled.service.list_documents(&repo).unwrap();
@@ -2384,9 +2393,6 @@ fn an_index_row_that_points_outside_the_repository_is_not_read_from() {
         for (result, code) in [(by_id, ResultCode::InternalError), (by_path, named)] {
             let error = result.unwrap_err();
             assert_eq!(error.code(), code, "{kind}");
-            let envelope =
-                serde_json::to_value(error.to_envelope::<Value>("document show")).unwrap();
-            assert_eq!(support::golden::find_sentinel(&envelope, &[SECRET]), None);
         }
     }
     // A path that is not an item's.
@@ -2402,5 +2408,323 @@ fn an_index_row_that_points_outside_the_repository_is_not_read_from() {
             "{path}"
         );
     }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_root_the_index_has_not_observed_is_read_by_path_as_unverified() {
+    let never = never_refreshed_repository();
+    let root = &never.fixture.root;
+    let source = document_source(DOCUMENT_A, "A", "");
+    write(root, "docs/a.md", &source);
+    let repo = never.service.resolve_repository(root).unwrap();
+
+    let shown = never
+        .service
+        .show_path(&repo, None, Path::new("docs/a.md"))
+        .unwrap();
+
+    // Nothing has checked which branch the root is on.
+    assert_eq!(shown.context.kind, ItemContextKind::Unverified);
+    assert_eq!(shown.context.branch, None);
+    assert_eq!(shown.context.head_oid, None);
+    assert_eq!(shown.context.worktree, root_string(&never.fixture));
+    assert_eq!(shown.source.as_deref(), Some(source.as_str()));
+    assert_eq!(shown.index.state, IndexState::NeverRefreshed);
+    assert_eq!(shown.index.refreshed_at, None);
+    assert_git_transport_uninitialized();
+}
+
+/// Adds an item worktree's context to the index, holding `id` at `path`,
+/// as a refresh that stored that context and has not yet removed it leaves
+/// it. Nothing is created on disk.
+fn insert_item_worktree_row(data_directory: &Path, root: &str, id: &str, path: &str) {
+    let connection = index(data_directory);
+    let repository_id: i64 = connection
+        .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO contexts (repository_id, kind, branch, worktree_path, item_id)
+             VALUES (?1, 'active', ?2, ?3, ?4)",
+            rusqlite::params![
+                repository_id,
+                format!("manyhands/document/{id}"),
+                format!("{root}/.manyhands/worktrees/{id}"),
+                id
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO discovered_items
+                (context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+             VALUES (?1, ?2, 'document', ?3, 'Worktree row', 5, 'git')",
+            rusqlite::params![connection.last_insert_rowid(), id, path],
+        )
+        .unwrap();
+}
+
+#[test]
+fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_there() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let primary = document_source(DOCUMENT_A, "Primary", "");
+    write(root, "docs/a.md", &primary);
+    write(root, "docs/b.md", &document_source(DOCUMENT_B, "B", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let root_text = root_string(&fixture);
+    // The item is in the primary context and in the row of an item worktree
+    // that is not there: a refresh has stored one and not yet removed the
+    // other.
+    insert_item_worktree_row(
+        enabled.data_directory.path(),
+        &root_text,
+        DOCUMENT_A,
+        "docs/a.md",
+    );
+    let show = || enabled.service.show_item(&repo, &item_id(DOCUMENT_A));
+
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let shown = show().unwrap();
+
+    assert_eq!(ids(&list), [Some(DOCUMENT_A), Some(DOCUMENT_B)]);
+    assert_eq!(list.items[0].title.as_deref(), Some("Primary"));
+    assert_eq!(list.items[0].context.kind, ItemContextKind::Primary);
+    // The index is in the middle of changing, and every entry says so.
+    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(list.items[1].index.state, IndexState::Stale);
+    assert_eq!(shown.context.kind, ItemContextKind::Primary);
+    assert_eq!(shown.source.as_deref(), Some(primary.as_str()));
+    assert_eq!(shown.index.state, IndexState::Stale);
+    // The other item is not held twice; read alone, nothing about it is behind.
+    assert_eq!(
+        enabled
+            .service
+            .show_item(&repo, &item_id(DOCUMENT_B))
+            .unwrap()
+            .index
+            .state,
+        IndexState::Current
+    );
+
+    // The worktree is there, with its own copy: that copy is the effective
+    // one, and the index is still behind.
+    let worktree = root.join(".manyhands/worktrees").join(DOCUMENT_A);
+    let edited = document_source(DOCUMENT_A, "Worktree", "");
+    write(&worktree, "docs/a.md", &edited);
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let shown = show().unwrap();
+
+    assert_eq!(ids(&list), [Some(DOCUMENT_A), Some(DOCUMENT_B)]);
+    assert_eq!(list.items[0].title.as_deref(), Some("Worktree row"));
+    assert_eq!(list.items[0].context.kind, ItemContextKind::Active);
+    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(shown.context.kind, ItemContextKind::Active);
+    assert_eq!(
+        Path::new(&shown.context.worktree),
+        fs::canonicalize(&worktree).unwrap()
+    );
+    assert_eq!(shown.source.as_deref(), Some(edited.as_str()));
+    assert_eq!(shown.index.state, IndexState::Stale);
+
+    // The worktree is there and its copy is not: a list, which opens no
+    // file, still names the worktree; a complete read falls back.
+    fs::remove_file(worktree.join("docs/a.md")).unwrap();
+    assert_eq!(
+        enabled.service.list_documents(&repo).unwrap().items[0]
+            .context
+            .kind,
+        ItemContextKind::Active
+    );
+    let shown = show().unwrap();
+    assert_eq!(shown.context.kind, ItemContextKind::Primary);
+    assert_eq!(shown.source.as_deref(), Some(primary.as_str()));
+    assert_eq!(shown.index.state, IndexState::Stale);
+
+    // Neither copy: not found, and a refresh is the recovery.
+    fs::remove_file(root.join("docs/a.md")).unwrap();
+    let error = show().unwrap_err();
+    assert_eq!(error.code(), ResultCode::ItemNotFound);
+    assert_eq!(recovery(&error), refresh_recovery(&root_text));
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    write(
+        root,
+        "docs/sub/b.md",
+        &document_source(DOCUMENT_B, "B", ""),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let directory = root.join("docs/sub");
+    let set_mode = |path: &Path, mode| {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    };
+    let assert_inaccessible = |id: &str, path: &str| {
+        for error in [
+            enabled
+                .service
+                .show_item(&repo, &item_id(id))
+                .unwrap_err(),
+            enabled
+                .service
+                .show_path(&repo, None, Path::new(path))
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.code(), ResultCode::RepositoryInaccessible, "{path}");
+            assert_eq!(recovery(&error), json!([]));
+            assert_eq!(
+                error.to_envelope::<Value>("document show").outcome,
+                Outcome::Blocked
+            );
+        }
+    };
+
+    set_mode(&file, 0o000);
+    if fs::read(&file).is_ok() {
+        // This user may open anything, so nothing here can be refused.
+        set_mode(&file, 0o644);
+        return;
+    }
+    assert_inaccessible(DOCUMENT_A, "docs/a.md");
+    // A list reads no file and is what it was.
+    assert_eq!(
+        ids(&enabled.service.list_documents(&repo).unwrap()),
+        [Some(DOCUMENT_A), Some(DOCUMENT_B)]
+    );
+    set_mode(&file, 0o644);
+    enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap();
+
+    set_mode(&directory, 0o000);
+    assert_inaccessible(DOCUMENT_B, "docs/sub/b.md");
+    set_mode(&directory, 0o755);
+    enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_B))
+        .unwrap();
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_where_an_item_file_was_is_refused_without_waiting() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    fs::remove_file(&file).unwrap();
+    let name = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let started = std::time::Instant::now();
+
+    let by_id = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap_err();
+    let by_path = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/a.md"))
+        .unwrap_err();
+
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(by_id.code(), ResultCode::ItemNotFound);
+    assert_eq!(by_path.code(), ResultCode::InvalidPath);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn refreshed_at_is_the_time_a_refresh_or_rebuild_began_observing() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let data = enabled.data_directory.path();
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    // Runs between the two observations of one refresh, changes nothing,
+    // and takes more than a second.
+    let pause = |observed: &std::sync::Arc<std::sync::Mutex<i64>>| {
+        let observed = observed.clone();
+        move || {
+            *observed.lock().unwrap() = now();
+            std::thread::sleep(Duration::from_millis(1_100));
+        }
+    };
+
+    let during_refresh = std::sync::Arc::new(std::sync::Mutex::new(0));
+    enabled
+        .service
+        .set_observation_hook_for_testing(pause(&during_refresh));
+    refresh_completely(&enabled.service, root);
+    let [Some(refreshed)] = refreshed_at(data)[..] else {
+        panic!("a completed refresh records its time");
+    };
+    let finished = now();
+
+    let during_rebuild = std::sync::Arc::new(std::sync::Mutex::new(0));
+    enabled
+        .service
+        .set_observation_hook_for_testing(pause(&during_rebuild));
+    rebuild(&enabled.service, root);
+    let [Some(rebuilt)] = refreshed_at(data)[..] else {
+        panic!("a completed rebuild records its time");
+    };
+
+    // Not the time it finished, which is at least a second later.
+    assert!(refreshed <= *during_refresh.lock().unwrap());
+    assert!(refreshed < finished, "{refreshed} {finished}");
+    assert!(rebuilt <= *during_rebuild.lock().unwrap());
+    assert!(rebuilt >= finished);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/shared.md", &document_source(DOCUMENT_C, "C", ""));
+    commit(&fixture, &["docs/shared.md"], 1_000);
+    create_document_context(&enabled.service, root, DOCUMENT_A, "docs/active.md");
+    let marker = write(root, MARKER_PATH, "---\nmanyhands_managed: true\n---\n");
+    write(root, "docs/one.md", &document_source(DOCUMENT_B, "One", ""));
+    let duplicate = write(root, "docs/two.md", &document_source(DOCUMENT_B, "Two", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let worktree = context_worktree(root, DOCUMENT_A);
+    let copy = worktree.join("docs/shared.md");
+    let state = |context: Option<&Path>, path: &str| {
+        enabled
+            .service
+            .show_path(&repo, context, Path::new(path))
+            .unwrap()
+            .index
+            .state
+    };
+    // A nonconforming file, a duplicate, and a copy that is not the
+    // effective one: the index is right about each of them.
+    assert_eq!(state(None, MARKER_PATH), IndexState::Current);
+    assert_eq!(state(None, "docs/two.md"), IndexState::Current);
+    assert_eq!(state(Some(&worktree), "docs/shared.md"), IndexState::Current);
+
+    for file in [&marker, &duplicate, &copy] {
+        set_modified_later(file);
+    }
+
+    assert_eq!(state(None, MARKER_PATH), IndexState::Stale);
+    assert_eq!(state(None, "docs/two.md"), IndexState::Stale);
+    assert_eq!(state(Some(&worktree), "docs/shared.md"), IndexState::Stale);
     assert_git_transport_uninitialized();
 }

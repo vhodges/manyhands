@@ -145,6 +145,8 @@ impl RepositoryService {
                         repositories.accessibility,
                         repositories.refresh_required,
                         repositories.refreshed_at,
+                        EXISTS(SELECT 1 FROM contexts
+                                WHERE contexts.repository_id = repositories.id),
                         configuration.state,
                         configuration.primary_branch,
                         configuration.publication_remote,
@@ -161,9 +163,9 @@ impl RepositoryService {
                     let enabled_at: i64 = row.get(1)?;
                     let accessibility: String = row.get(2)?;
                     let refresh_required: bool = row.get(3)?;
-                    let state: Option<String> = row.get(5)?;
-                    let invalid_code: Option<String> = row.get(8)?;
-                    let problem_count: i64 = row.get(9)?;
+                    let state: Option<String> = row.get(6)?;
+                    let invalid_code: Option<String> = row.get(9)?;
+                    let problem_count: i64 = row.get(10)?;
                     Ok(RepositorySummaryDto {
                         root: row.get(0)?,
                         enabled_at: OffsetDateTime::from_unix_timestamp(enabled_at)
@@ -175,11 +177,11 @@ impl RepositoryService {
                         },
                         configuration: stored_configuration(
                             state.as_deref(),
-                            row.get(6)?,
                             row.get(7)?,
+                            row.get(8)?,
                             invalid_code.as_deref(),
                         ),
-                        index: index_state(refresh_required, row.get(4)?),
+                        index: index_state(refresh_required, row.get(4)?, row.get(5)?),
                         problem_count: u64::try_from(problem_count).unwrap_or_default(),
                     })
                 })?

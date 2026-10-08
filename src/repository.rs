@@ -1038,6 +1038,10 @@ impl RepositoryService {
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
+        // Taken before anything is observed: what this refresh stores can be
+        // no newer than this, so a file changed while it runs reads as
+        // changed since.
+        let observed_from = OffsetDateTime::now_utc().unix_timestamp();
         let before = observe_root(repository, &root);
         if let Err(error) =
             self.check_failure(FailurePoint::AfterContextObservation, operation, &root)
@@ -1106,7 +1110,14 @@ impl RepositoryService {
                 context: Some(context),
             });
         }
-        reconcile_disappeared_contexts(&self.registry_path, repository_id, &before, owner, &root)?;
+        reconcile_disappeared_contexts(
+            &self.registry_path,
+            repository_id,
+            &before,
+            owner,
+            observed_from,
+            &root,
+        )?;
         let snapshot = self.repository_snapshot(&root)?;
         Ok(RefreshOutcome::Refreshed { snapshot })
     }
@@ -1127,6 +1138,8 @@ impl RepositoryService {
             begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id
         };
         let result = (|| {
+            // As in a refresh: the time before the first observation.
+            let observed_from = OffsetDateTime::now_utc().unix_timestamp();
             let observation = observe_root(&repository, &root);
             if let Some(hook) = self
                 .observation_hook
@@ -1151,7 +1164,13 @@ impl RepositoryService {
                 return read_repository_snapshot_from_registry(&self.registry_path, &root);
             }
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)?;
-            persist_rebuild_observation(&self.registry_path, operation_id, &root, &observation)?;
+            persist_rebuild_observation(
+                &self.registry_path,
+                operation_id,
+                &root,
+                &observation,
+                observed_from,
+            )?;
             set_rebuild_operation(&self.registry_path, operation_id, "completed", &root)?;
             read_repository_snapshot_from_registry(&self.registry_path, &root)
         })();
@@ -4406,6 +4425,7 @@ fn persist_rebuild_observation(
     operation_id: i64,
     root: &Path,
     observation: &RootObservation,
+    observed_from: i64,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
@@ -4448,11 +4468,12 @@ fn persist_rebuild_observation(
     persist_observation(&transaction, repository_id, observation, root)
         .map_err(|error| error.for_operation(operation, root))?;
     // The observation is stored and the index is current: this statement
-    // says so, and records when, in the transaction that stores it.
+    // says so, in the transaction that stores it, and records the time
+    // from which the observation was made.
     transaction
         .execute(
             "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1",
-            params![repository_id, OffsetDateTime::now_utc().unix_timestamp()],
+            params![repository_id, observed_from],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
@@ -4803,6 +4824,7 @@ fn reconcile_disappeared_contexts(
     repository_id: i64,
     observation: &RootObservation,
     owner: IndexOwner,
+    observed_from: i64,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
@@ -4859,10 +4881,10 @@ fn reconcile_disappeared_contexts(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     // Every context is stored and the refresh is about to be recorded as
-    // completed: this statement clears the stale mark and records when, in
-    // that same transaction. A refresh that fails or must be retried never
-    // reaches it.
-    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    // completed: this statement clears the stale mark, in that same
+    // transaction, and records the time from which the refresh observed.
+    // A refresh that fails or must be retried never reaches it.
+    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     if !transition_indexing(&transaction, owner, "completed", None)
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
@@ -5969,6 +5991,98 @@ fn owned_parent_directory(
         directory = unsafe { std::fs::File::from_raw_fd(fd) };
     }
     Ok(directory)
+}
+
+/// What reading one file for a read service found.
+enum GuardedFile {
+    Found {
+        bytes: Vec<u8>,
+        /// From the opened file itself, where the platform says.
+        modified: Option<SystemTime>,
+    },
+    /// Nothing is at the path.
+    Missing,
+    /// Something is there that is not a regular file reached through real
+    /// directories: a symbolic link, a directory, a pipe, a device.
+    NotAFile,
+}
+
+/// Reads `root/relative` for a read service, following no symbolic link
+/// below `root` and never waiting on what it opens.
+///
+/// This is the read-only sibling of `owned_file_bytes`: it creates nothing,
+/// runs no test hook, and tells its outcomes apart. Each directory is opened
+/// through the one before it without following links, and so is the file,
+/// which is opened non-blocking so that a pipe cannot hold the read. The
+/// file's type and modification time come from the descriptor that was
+/// opened, not from a second look at the path.
+///
+/// A missing component is `Missing`. A component that is a symbolic link or
+/// not a directory, and a file that is a link or not a regular file, is
+/// `NotAFile`. Every other failure, such as a file or directory this user
+/// may not open, is the error itself.
+#[cfg(unix)]
+fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
+    use std::io::{Error, ErrorKind};
+
+    fn name(text: &std::ffi::OsStr) -> std::io::Result<CString> {
+        CString::new(text.as_bytes()).map_err(|_| Error::from(ErrorKind::InvalidInput))
+    }
+    fn opened(descriptor: libc::c_int) -> std::io::Result<std::fs::File> {
+        if descriptor < 0 {
+            Err(Error::last_os_error())
+        } else {
+            Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+        }
+    }
+    /// `None` for a failure that is not about what is at the path.
+    fn absent(error: &Error) -> Option<GuardedFile> {
+        match error.raw_os_error() {
+            Some(libc::ENOENT) => Some(GuardedFile::Missing),
+            Some(libc::ELOOP | libc::ENOTDIR) => Some(GuardedFile::NotAFile),
+            _ => None,
+        }
+    }
+
+    let directory_flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let root_name = name(root.as_os_str())?;
+    let mut directory = opened(unsafe { libc::open(root_name.as_ptr(), directory_flags) })?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(Error::from(ErrorKind::InvalidInput));
+        };
+        let component = name(component)?;
+        let is_file = components.peek().is_none();
+        let flags = if is_file {
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC
+        } else {
+            directory_flags
+        };
+        let next = opened(unsafe {
+            libc::openat(directory.as_raw_fd(), component.as_ptr(), flags)
+        });
+        let mut next = match next {
+            Ok(next) => next,
+            Err(error) => return absent(&error).ok_or(error),
+        };
+        if !is_file {
+            directory = next;
+            continue;
+        }
+        let metadata = next.metadata()?;
+        if !metadata.is_file() {
+            return Ok(GuardedFile::NotAFile);
+        }
+        let mut bytes = Vec::new();
+        next.read_to_end(&mut bytes)?;
+        return Ok(GuardedFile::Found {
+            bytes,
+            modified: metadata.modified().ok(),
+        });
+    }
+    // An empty path names the root, which is not a file.
+    Ok(GuardedFile::NotAFile)
 }
 
 #[cfg(unix)]

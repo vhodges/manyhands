@@ -506,7 +506,7 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
 }
 
 /// Every item read, with inputs that succeed and inputs that fail. Returns
-/// how many succeeded.
+/// the outcome of each, in order: success, or the code it failed with.
 fn every_item_read(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -571,7 +571,7 @@ fn every_item_read(
                 .show_path(repo, None, path("docs/absent.md"))
                 .map(drop),
         ),
-        outcome(service.show_path(repo, None, path(".git/config")).map(drop)),
+        outcome(service.show_path(repo, None, path("../outside.md")).map(drop)),
     ]
 }
 
@@ -632,7 +632,8 @@ fn item_reads_are_busy_under_the_exclusive_lock_and_succeed_under_the_shared_one
     );
     holder.release();
 
-    // The last is refused for its path before any lock is asked for.
+    // The last is refused for how its path is written, before any lock is
+    // asked for.
     let (invalid, busy) = outcomes.split_last().unwrap();
     assert_eq!(invalid, &Err(ResultCode::InvalidPath));
     assert!(

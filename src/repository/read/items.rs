@@ -2,17 +2,16 @@
 //!
 //! A list is built from the index alone and opens no item file. A complete
 //! read finds where the item is in the index and then reads that one file,
-//! through the same guarded reader the save path uses.
+//! through a guarded reader that follows no symbolic link.
 
 use std::{
     cmp::Reverse,
+    collections::BTreeMap,
     fs, io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
-#[cfg(unix)]
-use crate::repository::owned_file_bytes;
 use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
@@ -24,8 +23,7 @@ use super::{
 use crate::{
     canonical::{self, ItemId},
     repository::{
-        RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-        discovery::UnknownMetadata,
+        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
     },
     results::{ProblemCode, ResultCode, absolute_path_string, timestamp_string},
 };
@@ -50,10 +48,6 @@ pub enum ReadinessFilter {
 /// `project` each match the whole stored value, case-sensitively; an unset
 /// filter matches every ticket. The default matches all of them.
 ///
-/// `slug` and `readiness` are not applied yet: no ticket has a short code
-/// or a readiness until the relationship fields are read, and until then a
-/// list is the same whatever these two hold.
-///
 /// A nonconforming entry has no metadata to match and is never removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TicketFilter {
@@ -61,7 +55,11 @@ pub struct TicketFilter {
     pub ticket_type: Option<String>,
     pub project: Option<String>,
     pub closure: ClosureFilter,
+    /// Not applied yet. It takes effect when tickets' short codes are read
+    /// (Task 8); until then a list is the same whatever this holds.
     pub slug: Option<String>,
+    /// Not applied yet. It takes effect with the relationship queries
+    /// (Task 9); until then a list is the same whatever this holds.
     pub readiness: Option<ReadinessFilter>,
 }
 
@@ -198,17 +196,23 @@ fn stored_index_state(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<(IndexStateDto, Option<i64>), ReadError> {
-    let stored: Option<(bool, Option<i64>)> = connection
+    let stored: Option<(bool, Option<i64>, bool)> = connection
         .query_row(
-            "SELECT refresh_required, refreshed_at FROM repositories
+            "SELECT refresh_required, refreshed_at,
+                    EXISTS(SELECT 1 FROM contexts
+                            WHERE contexts.repository_id = repositories.id)
+               FROM repositories
               WHERE id = ?1 AND root_path = ?2",
             rusqlite::params![repo.registration_id(), repo.root().to_str()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let (refresh_required, refreshed_at) =
+    let (refresh_required, refreshed_at, has_contexts) =
         stored.ok_or_else(|| ReadError::new(ResultCode::RepositoryNotRegistered))?;
-    Ok((index_state(refresh_required, refreshed_at), refreshed_at))
+    Ok((
+        index_state(refresh_required, refreshed_at, has_contexts),
+        refreshed_at,
+    ))
 }
 
 /// Every context of the registration, in worktree order.
@@ -342,8 +346,10 @@ fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     }
 }
 
-/// A file that is where an item of `kind` would be and is not one.
-fn nonconforming_item(
+/// An item DTO that says where a file is and nothing about what it holds.
+/// This is the whole of a nonconforming entry, and what a conforming item
+/// is filled in from.
+fn bare_item(
     kind: ItemDtoKind,
     path: &str,
     context: &StoredContext,
@@ -412,7 +418,7 @@ fn stored_item_dto(item: &StoredItem, index: &IndexStateDto) -> ItemDto {
         changed_at: timestamp(item.activity_at),
         change_source: Some(item.change_source),
         problems: metadata_problems(&item.unknown, &item.path),
-        ..nonconforming_item(item.kind, &item.path, &item.context, Vec::new(), index)
+        ..bare_item(item.kind, &item.path, &item.context, Vec::new(), index)
     }
 }
 
@@ -448,7 +454,7 @@ fn parsed_item_dto(
         body: Some(body.clone()),
         problems: metadata_problems(&unknown, path),
         unknown_metadata: unknown.values,
-        ..nonconforming_item(kind, path, context, Vec::new(), index)
+        ..bare_item(kind, path, context, Vec::new(), index)
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
         dto.closure = Some(closure(
@@ -536,7 +542,7 @@ enum ItemFileRead {
     /// Nothing is at the path.
     Missing,
     /// Something is at the path that is not a regular file reached through
-    /// real directories: a symbolic link, a directory, a device.
+    /// real directories: a symbolic link, a directory, a pipe, a device.
     NotAFile,
 }
 
@@ -561,102 +567,113 @@ fn below(root: &Path, relative: &Path) -> PathBuf {
         .fold(root.to_owned(), |path, component| path.join(component))
 }
 
-/// Reads the item file at `path` in the context whose worktree is
-/// `worktree`, following no symbolic link below the repository root.
+/// Whether `path` is written as a path inside a context: relative, with
+/// forward slashes, with no empty, `.` or `..` component, and not under the
+/// directory that holds item worktrees. This says nothing about whether it
+/// is a place an item can be.
+fn is_plain_relative(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+        && Path::new(path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && !Path::new(path).starts_with(WORKTREES_DIRECTORY)
+}
+
+/// The kind of item `path` is the canonical place of, if any:
+/// `docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`.
+fn canonical_item_kind(path: &str) -> Option<ItemDtoKind> {
+    match canonical::item_path_kind(Path::new(path)) {
+        Ok(canonical::ItemKind::Document) => Some(ItemDtoKind::Document),
+        Ok(canonical::ItemKind::Ticket) => Some(ItemDtoKind::Ticket),
+        Ok(canonical::ItemKind::Comment) | Err(_) => None,
+    }
+}
+
+/// Reads the file at `path` in the context whose worktree is `worktree`,
+/// following no symbolic link below the repository root.
 ///
 /// Both come from the index or from a caller, so both are checked first:
 /// the worktree must be the root or an item worktree under it, and the
-/// path a canonical item path. A row that is neither is not read from.
+/// path a plain relative one. A row that is neither is not read from. The
+/// caller decides which plain paths it reads.
 ///
-/// The bytes come from `owned_file_bytes`, given the repository root and
+/// The bytes come from the guarded reader, given the repository root and
 /// the whole path below it, so that it opens every directory on the way,
 /// the worktree's own included, and the file itself without following
-/// links. The check before it keeps that open away from anything that is
-/// not a regular file, such as a pipe, which would block; the reader then
-/// repeats the check on what it opened.
+/// links. What it cannot open for any reason other than what is at the
+/// path, such as a file this user may not read, is
+/// `repository_inaccessible`.
 fn read_item_file(
     repo: &ResolvedRepository,
     worktree: &str,
     path: &str,
 ) -> Result<ItemFileRead, ReadError> {
     let directory = context_directory(repo, worktree).ok_or_else(invalid_stored_data)?;
-    item_path(Path::new(path)).map_err(|_| invalid_stored_data())?;
-    let below_root = directory.join(path);
-    let metadata = match fs::symlink_metadata(below(repo.root(), &below_root)) {
-        Ok(metadata) => metadata,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(ItemFileRead::Missing);
-        }
-        Err(error) => {
-            return Err(ReadError::new(ResultCode::RepositoryInaccessible).with_source(error));
-        }
-    };
-    if !metadata.file_type().is_file() {
-        return Ok(ItemFileRead::NotAFile);
+    if !is_plain_relative(path) {
+        return Err(invalid_stored_data());
     }
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .and_then(|modified| i64::try_from(modified.as_secs()).ok());
-    match item_file_bytes(repo.root(), &below_root) {
-        Ok(Some(bytes)) => Ok(ItemFileRead::Found(ItemFile { bytes, modified })),
-        Ok(None) => Ok(ItemFileRead::Missing),
-        Err(error) if error.kind == RepositoryErrorKind::InvalidPath => Ok(ItemFileRead::NotAFile),
-        Err(error) => Err(error.into()),
+    match guarded_item_file(repo.root(), &directory.join(path)) {
+        Ok(GuardedFile::Found { bytes, modified }) => Ok(ItemFileRead::Found(ItemFile {
+            bytes,
+            modified: modified
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .and_then(|modified| i64::try_from(modified.as_secs()).ok()),
+        })),
+        Ok(GuardedFile::Missing) => Ok(ItemFileRead::Missing),
+        Ok(GuardedFile::NotAFile) => Ok(ItemFileRead::NotAFile),
+        Err(error) => Err(ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)),
     }
 }
 
-/// The bytes of the regular file at `root/path`, `None` when nothing is
-/// there, and `InvalidPath` when a symbolic link stands anywhere on the way.
 #[cfg(unix)]
-fn item_file_bytes(root: &Path, path: &Path) -> Result<Option<Vec<u8>>, RepositoryError> {
-    owned_file_bytes(root, path, RepositoryOperation::Read, root)
+fn guarded_item_file(root: &Path, path: &Path) -> io::Result<GuardedFile> {
+    crate::repository::guarded_file(root, path)
 }
 
-// The guarded reader exists only where directories can be opened without
-// following links. Elsewhere this does what the save path does there, and
-// also refuses a file whose real location is not that path under the root.
+// Weaker than the Unix reader, and never compiled or executed here: making
+// it sound and proving it on its platforms is a native obligation.
+//
+// The Unix reader opens each directory through the one before it without
+// following links and inspects the descriptor it opened. This one checks
+// the path and then uses the path: it looks at what is there, compares the
+// file's real location with the path, and only then reads. Something that
+// replaces the file or a directory between those steps is read. It can
+// also wait on a file that is not a regular one if it is swapped in after
+// the check.
 #[cfg(not(unix))]
-fn item_file_bytes(root: &Path, path: &Path) -> Result<Option<Vec<u8>>, RepositoryError> {
-    let operation = RepositoryOperation::Read;
-    let invalid = || {
-        RepositoryError::new(
-            operation,
-            Some(root.to_owned()),
-            RepositoryErrorKind::InvalidPath,
-            "an item file must be a regular file reached through real directories",
-        )
-    };
+fn guarded_item_file(root: &Path, path: &Path) -> io::Result<GuardedFile> {
     let file = below(root, path);
-    match fs::symlink_metadata(&file) {
-        Ok(metadata) if metadata.file_type().is_file() => {}
-        Ok(_) => return Err(invalid()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(RepositoryError::io(operation, Some(root.to_owned()), error)),
-    }
+    let metadata = match fs::symlink_metadata(&file) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(GuardedFile::Missing),
+        Err(error) => return Err(error),
+    };
     // The root is canonical, so a file reached through no link is where its
     // path says.
-    let inside = fs::canonicalize(&file)
-        .map(|real| real == file)
-        .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
-    if !inside {
-        return Err(invalid());
+    if !metadata.file_type().is_file() || fs::canonicalize(&file)? != file {
+        return Ok(GuardedFile::NotAFile);
     }
-    fs::read(&file)
-        .map(Some)
-        .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))
+    Ok(GuardedFile::Found {
+        bytes: fs::read(&file)?,
+        modified: metadata.modified().ok(),
+    })
 }
 
 impl ItemFile {
     /// Whether the file was modified in a later second than the one the
-    /// index was last refreshed in. A change made within that second is not
-    /// seen here; a change to indexed metadata is seen by comparing it.
+    /// last completed refresh began observing in.
+    ///
+    /// That time is taken before the refresh looks at anything, so a file
+    /// changed while a refresh runs is newer. This still misses a change
+    /// made in the same second the refresh began, a change that keeps or
+    /// sets back the file's modification time, and any change where the
+    /// platform reports no time; and a file whose time is in the future
+    /// reads as newer until that time passes. A change to metadata the
+    /// index stores is seen separately, by comparing it.
     fn newer_than(&self, refreshed_at: Option<i64>) -> bool {
         self.modified
             .zip(refreshed_at)
@@ -708,16 +725,50 @@ fn parse_file(
     }
 }
 
-/// The kind of item a caller's path can name, or `invalid_path`: only
-/// `docs/**/*.md` and `.manyhands/tickets/<id>/ticket.md`, written with
-/// forward slashes and with no `.`, `..` or empty component.
-fn item_path(path: &Path) -> Result<(ItemDtoKind, &str), ReadError> {
-    let text = path.to_str().ok_or_else(ReadError::invalid_path)?;
-    match canonical::item_path_kind(path) {
-        Ok(canonical::ItemKind::Document) => Ok((ItemDtoKind::Document, text)),
-        Ok(canonical::ItemKind::Ticket) => Ok((ItemDtoKind::Ticket, text)),
-        Ok(canonical::ItemKind::Comment) | Err(_) => Err(ReadError::invalid_path()),
+/// Whether the context's worktree is still a directory. Only asked when the
+/// index holds one item twice.
+fn context_exists(repo: &ResolvedRepository, context: &StoredContext) -> bool {
+    context_directory(repo, &context.worktree).is_some_and(|directory| {
+        fs::symlink_metadata(below(repo.root(), &directory))
+            .is_ok_and(|metadata| metadata.file_type().is_dir())
+    })
+}
+
+/// One row for each item, and whether the index held any item more than
+/// once.
+///
+/// A refresh stores the root, each item worktree and the removal of
+/// worktrees that are gone in separate transactions, so a read can find an
+/// item both in the primary context and in the row of a worktree that no
+/// longer exists, or the reverse. Then the item worktree's row is the
+/// effective one if its worktree is still there, and otherwise the primary
+/// one; and the index, which is in the middle of changing, is behind.
+fn effective_rows<'a>(
+    repo: &ResolvedRepository,
+    stored: &'a [StoredItem],
+) -> (Vec<&'a StoredItem>, bool) {
+    let mut by_id: BTreeMap<&str, Vec<&StoredItem>> = BTreeMap::new();
+    for item in stored {
+        by_id.entry(&item.id).or_default().push(item);
     }
+    let mut duplicated = false;
+    let rows = by_id
+        .into_values()
+        .map(|rows| {
+            if rows.len() == 1 {
+                return rows[0];
+            }
+            duplicated = true;
+            let is_active = |row: &&&StoredItem| row.context.kind == ItemContextKind::Active;
+            rows.iter()
+                .filter(is_active)
+                .find(|row| context_exists(repo, &row.context))
+                .or_else(|| rows.iter().find(|row| !is_active(row)))
+                .copied()
+                .unwrap_or(rows[0])
+        })
+        .collect();
+    (rows, duplicated)
 }
 
 impl RepositoryService {
@@ -755,9 +806,11 @@ impl RepositoryService {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
             let problems = stored_problems(connection, repo)?;
+            let (rows, duplicated) = effective_rows(repo, &stored);
+            let index = if duplicated { behind(&index) } else { index };
 
-            let mut listed: Vec<&StoredItem> = stored
-                .iter()
+            let mut listed: Vec<&StoredItem> = rows
+                .into_iter()
                 .filter(|item| item.kind == kind)
                 .filter(|item| filter.is_none_or(|filter| filter.matches(item)))
                 .collect();
@@ -814,25 +867,51 @@ impl RepositoryService {
     /// `index.state` is `stale`. A file that is gone, is no longer a
     /// regular file or now holds another item is `item_not_found`, with a
     /// refresh as the recovery. A file that no longer parses is returned in
-    /// the nonconforming form with its source.
+    /// the nonconforming form with its source. A file that cannot be opened
+    /// is `repository_inaccessible`.
+    ///
+    /// When the index holds the item in more than one context, which it can
+    /// while a refresh is under way, the item worktree's copy is read if it
+    /// is still there, otherwise the primary copy, and the index is `stale`.
     pub fn show_item(&self, repo: &ResolvedRepository, id: &ItemId) -> Result<ItemDto, ReadError> {
         let id = id.to_string();
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let mut rows = stored.iter().filter(|item| item.id == id);
-            let row = match (rows.next(), rows.next()) {
-                (Some(row), None) => row,
-                // A refresh can only find the item if the index is behind.
-                (None, _) => return Err(item_not_found(repo, index.state != IndexState::Current)),
-                // The index holds one row for each item.
-                (Some(_), Some(_)) => return Err(invalid_stored_data()),
+            let mut rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
+            // A refresh can only find the item if the index is behind.
+            if rows.is_empty() {
+                return Err(item_not_found(repo, index.state != IndexState::Current));
+            }
+            let index = if rows.len() > 1 {
+                behind(&index)
+            } else {
+                index
             };
-            let file = match read_item_file(repo, &row.context.worktree, &row.path)? {
-                ItemFileRead::Found(file) => file,
-                ItemFileRead::Missing | ItemFileRead::NotAFile => {
-                    return Err(item_not_found(repo, true));
+            // An item worktree's row first. The sort keeps the index's order
+            // among the rest.
+            rows.sort_by_key(|row| row.context.kind != ItemContextKind::Active);
+            let mut found = None;
+            for (position, row) in rows.iter().enumerate() {
+                let read = match canonical_item_kind(&row.path) {
+                    Some(_) => read_item_file(repo, &row.context.worktree, &row.path),
+                    None => Err(invalid_stored_data()),
+                };
+                match read {
+                    Ok(ItemFileRead::Found(file)) => {
+                        found = Some((*row, file));
+                        break;
+                    }
+                    // A row with nothing behind it gives way to the next.
+                    _ if position + 1 < rows.len() => {}
+                    Ok(ItemFileRead::Missing | ItemFileRead::NotAFile) => {
+                        return Err(item_not_found(repo, true));
+                    }
+                    Err(error) => return Err(error),
                 }
+            }
+            let Some((row, file)) = found else {
+                return Err(item_not_found(repo, true));
             };
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
@@ -856,7 +935,7 @@ impl RepositoryService {
                 // The index holds an item here, and the file is not one.
                 ParsedFile::Nonconforming { code, source } => ItemDto {
                     source,
-                    ..nonconforming_item(
+                    ..bare_item(
                         row.kind,
                         &row.path,
                         &row.context,
@@ -878,12 +957,17 @@ impl RepositoryService {
     /// The file at exactly `path`, whether or not it is an item: the way to
     /// read a nonconforming entry, which has no ID.
     ///
-    /// `path` is relative to the context and must be a canonical item path:
-    /// `docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`, with forward
-    /// slashes. Anything else is `invalid_path` and nothing is read. So is
-    /// a path that reaches the file through a symbolic link, or names
-    /// something that is not a regular file. Nothing at the path is
-    /// `path_not_found`.
+    /// `path` is relative to the context, written with forward slashes and
+    /// with no empty, `.` or `..` component, and not under
+    /// `.manyhands/worktrees`. It must be either a canonical item path,
+    /// `docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`, or the path
+    /// of a nonconforming entry the lists show for that context: one under
+    /// `docs/` or `.manyhands/tickets/` for which the index holds a
+    /// conformity problem. Anything else is `invalid_path` and nothing is
+    /// read. So is a path that reaches the file through a symbolic link, or
+    /// names something that is not a regular file. Nothing at the path is
+    /// `path_not_found`, and a file that cannot be opened is
+    /// `repository_inaccessible`.
     ///
     /// `context` is the repository root, or the worktree of one of its
     /// item contexts as the index has it; `None` is the root. Any other
@@ -905,7 +989,10 @@ impl RepositoryService {
         context: Option<&Path>,
         path: &Path,
     ) -> Result<ItemDto, ReadError> {
-        let (kind, path) = item_path(path)?;
+        let path = path
+            .to_str()
+            .filter(|path| is_plain_relative(path))
+            .ok_or_else(ReadError::invalid_path)?;
         let root = absolute_path_string(repo.root()).ok_or_else(ReadError::invalid_path)?;
         let worktree = match context {
             None => root.clone(),
@@ -924,15 +1011,32 @@ impl RepositoryService {
                     context
                 }
                 Some(_) => return Err(ReadError::invalid_path()),
-                // The root is a context whether or not it has been observed.
+                // The root is a context whether or not it has been
+                // observed; unobserved, nothing has verified its branch.
                 None if worktree == root => StoredContext {
-                    kind: ItemContextKind::Primary,
+                    kind: ItemContextKind::Unverified,
                     branch: None,
                     worktree: root.clone(),
                     head_oid: None,
                 },
                 None => return Err(ReadError::invalid_path()),
             };
+            // What the index holds for this file in this context.
+            let here: Vec<ProblemCode> = stored_problems(connection, repo)?
+                .into_iter()
+                .filter(|problem| problem.context.worktree == worktree && problem.path == path)
+                .map(|problem| problem.code)
+                .collect();
+            // A path that is not an item's is read only when a list shows
+            // it: the same rule that makes the entry.
+            let kind = canonical_item_kind(path)
+                .or_else(|| {
+                    ItemDtoKind::ALL
+                        .into_iter()
+                        .find(|kind| path.starts_with(kind.path_prefix()))
+                        .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
+                })
+                .ok_or_else(ReadError::invalid_path)?;
             let file = match read_item_file(repo, &context.worktree, path)? {
                 ItemFileRead::Found(file) => file,
                 ItemFileRead::Missing => return Err(ReadError::new(ResultCode::PathNotFound)),
@@ -941,12 +1045,6 @@ impl RepositoryService {
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
-            // What the index holds for this file in this context.
-            let here: Vec<ProblemCode> = stored_problems(connection, repo)?
-                .into_iter()
-                .filter(|problem| problem.context.worktree == worktree && problem.path == path)
-                .map(|problem| problem.code)
-                .collect();
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
@@ -966,17 +1064,20 @@ impl RepositoryService {
                         None => {
                             // A file can parse and still not be an item of
                             // its context: another file there has its ID.
-                            if here.contains(&ProblemCode::DuplicateId) {
+                            let duplicate = here.contains(&ProblemCode::DuplicateId);
+                            if duplicate {
                                 item.problems.push(problem(ProblemCode::DuplicateId, path));
-                            } else if !stored
-                                .iter()
-                                .any(|other| Some(&other.id) == item.id.as_ref())
-                            {
-                                // No context holds this item: the index has
-                                // not seen it. Where another context does,
-                                // this is a copy that is not the effective
-                                // one, and the index is right not to list
-                                // it here.
+                            }
+                            // Otherwise, where no context holds this item
+                            // the index has not seen it. Where another
+                            // context does, this is a copy that is not the
+                            // effective one, and the index is right not to
+                            // list it here.
+                            let known = duplicate
+                                || stored
+                                    .iter()
+                                    .any(|other| Some(&other.id) == item.id.as_ref());
+                            if newer || !known {
                                 item.index = behind(&index);
                             }
                         }
@@ -986,21 +1087,15 @@ impl RepositoryService {
                 }
                 ParsedFile::Nonconforming { code, source } => {
                     // Behind unless the index already holds this problem
-                    // for this file.
-                    let index = if row.is_none() && here.contains(&code) {
+                    // for this file as it is now.
+                    let index = if row.is_none() && here.contains(&code) && !newer {
                         index.clone()
                     } else {
                         behind(&index)
                     };
                     ItemDto {
                         source,
-                        ..nonconforming_item(
-                            kind,
-                            path,
-                            &context,
-                            vec![problem(code, path)],
-                            &index,
-                        )
+                        ..bare_item(kind, path, &context, vec![problem(code, path)], &index)
                     }
                 }
             };
@@ -1013,7 +1108,8 @@ impl RepositoryService {
 /// The nonconforming entries of a list of `kind`: one for each file, in
 /// each context, that has a stored conformity problem, lies where an item
 /// of that kind lives, and is not the file of an item the index holds in
-/// that context. A file with several problems is one entry.
+/// that context. A file with several problems is one entry, and a problem
+/// stored twice is listed once.
 fn nonconforming_entries(
     kind: ItemDtoKind,
     stored: &[StoredItem],
@@ -1024,6 +1120,7 @@ fn nonconforming_entries(
     for stored_problem in problems {
         if !CONFORMITY_PROBLEMS.contains(&stored_problem.code)
             || !stored_problem.path.starts_with(kind.path_prefix())
+            || !is_plain_relative(&stored_problem.path)
             || stored.iter().any(|item| {
                 item.context.worktree == stored_problem.context.worktree
                     && item.path == stored_problem.path
@@ -1038,9 +1135,11 @@ fn nonconforming_entries(
                 if entry.path == stored_problem.path
                     && entry.context.worktree == stored_problem.context.worktree =>
             {
-                entry.problems.push(dto);
+                if !entry.problems.contains(&dto) {
+                    entry.problems.push(dto);
+                }
             }
-            _ => entries.push(nonconforming_item(
+            _ => entries.push(bare_item(
                 kind,
                 &stored_problem.path,
                 &stored_problem.context,

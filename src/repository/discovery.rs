@@ -1511,11 +1511,11 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
         transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
             .map_err(RepositoryError::sqlite)?;
     }
-    migrate_item_read_columns(&transaction)?;
     super::keys::migrate_material_schema(&transaction)?;
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
+    migrate_item_read_columns(connection)?;
     super::recovery::migrate_operation_records(connection)
 }
 
@@ -1532,65 +1532,53 @@ const ITEM_READ_COLUMNS: [(&str, &str, &str); 3] = [
 /// Rows stored before a column existed hold nothing in it, so an index that
 /// gains one here is marked as needing a refresh for every registration: it
 /// then reports itself stale instead of reporting, say, that no ticket has
-/// unknown metadata. An index that already has the columns is not touched.
-fn migrate_item_read_columns(connection: &Connection) -> Result<(), RepositoryError> {
-    let mut added = false;
-    for (table, column, definition) in ITEM_READ_COLUMNS {
-        if !column_exists(connection, table, column)? {
-            added |= add_column(connection, table, column, definition)?;
-        }
+/// unknown metadata.
+///
+/// An index that already has the columns is only read, so opening it takes
+/// no write lock. One that lacks any is migrated in a transaction that takes
+/// the write lock before it looks again: of two processes that open an old
+/// index at once, the second waits for the first, then finds the columns
+/// there and adds nothing.
+fn migrate_item_read_columns(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if missing_item_read_columns(connection)?.is_empty() {
+        return Ok(());
     }
-    if added {
-        connection
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    let missing = missing_item_read_columns(&transaction)?;
+    for (table, column, definition) in &missing {
+        transaction
+            .execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))
+            .map_err(RepositoryError::sqlite)?;
+    }
+    if !missing.is_empty() {
+        transaction
             .execute("UPDATE repositories SET refresh_required = 1", [])
             .map_err(RepositoryError::sqlite)?;
     }
-    Ok(())
+    transaction.commit().map_err(RepositoryError::sqlite)
 }
 
-fn column_exists(
+fn missing_item_read_columns(
     connection: &Connection,
-    table: &str,
-    column: &str,
-) -> Result<bool, RepositoryError> {
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
-            [table, column],
-            |row| row.get(0),
-        )
-        .map_err(RepositoryError::sqlite)
-}
-
-/// Adds `column` to `table` and reports whether this call added it.
-///
-/// Two processes that open an old index at once can both find the column
-/// missing and both try to add it. The one that loses is told the column is
-/// a duplicate, which is the state it wanted: that is `Ok(false)`, and the
-/// winner has already marked the registrations.
-fn add_column(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> Result<bool, RepositoryError> {
-    let statement = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
-    match connection.execute_batch(&statement) {
-        Ok(()) => Ok(true),
-        Err(error) if is_duplicate_column(&error) => Ok(false),
-        Err(error) => Err(RepositoryError::sqlite(error)),
+) -> Result<Vec<(&'static str, &'static str, &'static str)>, RepositoryError> {
+    let mut missing = Vec::new();
+    for (table, column, definition) in ITEM_READ_COLUMNS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                [table, column],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push((table, column, definition));
+        }
     }
-}
-
-/// SQLite has no result code for a duplicate column; its message is the
-/// only thing that tells this failure from any other.
-fn is_duplicate_column(error: &rusqlite::Error) -> bool {
-    let message = match error {
-        rusqlite::Error::SqliteFailure(_, Some(message)) => message,
-        rusqlite::Error::SqlInputError { msg, .. } => msg,
-        _ => return false,
-    };
-    message.starts_with("duplicate column name")
+    Ok(missing)
 }
 
 #[cfg(test)]
@@ -1618,32 +1606,124 @@ mod tests {
             .unwrap()
     }
 
-    // Two processes migrating one old index: this one found the column
-    // missing, and the other added it before this one's ALTER ran.
+    /// An index file from before the item read columns, with one
+    /// registration that needs no refresh.
+    fn index_without_item_read_columns(directory: &Path) -> std::path::PathBuf {
+        let path = directory.join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO repositories (root_path, enabled_at, accessibility, refresh_required)
+                 VALUES ('/repository', 1, 'accessible', 0)",
+                [],
+            )
+            .unwrap();
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            connection
+                .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                .unwrap();
+        }
+        assert_eq!(missing_item_read_columns(&connection).unwrap().len(), 3);
+        path
+    }
+
+    fn assert_item_read_columns_once_and_marked(path: &Path) {
+        let connection = open_registry(path, &mut |_| {}).unwrap();
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        let marked: bool = connection
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(marked);
+    }
+
+    // Two processes migrating one old index: the other holds the write lock
+    // and has added one column when this one, which saw all three missing,
+    // asks for it.
     #[test]
-    fn adding_a_column_another_process_just_added_succeeds_without_adding_it() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch("CREATE TABLE discovered_items (id INTEGER PRIMARY KEY)")
-            .unwrap();
-        assert!(!column_exists(&connection, "discovered_items", "closed_by").unwrap());
-        connection
-            .execute_batch("ALTER TABLE discovered_items ADD COLUMN closed_by TEXT")
+    fn a_migration_waits_for_one_in_progress_and_adds_only_what_is_still_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_columns(directory.path());
+        let first = open_registry(&path, &mut |_| {}).unwrap();
+        first
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;",
+            )
             .unwrap();
 
-        assert!(!add_column(&connection, "discovered_items", "closed_by", "TEXT").unwrap());
+        let second = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                assert_eq!(missing_item_read_columns(&connection).unwrap().len(), 3);
+                migrate_item_read_columns(&mut connection).map_err(|error| format!("{error:?}"))
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!second.is_finished(), "the second migration did not wait");
+        first.execute_batch("COMMIT").unwrap();
 
-        assert!(column_exists(&connection, "discovered_items", "closed_by").unwrap());
-        assert_eq!(
-            column_names(&connection, "discovered_items"),
-            ["id", "closed_by"]
+        second.join().unwrap().unwrap();
+        assert_item_read_columns_once_and_marked(&path);
+    }
+
+    #[test]
+    fn migrations_started_together_all_succeed() {
+        for _ in 0..8 {
+            let directory = tempfile::tempdir().unwrap();
+            let path = index_without_item_read_columns(directory.path());
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let migrations: Vec<_> = (0..4)
+                .map(|_| {
+                    let (path, barrier) = (path.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                        barrier.wait();
+                        migrate_item_read_columns(&mut connection)
+                            .map_err(|error| format!("{error:?}"))
+                    })
+                })
+                .collect();
+
+            for migration in migrations {
+                migration.join().unwrap().unwrap();
+            }
+            assert_item_read_columns_once_and_marked(&path);
+        }
+    }
+
+    #[test]
+    fn an_index_that_has_the_columns_is_opened_without_the_write_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut holder = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut holder).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        // Another writer would wait the whole busy timeout and then fail.
+        let started = std::time::Instant::now();
+
+        migrate_item_read_columns(&mut connection).unwrap();
+
+        assert!(started.elapsed() < REGISTRY_BUSY_TIMEOUT / 2);
+        assert!(
+            connection
+                .execute_batch("BEGIN IMMEDIATE")
+                .is_err_and(|error| error.sqlite_error_code()
+                    == Some(rusqlite::ErrorCode::DatabaseBusy))
         );
-        // A column that is really added says so, and any other failure is
-        // still a failure.
-        assert!(add_column(&connection, "discovered_items", "unknown_metadata", "TEXT").unwrap());
-        assert!(add_column(&connection, "absent_table", "closed_by", "TEXT").is_err());
-        assert!(add_column(&connection, "discovered_items", "other", "TEXT PRIMARY KEY").is_err());
-        assert!(!column_exists(&connection, "discovered_items", "other").unwrap());
     }
 
     #[test]

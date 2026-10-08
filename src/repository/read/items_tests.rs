@@ -66,7 +66,7 @@ fn observation_token_changes_with_the_branch_the_path_and_the_source() {
 #[test]
 fn only_document_and_ticket_paths_name_an_item_file() {
     let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    let kind = |path: &str| item_path(Path::new(path)).map(|(kind, _)| kind).ok();
+    let kind = canonical_item_kind;
 
     assert_eq!(kind("docs/a.md"), Some(ItemDtoKind::Document));
     assert_eq!(kind("docs/a/b/c.md"), Some(ItemDtoKind::Document));
@@ -108,37 +108,79 @@ fn context(worktree: &str) -> StoredContext {
 }
 
 fn index() -> IndexStateDto {
-    index_state(false, Some(0))
+    index_state(false, Some(0), true)
 }
 
 #[test]
-fn the_index_state_is_never_refreshed_until_a_refresh_time_is_stored() {
-    for (refresh_required, refreshed_at, state) in [
-        (true, None, IndexState::NeverRefreshed),
-        (false, None, IndexState::NeverRefreshed),
-        (true, Some(0), IndexState::Stale),
-        (false, Some(0), IndexState::Current),
+fn the_index_state_is_never_refreshed_only_when_nothing_was_ever_stored() {
+    for (refresh_required, refreshed_at, has_contexts, state) in [
+        (true, None, false, IndexState::NeverRefreshed),
+        (false, None, false, IndexState::NeverRefreshed),
+        // Written before refresh times were recorded: rows, and no time.
+        (true, None, true, IndexState::Stale),
+        (false, None, true, IndexState::Stale),
+        (true, Some(0), true, IndexState::Stale),
+        (false, Some(0), true, IndexState::Current),
+        (true, Some(0), false, IndexState::Stale),
+        (false, Some(0), false, IndexState::Current),
     ] {
-        let index = index_state(refresh_required, refreshed_at);
-        assert_eq!(index.state, state);
+        let index = index_state(refresh_required, refreshed_at, has_contexts);
+        assert_eq!(
+            index.state, state,
+            "{refresh_required} {refreshed_at:?} {has_contexts}"
+        );
         assert_eq!(index.refreshed_at.is_some(), refreshed_at.is_some());
     }
     assert_eq!(
-        index_state(false, Some(1_700_000_000))
+        index_state(false, Some(1_700_000_000), true)
             .refreshed_at
             .as_deref(),
         Some("2023-11-14T22:13:20Z")
     );
     // Only a current index becomes stale; what is worse stays what it is.
     assert_eq!(
-        behind(&index_state(false, Some(0))).state,
+        behind(&index_state(false, Some(0), true)).state,
         IndexState::Stale
     );
-    assert_eq!(behind(&index_state(true, Some(0))).state, IndexState::Stale);
     assert_eq!(
-        behind(&index_state(true, None)).state,
+        behind(&index_state(true, Some(0), true)).state,
+        IndexState::Stale
+    );
+    assert_eq!(
+        behind(&index_state(true, None, false)).state,
         IndexState::NeverRefreshed
     );
+}
+
+#[test]
+fn a_plain_relative_path_has_only_normal_components_outside_the_worktrees() {
+    for path in [
+        "docs/a.md",
+        "a",
+        ".manyhands/tickets/not-an-id/ticket.md",
+        ".manyhands/worktreesx/a",
+        ".git/config",
+    ] {
+        assert!(is_plain_relative(path), "{path:?}");
+    }
+    for path in [
+        "",
+        "/",
+        "/docs/a.md",
+        "docs//a.md",
+        "docs/a.md/",
+        "./docs/a.md",
+        "docs/./a.md",
+        "..",
+        "../a.md",
+        "docs/../a.md",
+        "docs/..",
+        "docs\\a.md",
+        ".manyhands/worktrees",
+        ".manyhands/worktrees/x/docs/a.md",
+    ] {
+        assert!(!is_plain_relative(path), "{path:?}");
+    }
 }
 
 #[test]
@@ -191,6 +233,8 @@ fn nonconforming_entries_need_a_conformity_code_at_an_item_path_with_no_item() {
     let problems = [
         stored_problem("/r", "docs/a.md", ProblemCode::MissingField),
         stored_problem("/r", "docs/a.md", ProblemCode::InvalidField),
+        // Stored twice, listed once.
+        stored_problem("/r", "docs/a.md", ProblemCode::MissingField),
         stored_problem("/r", "docs/listed.md", ProblemCode::DuplicateId),
         stored_problem("/r", "docs/source.md", ProblemCode::SourceUnreadable),
         stored_problem("/r", "docs/unknown.md", ProblemCode::UnknownProblem),
