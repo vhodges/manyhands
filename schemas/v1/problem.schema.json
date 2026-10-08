@@ -32,6 +32,7 @@
         "path_not_utf8",
         "metadata_not_representable",
         "relationship_not_a_ticket",
+        "parent_cycle",
         "unknown_problem"
       ]
     },
@@ -39,7 +40,7 @@
       "type": ["string", "null"]
     },
     "target_id": {
-      "description": "The item ID a problem with a ticket's deps or parent is about. Null for every other problem.",
+      "description": "The item ID a problem with a ticket's deps or parent is about: for parent_cycle, the parent. Null for every other problem.",
       "type": ["string", "null"]
     },
     "guidance": {

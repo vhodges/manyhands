@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 reason a ticket is blocked",
+  "description": "ids is the dependency for open_dependency and unresolved_dependency. For dependency_cycle it is the lowest IDs of the cycle, at most sixteen, and complete is false when the cycle has more.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["code", "ids"],
+  "required": ["code", "ids", "complete"],
   "properties": {
     "code": {
       "type": "string",
@@ -14,6 +15,9 @@
       "items": {
         "type": "string"
       }
+    },
+    "complete": {
+      "type": "boolean"
     }
   }
 }

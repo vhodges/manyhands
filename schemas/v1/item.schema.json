@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 document or ticket",
-  "description": "A nonconforming entry has a null id and null metadata. In a list, body, source and observation are null. A ticket's slug, parent and deps are its own fields and are not repeated in unknown_metadata.",
+  "description": "A nonconforming entry has a null id and null metadata. In a list, body, source and observation are null. A ticket's slug, parent and deps are its own fields and are not repeated in unknown_metadata. readiness is null for a document and for a nonconforming entry.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -96,6 +96,7 @@
       }
     },
     "readiness": {
+      "description": "closed for a ticket with closure metadata. An open ticket is ready when every dependency is a closed ticket and it is on no dependency cycle, and blocked otherwise. reasons is empty unless it is blocked.",
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["state", "reasons"],

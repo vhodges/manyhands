@@ -33,6 +33,7 @@
         "path_not_utf8",
         "metadata_not_representable",
         "relationship_not_a_ticket",
+        "parent_cycle",
         "unknown_problem"
       ]
     },

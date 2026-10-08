@@ -28,7 +28,10 @@
     "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC1/ticket.md",
     "problems": [],
     "project": null,
-    "readiness": null,
+    "readiness": {
+      "reasons": [],
+      "state": "closed"
+    },
     "slug": null,
     "source": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC1\ntitle: Closed ticket\ntype: bug\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\nclosed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of Closed ticket.\n",
     "status": "done",

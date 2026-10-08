@@ -1,4 +1,5 @@
 use super::*;
+use crate::repository::read::{ReadinessDto, ReadinessReasonCode, ReadinessReasonDto};
 
 fn digest(input: &[u8]) -> String {
     format!("v1:{}", blake3::hash(input).to_hex())
@@ -98,6 +99,11 @@ fn only_document_and_ticket_paths_name_an_item_file() {
     }
 }
 
+/// A graph of no tickets, for a filter that does not ask about readiness.
+fn no_graph() -> TicketGraph {
+    TicketGraph::new(Vec::new())
+}
+
 fn context(worktree: &str) -> StoredContext {
     StoredContext {
         kind: ItemContextKind::Primary,
@@ -193,7 +199,7 @@ fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
             "docs/a.md",
             &context("/r"),
             &index(),
-            &Targets::of(&[], &[]),
+            &Related::of(&[], &[]),
         )
     };
 
@@ -335,24 +341,28 @@ fn ticket_filters_compare_whole_values_and_closure_reads_only_closed_at() {
     let says_closed = ticket("closed", None);
     let is_closed = ticket("open", Some(1));
 
-    assert!(closure(ClosureFilter::Open).matches(&says_closed));
-    assert!(!closure(ClosureFilter::Closed).matches(&says_closed));
-    assert!(closure(ClosureFilter::Closed).matches(&is_closed));
-    assert!(!closure(ClosureFilter::Open).matches(&is_closed));
-    assert!(closure(ClosureFilter::All).matches(&says_closed));
-    assert!(closure(ClosureFilter::All).matches(&is_closed));
+    assert!(closure(ClosureFilter::Open).matches(&says_closed, &no_graph()));
+    assert!(!closure(ClosureFilter::Closed).matches(&says_closed, &no_graph()));
+    assert!(closure(ClosureFilter::Closed).matches(&is_closed, &no_graph()));
+    assert!(!closure(ClosureFilter::Open).matches(&is_closed, &no_graph()));
+    assert!(closure(ClosureFilter::All).matches(&says_closed, &no_graph()));
+    assert!(closure(ClosureFilter::All).matches(&is_closed, &no_graph()));
     // A filter on a field the ticket does not have matches nothing.
     let by_project = TicketFilter {
         project: text("alpha"),
         ..Default::default()
     };
-    assert!(!by_project.matches(&is_closed));
+    assert!(!by_project.matches(&is_closed, &no_graph()));
     for (status, matches) in [("open", true), ("Open", false), ("ope", false), ("", false)] {
         let filter = TicketFilter {
             status: text(status),
             ..Default::default()
         };
-        assert_eq!(filter.matches(&is_closed), matches, "{status:?}");
+        assert_eq!(
+            filter.matches(&is_closed, &no_graph()),
+            matches,
+            "{status:?}"
+        );
     }
 }
 
@@ -405,7 +415,7 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
     ];
     // An ID that is both an item's and a comment's is the item's.
     let comments = [COMMENT.to_owned(), CLOSED.to_owned()];
-    let targets = Targets::of(&rows.iter().collect::<Vec<_>>(), &comments);
+    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &comments);
     let dependency = |id: &str, state| DependencyDto {
         id: id.to_owned(),
         state,
@@ -433,7 +443,7 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
         ..stored(SELF, ItemDtoKind::Ticket, None)
     };
 
-    let dto = stored_item_dto(&ticket, &targets, &index());
+    let dto = stored_item_dto(&ticket, &related, &index());
 
     assert_eq!(dto.slug.as_deref(), Some("mh-vh-k9x2b"));
     // A parent no context holds is still the parent, and says so.
@@ -450,7 +460,27 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
             dependency(OPEN, DependencyState::Open),
         ]
     );
-    assert_eq!(dto.readiness, None);
+    // Blocked by what is unresolved and by what is open, in the file's
+    // order; the closed ticket, the document and the comment block nothing.
+    let reason = |code, id: &str| ReadinessReasonDto {
+        code,
+        ids: vec![id.to_owned()],
+        complete: true,
+    };
+    let with_ticket = Related::of(&rows.iter().chain([&ticket]).collect::<Vec<_>>(), &comments);
+    assert_eq!(
+        stored_item_dto(&ticket, &with_ticket, &index()).readiness,
+        Some(ReadinessDto {
+            state: ReadinessState::Blocked,
+            reasons: vec![
+                reason(ReadinessReasonCode::UnresolvedDependency, ABSENT),
+                reason(ReadinessReasonCode::OpenDependency, OPEN),
+            ],
+        })
+    );
+    // A document has no readiness, whatever its ID is to a ticket.
+    let document = stored_item_dto(&rows[2], &related, &index());
+    assert_eq!(document.readiness, None);
     // The item's own problems first. Problems alike in every way are one;
     // problems about different IDs are not.
     assert_eq!(
@@ -479,7 +509,7 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
             },
             ..stored(SELF, ItemDtoKind::Ticket, None)
         };
-        let dto = stored_item_dto(&child, &targets, &index());
+        let dto = stored_item_dto(&child, &related, &index());
         assert_eq!(dto.parent, state.map(|state| dependency(parent, state)));
         let expected = match state {
             Some(_) => Vec::new(),
@@ -513,10 +543,14 @@ fn the_slug_filter_matches_the_whole_short_code_without_regard_to_case() {
         ("k9x2b", false),
         ("", false),
     ] {
-        assert_eq!(by_slug(slug).matches(&with_slug), matches, "{slug:?}");
-        assert!(!by_slug(slug).matches(&without), "{slug:?}");
+        assert_eq!(
+            by_slug(slug).matches(&with_slug, &no_graph()),
+            matches,
+            "{slug:?}"
+        );
+        assert!(!by_slug(slug).matches(&without, &no_graph()), "{slug:?}");
     }
-    assert!(TicketFilter::default().matches(&without));
+    assert!(TicketFilter::default().matches(&without, &no_graph()));
 }
 
 #[test]
@@ -531,4 +565,140 @@ fn each_relationship_problem_is_stored_under_its_registry_string() {
         registered
     });
     assert_eq!(codes, RELATIONSHIP_PROBLEMS);
+}
+
+fn related_to(id: &str, parent: Option<&str>, deps: &[&str], closed_at: Option<i64>) -> StoredItem {
+    StoredItem {
+        relationships: Relationships {
+            parent: parent.map(str::to_owned),
+            deps: deps.iter().map(|id| (*id).to_owned()).collect(),
+            ..Default::default()
+        },
+        ..stored(id, ItemDtoKind::Ticket, closed_at)
+    }
+}
+
+#[test]
+fn the_readiness_filter_keeps_ready_or_blocked_tickets_and_never_a_closed_one() {
+    let rows = [
+        related_to(SELF, None, &[CLOSED], None),
+        related_to(OPEN, None, &[SELF], None),
+        related_to(CLOSED, None, &[ABSENT], Some(1)),
+        // A document's ID blocks nothing and is ready for nothing.
+        stored(DOCUMENT, ItemDtoKind::Document, None),
+    ];
+    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let kept = |readiness| {
+        let filter = TicketFilter {
+            readiness,
+            ..Default::default()
+        };
+        rows.iter()
+            .filter(|row| filter.matches(row, &related.graph))
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(kept(None), [SELF, OPEN, CLOSED, DOCUMENT]);
+    assert_eq!(kept(Some(ReadinessFilter::Ready)), [SELF]);
+    assert_eq!(kept(Some(ReadinessFilter::Blocked)), [OPEN]);
+    let state = |row: &StoredItem| {
+        stored_item_dto(row, &related, &index())
+            .readiness
+            .map(|readiness| (readiness.state, readiness.reasons.len()))
+    };
+    assert_eq!(state(&rows[0]), Some((ReadinessState::Ready, 0)));
+    assert_eq!(state(&rows[1]), Some((ReadinessState::Blocked, 1)));
+    // Closed, though what it depends on is no ticket at all.
+    assert_eq!(state(&rows[2]), Some((ReadinessState::Closed, 0)));
+    assert_eq!(state(&rows[3]), None);
+}
+
+#[test]
+fn a_ticket_on_a_parent_cycle_keeps_its_parent_and_says_so() {
+    let rows = [
+        related_to(SELF, Some(OPEN), &[], None),
+        related_to(OPEN, Some(SELF), &[], None),
+        // Under the cycle, not on it.
+        related_to(CLOSED, Some(SELF), &[], Some(1)),
+    ];
+    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let dto = |row: &StoredItem| stored_item_dto(row, &related, &index());
+
+    for (row, parent) in [(&rows[0], OPEN), (&rows[1], SELF)] {
+        let dto = dto(row);
+        assert_eq!(dto.parent.map(|parent| parent.id).as_deref(), Some(parent));
+        assert_eq!(
+            dto.problems,
+            [about(ProblemCode::ParentCycle, Some(parent))]
+        );
+        // A parent never blocks.
+        assert_eq!(
+            dto.readiness.map(|readiness| readiness.state),
+            Some(ReadinessState::Ready)
+        );
+    }
+    assert_eq!(dto(&rows[2]).problems, []);
+}
+
+#[test]
+fn a_file_decides_its_own_readiness_against_what_the_index_holds_of_the_rest() {
+    // The index holds SELF as depending on nothing, and OPEN on SELF.
+    let rows = [
+        related_to(SELF, None, &[], None),
+        related_to(OPEN, None, &[SELF], None),
+        related_to(CLOSED, None, &[], Some(1)),
+    ];
+    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let read = |front_matter: &str| {
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {SELF}\ntitle: T\n\
+             type: task\nstatus: open\n{front_matter}---\n"
+        );
+        let path = format!(".manyhands/tickets/{SELF}/ticket.md");
+        let ParsedFile::Item { dto, .. } = parse_file(
+            source.into_bytes(),
+            &path,
+            &context("/r"),
+            &index(),
+            &related,
+        ) else {
+            panic!("the file is a ticket");
+        };
+        let readiness = dto.readiness.unwrap();
+        (
+            readiness.state,
+            readiness
+                .reasons
+                .into_iter()
+                .map(|reason| (reason.code, reason.ids))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+
+    assert_eq!(read(""), (ReadinessState::Ready, vec![]));
+    assert_eq!(
+        read(&format!("deps: [{CLOSED}]\n")),
+        (ReadinessState::Ready, vec![])
+    );
+    // The file now depends on the ticket that depends on it: a cycle the
+    // index has not stored, found all the same.
+    assert_eq!(
+        read(&format!("deps: [{OPEN}]\n")),
+        (
+            ReadinessState::Blocked,
+            vec![
+                (ReadinessReasonCode::OpenDependency, ids(&[OPEN])),
+                (ReadinessReasonCode::DependencyCycle, ids(&[SELF, OPEN])),
+            ]
+        )
+    );
+    // Closed in the file: closed, whatever the index stored.
+    assert_eq!(
+        read(&format!(
+            "deps: [{OPEN}]\nclosed_at: 2026-09-30T12:34:56Z\nclosed_by: A\n"
+        )),
+        (ReadinessState::Closed, vec![])
+    );
 }

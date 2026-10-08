@@ -13,8 +13,9 @@ use std::{
 use manyhands::{
     repository::{
         ChangeSource, ClosureFilter, ClosureState, FailurePoint, IndexState, ItemContextKind,
-        ItemDto, ItemDtoKind, ItemListDto, ReadError, ReadinessFilter, RefreshOutcome,
-        RefreshRepositoryRequest, RepositoryErrorKind, RepositoryService, TicketFilter,
+        ItemDto, ItemDtoKind, ItemListDto, ReadError, ReadinessFilter, ReadinessReasonCode,
+        ReadinessState, RefreshOutcome, RefreshRepositoryRequest, RepositoryErrorKind,
+        RepositoryService, TicketFilter,
     },
     results::{Envelope, Outcome, ProblemCode, ResultCode},
 };
@@ -471,7 +472,16 @@ fn assert_list_form(item: &ItemDto) {
     assert_eq!(item.slug, None);
     assert_eq!(item.parent, None);
     assert!(item.deps.is_empty());
-    assert_eq!(item.readiness, None);
+    // A ticket that depends on nothing has no reason to wait. A document,
+    // and a file that is not an item, has no readiness at all.
+    match (&item.id, item.kind) {
+        (Some(_), ItemDtoKind::Ticket) => {
+            let readiness = item.readiness.as_ref().unwrap();
+            assert_ne!(readiness.state, ReadinessState::Blocked);
+            assert!(readiness.reasons.is_empty());
+        }
+        _ => assert_eq!(item.readiness, None),
+    }
 }
 
 #[test]
@@ -754,13 +764,22 @@ fn ticket_filters_match_exactly_and_closure_follows_lifecycle_metadata() {
             },
             vec![],
         ),
-        // Not applied until readiness is read.
+        // None of them depends on anything: the open ones are ready, the
+        // one whose status says closed among them, and the closed one is
+        // neither ready nor blocked.
+        (
+            TicketFilter {
+                readiness: Some(ReadinessFilter::Ready),
+                ..Default::default()
+            },
+            vec![TICKET_A, TICKET_B],
+        ),
         (
             TicketFilter {
                 readiness: Some(ReadinessFilter::Blocked),
                 ..Default::default()
             },
-            vec![TICKET_A, TICKET_B, TICKET_C],
+            vec![],
         ),
         // None of these tickets has a short code.
         (
@@ -3321,7 +3340,28 @@ fn lists_and_complete_reads_carry_relationships_and_keep_them_out_of_unknown_met
             dependency(ABSENT, DependencyState::Unresolved),
         ]
     );
-    assert_eq!(a.readiness, None);
+    // A waits for C, which waits for A, and for a ticket no context holds.
+    let readiness = a.readiness.as_ref().unwrap();
+    assert_eq!(readiness.state, ReadinessState::Blocked);
+    assert_eq!(
+        readiness
+            .reasons
+            .iter()
+            .map(|reason| (reason.code, reason.ids.iter().map(String::as_str).collect()))
+            .collect::<Vec<(ReadinessReasonCode, Vec<&str>)>>(),
+        [
+            (ReadinessReasonCode::OpenDependency, vec![TICKET_C]),
+            (ReadinessReasonCode::UnresolvedDependency, vec![ABSENT]),
+            (
+                ReadinessReasonCode::DependencyCycle,
+                vec![TICKET_A, TICKET_C]
+            ),
+        ]
+    );
+    assert_eq!(
+        ticket(&tickets, TICKET_B).readiness.as_ref().unwrap().state,
+        ReadinessState::Closed
+    );
     assert_eq!(
         Value::Object(a.unknown_metadata.clone()),
         json!({"other": "kept"})

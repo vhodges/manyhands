@@ -18,7 +18,9 @@ use time::OffsetDateTime;
 use super::{
     ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
     IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
-    REFRESH_INDEX_ACTION, ReadError, ResolvedRepository, index_state, root_action,
+    REFRESH_INDEX_ACTION, ReadError, ReadinessState, ResolvedRepository,
+    graph::{TicketGraph, TicketNode},
+    index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
@@ -45,8 +47,12 @@ pub enum ReadinessFilter {
 /// Which tickets `list_tickets` returns. `status`, `ticket_type` and
 /// `project` each match the whole stored value, case-sensitively; an unset
 /// filter matches every ticket. `slug` matches a ticket's whole short code
-/// without regard to ASCII case, and never a ticket that has none. The
-/// default matches all of them.
+/// without regard to ASCII case, and never a ticket that has none.
+/// `readiness` keeps the open tickets that are ready, or the ones that are
+/// blocked, and never a closed ticket. The default matches all of them.
+///
+/// A filter chooses which tickets are returned and never what a ticket
+/// depends on: readiness is decided against every ticket the index holds.
 ///
 /// A nonconforming entry has no metadata to match and is never removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -56,13 +62,12 @@ pub struct TicketFilter {
     pub project: Option<String>,
     pub closure: ClosureFilter,
     pub slug: Option<String>,
-    /// Not applied yet. It takes effect with the relationship queries
-    /// (Task 9); until then a list is the same whatever this holds.
     pub readiness: Option<ReadinessFilter>,
 }
 
 impl TicketFilter {
-    fn matches(&self, item: &StoredItem) -> bool {
+    /// `graph` is of every ticket, whatever the filter leaves out.
+    pub(super) fn matches(&self, item: &StoredItem, graph: &TicketGraph) -> bool {
         let equals = |wanted: &Option<String>, stored: &Option<String>| {
             wanted
                 .as_ref()
@@ -81,6 +86,13 @@ impl TicketFilter {
                     .slug
                     .as_ref()
                     .is_some_and(|slug| slug.eq_ignore_ascii_case(wanted))
+            })
+            && self.readiness.is_none_or(|wanted| {
+                graph.readiness_state(&item.id)
+                    == Some(match wanted {
+                        ReadinessFilter::Ready => ReadinessState::Ready,
+                        ReadinessFilter::Blocked => ReadinessState::Blocked,
+                    })
             })
     }
 }
@@ -153,18 +165,18 @@ pub(super) struct StoredItem {
     /// The row's own key in the index, which its comments are stored under.
     pub(super) row_id: i64,
     pub(super) context: StoredContext,
-    id: String,
-    kind: ItemDtoKind,
+    pub(super) id: String,
+    pub(super) kind: ItemDtoKind,
     pub(super) path: String,
-    title: String,
+    pub(super) title: String,
     ticket_type: Option<String>,
     status: Option<String>,
     project: Option<String>,
     team: Option<String>,
-    closed_at: Option<i64>,
+    pub(super) closed_at: Option<i64>,
     closed_by: Option<String>,
     unknown: UnknownMetadata,
-    relationships: Relationships,
+    pub(super) relationships: Relationships,
     activity_at: i64,
     change_source: ChangeSource,
 }
@@ -176,7 +188,7 @@ pub(super) struct StoredItem {
 /// is decided against the items the index holds, each time it is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Relationships {
-    slug: Option<String>,
+    pub(super) slug: Option<String>,
     parent: Option<String>,
     deps: Vec<String>,
     /// Each with the item ID it is about, when it is about one.
@@ -246,6 +258,68 @@ impl<'a> Targets<'a> {
             Some(Target::ClosedTicket) => Some(DependencyState::Closed),
             None => Some(DependencyState::Unresolved),
         }
+    }
+
+    /// A ticket as the graph takes it: without a `parent` or a `deps` entry
+    /// that names a document or a comment, which names no ticket.
+    fn node(&self, id: &str, closed: bool, relationships: &Relationships) -> TicketNode {
+        let names_a_ticket = |id: &&String| self.state(id).is_some();
+        TicketNode {
+            id: id.to_owned(),
+            closed,
+            parent: relationships
+                .parent
+                .as_ref()
+                .filter(names_a_ticket)
+                .cloned(),
+            deps: relationships
+                .deps
+                .iter()
+                .filter(names_a_ticket)
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// What a ticket's relationships are read against: what every ID names,
+/// and the graph of every ticket, both from the effective copy of each
+/// item the index holds.
+pub(super) struct Related<'a> {
+    targets: Targets<'a>,
+    nodes: Vec<TicketNode>,
+    pub(super) graph: TicketGraph,
+}
+
+impl<'a> Related<'a> {
+    /// `rows` holds one row for each item, its effective copy, and
+    /// `comments` the ID of every stored comment.
+    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
+        let targets = Targets::of(rows, comments);
+        let nodes: Vec<TicketNode> = rows
+            .iter()
+            .filter(|row| row.kind == ItemDtoKind::Ticket)
+            .map(|row| targets.node(&row.id, row.closed_at.is_some(), &row.relationships))
+            .collect();
+        let graph = TicketGraph::new(nodes.clone());
+        Self {
+            targets,
+            nodes,
+            graph,
+        }
+    }
+
+    /// The graph with one ticket as its file has it now, in place of what
+    /// the index stored for that ID, if it stored anything.
+    fn graph_with(&self, ticket: TicketNode) -> TicketGraph {
+        let mut nodes: Vec<TicketNode> = self
+            .nodes
+            .iter()
+            .filter(|node| node.id != ticket.id)
+            .cloned()
+            .collect();
+        nodes.push(ticket);
+        TicketGraph::new(nodes)
     }
 }
 
@@ -570,6 +644,14 @@ pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     }
 }
 
+/// Puts tickets in the ticket list ordering: content-change time, latest
+/// first, and then ID.
+pub(super) fn ticket_list_order(tickets: &mut [&StoredItem]) {
+    tickets.sort_by(|left, right| {
+        (Reverse(left.activity_at), &left.id).cmp(&(Reverse(right.activity_at), &right.id))
+    });
+}
+
 /// An item DTO that says where a file is and nothing about what it holds.
 /// This is the whole of a nonconforming entry, and what a conforming item
 /// is filled in from.
@@ -626,8 +708,8 @@ pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<Pr
         .collect()
 }
 
-/// Fills in a ticket's `slug`, `parent` and `deps`, and adds the problems
-/// of its relationship values after the ones it already has.
+/// Fills in a ticket's `slug`, `parent`, `deps` and `readiness`, and adds
+/// the problems of its relationship values after the ones it already has.
 ///
 /// The parent and each dependency say what their target is among what the
 /// index holds now: an open ticket, a closed one, or `unresolved` when no
@@ -636,9 +718,20 @@ pub(super) fn metadata_problems(unknown: &UnknownMetadata, path: &str) -> Vec<Pr
 /// reported with the ID. A problem the item already carries, about the
 /// same ID, is not repeated.
 ///
+/// `graph` holds the ticket as `relationships` has it. It gives the
+/// readiness, and `parent_cycle`, with the parent's ID, for a ticket whose
+/// `parent` links lead back to it. Such a ticket is a root, and is still
+/// shown the parent its file names. A document is no ticket of the graph
+/// and gets neither.
+///
 /// Every ID here was parsed as one, from the file or from the index, so a
 /// problem's `target_id` is never text taken from front matter.
-fn relate(dto: &mut ItemDto, relationships: &Relationships, targets: &Targets<'_>) {
+fn relate(
+    dto: &mut ItemDto,
+    relationships: &Relationships,
+    targets: &Targets<'_>,
+    graph: &TicketGraph,
+) {
     let mut problems = relationships.problems.clone();
     let mut target = |id: &String| {
         let state = targets.state(id);
@@ -653,6 +746,12 @@ fn relate(dto: &mut ItemDto, relationships: &Relationships, targets: &Targets<'_
     dto.slug = relationships.slug.clone();
     dto.parent = relationships.parent.as_ref().and_then(&mut target);
     dto.deps = relationships.deps.iter().filter_map(&mut target).collect();
+    if let Some(id) = &dto.id {
+        dto.readiness = graph.readiness(id);
+        if graph.on_parent_cycle(id) {
+            problems.push((ProblemCode::ParentCycle, relationships.parent.clone()));
+        }
+    }
     for (code, target_id) in problems {
         let problem = ProblemDto {
             target_id,
@@ -665,7 +764,11 @@ fn relate(dto: &mut ItemDto, relationships: &Relationships, targets: &Targets<'_
 }
 
 /// An item as the index stored it: the list form.
-fn stored_item_dto(item: &StoredItem, targets: &Targets<'_>, index: &IndexStateDto) -> ItemDto {
+pub(super) fn stored_item_dto(
+    item: &StoredItem,
+    related: &Related<'_>,
+    index: &IndexStateDto,
+) -> ItemDto {
     let is_ticket = item.kind == ItemDtoKind::Ticket;
     let mut dto = ItemDto {
         id: Some(item.id.clone()),
@@ -682,18 +785,27 @@ fn stored_item_dto(item: &StoredItem, targets: &Targets<'_>, index: &IndexStateD
         problems: metadata_problems(&item.unknown, &item.path),
         ..bare_item(item.kind, &item.path, &item.context, Vec::new(), index)
     };
-    relate(&mut dto, &item.relationships, targets);
+    relate(
+        &mut dto,
+        &item.relationships,
+        &related.targets,
+        &related.graph,
+    );
     dto
 }
 
 /// A parsed file as an item with no index row behind it. `None` for a
 /// comment, which is not an item.
+///
+/// A ticket's readiness is decided from its file: its own closure and
+/// dependencies as they are there, against what the index holds of every
+/// other ticket.
 fn parsed_item_dto(
     item: canonical::CanonicalItem,
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
-    targets: &Targets<'_>,
+    related: &Related<'_>,
 ) -> Option<ItemDto> {
     let (kind, id, title, unknown, body) = match &item {
         canonical::CanonicalItem::Document(document) => (
@@ -723,7 +835,13 @@ fn parsed_item_dto(
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
         let relationships = Relationships::from(&canonical::ticket_relationships(&ticket));
-        relate(&mut dto, &relationships, targets);
+        let targets = &related.targets;
+        let graph = related.graph_with(targets.node(
+            &ticket.id.to_string(),
+            ticket.closed_at.is_some(),
+            &relationships,
+        ));
+        relate(&mut dto, &relationships, targets, &graph);
         dto.closure = Some(closure(
             ticket.closed_at.and_then(timestamp_string),
             ticket.closed_by,
@@ -968,7 +1086,7 @@ fn parse_file(
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
-    targets: &Targets<'_>,
+    related: &Related<'_>,
 ) -> ParsedFile {
     let Ok(source) = String::from_utf8(bytes) else {
         return ParsedFile::Nonconforming {
@@ -979,7 +1097,7 @@ fn parse_file(
     // The problem's message can repeat the file's text; only its code is
     // kept.
     match canonical::parse_item(Path::new(path), &source) {
-        Ok(item) => match parsed_item_dto(item, path, context, index, targets) {
+        Ok(item) => match parsed_item_dto(item, path, context, index, related) {
             Some(dto) => ParsedFile::Item {
                 dto: Box::new(dto),
                 source,
@@ -1146,9 +1264,9 @@ impl RepositoryService {
     }
 
     /// The tickets `filter` matches, ordered by content-change time, latest
-    /// first, and then ID. A nonconforming entry for each file under
-    /// `.manyhands/tickets/` that is not a ticket follows them, in path
-    /// order, whatever the filter.
+    /// first, and then ID. Each says whether it is ready, blocked or closed.
+    /// A nonconforming entry for each file under `.manyhands/tickets/` that
+    /// is not a ticket follows them, in path order, whatever the filter.
     ///
     /// The list is what the index holds; `index` says how far behind the
     /// repository that is. No file is opened.
@@ -1173,19 +1291,19 @@ impl RepositoryService {
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
             let comments = stored_comment_ids(connection, repo)?;
-            let targets = Targets::of(&rows, &comments);
+            let related = Related::of(&rows, &comments);
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
                 .filter(|item| item.kind == kind)
-                .filter(|item| filter.is_none_or(|filter| filter.matches(item)))
+                .filter(|item| filter.is_none_or(|filter| filter.matches(item, &related.graph)))
                 .collect();
             let mut nonconforming = nonconforming_entries(kind, &stored, &problems, &index);
             let items = match kind {
                 ItemDtoKind::Document => {
                     let mut items: Vec<ItemDto> = listed
                         .into_iter()
-                        .map(|item| stored_item_dto(item, &targets, &index))
+                        .map(|item| stored_item_dto(item, &related, &index))
                         .chain(nonconforming)
                         .collect();
                     // A nonconforming entry has no ID and sorts before an
@@ -1200,17 +1318,14 @@ impl RepositoryService {
                     items
                 }
                 ItemDtoKind::Ticket => {
-                    listed.sort_by(|left, right| {
-                        (Reverse(left.activity_at), &left.id)
-                            .cmp(&(Reverse(right.activity_at), &right.id))
-                    });
+                    ticket_list_order(&mut listed);
                     nonconforming.sort_by(|left, right| {
                         (&left.path, &left.context.worktree)
                             .cmp(&(&right.path, &right.context.worktree))
                     });
                     listed
                         .into_iter()
-                        .map(|item| stored_item_dto(item, &targets, &index))
+                        .map(|item| stored_item_dto(item, &related, &index))
                         .chain(nonconforming)
                         .collect()
                 }
@@ -1246,13 +1361,13 @@ impl RepositoryService {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
             let comments = stored_comment_ids(connection, repo)?;
-            let targets = Targets::of(&effective_rows(repo, &stored).0, &comments);
+            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
-            let listed = stored_item_dto(row, &targets, &index);
-            let mut item = match parse_file(file.bytes, &row.path, &row.context, &index, &targets) {
+            let listed = stored_item_dto(row, &related, &index);
+            let mut item = match parse_file(file.bytes, &row.path, &row.context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
                     // Another item is now where this one was.
                     if dto.id != listed.id || dto.kind != listed.kind {
@@ -1390,14 +1505,14 @@ impl RepositoryService {
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
             let comments = stored_comment_ids(connection, repo)?;
-            let targets = Targets::of(&effective_rows(repo, &stored).0, &comments);
+            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
-            let mut item = match parse_file(file.bytes, path, &context, &index, &targets) {
+            let mut item = match parse_file(file.bytes, path, &context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
                     let mut item = *dto;
-                    match row.map(|row| stored_item_dto(row, &targets, &index)) {
+                    match row.map(|row| stored_item_dto(row, &related, &index)) {
                         Some(listed) if listed.id == item.id => {
                             if newer || !same_indexed_metadata(&item, &listed) {
                                 item.index = behind(&index);

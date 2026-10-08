@@ -27,21 +27,24 @@ mod admin;
 mod comments;
 mod credentials;
 mod dto;
+mod graph;
 mod items;
 mod resolve;
 mod status;
 
 pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
-    ConfigurationDto, ConfigurationState, DependencyDto, DependencyState, HostPinDto,
+    ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,
+    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, HostPinDto,
     HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexProblemDto, IndexState,
     IndexStateDto, IndexStatusDto, IndexStatusState, ItemContextDto, ItemContextKind, ItemDto,
     ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
     KeyPublicMetadataState, NewIdDto, OperationAction, OperationDto, OperationFamily,
-    OperationListDto, OperationNextAction, OperationScope, PollingOutcome, PollingStatusDto,
-    ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto,
-    ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
-    RepositorySummaryDto,
+    OperationListDto, OperationNextAction, OperationScope, PlanBatchDto, PlanDto, PollingOutcome,
+    PollingStatusDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
+    ReadinessReasonDto, ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto,
+    RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto,
+    UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;

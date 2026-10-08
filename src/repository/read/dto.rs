@@ -26,7 +26,8 @@ pub struct ProblemDto {
     /// The ID a problem with a ticket's `deps` or `parent` is about: the
     /// ticket's own for `relationship_self_reference`, the repeated one
     /// for `duplicate_dependency`, and the document's or comment's for
-    /// `relationship_not_a_ticket`. `None` for every other problem. It is
+    /// `relationship_not_a_ticket`, and the parent for `parent_cycle`.
+    /// `None` for every other problem. It is
     /// always a well-formed item ID and never text from the file.
     pub target_id: Option<String>,
 }
@@ -286,11 +287,15 @@ contract_enum!(
     }
 );
 
-contract_enum!(ReadinessState {
-    Ready => "ready",
-    Blocked => "blocked",
-    Closed => "closed",
-});
+contract_enum!(
+    /// Whether a ticket can be started. A closed ticket is neither ready
+    /// nor blocked.
+    ReadinessState {
+        Ready => "ready",
+        Blocked => "blocked",
+        Closed => "closed",
+    }
+);
 
 contract_enum!(
     /// Why an open ticket is blocked.
@@ -323,7 +328,8 @@ contract_enum!(
 /// Documents ordered by path and then ID; tickets by content-change time,
 /// latest first, and then ID. Nonconforming entries have no ID: among
 /// documents they sort by path with the rest, and among tickets they
-/// follow every ticket, ordered by path.
+/// follow every ticket, ordered by path. The relationship queries return
+/// tickets only, and the critical path in its own order.
 ///
 /// A list opens no file, so while a refresh is under way it may name an
 /// item worktree as the context of an item whose file there is gone, where
@@ -366,7 +372,11 @@ pub struct ItemDto {
     /// A ticket's dependencies in its file's order, each once. An entry
     /// that was ignored is not here, and `problems` says why.
     pub deps: Vec<DependencyDto>,
-    /// Null: readiness is not computed yet.
+    /// Whether a ticket can be started, decided when it is read from what
+    /// its dependencies are in the index then. In a complete read the
+    /// ticket's own closure and dependencies are its file's, so this can
+    /// differ from the list's until the index is refreshed. Null for a
+    /// document and for a nonconforming entry.
     pub readiness: Option<ReadinessDto>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
@@ -410,19 +420,33 @@ pub struct DependencyDto {
     pub state: DependencyState,
 }
 
+/// `closed` for a ticket with lifecycle closure metadata, whatever its
+/// `status` says and whatever it depends on. An open ticket is `ready` when
+/// every dependency is a closed ticket and it is on no dependency cycle,
+/// and `blocked` otherwise. `reasons` is empty unless it is `blocked`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReadinessDto {
     pub state: ReadinessState,
     pub reasons: Vec<ReadinessReasonDto>,
 }
 
-/// `ids` is the dependency for `open_dependency` and
-/// `unresolved_dependency`, and the tickets of the cycle for
-/// `dependency_cycle`.
+/// One cause of a ticket being blocked. `ids` is the dependency for
+/// `open_dependency` and `unresolved_dependency`, and the tickets of the
+/// cycle, in ID order, for `dependency_cycle`.
+///
+/// A ticket has one reason for each dependency that is an open ticket and
+/// each that no context holds a ticket for, in its file's order, and then
+/// one for the dependency cycle it is on, if it is on one.
+///
+/// A reason names at most sixteen tickets of a cycle, the lowest IDs, and
+/// `complete` is false when the cycle has more. The first is always the
+/// cycle's lowest ID, which is the first ID of that cycle where the cycles
+/// read lists it whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReadinessReasonDto {
     pub code: ReadinessReasonCode,
     pub ids: Vec<String>,
+    pub complete: bool,
 }
 
 /// As the index stored it at the last refresh. `branch` and `head_oid` are
@@ -746,4 +770,134 @@ pub struct OperationDto {
     /// Why a remote or key-material operation did not complete. Always
     /// null for a local operation, which stores no reason.
     pub failure_code: Option<OperationFailureCode>,
+}
+
+contract_enum!(
+    /// Which way a dependency tree is followed from its ticket: `down` to
+    /// the tickets it depends on, `up` to the tickets that depend on it.
+    DependencyDirection {
+        Down => "down",
+        Up => "up",
+        Both => "both",
+    }
+);
+
+contract_enum!(
+    /// The ticket field whose links form a cycle.
+    CycleKind {
+        Deps => "deps",
+        Parent => "parent",
+    }
+);
+
+contract_enum!(
+    /// Why closing tickets can never bring an open ticket's turn.
+    UnplannableReasonCode {
+        UnresolvedDependency => "unresolved_dependency",
+        UnplannableDependency => "unplannable_dependency",
+        DependencyCycle => "dependency_cycle",
+    }
+);
+
+/// The trees of what one ticket depends on and of what depends on it.
+///
+/// Each tree is written out line by line, depth first, with every ticket's
+/// neighbors in ID order. A line belongs under the nearest line before it
+/// whose `depth` is one less, and a line of depth 1 under `ticket`. The
+/// tree of a direction that was not asked for is empty.
+///
+/// A tree is not nested in the JSON so that its depth, which is as great
+/// as the longest chain of dependencies, is never the depth of a document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DependencyTreeDto {
+    /// The ticket both trees start at, at depth 0. `truncated` when
+    /// `depth` is 0 and it has edges in a direction that was asked for.
+    pub ticket: DependencyTreeNodeDto,
+    pub direction: DependencyDirection,
+    /// The limit that was asked for, and null when there was none.
+    pub depth: Option<u32>,
+    pub dependencies: Vec<DependencyTreeNodeDto>,
+    pub dependents: Vec<DependencyTreeNodeDto>,
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// One line of a dependency tree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DependencyTreeNodeDto {
+    pub id: String,
+    /// `unresolved` for a dependency no context holds a ticket for.
+    pub state: DependencyState,
+    /// The ticket's short code and title, for showing beside its ID. Both
+    /// null for an unresolved dependency.
+    pub slug: Option<String>,
+    pub title: Option<String>,
+    /// Steps from the ticket the tree starts at.
+    pub depth: u32,
+    /// The ID has another line in this tree, and its own edges are shown
+    /// there: an ID is expanded once, where it is nearest the ticket. That
+    /// line can come later than this one.
+    pub repeated: bool,
+    /// The ticket has edges that the depth limit kept out.
+    pub truncated: bool,
+}
+
+/// Dependency cycles and then parent cycles, each kind ordered by its
+/// cycles' lowest IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CycleListDto {
+    pub items: Vec<CycleDto>,
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// The tickets that can each reach itself through the others by `kind`'s
+/// links. `ids` ascend; they are a set, not a path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CycleDto {
+    pub kind: CycleKind,
+    pub ids: Vec<String>,
+}
+
+/// Every open ticket the filter matches, once: in a batch, or unplannable.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PlanDto {
+    /// In batch order. A batch the filter left empty is not listed.
+    pub batches: Vec<PlanBatchDto>,
+    /// In ID order.
+    pub unplannable: Vec<UnplannableTicketDto>,
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// Tickets that can be worked at once, in ID order. `batch` counts from 1
+/// in the plan of every ticket, whatever the filter: each ticket here has
+/// all its open dependencies in batches with a lower number.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PlanBatchDto {
+    pub batch: u64,
+    pub items: Vec<ItemDto>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnplannableTicketDto {
+    pub ticket: ItemDto,
+    /// Never empty.
+    pub reasons: Vec<UnplannableReasonDto>,
+}
+
+/// `ids` is the dependency for `unresolved_dependency` and for
+/// `unplannable_dependency`, which is an open ticket that is itself
+/// unplannable, and the tickets of the cycle for `dependency_cycle`, named
+/// as a readiness reason names them: at most sixteen, with `complete` false
+/// when the cycle has more.
+///
+/// A ticket has one reason for each such dependency, in its file's order,
+/// and then one for the dependency cycle it is on. A dependency on its own
+/// cycle is covered by the cycle and has no reason of its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UnplannableReasonDto {
+    pub code: UnplannableReasonCode,
+    pub ids: Vec<String>,
+    pub complete: bool,
 }
