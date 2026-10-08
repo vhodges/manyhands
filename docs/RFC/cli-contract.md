@@ -122,6 +122,14 @@ unchanged. A document folder target resolves in the selected item's context
 when organizing an existing item, or in the documentation tree for an empty
 folder; creation never implies publication or a placeholder-file commit.
 
+The [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#cli)
+extends this taxonomy, as amended on 2026-10-07. It adds `ticket ready`,
+`ticket blocked`, `ticket deps`, `ticket children`, `ticket cycles`,
+`ticket plan`, `ticket critical-path`, `ticket find` and
+`ticket slug-assign`, and optional relationship, initials and prefix inputs
+on existing ticket, identity and repository verbs. `--id` still takes only a
+canonical ULID; a short code is a search key and is rejected as an item ID.
+
 ## Observations, request identity and retries
 
 Show/inspect returns an opaque observation token representing the exact source,

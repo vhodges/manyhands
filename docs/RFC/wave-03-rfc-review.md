@@ -61,7 +61,7 @@ pushing or merging the planning branch.
 | W3-09 | Repair/adoption, folder creation, identity configuration, key public export and confirmation previews need an API audit. UI controls cannot manufacture safe missing domain behavior. | Technical Lead must map to existing operations or propose narrowly scoped additions in Wave 03 Cycles. |
 | W3-10 | Build CI is not proof of keyboard, IME, rich-text fidelity or end-to-end desktop use. | Product owner selected Linux-first work and confirmed early beta testers have Windows and Mac machines on 2026-10-05. Release Owner tracks specific assignments, architecture coverage and scheduling; the complete native evidence matrix remains a Wave exit requirement. |
 | W3-11 | A ticket close integrates the full context branch and can remove a worktree containing non-item files. | Effect preview must enumerate paths and preserve dirty/unexpected work; reconcile with Wave 02 closure preflight before close UI planning. |
-| W3-12 | Short-ID research is not an approved replacement for canonical ULIDs. | Keep full IDs for mutation and copy controls. Aliases need a separate collision/ambiguity contract if requested. |
+| W3-12 | Short-ID research is not an approved replacement for canonical ULIDs. | Keep full IDs for mutation and copy controls. On 2026-10-07 the product owner requested a human short code; the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md) is its collision/ambiguity contract. It is a search key, not an identity or a mutation selector. |
 
 Approval resolves the design decisions above. Editor dependency selection,
 transport shutdown feasibility, the Wave 02 API audit and native evidence

@@ -226,6 +226,11 @@ must reconcile Git/canonical state; cache loss that prevents safe replay returns
 recovery-required rather than silently repeating an effect. These records do
 not replace the repository lease or make SQLite authoritative.
 
+Item discovery also records each ticket's short code and readiness, and the
+index holds relationship edge records, as defined by the
+[ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#index).
+They are rebuilt from canonical files on refresh and rebuild.
+
 ## Wave 1 Acceptance
 
 Wave 1 persistence work is complete when real temporary repositories show that:
