@@ -384,11 +384,8 @@ impl RepositoryService {
 /// Lowers the connection's limit on attached databases to none, so neither
 /// `ATTACH` nor `VACUUM INTO` can open a file beside the index.
 fn forbid_attached_databases(connection: &Connection) {
-    // SAFETY: the handle is this open connection's, used only for the call,
-    // and `sqlite3_limit` only stores a per-connection integer.
-    unsafe {
-        rusqlite::ffi::sqlite3_limit(connection.handle(), rusqlite::ffi::SQLITE_LIMIT_ATTACHED, 0);
-    }
+    // The return value is the previous limit, which is of no use here.
+    let _ = connection.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 0);
 }
 
 #[cfg(test)]
