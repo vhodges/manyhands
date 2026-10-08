@@ -33,6 +33,20 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: None within Wave 03.
 
+## Added Scope (2026-10-07)
+
+Ticket relationships and short codes, per the
+[RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
+rebased onto main.
+
+Ticket DTOs carry `slug`, `parent`, `deps`, readiness and relationship
+problems. Read services cover ready, blocked, dependencies in both directions,
+children, cycles, plan, critical path and find by short code, over index edge
+records rebuilt from canonical files. Exit evidence adds: these queries proven
+across primary and active worktrees with an unresolved dependency, a merged-in
+cycle and a duplicate short code, each reported and none repaired.
+
 ## Exit Evidence
 
 Library integration tests against real repositories cover
