@@ -68,7 +68,7 @@ fn repository_error_kinds_map_to_pinned_codes() {
             kind,
             "unused",
         ));
-        assert_eq!(error.code, code, "{kind:?}");
+        assert_eq!(error.code(), code, "{kind:?}");
     }
 }
 
@@ -98,7 +98,7 @@ fn key_material_error_kinds_map_to_pinned_codes() {
             operation_id: None,
             kind,
         });
-        assert_eq!(error.code, code, "{kind:?}");
+        assert_eq!(error.code(), code, "{kind:?}");
         assert!(error.source().is_some());
     }
 }
@@ -120,7 +120,7 @@ fn ssh_transport_error_kinds_are_internal() {
             "{kind:?}"
         );
         let error = ReadError::from(kind);
-        assert_eq!(error.code, ResultCode::InternalError);
+        assert_eq!(error.code(), ResultCode::InternalError);
         assert!(error.source().is_none());
     }
 }
@@ -141,25 +141,32 @@ const VALIDATION_CODES: [canonical::ValidationCode; 12] = [
 ];
 
 #[test]
-fn validation_problems_map_to_pinned_codes() {
-    for code in VALIDATION_CODES {
-        let expected = match code {
-            canonical::ValidationCode::InvalidPath => ResultCode::InvalidPath,
-            canonical::ValidationCode::InvalidField => ResultCode::InvalidId,
-            _ => ResultCode::InternalError,
-        };
-        let error = ReadError::from(canonical::ValidationProblem {
-            path: PathBuf::from(SENTINEL),
-            code: code.clone(),
-            message: SENTINEL.to_owned(),
-        });
-        assert_eq!(error.code, expected, "{code:?}");
+fn caller_input_errors_are_named_constructors_not_a_conversion() {
+    assert_eq!(ReadError::invalid_id().code(), ResultCode::InvalidId);
+    assert_eq!(ReadError::invalid_path().code(), ResultCode::InvalidPath);
+    for error in [ReadError::invalid_id(), ReadError::invalid_path()] {
         assert!(error.source().is_none());
-        assert!(!serialized(&error).contains(SENTINEL));
+        assert!(error.recovery.is_empty());
+        assert_eq!(error.scope, Scope::default());
     }
+}
 
-    let problem = "not a ulid".parse::<canonical::ItemId>().unwrap_err();
-    assert_eq!(ReadError::from(problem).code, ResultCode::InvalidId);
+#[test]
+fn a_read_error_cannot_carry_the_ok_code() {
+    assert_eq!(failure_code(ResultCode::Ok), ResultCode::InternalError);
+    for code in ResultCode::ALL {
+        if code != ResultCode::Ok {
+            assert_eq!(failure_code(code), code);
+            assert_eq!(ReadError::new(code).code(), code);
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a read error cannot carry the ok code")]
+fn constructing_a_read_error_with_the_ok_code_is_caught_in_debug_builds() {
+    let _ = ReadError::new(ResultCode::Ok);
 }
 
 #[test]
@@ -227,7 +234,7 @@ fn a_read_error_never_shows_what_the_repository_error_carried() {
     ] {
         let error = ReadError::from(repository_error);
 
-        assert_eq!(error.code, code);
+        assert_eq!(error.code(), code);
         assert_eq!(error.to_string(), code.message());
         assert!(!format!("{error:?}").contains(SENTINEL));
         assert!(!serialized(&error).contains(SENTINEL));
@@ -260,19 +267,40 @@ fn a_read_error_becomes_a_failure_envelope_with_its_scope_and_recovery() {
 }
 
 #[test]
-fn index_connection_failures_keep_their_sqlite_meaning() {
+fn a_sqlite_failure_maps_the_same_way_raw_or_wrapped() {
     let failure = |code| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
     for (sqlite, code) in [
         (rusqlite::ffi::SQLITE_BUSY, ResultCode::Busy),
         (rusqlite::ffi::SQLITE_LOCKED, ResultCode::Busy),
         (rusqlite::ffi::SQLITE_NOTADB, ResultCode::IndexUnavailable),
         (rusqlite::ffi::SQLITE_CORRUPT, ResultCode::IndexUnavailable),
+        (rusqlite::ffi::SQLITE_CANTOPEN, ResultCode::IndexUnavailable),
         (rusqlite::ffi::SQLITE_READONLY, ResultCode::InternalError),
     ] {
-        assert_eq!(ReadError::from(failure(sqlite)).code, code, "{sqlite}");
+        let raw = ReadError::from(failure(sqlite));
+        let wrapped = ReadError::from(RepositoryError::sqlite(failure(sqlite)));
+
+        assert_eq!(raw.code(), code, "{sqlite}");
+        assert_eq!(wrapped.code(), code, "{sqlite}");
+        assert_eq!(raw.recovery, wrapped.recovery, "{sqlite}");
+        assert_eq!(
+            raw.recovery.len(),
+            usize::from(code == ResultCode::IndexUnavailable)
+        );
     }
+    // Only the `Sqlite` kind is read through its source.
+    let other_kind = RepositoryError::with_source(
+        RepositoryOperation::Read,
+        None,
+        RepositoryErrorKind::Io,
+        failure(rusqlite::ffi::SQLITE_NOTADB),
+    );
     assert_eq!(
-        ReadError::from(rusqlite::Error::QueryReturnedNoRows).code,
+        ReadError::from(other_kind).code(),
+        ResultCode::InternalError
+    );
+    assert_eq!(
+        ReadError::from(rusqlite::Error::QueryReturnedNoRows).code(),
         ResultCode::InternalError
     );
 }

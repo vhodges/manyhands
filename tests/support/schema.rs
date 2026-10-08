@@ -1,8 +1,9 @@
 //! A JSON Schema checker for the keyword subset the published schemas use:
 //! `type` (a name or an array of names), `properties`, `required`,
 //! `additionalProperties` (boolean), `items`, `enum`, and `$ref` to a
-//! sibling file. Any other keyword is an error, so a schema cannot rely on a
-//! constraint this checker does not enforce.
+//! sibling file. The annotations `$schema`, `$id`, `title` and `description`
+//! are accepted and ignored. Any other keyword is an error, so a schema
+//! cannot rely on a constraint this checker does not enforce.
 
 use std::{
     collections::BTreeSet,
@@ -15,6 +16,9 @@ use serde_json::Value;
 const TYPES: [&str; 7] = [
     "object", "array", "string", "integer", "number", "boolean", "null",
 ];
+
+/// Keywords that say what a schema is and constrain nothing.
+const ANNOTATIONS: [&str; 4] = ["$schema", "$id", "title", "description"];
 
 /// The published JSON v1 schemas.
 pub fn schema_directory() -> PathBuf {
@@ -30,8 +34,14 @@ pub fn check_published(file: &str, instance: &Value) -> Result<(), String> {
 /// it refers to, is first checked to use only the supported keywords, whether
 /// or not `instance` reaches them.
 pub fn check(directory: &Path, file: &str, instance: &Value) -> Result<(), String> {
-    validate_schema_file(directory, file, &mut BTreeSet::new())?;
+    validate(directory, file)?;
     check_node(directory, &load(directory, file)?, instance, "$")
+}
+
+/// Checks that `directory/file`, and every schema it refers to, uses only
+/// the supported keywords, each in a form this checker enforces.
+pub fn validate(directory: &Path, file: &str) -> Result<(), String> {
+    validate_schema_file(directory, file, &mut BTreeSet::new())
 }
 
 fn load(directory: &Path, file: &str) -> Result<Value, String> {
@@ -60,15 +70,36 @@ fn validate_schema(
     let Some(keywords) = schema.as_object() else {
         return Err(format!("{location}: a schema must be an object"));
     };
+    for annotation in ANNOTATIONS {
+        if keywords
+            .get(annotation)
+            .is_some_and(|text| !text.is_string())
+        {
+            return Err(format!("{location}/{annotation}: expected a string"));
+        }
+    }
     if let Some(reference) = keywords.get("$ref") {
-        if keywords.len() != 1 {
+        if keywords
+            .keys()
+            .any(|keyword| keyword != "$ref" && !ANNOTATIONS.contains(&keyword.as_str()))
+        {
             return Err(format!("{location}: $ref must be the only keyword"));
         }
         return validate_schema_file(directory, sibling(reference, location)?, visited);
     }
+
+    // A keyword that applies to one type is refused where the schema's own
+    // `type` rules that type out: it would constrain nothing.
+    let allows = |name: &str| match keywords.get("type") {
+        Some(Value::Array(names)) => names.iter().any(|allowed| allowed == name),
+        Some(allowed) => allowed == name,
+        None => true,
+    };
+    let properties = keywords.get("properties").and_then(Value::as_object);
     for (keyword, value) in keywords {
         let location = format!("{location}/{keyword}");
         match keyword.as_str() {
+            keyword if ANNOTATIONS.contains(&keyword) => {}
             "type" => {
                 let names = match value {
                     Value::String(_) => std::slice::from_ref(value),
@@ -81,6 +112,12 @@ fn validate_schema(
                     }
                 }
             }
+            "properties" | "required" | "additionalProperties" if !allows("object") => {
+                return Err(format!("{location}: the type cannot be an object"));
+            }
+            "items" if !allows("array") => {
+                return Err(format!("{location}: the type cannot be an array"));
+            }
             "properties" => {
                 let Some(properties) = value.as_object() else {
                     return Err(format!("{location}: expected an object"));
@@ -90,11 +127,16 @@ fn validate_schema(
                 }
             }
             "required" => {
-                if !value
-                    .as_array()
-                    .is_some_and(|names| names.iter().all(Value::is_string))
-                {
+                let Some(names) = value.as_array() else {
                     return Err(format!("{location}: expected an array of names"));
+                };
+                for name in names {
+                    let Some(name) = name.as_str() else {
+                        return Err(format!("{location}: expected an array of names"));
+                    };
+                    if !properties.is_some_and(|properties| properties.contains_key(name)) {
+                        return Err(format!("{location}: {name:?} is not a property"));
+                    }
                 }
             }
             "additionalProperties" => {
@@ -147,7 +189,7 @@ fn check_node(
         }
     }
     if let Some(values) = schema.get("enum").and_then(Value::as_array)
-        && !values.contains(instance)
+        && !values.iter().any(|value| same_value(value, instance))
     {
         return Err(format!(
             "{location}: {instance} is not one of the allowed values"
@@ -185,21 +227,45 @@ fn check_node(
     Ok(())
 }
 
+/// Equality as JSON Schema has it: a number equals a number of the same
+/// value however it is written, so `1` and `1.0` are one value.
+fn same_value(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            left == right || left.as_f64() == right.as_f64()
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| same_value(left, right))
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|(key, left)| right.get(key).is_some_and(|right| same_value(left, right)))
+        }
+        _ => left == right,
+    }
+}
+
 fn has_type(instance: &Value, name: &Value) -> bool {
     match name.as_str() {
         Some("object") => instance.is_object(),
         Some("array") => instance.is_array(),
         Some("string") => instance.is_string(),
-        Some("integer") => instance.is_i64() || instance.is_u64(),
+        Some("integer") => {
+            instance.is_i64()
+                || instance.is_u64()
+                || instance
+                    .as_f64()
+                    .is_some_and(|number| number.fract() == 0.0)
+        }
         Some("number") => instance.is_number(),
         Some("boolean") => instance.is_boolean(),
         Some("null") => instance.is_null(),
         _ => false,
     }
-}
-
-/// Checks that `directory/file`, and every schema it refers to, uses only
-/// the supported keywords.
-pub fn validate(directory: &Path, file: &str) -> Result<(), String> {
-    validate_schema_file(directory, file, &mut BTreeSet::new())
 }

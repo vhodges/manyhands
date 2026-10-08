@@ -69,11 +69,17 @@ fn hold_index_lock(
 fn registered_repositories(service: &RepositoryService) -> i64 {
     service
         .read_session_for_testing(|connection| {
-            connection
-                .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
-                .unwrap()
+            connection.query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
         })
         .unwrap()
+}
+
+fn assert_rebuild_is_the_recovery(error: &manyhands::repository::ReadError) {
+    assert_eq!(error.code(), ResultCode::IndexUnavailable);
+    let envelope = error.to_envelope::<Value>("document list");
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert_eq!(envelope.recovery.len(), 1);
+    assert_eq!(envelope.recovery[0].action, "index.rebuild");
 }
 
 #[test]
@@ -107,11 +113,11 @@ fn read_session_is_busy_while_another_process_holds_the_exclusive_lock() {
     let started = Instant::now();
     let error = enabled
         .service
-        .read_session_for_testing(|_| ())
+        .read_session_for_testing(|_| Ok(()))
         .unwrap_err();
     let elapsed = started.elapsed();
 
-    assert_eq!(error.code, ResultCode::Busy);
+    assert_eq!(error.code(), ResultCode::Busy);
     assert!(elapsed < NOT_BLOCKED, "{elapsed:?}");
     assert_eq!(error.to_string(), ResultCode::Busy.message());
     assert!(error.source().is_some());
@@ -140,38 +146,74 @@ fn read_session_succeeds_while_another_process_holds_the_shared_lock() {
 }
 
 #[test]
-fn read_session_cannot_write_and_keeps_nothing() {
+fn read_session_refuses_every_write_as_read_only() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    // Each is valid against a writable index, so only the session refuses it.
     let statements = [
-        "INSERT INTO repositories DEFAULT VALUES",
+        "UPDATE repositories SET rowid = rowid",
         "DELETE FROM repositories",
         "CREATE TABLE read_boundary_probe (value INTEGER)",
-        "CREATE TEMP TABLE read_boundary_probe AS SELECT * FROM repositories",
+        "CREATE TEMP TABLE read_boundary_probe (value INTEGER)",
+        "PRAGMA user_version = 7",
     ];
+    let writable =
+        rusqlite::Connection::open(enabled.data_directory.path().join("manyhands.sqlite3"))
+            .unwrap();
+    for statement in statements {
+        let transaction = writable.unchecked_transaction().unwrap();
+        transaction.execute_batch(statement).unwrap();
+        transaction.rollback().unwrap();
+    }
+    drop(writable);
 
-    let failures = enabled
+    let refusals = enabled
         .service
         .read_session_for_testing(|connection| {
-            statements.map(|statement| connection.execute(statement, []).is_err())
+            Ok(statements.map(|statement| connection.execute_batch(statement).unwrap_err()))
         })
         .unwrap();
 
-    // A temporary table is not the index; the rest must be refused.
-    assert_eq!(failures, [true, true, true, false]);
+    for (statement, refusal) in statements.into_iter().zip(refusals) {
+        assert_eq!(
+            refusal.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly),
+            "{statement}"
+        );
+    }
     assert_eq!(registered_repositories(&enabled.service), 1);
-    enabled
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn read_session_cannot_write_a_file_after_ending_its_transaction() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let scratch = tempfile::tempdir().unwrap();
+    let copy = scratch.path().join("copy.sqlite3");
+    let attached = scratch.path().join("attached.sqlite3");
+
+    let (committed, vacuum, attach) = enabled
         .service
         .read_session_for_testing(|connection| {
-            // A new session is a new connection: nothing carried over.
-            assert!(
-                connection
-                    .prepare("SELECT * FROM read_boundary_probe")
-                    .is_err()
-            );
-            assert!(!connection.is_autocommit());
+            let committed = connection.execute_batch("COMMIT");
+            let vacuum =
+                connection.execute_batch(&format!("VACUUM INTO '{}'", copy.to_str().unwrap()));
+            let attach = connection.execute_batch(&format!(
+                "ATTACH DATABASE '{}' AS other; CREATE TABLE other.probe (value INTEGER)",
+                attached.to_str().unwrap()
+            ));
+            Ok((committed, vacuum, attach))
         })
         .unwrap();
+
+    // Ending the transaction early is not itself a write.
+    committed.unwrap();
+    assert!(vacuum.is_err());
+    assert!(attach.is_err());
+    assert!(!copy.exists());
+    assert!(!attached.exists());
+    assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
     assert_git_transport_uninitialized();
 }
 
@@ -181,13 +223,74 @@ fn read_session_reports_a_degraded_index_as_unavailable() {
     fs::write(data.path().join("manyhands.sqlite3"), b"not sqlite").unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
 
-    let error = service.read_session_for_testing(|_| ()).unwrap_err();
+    let error = service.read_session_for_testing(|_| Ok(())).unwrap_err();
 
-    assert_eq!(error.code, ResultCode::IndexUnavailable);
-    let envelope = error.to_envelope::<Value>("item list");
-    assert_eq!(envelope.outcome, Outcome::Blocked);
-    assert_eq!(envelope.recovery.len(), 1);
-    assert_eq!(envelope.recovery[0].action, "index.rebuild");
+    assert_rebuild_is_the_recovery(&error);
+    assert_git_transport_uninitialized();
+}
+
+fn index_files(enabled: &support::EnabledRepository) -> Vec<PathBuf> {
+    fs::read_dir(enabled.data_directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            name.starts_with("manyhands.sqlite3") && !name.ends_with(".lock")
+        })
+        .collect()
+}
+
+// The service opened a good index, so it does not know the index is gone:
+// the failure arrives from SQLite, wrapped by the function that opens it.
+#[test]
+fn read_session_reports_an_index_deleted_after_open_as_unavailable() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    assert_eq!(registered_repositories(&enabled.service), 1);
+    for file in index_files(&enabled) {
+        fs::remove_file(file).unwrap();
+    }
+
+    let error = enabled
+        .service
+        .read_session_for_testing(|_| Ok(()))
+        .unwrap_err();
+
+    assert_rebuild_is_the_recovery(&error);
+    assert!(index_files(&enabled).is_empty());
+    assert_git_transport_uninitialized();
+}
+
+// Here the failure arrives unwrapped, from the first statement that reads.
+#[test]
+fn read_session_reports_an_index_corrupted_after_open_as_unavailable() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    assert_eq!(registered_repositories(&enabled.service), 1);
+    for file in index_files(&enabled) {
+        fs::remove_file(file).unwrap();
+    }
+    let index = enabled.data_directory.path().join("manyhands.sqlite3");
+    fs::write(
+        &index,
+        b"not sqlite, and long enough to be read as a header",
+    )
+    .unwrap();
+
+    let error = enabled
+        .service
+        .read_session_for_testing(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM repositories", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })
+        .unwrap_err();
+
+    assert_rebuild_is_the_recovery(&error);
+    assert_eq!(
+        fs::read(&index).unwrap(),
+        b"not sqlite, and long enough to be read as a header"
+    );
     assert_git_transport_uninitialized();
 }
 

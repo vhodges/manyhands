@@ -26,6 +26,8 @@ macro_rules! contract_enum {
         }
 
         impl $name {
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $string),+

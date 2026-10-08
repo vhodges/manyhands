@@ -1,6 +1,6 @@
 {
   "code": "index_unavailable",
-  "command": "item list",
+  "command": "document list",
   "data": null,
   "effects": {
     "checkpoint": "not_requested",

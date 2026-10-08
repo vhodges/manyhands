@@ -34,19 +34,21 @@ const REBUILD_INDEX_ACTION: &str = "index.rebuild";
 /// `Display` prints only the code's fixed message. The source is kept for
 /// in-process logging by a front end and is never serialized.
 pub struct ReadError {
-    pub code: ResultCode,
+    code: ResultCode,
     pub scope: Scope,
     pub recovery: Vec<RecoveryAction>,
     source: Option<Box<dyn Error + Send + Sync>>,
 }
 
 impl ReadError {
-    /// `code` must not be `ResultCode::Ok`.
+    /// `code` must not be `ResultCode::Ok`; outside a debug build it is
+    /// replaced by `internal_error`, so a failure can never report success.
     pub fn new(code: ResultCode) -> Self {
         debug_assert!(
             code != ResultCode::Ok,
             "a read error cannot carry the ok code"
         );
+        let code = failure_code(code);
         let recovery = match code {
             ResultCode::IndexUnavailable => vec![RecoveryAction {
                 action: REBUILD_INDEX_ACTION.to_owned(),
@@ -61,6 +63,22 @@ impl ReadError {
             recovery,
             source: None,
         }
+    }
+
+    /// The caller supplied a string that is not a canonical ULID. Only for
+    /// input: an ID that fails to parse in stored content is a `ProblemDto`.
+    pub fn invalid_id() -> Self {
+        Self::new(ResultCode::InvalidId)
+    }
+
+    /// The caller supplied a path that cannot name a target. Only for
+    /// input: a bad path found in stored content is a `ProblemDto`.
+    pub fn invalid_path() -> Self {
+        Self::new(ResultCode::InvalidPath)
+    }
+
+    pub fn code(&self) -> ResultCode {
+        self.code
     }
 
     pub fn with_scope(mut self, scope: Scope) -> Self {
@@ -87,6 +105,13 @@ impl ReadError {
             self.code,
             self.recovery.clone(),
         )
+    }
+}
+
+fn failure_code(code: ResultCode) -> ResultCode {
+    match code {
+        ResultCode::Ok => ResultCode::InternalError,
+        code => code,
     }
 }
 
@@ -120,10 +145,26 @@ impl Error for ReadError {
 // Each conversion below maps by kind through a `match` with no wildcard arm,
 // so a kind added later does not compile until it is mapped. None of them
 // formats the error it converts.
+//
+// There is deliberately no conversion from `canonical::ValidationProblem`:
+// the same validation codes are raised for caller input and for stored
+// content, and only the call site knows which it parsed. Input uses
+// `ReadError::invalid_id` and `ReadError::invalid_path`.
 
 impl From<RepositoryError> for ReadError {
     fn from(error: RepositoryError) -> Self {
-        Self::new(repository_error_code(error.kind)).with_source(error)
+        // A SQLite failure means the same thing whether or not it was
+        // wrapped on its way here.
+        let sqlite = error
+            .source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<rusqlite::Error>())
+            .filter(|_| error.kind == RepositoryErrorKind::Sqlite);
+        let code = match sqlite {
+            Some(sqlite) => sqlite_error_code(sqlite),
+            None => repository_error_code(error.kind),
+        };
+        Self::new(code).with_source(error)
     }
 }
 
@@ -139,26 +180,26 @@ impl From<SshTransportErrorKind> for ReadError {
     }
 }
 
-impl From<canonical::ValidationProblem> for ReadError {
-    fn from(problem: canonical::ValidationProblem) -> Self {
-        Self::new(validation_error_code(&problem.code))
+impl From<rusqlite::Error> for ReadError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::new(sqlite_error_code(&error)).with_source(error)
     }
 }
 
-/// A failure of the read-only index connection. SQLite's own busy and
-/// corruption results keep their meaning; everything else is internal.
-impl From<rusqlite::Error> for ReadError {
-    fn from(error: rusqlite::Error) -> Self {
-        let code = match error.sqlite_error_code() {
-            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
-                ResultCode::Busy
-            }
-            Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase) => {
-                ResultCode::IndexUnavailable
-            }
-            _ => ResultCode::InternalError,
-        };
-        Self::new(code).with_source(error)
+/// A failure of the read-only index connection. SQLite's own busy result
+/// keeps its meaning; an index file that is missing, corrupt or not a
+/// database is unavailable until it is rebuilt; everything else is internal.
+fn sqlite_error_code(error: &rusqlite::Error) -> ResultCode {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            ResultCode::Busy
+        }
+        Some(
+            rusqlite::ErrorCode::DatabaseCorrupt
+            | rusqlite::ErrorCode::NotADatabase
+            | rusqlite::ErrorCode::CannotOpen,
+        ) => ResultCode::IndexUnavailable,
+        _ => ResultCode::InternalError,
     }
 }
 
@@ -271,26 +312,6 @@ fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCode {
     }
 }
 
-/// A validation problem is a read error only when it rejects what the caller
-/// supplied: an ID or a path. A problem found in content is a `ProblemDto`.
-fn validation_error_code(code: &canonical::ValidationCode) -> ResultCode {
-    match code {
-        canonical::ValidationCode::InvalidPath => ResultCode::InvalidPath,
-        // What `ItemId::from_str` reports for a string that is not a ULID.
-        canonical::ValidationCode::InvalidField => ResultCode::InvalidId,
-        canonical::ValidationCode::MissingFrontMatter
-        | canonical::ValidationCode::MalformedFrontMatter
-        | canonical::ValidationCode::MalformedConfiguration
-        | canonical::ValidationCode::MissingField
-        | canonical::ValidationCode::KindPathMismatch
-        | canonical::ValidationCode::DuplicateId
-        | canonical::ValidationCode::MissingCommentItem
-        | canonical::ValidationCode::MissingParent
-        | canonical::ValidationCode::CrossItemParent
-        | canonical::ValidationCode::CommentCycle => ResultCode::InternalError,
-    }
-}
-
 impl From<&canonical::ValidationCode> for ProblemCode {
     fn from(code: &canonical::ValidationCode) -> Self {
         match code {
@@ -329,6 +350,11 @@ impl RepositoryService {
         let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
         self.require_index_available(operation, None)?;
         let connection = open_registry_read_only(&self.registry_path)?;
+        // The read-only flag covers the index file only. These two refuse
+        // the writes it still allows: temporary tables, and a second
+        // database file, which `VACUUM INTO` would otherwise create.
+        connection.pragma_update(None, "query_only", true)?;
+        forbid_attached_databases(&connection);
         let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Deferred)?;
         let result = read(&transaction);
         // Dropping the transaction rolls it back as well; this states it.
@@ -339,9 +365,11 @@ impl RepositoryService {
     #[doc(hidden)]
     pub fn read_session_for_testing<T>(
         &self,
-        read: impl FnOnce(&Connection) -> T,
+        read: impl FnOnce(&Connection) -> Result<T, rusqlite::Error>,
     ) -> Result<T, ReadError> {
-        self.read_session(RepositoryOperation::Read, |connection| Ok(read(connection)))
+        self.read_session(RepositoryOperation::Read, |connection| {
+            Ok(read(connection)?)
+        })
     }
 
     /// A new item ID. Nothing is reserved or written; the ID becomes an item
@@ -350,6 +378,16 @@ impl RepositoryService {
         NewIdDto {
             id: canonical::ItemId::generate().to_string(),
         }
+    }
+}
+
+/// Lowers the connection's limit on attached databases to none, so neither
+/// `ATTACH` nor `VACUUM INTO` can open a file beside the index.
+fn forbid_attached_databases(connection: &Connection) {
+    // SAFETY: the handle is this open connection's, used only for the call,
+    // and `sqlite3_limit` only stores a per-connection integer.
+    unsafe {
+        rusqlite::ffi::sqlite3_limit(connection.handle(), rusqlite::ffi::SQLITE_LIMIT_ATTACHED, 0);
     }
 }
 
