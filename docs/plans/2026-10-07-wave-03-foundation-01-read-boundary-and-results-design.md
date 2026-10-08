@@ -671,6 +671,38 @@ pub fn find_tickets_by_slug(&self, repo, slug: &str) -> Result<ItemListDto, Read
 
 All results order by the ticket list ordering, then ID, unless stated.
 
+Amended 2026-10-08, after implementation and review:
+
+- **A closed dependency never blocks**, as the RFC defines ready. Readiness,
+  blocking reasons and plannability consider cycles among open tickets only
+  and follow no edge into a closed ticket. `ticket_cycles` reports cycles
+  over all tickets, closed included, and every member of one carries the
+  read-time problem `dependency_cycle` naming the cycle's lowest ID. A
+  ticket on a parent cycle carries `parent_cycle` and is nobody's child.
+- **A cycle reason names at most 16 IDs**, the lowest, with `complete: false`
+  beyond that, so output stays linear on a large cycle. `ticket_cycles`
+  lists each cycle whole, once, as an ascending set of IDs.
+- **Trees are flat.** `DependencyTreeDto` holds `dependencies` and
+  `dependents` as lines in depth-first order, each with `id`, `state`,
+  `slug`, `title`, `depth`, `repeated` and `truncated`, so JSON depth does
+  not follow chain length. An ID is expanded once, at its nearest occurrence;
+  every other occurrence is a `repeated` line. A depth-limited tree is the
+  unlimited one cut at the limit.
+- **Plan.** Batch is one more than the highest batch among a ticket's open
+  dependencies, so batch 1 is exactly the ready set. Batches and the
+  unplannable list order by ID.
+- **Critical path** is over plannable tickets only, in work order. It ends at
+  the lowest ID in the last batch and steps back to the lowest-ID dependency
+  in the batch before, so it is always a longest chain but not necessarily
+  the one with the lowest first ID. The RFC's one-line definition does not
+  state the plannable restriction.
+- **A document ID** given to the tree or children read is `item_not_found`.
+- **Complete reads** (`show_item`, `show_path`) decide the shown ticket's
+  readiness from its file against the index's graph; any difference that
+  could change it reads `stale`.
+- Nothing recurses. Cycles, plan and critical path are linear in tickets plus
+  edges.
+
 ## Published Contract
 
 ```text

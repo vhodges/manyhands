@@ -101,15 +101,16 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 8: complete; review accepted with fixes, range `fcbe353..de6f876`. The
   full gate at `de6f876` had one failing test that passes on every rerun (see
   the Task 8 evidence).
-- Tasks 9–10: pending.
+- Task 9: complete; review accepted with fixes, range `b1449cc..2873ee2`.
+- Task 10: pending.
 
 ## Resume here — 2026-10-08
 
 Tasks 5 to 8 are complete. The full gate last passed cleanly at `bcbe2e6`
 (Task 5); at `de6f876` (Task 8) it passed except for one load-sensitive
-existing test. Next: Task 9 (relationship queries, `read/graph.rs`,
-`tests/read_relationships.rs`), by a fresh implementer, then an independent
-review. Task 10's gate must pass cleanly.
+existing test. Task 9 is complete with focused runs only. Next: Task 10
+(workflow test list, characterization, full gate that must pass cleanly,
+whole-branch independent review, handoff defect tickets).
 
 All cargo runs are local through Devenv. A same-day trial of running cargo on
 remote sprites was abandoned by the product owner: both sprites lost their
@@ -361,6 +362,38 @@ Accepted limits:
 - An unquoted slug that YAML reads as a number (`1e-12345`) is invalid; F2
   must write slugs as strings.
 - `discovered_items_slug` is not used by any query yet.
+
+## Task 9 rulings — 2026-10-08
+
+- **A closed dependency never blocks** (controller ruling for the RFC's
+  definition of ready, against the implementer's first reading of the RFC's
+  validation table). Readiness, reasons and plannability consider cycles
+  among open tickets only. `ticket_cycles` still reports cycles over all
+  tickets; every member carries the read-time problem `dependency_cycle`
+  with the cycle's lowest ID as `target_id`.
+- **Accepted as implemented**, and amended into the design: cycle reasons
+  capped at 16 IDs with `complete`; flat tree lines carrying `slug` and
+  `title`; nearest-occurrence expansion; a cycle as an ascending set;
+  `parent_cycle` as a read-time problem; `item_not_found` for a document ID;
+  `ticket_readiness` with no readiness filter returning every open ticket;
+  the orderings; complete reads deciding readiness from the file.
+- **`TicketFilter.readiness`** is applied by `list_tickets`; nonconforming
+  entries still pass list filters and never appear in a query result.
+- **`find_tickets_by_slug`**: whole code, case-insensitive, every match; no
+  prefix or text search exists because the RFC defines none.
+- `tests/read_relationships.rs` is a new test target for the Task 10 workflow
+  list.
+
+Accepted limits:
+
+- `canonical::ticket_relationships` checks duplicates with a linear scan per
+  entry, so parsing one ticket is quadratic in its dependency count. A
+  20,000-dependency ticket reads end to end in 2.4 s.
+- `show_path` on a non-effective copy reports that copy's own readiness with
+  the index `current`.
+- The RFC's definition of the critical path does not state that it is over
+  plannable tickets; the design does. The RFC is the product owner's to amend.
+- No test forces a duplicate stored edge; the unique constraint prevents it.
 
 ## Decisions and rulings
 
@@ -790,3 +823,27 @@ from this work without asking.
 - Implementer: one test seen failing before its fix (a comment as a target);
   the first commits were checked by three mutations applied together; most
   review-fix tests were only run passing.
+
+### Task 9 — relationship queries, range `b1449cc..2873ee2`
+
+- `c508f4d` graph, readiness and queries; `3fe4a12` schemas and goldens;
+  `000bdc3` integration and boundary tests; `2873ee2` review fixes.
+- No index, migration or write-path change.
+- Independent review of `b1449cc..000bdc3`: algorithms sound; one major
+  semantic finding (a closed dependency blocked through a cycle), three minor
+  and several notes; all addressed. The reviewer worked the chain, diamond,
+  mixed-closure, unresolved, cycle, parent-loop and duplicate-slug cases by
+  hand and found the rest matching the RFC.
+- `2873ee2` was not independently re-reviewed.
+- Controller rerun at `2873ee2`, through Devenv on Linux: `cargo test --locked
+  --lib` 265; `read_relationships` 15; `read_items` 61; `read_contract` 54;
+  `read_boundary` 17; `read_status` 23; `read_comments` 19 passed, 0 failed;
+  `cargo fmt --check` and clippy with warnings denied over all targets and
+  features exit 0; no `unsafe` under `src/repository/read/`.
+- Not run for this task: the full suite.
+- Test-first, as reported: 18 graph unit tests, 4 item unit tests and 13
+  integration tests failed against stubbed graph functions; the two
+  closed-dependency tests failed against the first implementation. The eight
+  new goldens, the boundary additions and several review-fix assertions were
+  only run passing. Unit tests run 100,000-deep chains and rings and a
+  100,000-wide fan and assert results.
