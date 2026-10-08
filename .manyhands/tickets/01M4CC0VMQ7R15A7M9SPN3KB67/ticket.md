@@ -69,7 +69,8 @@ dependency, no canonical mutation and no resident process.
 
 ## Review-Ready (2026-10-08)
 
-Implementation is complete at `8d05ab2` and the Cycle is ready for the
+Implementation was complete at `8d05ab2`, and at `f959106` after the
+product owner's decisions below, and the Cycle is ready for the
 product owner's review. The full gate passed there, every acceptance row is
 met on Linux, and the whole branch was independently reviewed. The
 [execution ledger](../../../docs/plans/2026-10-07-wave-03-foundation-01-read-boundary-and-results-execution.md)
@@ -89,10 +90,14 @@ cleanup.
 - `created_by` is read and nothing writes it: F2.
 - `operation.resume` and new result codes join the registries: F2.
 
-## Open With The Product Owner
+## Product-Owner Decisions After Handoff (2026-10-08)
 
-- A compatibility rule for the closed v1 schemas.
-- Nested or flat comment replies.
-- Amendments to the Cycle, Wave and RFC documents that the rulings made
-  inaccurate.
-- Ten defect and follow-up tickets listed in the ledger, not yet raised.
+- The v1 schemas stay closed under a stated compatibility rule: consumers
+  ignore unknown fields and tolerate unknown codes.
+- Comments are read as a flat list with a depth (`f959106`); the consumer
+  builds the tree.
+- The Cycle, Wave and RFC documents are amended on this branch (`42605e2`).
+- Six follow-up tickets are raised on their own branches; the ledger lists
+  them.
+
+The full gate passed again at `f959106`, which is now the code head.

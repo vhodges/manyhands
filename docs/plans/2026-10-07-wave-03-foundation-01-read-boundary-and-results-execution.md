@@ -1035,3 +1035,74 @@ authorize.
 F1 is review-ready at `8d05ab2` plus this record. The branch is pushed to
 origin and kept current. Not authorized and not done: pull request, merge,
 ticket closure, worktree cleanup, further workflow dispatch.
+
+## After handoff: product-owner decisions — 2026-10-08
+
+The product owner answered the three open questions and the ticket question.
+This section supersedes "Open with the product owner" and the ticket list
+above.
+
+1. **Schema compatibility.** The v1 schemas stay closed, provided consumers
+   tolerate unknown fields. The rule is written into the CLI RFC, the design
+   and the Cycle document: a schema describes what the build that ships it
+   produces; additions are made in place; consumers ignore unknown fields and
+   tolerate unknown codes and enumeration values. Controller ruling within
+   it: the envelope's outcome and effect values keep the RFC's earlier rule
+   that any change to them is breaking, because the decision named fields.
+2. **Comments are a flat list**, and the consumer builds the tree.
+   `CommentDto` loses `replies` and gains `depth`; `f959106`.
+3. **Amendments authorized** to the Cycle document, the Wave document and the
+   CLI, relationships and index RFCs; `42605e2`. F2's scope now includes
+   writing `created_by`.
+4. **Tickets do not touch main.** Each lives on its own branch and worktree;
+   the earlier statement in this ledger that filing changes main was wrong.
+   The product owner keeps few tickets, for work that will happen soon, so
+   six were raised, each one commit on a branch from main `60b0324`, none
+   pushed:
+   - `01M4EHGE2KDCBRZ9DMXBPP30R0` accessibility is never updated
+   - `01M4EHGE4BXGPMCWWA1S1QR0JW` make an index refresh atomic
+   - `01M4EHGE60PK1WQ8DM4FRJV9YF` committed files stored as uncommitted
+   - `01M4EHGE7YFBPRHY20X178572K` version the index: schema and content
+   - `01M4EHGE9TMR99VYZC184J9XEC` discovery entry caps
+   - `01M4EHGEBHGMJ2B3BKH9NDW5JJ` the indexer's unguarded configuration read
+
+   Not raised, kept here as notes: the 250 ms lease wait in
+   `concurrent_corrupt_rebuilds_replace_the_cache_once`; `_for_testing` hooks
+   in release builds; the quadratic `ticket_relationships` and the unused
+   `discovered_items_slug`; refresh time at 1,000 items.
+
+### Flat comment list, `f959106`
+
+- Implementer: iterative flattening; the golden regenerated, not hand-edited;
+  the test-side schema checker learned `minimum`, which no schema used
+  before. A comment with a missing, cross-item or cyclic parent never reaches
+  the tree, so the file's `parent_id` is always the tree position and no
+  `parent_id` reporting changed.
+- Independent read-only review: no blocker and no should-fix. It confirmed
+  the parent claim against `canonical::validate_context` and walked the
+  held-out, missing and unreadable-parent cases.
+- Notes from the review, not acted on:
+  - `canonical::build_comment_threads`, the comment cycle detector and
+    `collect_indexed` still recurse to the depth of a reply chain. The
+    reviewer estimates, without measuring, that a chain near the 1,024 cap
+    could overflow a 2 MiB thread in a debug build. A refresh would meet it
+    before a read does. Existing code, unchanged by F1.
+  - `assert_threaded` does not assert that depth rises by at most one.
+  - The schema checker accepts `minimum` on a schema with no `type`.
+- Controller full gate at `f959106`, through Devenv on Linux, each command
+  exit 0: check, format, clippy with warnings denied;
+  `cargo test --all-features --locked --no-fail-fast` with 999 passed and 0
+  failed, and 15, 35, 31 and 103 SSH cases passed; the CLI smoke run; the
+  eight read targets without the `desktop` feature, 264 passed and 0 failed.
+- The document amendments were written by a subagent and read by the
+  controller, not independently reviewed. Left as written, by its report: the
+  design's "Status Reads" and "Redaction" still carry `scope` and
+  `path_not_utf8`, which its amendments section withdraws; the relationships
+  RFC does not say how a critical-path tie is broken beyond "the
+  deterministic ordering".
+
+### Handoff state
+
+F1 is review-ready at `f959106` plus the document commits. Not authorized and
+not done: pull request, merge, ticket closure, worktree cleanup, further
+workflow dispatch, pushing the six new ticket branches.
