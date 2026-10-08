@@ -354,14 +354,18 @@ recovery preserves evidence and refuses foreign-lock adoption/removal. Scoped
 writes, no-follow access, closure invariants, privacy, and effect-aware replay
 remain binding. The concurrency answer alone approves no other change.
 
-**Separate owner decision — narrow backend-lock recovery, 2026-10-08:** allow
-operator intervention only for ambiguous live locks created internally by
-libgit2 after a crash. Preserve the lock and actual effects, return fixed redacted
-recovery-required, and never delete/adopt using contents, age, or PID alone.
-The operator quiesces writers and verifies/handles the stale lock before identical
-retry. Retry revalidates refs/index/worktree/metadata and intent, reuses the
-candidate, and refuses third states. Owned sentinel/path/index recovery remains
-automatic. Native/dependency scope remains unchanged. Owner separately approved
+**Separate owner decision — backend ref/reflog recovery, 2026-10-08:** allow
+operator intervention for ambiguous live locks and incomplete backend ref/reflog
+effects after an interrupted or failed libgit2 update, including partial logs.
+This supersedes the lock-only exception after stock-API characterization. Preserve
+locks/effects and return fixed redacted recovery-required. Never infer ownership
+from contents, age, or PID or automatically delete locks, normalize/repair logs,
+or add a custom backend. Operator quiescence, verification and repair of affected
+backend metadata precede identical retry. Prove recorded baseline or completed-
+candidate ref/log images, revalidate index/worktree/metadata/intent, reuse the
+candidate, and refuse third states. Unrelated historical bytes remain preserved;
+other owned sentinel/path/index/metadata recovery stays automatic. Native/dependency
+scope remains unchanged. Owner separately approved
 the technical amendment and sequential local implementation on 2026-10-08:
 [Task 4 resolution protocol](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md).
 

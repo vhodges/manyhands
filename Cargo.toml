@@ -22,7 +22,6 @@ rusqlite = { version = "0.32", features = ["bundled", "limits"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-sha1 = "0.11"
 ssh-key = { version = "0.6.7", features = ["ed25519", "encryption", "getrandom"] }
 zeroize = "1"
 zorite-editor = { version = "=0.10.0", optional = true }

@@ -278,6 +278,38 @@ const MERGE_EVIDENCE_SCHEMA: &str = r#"
             applied INTEGER NOT NULL DEFAULT 0 CHECK(applied IN (0,1)),
             PRIMARY KEY(attempt_id,ordinal), UNIQUE(attempt_id,path_digest)
         );
+        CREATE TABLE remote_resolution_index_artifacts (
+            attempt_id INTEGER PRIMARY KEY REFERENCES remote_resolution_attempts(id) ON DELETE CASCADE,
+            device INTEGER NOT NULL CHECK(device >= 0),
+            inode INTEGER NOT NULL CHECK(inode > 0),
+            sentinel_digest BLOB NOT NULL CHECK(typeof(sentinel_digest)='blob' AND length(sentinel_digest)=32),
+            baseline_digest BLOB NOT NULL CHECK(typeof(baseline_digest)='blob' AND length(baseline_digest)=32),
+            baseline_device INTEGER NOT NULL CHECK(baseline_device >= 0),
+            baseline_inode INTEGER NOT NULL CHECK(baseline_inode > 0),
+            merge_head_digest BLOB CHECK(merge_head_digest IS NULL OR (typeof(merge_head_digest)='blob' AND length(merge_head_digest)=32)),
+            merge_msg_digest BLOB CHECK(merge_msg_digest IS NULL OR (typeof(merge_msg_digest)='blob' AND length(merge_msg_digest)=32)),
+            merge_mode_digest BLOB CHECK(merge_mode_digest IS NULL OR (typeof(merge_mode_digest)='blob' AND length(merge_mode_digest)=32)),
+            ref_phase TEXT NOT NULL DEFAULT 'not_started' CHECK(ref_phase IN ('not_started','intent','observed')),
+            output_device INTEGER CHECK(output_device >= 0),
+            output_inode INTEGER CHECK(output_inode > 0),
+            output_digest BLOB CHECK(output_digest IS NULL OR (typeof(output_digest)='blob' AND length(output_digest)=32)),
+            phase TEXT NOT NULL CHECK(phase IN ('intent','published','release_intent','released')),
+            CHECK((output_device IS NULL AND output_inode IS NULL AND output_digest IS NULL) OR (output_device IS NOT NULL AND output_inode IS NOT NULL AND output_digest IS NOT NULL)),
+            CHECK(phase!='intent' OR (output_digest IS NULL AND ref_phase='not_started')),
+            CHECK(ref_phase='not_started' OR output_digest IS NOT NULL),
+            CHECK(phase NOT IN ('release_intent','released') OR (output_digest IS NOT NULL AND ref_phase='observed'))
+        );
+        CREATE TABLE remote_resolution_ref_log_artifacts (
+            attempt_id INTEGER NOT NULL REFERENCES remote_resolution_index_artifacts(attempt_id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK(role IN ('baseline','transition')),
+            device INTEGER NOT NULL CHECK(device >= 0),
+            inode INTEGER NOT NULL CHECK(inode > 0),
+            digest BLOB NOT NULL CHECK(typeof(digest)='blob' AND length(digest)=32),
+            PRIMARY KEY(attempt_id,role)
+        );
+        CREATE TRIGGER remote_resolution_ref_log_artifact_immutable BEFORE UPDATE ON remote_resolution_ref_log_artifacts BEGIN SELECT RAISE(ABORT,'immutable ref log evidence'); END;
+        CREATE TRIGGER remote_resolution_index_output_immutable BEFORE UPDATE OF output_device,output_inode,output_digest ON remote_resolution_index_artifacts WHEN OLD.output_digest IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable index output'); END;
+        CREATE TRIGGER remote_resolution_index_artifact_immutable BEFORE UPDATE OF attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,merge_head_digest,merge_msg_digest,merge_mode_digest ON remote_resolution_index_artifacts BEGIN SELECT RAISE(ABORT,'immutable index ownership'); END;
         CREATE TRIGGER remote_integration_step_immutable BEFORE UPDATE OF operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest ON remote_integration_steps BEGIN SELECT RAISE(ABORT,'immutable integration evidence'); END;
         CREATE TRIGGER remote_identity_confirmation_immutable BEFORE UPDATE OF confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest ON remote_identity_confirmations BEGIN SELECT RAISE(ABORT,'immutable identity evidence'); END;
         CREATE TRIGGER remote_resolution_attempt_immutable BEFORE UPDATE OF attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id ON remote_resolution_attempts BEGIN SELECT RAISE(ABORT,'immutable resolution evidence'); END;
@@ -386,6 +418,29 @@ fn migrate_merge_evidence(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
                 let sql = merge_schema_object_sql(kind, name).ok_or_else(recovery_required)?;
                 tx.execute_batch(sql).map_err(|_| recovery_required())?;
             }
+        }
+    }
+    let artifact_present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_resolution_index_artifacts')", [], |row| row.get(0)).map_err(|_| recovery_required())?;
+    if !artifact_present {
+        // Legacy attempts retain their evidence but gain no inferred live-lock ownership.
+        for (kind, name) in [
+            ("TABLE", "remote_resolution_index_artifacts"),
+            ("TRIGGER", "remote_resolution_index_artifact_immutable"),
+            ("TRIGGER", "remote_resolution_index_output_immutable"),
+        ] {
+            tx.execute_batch(merge_schema_object_sql(kind, name).ok_or_else(recovery_required)?)
+                .map_err(|_| recovery_required())?;
+        }
+    }
+    let ref_log_present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_resolution_ref_log_artifacts')", [], |row| row.get(0)).map_err(|_| recovery_required())?;
+    if !ref_log_present {
+        // Additive: legacy candidates acquire no inferred log proof.
+        for (kind, name) in [
+            ("TABLE", "remote_resolution_ref_log_artifacts"),
+            ("TRIGGER", "remote_resolution_ref_log_artifact_immutable"),
+        ] {
+            tx.execute_batch(merge_schema_object_sql(kind, name).ok_or_else(recovery_required)?)
+                .map_err(|_| recovery_required())?;
         }
     }
     validate_merge_evidence_schema(tx)
@@ -499,6 +554,11 @@ fn validate_merge_evidence_schema(connection: &Connection) -> Result<(), Reposit
         }
     }
     for (kind, name) in [
+        ("TABLE", "remote_resolution_ref_log_artifacts"),
+        ("TRIGGER", "remote_resolution_ref_log_artifact_immutable"),
+        ("TABLE", "remote_resolution_index_artifacts"),
+        ("TRIGGER", "remote_resolution_index_artifact_immutable"),
+        ("TRIGGER", "remote_resolution_index_output_immutable"),
         ("TABLE", "remote_integration_steps"),
         ("TABLE", "remote_identity_confirmations"),
         ("TABLE", "remote_resolution_attempts"),
@@ -2161,6 +2221,16 @@ fn audit_merge_evidence(
         [record.id],
         |row| row.get(0),
     ).map_err(|_| recovery_required())?;
+    let artifact_attempts = connection.prepare("SELECT attempt.attempt_ulid FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1")
+        .and_then(|mut statement| statement.query_map([record.id], |row| row.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+    for attempt in artifact_attempts {
+        let attempt =
+            crate::repository::OperationId::parse(&attempt).map_err(|_| recovery_required())?;
+        resolution_index_artifact(connection, record, attempt)?.ok_or_else(recovery_required)?;
+        for role in ["baseline", "transition"] {
+            resolution_ref_log_artifact(connection, record, attempt, role)?;
+        }
+    }
     if invalid_attempt || invalid_confirmation || invalid_paths {
         return Err(recovery_required());
     }
@@ -2463,6 +2533,286 @@ fn resolution_attempt_id(
     ).optional().map_err(|_| recovery_required())?.ok_or_else(recovery_required)
 }
 
+/// Fixed-role manifest provenance. Images and signer authority are bound by the
+/// private anchored manifest; signer bytes are derived from immutable candidate ODB.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ResolutionRefLogArtifact {
+    pub device: u64,
+    pub inode: u64,
+    pub digest: [u8; 32],
+}
+
+pub(super) fn resolution_ref_log_artifact(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    role: &str,
+) -> Result<Option<ResolutionRefLogArtifact>, RepositoryError> {
+    if !matches!(role, "baseline" | "transition") {
+        return Err(recovery_required());
+    }
+    let (id, phase) = resolution_attempt_id(connection, record, attempt)?;
+    let row = connection.query_row("SELECT device,inode,digest FROM remote_resolution_ref_log_artifacts WHERE attempt_id=?1 AND role=?2", params![id, role], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,Vec<u8>>(2)?))).optional().map_err(|_| recovery_required())?;
+    row.map(|(device, inode, digest)| {
+        if inode <= 0
+            || !matches!(
+                phase.as_str(),
+                "paths_applying" | "candidate_prepared" | "applied"
+            )
+        {
+            return Err(recovery_required());
+        }
+        let index = resolution_index_artifact(connection, record, attempt)?
+            .ok_or_else(recovery_required)?;
+        if role == "transition"
+            && (resolution_candidate_for_attempt(connection, record, attempt)?.is_none()
+                || resolution_ref_log_artifact(connection, record, attempt, "baseline")?.is_none()
+                || index.phase == "intent")
+        {
+            return Err(recovery_required());
+        }
+        Ok(ResolutionRefLogArtifact {
+            device: device.try_into().map_err(|_| recovery_required())?,
+            inode: inode.try_into().map_err(|_| recovery_required())?,
+            digest: digest.try_into().map_err(|_| recovery_required())?,
+        })
+    })
+    .transpose()
+}
+
+pub(super) fn prepare_resolution_ref_log_artifact(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    role: &str,
+    artifact: &ResolutionRefLogArtifact,
+) -> Result<(), RepositoryError> {
+    if let Some(existing) = resolution_ref_log_artifact(tx, record, attempt, role)? {
+        return (existing == *artifact)
+            .then_some(())
+            .ok_or_else(recovery_required);
+    }
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    let index = resolution_index_artifact(tx, record, attempt)?.ok_or_else(recovery_required)?;
+    if index.ref_phase != "not_started"
+        || index.phase != "published"
+        || (role == "baseline" && phase != "paths_applying")
+        || (role == "transition"
+            && (phase != "candidate_prepared"
+                || resolution_ref_log_artifact(tx, record, attempt, "baseline")?.is_none()))
+        || !matches!(role, "baseline" | "transition")
+    {
+        return Err(recovery_required());
+    }
+    tx.execute("INSERT INTO remote_resolution_ref_log_artifacts(attempt_id,role,device,inode,digest) VALUES(?1,?2,?3,?4,?5)", params![id,role,i64::try_from(artifact.device).map_err(|_| recovery_required())?,i64::try_from(artifact.inode).map_err(|_| recovery_required())?,artifact.digest.as_slice()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ResolutionIndexArtifact {
+    pub device: u64,
+    pub inode: u64,
+    pub sentinel_digest: [u8; 32],
+    pub baseline_digest: [u8; 32],
+    pub baseline_identity: (u64, u64),
+    pub metadata: [Option<[u8; 32]>; 3],
+    pub output: Option<(u64, u64, [u8; 32])>,
+    pub ref_phase: String,
+    pub phase: String,
+}
+
+pub(super) fn resolution_index_artifact(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<Option<ResolutionIndexArtifact>, RepositoryError> {
+    let (id, attempt_phase) = resolution_attempt_id(connection, record, attempt)?;
+    let row = connection.query_row("SELECT device,inode,sentinel_digest,baseline_digest,merge_head_digest,merge_msg_digest,merge_mode_digest,phase,output_device,output_inode,output_digest,baseline_device,baseline_inode,ref_phase FROM remote_resolution_index_artifacts WHERE attempt_id=?1", [id], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?,row.get::<_,Option<Vec<u8>>>(4)?,row.get::<_,Option<Vec<u8>>>(5)?,row.get::<_,Option<Vec<u8>>>(6)?,row.get::<_,String>(7)?,row.get::<_,Option<i64>>(8)?,row.get::<_,Option<i64>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?,row.get::<_,i64>(11)?,row.get::<_,i64>(12)?,row.get::<_,String>(13)?))).optional().map_err(|_| recovery_required())?;
+    row.map(
+        |(
+            device,
+            inode,
+            sentinel,
+            baseline,
+            head,
+            msg,
+            mode,
+            phase,
+            output_device,
+            output_inode,
+            output_digest,
+            baseline_device,
+            baseline_inode,
+            ref_phase,
+        )| {
+            if !matches!(ref_phase.as_str(), "not_started" | "intent" | "observed") {
+                return Err(recovery_required());
+            }
+            if (attempt_phase == "applied" && ref_phase != "observed")
+                || (matches!(phase.as_str(), "release_intent" | "released")
+                    && (attempt_phase != "applied"
+                        || output_digest.is_none()
+                        || ref_phase != "observed"))
+            {
+                return Err(recovery_required());
+            }
+            if inode <= 0
+                || baseline_inode <= 0
+                || !matches!(
+                    phase.as_str(),
+                    "intent" | "published" | "release_intent" | "released"
+                )
+            {
+                return Err(recovery_required());
+            }
+            Ok(ResolutionIndexArtifact {
+                device: device.try_into().map_err(|_| recovery_required())?,
+                inode: inode.try_into().map_err(|_| recovery_required())?,
+                sentinel_digest: sentinel.try_into().map_err(|_| recovery_required())?,
+                baseline_digest: baseline.try_into().map_err(|_| recovery_required())?,
+                baseline_identity: (
+                    baseline_device
+                        .try_into()
+                        .map_err(|_| recovery_required())?,
+                    baseline_inode.try_into().map_err(|_| recovery_required())?,
+                ),
+                metadata: [head, msg, mode]
+                    .into_iter()
+                    .map(|digest| {
+                        digest
+                            .map(|digest| digest.try_into().map_err(|_| recovery_required()))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .try_into()
+                    .map_err(|_| recovery_required())?,
+                output: match (output_device, output_inode, output_digest) {
+                    (None, None, None) => None,
+                    (Some(device), Some(inode), Some(digest)) if inode > 0 => Some((
+                        device.try_into().map_err(|_| recovery_required())?,
+                        inode.try_into().map_err(|_| recovery_required())?,
+                        digest.try_into().map_err(|_| recovery_required())?,
+                    )),
+                    _ => return Err(recovery_required()),
+                },
+                ref_phase,
+                phase,
+            })
+        },
+    )
+    .transpose()
+}
+
+pub(super) fn prepare_resolution_index_artifact(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    artifact: &ResolutionIndexArtifact,
+) -> Result<(), RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if let Some(existing) = resolution_index_artifact(tx, record, attempt)? {
+        let mut intended = artifact.clone();
+        intended.phase = existing.phase.clone();
+        intended.output = existing.output;
+        intended.ref_phase = existing.ref_phase.clone();
+        return (existing == intended)
+            .then_some(())
+            .ok_or_else(recovery_required);
+    }
+    if phase != "paths_applying"
+        || artifact.phase != "intent"
+        || artifact.ref_phase != "not_started"
+    {
+        return Err(recovery_required());
+    }
+    tx.execute("INSERT INTO remote_resolution_index_artifacts(attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,merge_head_digest,merge_msg_digest,merge_mode_digest,phase) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'intent')", params![id,i64::try_from(artifact.device).map_err(|_| recovery_required())?,i64::try_from(artifact.inode).map_err(|_| recovery_required())?,artifact.sentinel_digest.as_slice(),artifact.baseline_digest.as_slice(),i64::try_from(artifact.baseline_identity.0).map_err(|_| recovery_required())?,i64::try_from(artifact.baseline_identity.1).map_err(|_| recovery_required())?,artifact.metadata[0].as_ref().map(|digest|digest.as_slice()),artifact.metadata[1].as_ref().map(|digest|digest.as_slice()),artifact.metadata[2].as_ref().map(|digest|digest.as_slice())]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn prepare_resolution_index_output(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    output: (u64, u64, [u8; 32]),
+) -> Result<(), RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    let artifact = resolution_index_artifact(tx, record, attempt)?.ok_or_else(recovery_required)?;
+    if let Some(existing) = artifact.output {
+        return (existing == output)
+            .then_some(())
+            .ok_or_else(recovery_required);
+    }
+    if phase != "candidate_prepared" || artifact.phase != "published" {
+        return Err(recovery_required());
+    }
+    tx.execute("UPDATE remote_resolution_index_artifacts SET output_device=?2,output_inode=?3,output_digest=?4 WHERE attempt_id=?1", params![id,i64::try_from(output.0).map_err(|_| recovery_required())?,i64::try_from(output.1).map_err(|_| recovery_required())?,output.2.as_slice()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn advance_resolution_ref_effect(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    next: &str,
+) -> Result<(), RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    let artifact = resolution_index_artifact(tx, record, attempt)?.ok_or_else(recovery_required)?;
+    resolution_ref_log_artifact(tx, record, attempt, "transition")?
+        .ok_or_else(recovery_required)?;
+    if artifact.ref_phase == "observed" && next == "observed" {
+        return Ok(());
+    }
+    if phase != "candidate_prepared"
+        || artifact.phase != "published"
+        || artifact.output.is_none()
+        || !matches!(
+            (artifact.ref_phase.as_str(), next),
+            ("not_started", "intent")
+                | ("intent", "intent")
+                | ("intent", "observed")
+                | ("not_started", "observed")
+        )
+    {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_resolution_index_artifacts SET ref_phase=?2 WHERE attempt_id=?1",
+        params![id, next],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+pub(super) fn advance_resolution_index_artifact(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+    next: &str,
+) -> Result<(), RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    let artifact = resolution_index_artifact(tx, record, attempt)?.ok_or_else(recovery_required)?;
+    if matches!(next, "release_intent" | "released")
+        && (phase != "applied" || artifact.output.is_none() || artifact.ref_phase != "observed")
+    {
+        return Err(recovery_required());
+    }
+    if artifact.phase == next {
+        return Ok(());
+    }
+    if !matches!(
+        (artifact.phase.as_str(), next),
+        ("intent", "published") | ("published", "release_intent") | ("release_intent", "released")
+    ) {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_resolution_index_artifacts SET phase=?2 WHERE attempt_id=?1",
+        params![id, next],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(())
+}
+
 pub(super) fn begin_resolution_path_effects(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,
@@ -2739,6 +3089,8 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
     for table in [
+        "remote_resolution_ref_log_artifacts",
+        "remote_resolution_index_artifacts",
         "remote_polling_state",
         "remote_observation_batches",
         "remote_ref_observations",

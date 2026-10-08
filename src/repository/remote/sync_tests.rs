@@ -4,7 +4,6 @@ use crate::repository::OwnedPathBoundary;
 use crate::repository::remote::reservation::commit_observation_batch;
 use crate::repository::{EnableRepositoryRequest, FailurePoint, REGISTRY_FILE};
 #[cfg(target_os = "linux")]
-use sha1::{Digest, Sha1};
 use std::fs;
 struct NoPrompt;
 impl SessionCredentialProvider for NoPrompt {
@@ -2059,15 +2058,14 @@ fn resolution_candidate_failure_reuses_the_same_candidate_on_retry() {
     .unwrap();
     *service.failure_point.lock().unwrap() = None;
     #[cfg(target_os = "linux")]
-    {
-        // Simulate process death after fully initialized acquisition but before
-        // persistence: forget closes neither descriptor nor pathname locally,
-        // while the fresh service below must recognize and retire its image.
-        let repository = git2::Repository::open(root.path()).unwrap();
-        let lock = ResolutionIndexLock::acquire(&repository).unwrap();
-        std::mem::forget(lock);
-        assert!(repository.path().join("index.lock").exists());
-    }
+    assert!(
+        git2::Repository::open(root.path())
+            .unwrap()
+            .path()
+            .join("index.lock")
+            .exists(),
+        "failure retains the journaled sentinel without Drop cleanup"
+    );
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
         restarted.resolve_synchronization(request()).unwrap()
@@ -2121,7 +2119,7 @@ fn resolution_ref_transition_failure_reconciles_candidate_without_second_ref_mov
             .path()
             .join("index.lock")
             .exists(),
-        "persisted exchange sentinel survives the injected ref-transition failure"
+        "stable anchored sentinel survives the injected ref-transition failure"
     );
     let candidate = git2::Repository::open(root.path())
         .unwrap()
@@ -2522,7 +2520,7 @@ fn index_lock_revalidates_target_change_after_preflight_without_clobbering_it() 
         external
     );
     assert!(
-        !git2::Repository::open(root.path())
+        git2::Repository::open(root.path())
             .unwrap()
             .path()
             .join("index.lock")
@@ -2606,7 +2604,7 @@ fn index_lock_pathname_substitution_before_persist_is_refused() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn scratch_pathname_replacement_before_descriptor_parse_is_ignored() {
+fn unrelated_scratch_leaf_is_never_a_serialization_source() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
     let local = base.replace("base", "local");
     let remote = base.replace("base", "remote");
@@ -2619,9 +2617,8 @@ fn scratch_pathname_replacement_before_descriptor_parse_is_ignored() {
     let original_index = fs::read(repository.path().join("index")).unwrap();
     let gitdir = repository.path().to_owned();
     set_resolution_index_scratch_hook(root.path().to_owned(), move || {
-        // This runs after memfd serialization and immediately before libgit2
-        // parses it. A persistent filesystem scratch-name replacement cannot
-        // affect descriptor-bound serialization or the lock copy.
+        // The backend has serialized the operation-private index. An unrelated
+        // leaf is never selected as the serialization/install source.
         let replacement = gitdir.join(".manyhands-index-scratch-race");
         fs::copy(gitdir.join("index"), replacement).unwrap();
     });
@@ -2656,22 +2653,24 @@ fn index_with_extension(mut index: Vec<u8>, signature: &[u8; 4]) -> Vec<u8> {
     index.truncate(index.len() - 20);
     index.extend_from_slice(signature);
     index.extend_from_slice(&0_u32.to_be_bytes());
-    let checksum = Sha1::digest(&index);
-    index.extend_from_slice(&checksum);
+    // The extension policy scanner does not implement a checksum. Actual
+    // serialization/reads are validated by libgit2; these policy-only images
+    // deliberately have a dummy checksum.
+    index.extend_from_slice(&[0; 20]);
     index
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn semantic_index_extensions_are_rejected_before_index_lock_creation() {
-    for extension in [b"REUC", b"NAME", b"link", b"abcd", b"ABCD"] {
+fn unsupported_index_extensions_are_rejected_before_index_lock_creation() {
+    for extension in [b"link", b"abcd", b"ABCD"] {
         let (root, _data, _service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         let index_path = repository.path().join("index");
         let extension_index = index_with_extension(fs::read(&index_path).unwrap(), extension);
         fs::write(&index_path, &extension_index).unwrap();
         assert!(matches!(
-            ResolutionIndexLock::acquire(&repository),
+            approved_index_extensions(&extension_index),
             Err(SynchronizationError::ExternalChange)
         ));
         assert_eq!(fs::read(&index_path).unwrap(), extension_index);
@@ -2735,7 +2734,7 @@ fn external_index_substitution_after_persist_rejects_before_ref_transition() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn substituted_lock_between_retire_precheck_and_exchange_is_preserved() {
+fn substituted_lock_before_verified_release_is_preserved() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
     let local = base.replace("base", "local");
     let remote = base.replace("base", "remote");
@@ -2777,7 +2776,7 @@ fn substituted_lock_between_retire_precheck_and_exchange_is_preserved() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn substituted_lock_after_exchange_is_retained_without_cleanup() {
+fn substituted_lock_after_install_is_retained_without_cleanup() {
     let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
     let local = base.replace("base", "local");
     let remote = base.replace("base", "remote");
@@ -2787,11 +2786,11 @@ fn substituted_lock_after_exchange_is_retained_without_cleanup() {
         .inspect_synchronization_recovery(root.path(), operation)
         .unwrap();
     let repository = git2::Repository::open(root.path()).unwrap();
-    let external_lock = b"external lock after index exchange\n".to_vec();
+    let external_lock = b"external lock after index installation\n".to_vec();
     let gitdir = repository.path().to_owned();
     let hook_lock = external_lock.clone();
     set_resolution_index_install_hook(root.path().to_owned(), move || {
-        let replacement = gitdir.join("external-post-exchange-lock");
+        let replacement = gitdir.join("external-post-install-lock");
         fs::write(&replacement, hook_lock).unwrap();
         fs::rename(replacement, gitdir.join("index.lock")).unwrap();
     });
@@ -3693,5 +3692,2307 @@ fn document_ticket_comment_kind_change_is_external_only_without_effects() {
             )
             .unwrap(),
         0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_content_foreign_lock_is_never_recovered_as_owned() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let local = base.replace("base", "local");
+    let remote = base.replace("base", "remote");
+    let (root, data, service, operation, _, _) =
+        resolution_fixture(&[("docs/document.md", base, &local, &remote)]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = OperationId::new();
+    let request = || {
+        ResolveSynchronizationRequest::new(
+            root.path().to_owned(),
+            operation,
+            attempt,
+            inspection.observation.clone(),
+            vec![(
+                inspection.paths[0].token.clone(),
+                RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+            )],
+            None,
+        )
+    };
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterCandidatePrepared);
+    assert!(service.resolve_synchronization(request()).is_err());
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let lock = repository.path().join("index.lock");
+    let bytes = fs::read(&lock).unwrap();
+    // Exact sentinel bytes, different filesystem identity; content is not provenance.
+    fs::remove_file(&lock).ok();
+    fs::write(&lock, &bytes).unwrap();
+    let identity = fs::metadata(&lock).unwrap().ino();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request()),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    assert_eq!(fs::read(&lock).unwrap(), bytes);
+    assert_eq!(fs::metadata(&lock).unwrap().ino(), identity);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sentinel_identity_and_bytes_are_stable_across_index_persistence() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let local = base.replace("base", "local");
+    let remote = base.replace("base", "remote");
+    let (root, _data, service, operation, _, _) =
+        resolution_fixture(&[("docs/document.md", base, &local, &remote)]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let before = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured = before.clone();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let lock = repository.path().join("index.lock");
+    let acquired = lock.clone();
+    set_resolution_index_lock_hook(root.path().to_owned(), move || {
+        let metadata = fs::metadata(&acquired).unwrap();
+        *captured.lock().unwrap() =
+            Some((metadata.dev(), metadata.ino(), fs::read(&acquired).unwrap()));
+    });
+    set_resolution_index_install_hook(root.path().to_owned(), move || {
+        let metadata = fs::metadata(&lock).unwrap();
+        assert_eq!(
+            Some((metadata.dev(), metadata.ino(), fs::read(&lock).unwrap())),
+            *before.lock().unwrap()
+        );
+    });
+    assert!(matches!(
+        service
+            .resolve_synchronization(ResolveSynchronizationRequest::new(
+                root.path().to_owned(),
+                operation,
+                OperationId::new(),
+                inspection.observation,
+                vec![(
+                    inspection.paths[0].token.clone(),
+                    RedactedConflictBytes::from_bytes(
+                        base.replace("base", "resolved").into_bytes()
+                    )
+                )],
+                None
+            ))
+            .unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+}
+
+#[cfg(target_os = "linux")]
+fn protocol_resolution_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    RepositoryService,
+    ResolveSynchronizationRequest,
+) {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\nfuture_metadata: retained\n---\n\nbase\n";
+    let local = base.replace("base", "local");
+    let remote = base.replace("base", "remote");
+    let (root, data, service, operation, _, _) =
+        resolution_fixture(&[("docs/document.md", base, &local, &remote)]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let request = ResolveSynchronizationRequest::new(
+        root.path().to_owned(),
+        operation,
+        OperationId::new(),
+        inspection.observation,
+        vec![(
+            inspection.paths[0].token.clone(),
+            RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+        )],
+        None,
+    );
+    (root, data, service, request)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn acquisition_observation_transaction_failure_recovers_before_candidate_without_drop_cleanup() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let database = data.path().join(REGISTRY_FILE);
+    let hook_database = database.clone();
+    set_resolution_index_lock_hook(root.path().to_owned(), move || {
+        rusqlite::Connection::open(hook_database).unwrap().execute_batch("CREATE TRIGGER fail_publication_observation BEFORE UPDATE OF phase ON remote_resolution_index_artifacts WHEN NEW.phase='published' BEGIN SELECT RAISE(ABORT,'test observation fault'); END;").unwrap();
+    });
+    assert!(service.resolve_synchronization(request.clone()).is_err());
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let identity = fs::metadata(repository.path().join("index.lock"))
+        .unwrap()
+        .ino();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let progress: (String, String, Option<String>) = connection.query_row("SELECT artifact.phase,attempt.phase,attempt.candidate_oid FROM remote_resolution_index_artifacts artifact JOIN remote_resolution_attempts attempt ON attempt.id=artifact.attempt_id", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(progress, ("intent".into(), "paths_applying".into(), None));
+    connection
+        .execute_batch("DROP TRIGGER fail_publication_observation;")
+        .unwrap();
+    let check = repository.path().join("index.lock");
+    set_resolution_index_install_hook(root.path().to_owned(), move || {
+        assert_eq!(fs::metadata(check).unwrap().ino(), identity)
+    });
+    // No Drop cleanup exists; a newly opened service recognizes only the anchor.
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request).unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn release_observation_transaction_failure_recovers_absence_and_refuses_foreign_replacement() {
+    for foreign in [false, true] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let database = data.path().join(REGISTRY_FILE);
+        let hook_database = database.clone();
+        set_resolution_index_retire_hook(root.path().to_owned(), move || {
+            rusqlite::Connection::open(hook_database).unwrap().execute_batch("CREATE TRIGGER fail_release_observation BEFORE UPDATE OF phase ON remote_resolution_index_artifacts WHEN NEW.phase='released' BEGIN SELECT RAISE(ABORT,'test observation fault'); END;").unwrap();
+        });
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let candidate = repository.head().unwrap().target().unwrap();
+        let lock = repository.path().join("index.lock");
+        assert!(!lock.exists());
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT phase FROM remote_resolution_index_artifacts",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "release_intent"
+        );
+        connection
+            .execute_batch("DROP TRIGGER fail_release_observation;")
+            .unwrap();
+        if foreign {
+            fs::write(&lock, b"foreign release lock").unwrap();
+        }
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        let outcome = restarted.resolve_synchronization(request);
+        if foreign {
+            assert!(matches!(outcome, Err(SynchronizationError::ExternalChange)));
+            assert_eq!(fs::read(&lock).unwrap(), b"foreign release lock");
+        } else {
+            assert!(
+                matches!(outcome.unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT phase FROM remote_resolution_index_artifacts",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                "released"
+            );
+        }
+        assert_eq!(repository.head().unwrap().target(), Some(candidate));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pre_ref_installed_index_old_head_reuses_candidate_and_preserves_foreign_backend_lock() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let old_head = repository.head().unwrap().target().unwrap();
+    set_resolution_index_install_hook(root.path().to_owned(), || {
+        panic!("test termination after installation")
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || service.resolve_synchronization(request.clone())
+        ))
+        .is_err()
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(old_head));
+    assert!(repository.path().join("index.lock").exists());
+    let backend_lock = repository.path().join("refs/heads/main.lock");
+    fs::write(&backend_lock, b"ambiguous backend lock").unwrap();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(fs::read(&backend_lock).unwrap(), b"ambiguous backend lock");
+    assert_eq!(repository.head().unwrap().target(), Some(old_head));
+    // Simulated quiesced operator action on this disposable fixture only.
+    fs::remove_file(&backend_lock).unwrap();
+    let candidate: String = rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT candidate_oid FROM remote_resolution_attempts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        matches!(restarted.resolve_synchronization(request).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid.to_string() == candidate)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn metadata_members_reconcile_independent_absence_and_preserve_foreign_remnants() {
+    for missing in RESOLUTION_MERGE_MEMBERS {
+        for foreign in [false, true] {
+            let (root, data, service, request) = protocol_resolution_fixture();
+            *service.failure_point.lock().unwrap() =
+                Some(FailurePoint::ResolutionAfterCheckpointObservation);
+            assert!(service.resolve_synchronization(request.clone()).is_err());
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let candidate = repository.head().unwrap().target();
+            fs::remove_file(repository.path().join(missing)).unwrap();
+            let remnant = repository.path().join(if missing == "MERGE_MSG" {
+                "MERGE_MODE"
+            } else {
+                "MERGE_MSG"
+            });
+            if foreign {
+                fs::write(&remnant, b"foreign merge metadata").unwrap();
+            }
+            let restarted = RepositoryService::open_at(data.path()).unwrap();
+            let outcome = restarted.resolve_synchronization(request);
+            if foreign {
+                assert!(matches!(outcome, Err(SynchronizationError::ExternalChange)));
+                assert_eq!(fs::read(remnant).unwrap(), b"foreign merge metadata");
+                assert!(repository.path().join("index.lock").exists());
+            } else {
+                assert!(matches!(
+                    outcome.unwrap(),
+                    ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+                ));
+                assert!(!repository.path().join("index.lock").exists());
+                assert!(
+                    RESOLUTION_MERGE_MEMBERS
+                        .iter()
+                        .all(|member| !repository.path().join(member).exists())
+                );
+            }
+            assert_eq!(repository.head().unwrap().target(), candidate);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn authoritative_libgit2_serialization_preserves_reuc_and_name_semantics() {
+    // Valid v2 index with one REUC and NAME record. A static checksum fixture,
+    // not a production or test reimplementation of the index serializer.
+    let hex = "444952430000000200000000524555430000005a72657461696e6564003130303634340031303036343400313030363434000101010101010101010101010101010101010101020202020202020202020202020202020202020203030303030303030303030303030303030303034e414d4500000015616e636573746f72006f7572730074686569727300121d6a29fa7fac253bec9f4f1e91de4aba61867c";
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&hex[offset..offset + 2], 16).unwrap())
+        .collect::<Vec<_>>();
+    assert!(approved_index_extensions(&bytes).is_ok());
+    let private = tempfile::tempdir().unwrap();
+    let path = private.path().join("index");
+    fs::write(&path, &bytes).unwrap();
+    let mut authoritative = git2::Index::open(&path).unwrap();
+    authoritative
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_bytes(&[4; 20]).unwrap(),
+            flags: 0,
+            flags_extended: 0,
+            path: b"resolved.md".to_vec(),
+        })
+        .unwrap();
+    authoritative.write().unwrap();
+    let serialized = fs::read(&path).unwrap();
+    for (start, end) in [(12, 110), (110, 139)] {
+        let extension = &bytes[start..end];
+        assert!(
+            serialized
+                .windows(extension.len())
+                .any(|window| window == extension),
+            "semantic extension was lost or changed"
+        );
+    }
+    let reopened = git2::Index::open(&path).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert!(!reopened.has_conflicts());
+    assert!(approved_index_extensions(&serialized).is_ok());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn same_image_index_identity_substitution_is_refused_before_canonical_writes() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let original = fs::read(root.path().join("docs/document.md")).unwrap();
+    let gitdir = repository.path().to_owned();
+    set_resolution_index_lock_hook(root.path().to_owned(), move || {
+        let replacement = gitdir.join("same-image-index");
+        fs::copy(gitdir.join("index"), &replacement).unwrap();
+        fs::rename(replacement, gitdir.join("index")).unwrap();
+    });
+    assert!(matches!(
+        service.resolve_synchronization(request),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    assert_eq!(
+        fs::read(root.path().join("docs/document.md")).unwrap(),
+        original
+    );
+    assert_eq!(
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_paths WHERE applied=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn uncertain_ref_intent_preserves_candidate_and_both_logs_after_operator_lock_handling() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    set_resolution_index_install_hook(root.path().to_owned(), || {
+        panic!("test termination before ref invocation")
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || service.resolve_synchronization(request.clone())
+        ))
+        .is_err()
+    );
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let old_head = repository.head().unwrap().target();
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // Simulate the actual backend crash window: intent is durable, the backend
+    // may already have appended logs, but the loose ref is still old.
+    connection
+        .execute_batch("UPDATE remote_resolution_index_artifacts SET ref_phase='intent';")
+        .unwrap();
+    let candidate: String = connection
+        .query_row(
+            "SELECT candidate_oid FROM remote_resolution_attempts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let logs = [
+        repository.path().join("logs/HEAD"),
+        repository.path().join("logs/refs/heads/main"),
+    ];
+    for log in &logs {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(log)
+            .unwrap()
+            .write_all(b"test uncertain partial reflog append\n")
+            .unwrap();
+    }
+    let before = logs
+        .iter()
+        .map(|log| fs::read(log).unwrap())
+        .collect::<Vec<_>>();
+    let backend_lock = repository.path().join("refs/heads/main.lock");
+    fs::write(&backend_lock, b"ambiguous backend lock").unwrap();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    // Disposable fixture's simulated operator handles only the ambiguous lock.
+    fs::remove_file(&backend_lock).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(
+        logs.iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(repository.head().unwrap().target(), old_head);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT candidate_oid FROM remote_resolution_attempts",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        candidate
+    );
+    assert!(repository.path().join("index.lock").exists());
+}
+
+fn resolution_request_for_bodies(
+    root: &Path,
+    operation: OperationId,
+    attempt: OperationId,
+    inspection: &SynchronizationConflictInspection,
+    bodies: &[&str],
+) -> ResolveSynchronizationRequest {
+    ResolveSynchronizationRequest::new(
+        root.to_owned(),
+        operation,
+        attempt,
+        inspection.observation.clone(),
+        inspection
+            .paths
+            .iter()
+            .zip(bodies)
+            .map(|(path, body)| {
+                (
+                    path.token.clone(),
+                    RedactedConflictBytes::from_bytes(body.as_bytes().to_vec()),
+                )
+            })
+            .collect(),
+        None,
+    )
+}
+
+const M2_DOCUMENT: &str = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\nunknown: {keep: [1, 2]}\n---\n\nbase\n";
+
+#[cfg(unix)]
+#[test]
+fn missing_path_observation_replays_exact_result_without_second_replacement() {
+    use std::os::unix::fs::MetadataExt;
+    for (count, failed_ordinal) in [(1, 0), (2, 0), (2, 1)] {
+        let second =
+            M2_DOCUMENT.replace("01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ");
+        let bases = [M2_DOCUMENT.to_owned(), second];
+        let locals = bases
+            .iter()
+            .map(|body| body.replace("base", "local"))
+            .collect::<Vec<_>>();
+        let incoming = bases
+            .iter()
+            .map(|body| body.replace("base", "incoming"))
+            .collect::<Vec<_>>();
+        let results = bases
+            .iter()
+            .map(|body| body.replace("base", "caller\n  exact bytes"))
+            .collect::<Vec<_>>();
+        let paths = ["docs/a.md", "docs/b.md"];
+        let files = (0..count)
+            .map(|i| {
+                (
+                    paths[i],
+                    bases[i].as_str(),
+                    locals[i].as_str(),
+                    incoming[i].as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (root, data, service, operation, head, _) = resolution_fixture(&files);
+        let inspection = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        let attempt = OperationId::new();
+        let bodies = results[..count]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let request =
+            || resolution_request_for_bodies(root.path(), operation, attempt, &inspection, &bodies);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch(&format!("CREATE TRIGGER fail_path_observation BEFORE UPDATE OF applied ON remote_resolution_paths WHEN NEW.ordinal={failed_ordinal} BEGIN SELECT RAISE(ABORT,'test observation failure'); END;")).unwrap();
+        assert!(service.resolve_synchronization(request()).is_err());
+        assert_eq!(repository.head().unwrap().target(), Some(head));
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+        assert!(
+            !db.query_row(
+                "SELECT applied FROM remote_resolution_paths WHERE ordinal=?1",
+                [failed_ordinal],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+        );
+        db.execute_batch("DROP TRIGGER fail_path_observation;")
+            .unwrap();
+        let altered = results[0].replace("caller", "altered");
+        let mut altered_bodies = bodies.clone();
+        altered_bodies[0] = &altered;
+        assert!(
+            service
+                .resolve_synchronization(resolution_request_for_bodies(
+                    root.path(),
+                    operation,
+                    attempt,
+                    &inspection,
+                    &altered_bodies
+                ))
+                .is_err()
+        );
+        let written_images = paths
+            .iter()
+            .take(failed_ordinal as usize + 1)
+            .map(|path| {
+                let metadata = fs::metadata(root.path().join(path)).unwrap();
+                (
+                    (*path).to_owned(),
+                    (
+                        metadata.dev(),
+                        metadata.ino(),
+                        metadata.mtime(),
+                        metadata.mtime_nsec(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for path in paths.iter().take(failed_ordinal as usize + 1) {
+            service.set_owned_path_hook_for_root_for_testing(
+                root.path().to_owned(),
+                (*path).into(),
+                OwnedPathBoundary::Replace,
+                || panic!("bound result must not be replaced again"),
+            );
+        }
+        let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+            service.resolve_synchronization(request()).unwrap()
+        else {
+            panic!("exact retry must complete")
+        };
+        for (path, image) in written_images {
+            let metadata = fs::metadata(root.path().join(path)).unwrap();
+            assert_eq!(
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.mtime(),
+                    metadata.mtime_nsec()
+                ),
+                image,
+                "no second actual write, including checkout"
+            );
+        }
+        for i in 0..count {
+            assert_eq!(
+                fs::read(root.path().join(paths[i])).unwrap(),
+                results[i].as_bytes()
+            );
+            assert_eq!(
+                repository
+                    .find_commit(commit_oid)
+                    .unwrap()
+                    .tree()
+                    .unwrap()
+                    .get_path(Path::new(paths[i]))
+                    .unwrap()
+                    .id(),
+                repository.blob(results[i].as_bytes()).unwrap()
+            );
+        }
+        assert!(
+            matches!(service.resolve_synchronization(request()).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid: replay } if replay == commit_oid)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_path_observation_preserves_third_values_and_rejects_stale_or_unsafe_state() {
+    use std::os::unix::fs::PermissionsExt;
+    for change in [
+        "third",
+        "executable",
+        "symlink",
+        "index",
+        "head",
+        "metadata",
+        "unrelated",
+    ] {
+        let local = M2_DOCUMENT.replace("base", "local");
+        let incoming = M2_DOCUMENT.replace("base", "incoming");
+        let result = M2_DOCUMENT.replace("base", "caller");
+        let (root, data, service, operation, _, _) =
+            resolution_fixture(&[("docs/a.md", M2_DOCUMENT, &local, &incoming)]);
+        let inspection = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        let attempt = OperationId::new();
+        let request = || {
+            resolution_request_for_bodies(root.path(), operation, attempt, &inspection, &[&result])
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch("CREATE TRIGGER fail_path_observation BEFORE UPDATE OF applied ON remote_resolution_paths BEGIN SELECT RAISE(ABORT,'test observation failure'); END;").unwrap();
+        assert!(service.resolve_synchronization(request()).is_err());
+        db.execute_batch("DROP TRIGGER fail_path_observation;")
+            .unwrap();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let path = root.path().join("docs/a.md");
+        match change {
+            "third" => fs::write(&path, b"third value must survive\n").unwrap(),
+            "executable" => fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap(),
+            "symlink" => {
+                fs::remove_file(&path).unwrap();
+                std::os::unix::fs::symlink("../fixture.txt", &path).unwrap();
+            }
+            "index" => fs::write(repository.path().join("index"), b"external index image").unwrap(),
+            "head" => {
+                repository
+                    .reference(
+                        "refs/heads/main",
+                        repository
+                            .head()
+                            .unwrap()
+                            .peel_to_commit()
+                            .unwrap()
+                            .parent_id(0)
+                            .unwrap(),
+                        true,
+                        "test",
+                    )
+                    .unwrap();
+            }
+            "metadata" => {
+                fs::write(repository.path().join("MERGE_MSG"), b"foreign metadata\n").unwrap()
+            }
+            "unrelated" => fs::write(root.path().join("fixture.txt"), b"unrelated edit\n").unwrap(),
+            _ => unreachable!(),
+        }
+        let head = repository.head().unwrap().target();
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let metadata = fs::read(repository.path().join("MERGE_MSG")).unwrap();
+        assert!(
+            !matches!(
+                service.resolve_synchronization(request()),
+                Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+            ),
+            "{change}"
+        );
+        assert_eq!(repository.head().unwrap().target(), head, "{change}");
+        assert_eq!(
+            fs::read(repository.path().join("index")).unwrap(),
+            index,
+            "{change}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes, "{change}");
+        assert_eq!(
+            fs::read(repository.path().join("MERGE_MSG")).unwrap(),
+            metadata,
+            "{change}"
+        );
+        assert!(
+            !db.query_row("SELECT applied FROM remote_resolution_paths", [], |row| row
+                .get::<_, bool>(0))
+                .unwrap(),
+            "{change}"
+        );
+    }
+}
+
+#[test]
+fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
+    let open = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"\ntitle: \"Ticket\"\ntype: \"cycle\"\nstatus: \"open\"\n---\n\nbase\n";
+    let closed = open.replace(
+        "status: \"open\"",
+        "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"",
+    );
+    let other = closed.replace("original author", "different author");
+    for (base, local, incoming, result, valid) in [
+        (open, closed.as_str(), open, open, false),
+        (open, open, closed.as_str(), open, false),
+        (
+            open,
+            closed.as_str(),
+            other.as_str(),
+            closed.as_str(),
+            false,
+        ),
+        (
+            open,
+            closed.as_str(),
+            closed.as_str(),
+            other.as_str(),
+            false,
+        ),
+        (open, closed.as_str(), open, closed.as_str(), true),
+        (open, open, closed.as_str(), closed.as_str(), true),
+        (
+            open,
+            closed.as_str(),
+            closed.as_str(),
+            closed.as_str(),
+            true,
+        ),
+        (
+            closed.as_str(),
+            closed.as_str(),
+            closed.as_str(),
+            closed.as_str(),
+            true,
+        ),
+    ] {
+        let local = local.replace("base", "local");
+        let incoming = incoming.replace("base", "incoming");
+        let result = result
+            .replace("base", "exact caller closure\n")
+            .replace("---\n\n", "custom: {preserve: true}\n---\n\n");
+        let path = ".manyhands/tickets/01BX5ZZKBKACTAV9WEVGEMMVRZ/ticket.md";
+        let (root, data, service, operation, head, _) =
+            resolution_fixture(&[(path, base, &local, &incoming)]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let bytes = fs::read(root.path().join(path)).unwrap();
+        let outcome = resolve_fixture(
+            root.path(),
+            &service,
+            operation,
+            &[&result, &result, &result],
+        );
+        if valid {
+            assert!(matches!(
+                outcome,
+                ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+            ));
+            assert_eq!(fs::read(root.path().join(path)).unwrap(), result.as_bytes());
+        } else {
+            assert_eq!(outcome, ResolveSynchronizationOutcome::ValidationFailed);
+            assert_eq!(repository.head().unwrap().target(), Some(head));
+            assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+            assert_eq!(fs::read(root.path().join(path)).unwrap(), bytes);
+            assert_eq!(
+                rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                    .unwrap()
+                    .query_row(
+                        "SELECT count(*) FROM remote_resolution_attempts",
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+        }
+    }
+}
+
+#[test]
+fn all_recorded_comment_sides_constrain_immutable_fields_before_writes() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"01CRZ3NDEKTSV4RRFFQ69G5FAV\"\nitem_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ncreated_at: \"2026-01-01T00:00:00Z\"\nauthor: \"original author\"\n---\n\nbase\n";
+    let path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md";
+    for field in ["author", "created", "parent", "item", "consistent"] {
+        for changed_side in ["local", "incoming", "result"] {
+            let changed = match field {
+                "item" => base.replace(
+                    "item_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"",
+                    "item_id: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"",
+                ),
+                "parent" => base.replace(
+                    "created_at:",
+                    "parent_id: \"01DRZ3NDEKTSV4RRFFQ69G5FAV\"\ncreated_at:",
+                ),
+                "created" => base.replace("2026-01-01", "2026-01-02"),
+                "author" => base.replace("original author", "different author"),
+                "consistent" => base.to_owned(),
+                _ => unreachable!(),
+            };
+            let local = if changed_side == "local" {
+                &changed
+            } else {
+                base
+            }
+            .replace("base", "local");
+            let incoming = if changed_side == "incoming" {
+                &changed
+            } else {
+                base
+            }
+            .replace("base", "incoming");
+            let result = if changed_side == "result" {
+                &changed
+            } else {
+                base
+            }
+            .replace("base", "exact caller comment")
+            .replace("---\n\n", "custom: [keep, unknown]\n---\n\n");
+            let (root, data, service, operation, head, _) = resolution_fixture(&[
+                ("docs/item.md", M2_DOCUMENT, M2_DOCUMENT, M2_DOCUMENT),
+                (path, base, &local, &incoming),
+            ]);
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let index = fs::read(repository.path().join("index")).unwrap();
+            let bytes = fs::read(root.path().join(path)).unwrap();
+            let outcome = resolve_fixture(
+                root.path(),
+                &service,
+                operation,
+                &[&result, &result, &result],
+            );
+            if field == "consistent" {
+                assert!(matches!(
+                    outcome,
+                    ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+                ));
+                assert_eq!(fs::read(root.path().join(path)).unwrap(), result.as_bytes());
+            } else {
+                assert!(
+                    matches!(
+                        outcome,
+                        ResolveSynchronizationOutcome::ValidationFailed
+                            | ResolveSynchronizationOutcome::StaleObservation
+                    ),
+                    "{field}/{changed_side}: {outcome:?}"
+                );
+                assert_eq!(repository.head().unwrap().target(), Some(head));
+                assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+                assert_eq!(fs::read(root.path().join(path)).unwrap(), bytes);
+                assert_eq!(
+                    rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                        .unwrap()
+                        .query_row(
+                            "SELECT count(*) FROM remote_resolution_attempts",
+                            [],
+                            |row| row.get::<_, i64>(0)
+                        )
+                        .unwrap(),
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn missing_path_observation_checks_all_images_before_completing_remaining_writes() {
+    let second = M2_DOCUMENT.replace("01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ");
+    let local = M2_DOCUMENT.replace("base", "local");
+    let incoming = M2_DOCUMENT.replace("base", "incoming");
+    let second_local = second.replace("base", "local");
+    let second_incoming = second.replace("base", "incoming");
+    let result = M2_DOCUMENT.replace("base", "caller");
+    let second_result = second.replace("base", "caller");
+    let (root, data, service, operation, _, _) = resolution_fixture(&[
+        ("docs/a.md", M2_DOCUMENT, &local, &incoming),
+        ("docs/b.md", &second, &second_local, &second_incoming),
+    ]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = OperationId::new();
+    let request = || {
+        resolution_request_for_bodies(
+            root.path(),
+            operation,
+            attempt,
+            &inspection,
+            &[&result, &second_result],
+        )
+    };
+    let old = fs::read(root.path().join("docs/a.md")).unwrap();
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_path_observation BEFORE UPDATE OF applied ON remote_resolution_paths WHEN NEW.ordinal=0 BEGIN SELECT RAISE(ABORT,'test observation failure'); END;").unwrap();
+    assert!(service.resolve_synchronization(request()).is_err());
+    db.execute_batch("DROP TRIGGER fail_path_observation;")
+        .unwrap();
+    // Even a still-authorized prewrite image must remain untouched when a
+    // later member is a third value. No partial retry effect is needed here.
+    fs::write(root.path().join("docs/a.md"), &old).unwrap();
+    fs::write(root.path().join("docs/b.md"), b"third value\n").unwrap();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let head = repository.head().unwrap().target();
+    let index = fs::read(repository.path().join("index")).unwrap();
+    assert!(matches!(
+        service.resolve_synchronization(request()),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    assert_eq!(fs::read(root.path().join("docs/a.md")).unwrap(), old);
+    assert_eq!(
+        fs::read(root.path().join("docs/b.md")).unwrap(),
+        b"third value\n"
+    );
+    assert_eq!(repository.head().unwrap().target(), head);
+    assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+    assert_eq!(
+        db.query_row(
+            "SELECT sum(applied) FROM remote_resolution_paths",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn retained_candidate_cannot_bypass_all_side_closure_validation() {
+    // Construct evidence as an older writer could: its base-only validation
+    // allowed an open result even though the local side retained closure.
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"\ntitle: \"Ticket\"\ntype: \"cycle\"\nstatus: \"open\"\n---\n\nbase\n";
+    let local = base.replace("status: \"open\"", "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"").replace("base", "local");
+    let incoming = base.replace("base", "incoming");
+    let result = base.replace("base", "legacy reopening");
+    let path = ".manyhands/tickets/01BX5ZZKBKACTAV9WEVGEMMVRZ/ticket.md";
+    let (root, data, service, operation, local_oid, incoming_oid) =
+        resolution_fixture(&[(path, base, &local, &incoming)]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = OperationId::new();
+    let request =
+        || resolution_request_for_bodies(root.path(), operation, attempt, &inspection, &[&result]);
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let token = &inspection.paths[0].token;
+    let mut input = blake3::Hasher::new();
+    input.update(b"manyhands-resolution-v1\0");
+    input.update(&token.ordinal.to_be_bytes());
+    input.update(&token.path);
+    input.update(&conflict_token_digest(token));
+    input.update(result.as_bytes());
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let owner = match service
+        .reacquire_synchronization_conflict(
+            root.path(),
+            operation,
+            &inspection.target.operation_target(&plan),
+            0,
+            inspection.observation.fingerprint,
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("reacquire"),
+    };
+    service
+        .prepare_synchronization_resolution_attempt(
+            root.path(),
+            &owner,
+            &state::ResolutionAttemptIntent {
+                attempt_id: attempt,
+                step_ordinal: 0,
+                observation_digest: inspection.observation.fingerprint,
+                input_digest: *input.finalize().as_bytes(),
+                preflight_digest: resolution_preflight(&repository, &request().resolutions)
+                    .unwrap(),
+                identity_confirmation_id: None,
+            },
+            &[state::ResolutionPathIntent {
+                ordinal: token.ordinal,
+                path_digest: *blake3::hash(&token.path).as_bytes(),
+                expected_digest: conflict_token_digest(token),
+                result_digest: *blake3::hash(result.as_bytes()).as_bytes(),
+                prewrite_digest: conflict_worktree_digest(root.path(), Path::new(path)).unwrap(),
+                base_blob_oid: token.base,
+                local_blob_oid: token.local,
+                incoming_blob_oid: token.incoming,
+                mode: 0o100644,
+            }],
+        )
+        .unwrap();
+    service
+        .begin_synchronization_resolution_path_effects(root.path(), &owner, attempt)
+        .unwrap();
+    fs::write(root.path().join(path), &result).unwrap();
+    service
+        .observe_synchronization_resolution_path_effect(root.path(), &owner, attempt, token.ordinal)
+        .unwrap();
+    let mut index = repository.index().unwrap();
+    for stage in 1..=3 {
+        index.remove(Path::new(path), stage).unwrap();
+    }
+    let blob = repository.blob(result.as_bytes()).unwrap();
+    index
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: result.len() as u32,
+            id: blob,
+            flags: 0,
+            flags_extended: 0,
+            path: token.path.clone(),
+        })
+        .unwrap();
+    let tree = repository
+        .find_tree(index.write_tree_to(&repository).unwrap())
+        .unwrap();
+    let signature = repository.signature().unwrap();
+    let candidate = repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "legacy candidate",
+            &tree,
+            &[
+                &repository.find_commit(local_oid).unwrap(),
+                &repository.find_commit(incoming_oid).unwrap(),
+            ],
+        )
+        .unwrap();
+    service
+        .prepare_synchronization_resolution_candidate(root.path(), &owner, attempt, candidate)
+        .unwrap();
+    let index_image = fs::read(repository.path().join("index")).unwrap();
+    assert_eq!(
+        service.resolve_synchronization(request()).unwrap(),
+        ResolveSynchronizationOutcome::ValidationFailed
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(local_oid));
+    assert_eq!(
+        fs::read(repository.path().join("index")).unwrap(),
+        index_image
+    );
+    assert_eq!(fs::read(root.path().join(path)).unwrap(), result.as_bytes());
+    assert!(!repository.path().join("index.lock").exists());
+    assert_eq!(
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_index_artifacts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+// Locked public-API characterization only. None of these fixture transitions
+// establishes process-death behavior or authorizes production reflog repair.
+#[cfg(target_os = "linux")]
+fn ref_effect_api_fixture() -> (tempfile::TempDir, git2::Repository, git2::Oid, git2::Oid) {
+    let root = tempfile::tempdir().unwrap();
+    let repository = git2::Repository::init(root.path()).unwrap();
+    repository.set_head("refs/heads/main").unwrap();
+    let mut config = repository.config().unwrap();
+    config.set_str("user.name", "Config Identity").unwrap();
+    config
+        .set_str("user.email", "config@example.invalid")
+        .unwrap();
+    config.set_bool("core.logallrefupdates", true).unwrap();
+    let signature = git2::Signature::new(
+        "Frozen Identity",
+        "frozen@example.invalid",
+        &git2::Time::new(1234, 0),
+    )
+    .unwrap();
+    let tree = repository
+        .find_tree(repository.index().unwrap().write_tree().unwrap())
+        .unwrap();
+    let old = repository
+        .commit(Some("HEAD"), &signature, &signature, "baseline", &tree, &[])
+        .unwrap();
+    let parent = repository.find_commit(old).unwrap();
+    let candidate = repository
+        .commit(None, &signature, &signature, "candidate", &tree, &[&parent])
+        .unwrap();
+    drop(parent);
+    drop(tree);
+    (root, repository, old, candidate)
+}
+
+#[cfg(target_os = "linux")]
+fn ref_effect_entry(old: git2::Oid, new: git2::Oid) -> Vec<u8> {
+    format!("{old} {new} Frozen Identity <frozen@example.invalid> 5678 +0000\towned effect\n")
+        .into_bytes()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stock_ref_effect_transaction_appends_both_logs_with_explicit_signature_and_absence() {
+    for absent in [false, true] {
+        let (_root, repository, old, candidate) = ref_effect_api_fixture();
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        let baseline = logs
+            .iter()
+            .map(|log| {
+                if absent {
+                    fs::remove_file(log).unwrap();
+                    Vec::new()
+                } else {
+                    fs::read(log).unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
+        let signature = git2::Signature::new(
+            "Frozen Identity",
+            "frozen@example.invalid",
+            &git2::Time::new(5678, 0),
+        )
+        .unwrap();
+        let mut transaction = repository.transaction().unwrap();
+        transaction.lock_ref("refs/heads/main").unwrap();
+        transaction
+            .set_target(
+                "refs/heads/main",
+                candidate,
+                Some(&signature),
+                "owned effect",
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(repository.refname_to_id("HEAD").unwrap(), candidate);
+        for (log, mut expected) in logs.iter().zip(baseline) {
+            expected.extend(ref_effect_entry(old, candidate));
+            assert_eq!(fs::read(log).unwrap(), expected);
+        }
+        // The same-value fast path does not append, but cannot finish a missing
+        // HEAD effect: it returns before both logging and loose-ref installation.
+        let before = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        let mut transaction = repository.transaction().unwrap();
+        transaction.lock_ref("refs/heads/main").unwrap();
+        transaction
+            .set_target(
+                "refs/heads/main",
+                candidate,
+                Some(&signature),
+                "owned effect",
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stock_ref_effect_set_reflog_suppresses_head_and_replaces_branch_even_without_target() {
+    for absent in [false, true] {
+        let (_root, repository, old, candidate) = ref_effect_api_fixture();
+        let branch_log = repository.path().join("logs/refs/heads/main");
+        let head_log = repository.path().join("logs/HEAD");
+        if absent {
+            fs::remove_file(&branch_log).unwrap();
+            fs::remove_file(&head_log).unwrap();
+        }
+        let before_head = fs::read(&head_log).ok();
+        let before_branch = fs::read(&branch_log).ok();
+        let log = repository.reflog("refs/heads/main").unwrap();
+        // PUBLIC read creates an absent file; therefore it is not a read-only
+        // actual-state probe. Never use this to infer baseline absence.
+        assert_eq!(
+            fs::read(&branch_log).unwrap(),
+            before_branch.unwrap_or_default()
+        );
+        use std::os::unix::fs::MetadataExt;
+        let anchor = repository.path().join("branch-log-anchor");
+        fs::hard_link(&branch_log, &anchor).unwrap();
+        let inode = fs::metadata(&anchor).unwrap().ino();
+        let mut transaction = repository.transaction().unwrap();
+        transaction.lock_ref("refs/heads/main").unwrap();
+        transaction
+            .set_target("refs/heads/main", candidate, None, "ignored message")
+            .unwrap();
+        transaction.set_reflog("refs/heads/main", log).unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(repository.refname_to_id("HEAD").unwrap(), candidate);
+        assert_eq!(fs::read(&head_log).ok(), before_head); // No implicit HEAD append.
+        assert_eq!(fs::read(&branch_log).unwrap(), fs::read(&anchor).unwrap());
+        assert_ne!(fs::metadata(&branch_log).unwrap().ino(), inode); // Full replacement, not no-op.
+        assert_eq!(
+            repository.reflog("refs/heads/main").unwrap().len(),
+            usize::from(!absent)
+        );
+        // Log-only transactions can install the missing HEAD entry, but still
+        // replace the full log rather than appending just the missing bytes.
+        let signature = git2::Signature::new(
+            "Frozen Identity",
+            "frozen@example.invalid",
+            &git2::Time::new(5678, 0),
+        )
+        .unwrap();
+        let mut log = repository.reflog("HEAD").unwrap();
+        log.append(candidate, &signature, Some("owned effect"))
+            .unwrap();
+        let mut transaction = repository.transaction().unwrap();
+        transaction.lock_ref("HEAD").unwrap();
+        transaction.set_reflog("HEAD", log).unwrap();
+        transaction.commit().unwrap();
+        let mut expected = before_head.unwrap_or_default();
+        // In-memory append derives old OID from the last log entry, not the ref.
+        expected.extend(ref_effect_entry(
+            if absent { git2::Oid::zero() } else { old },
+            candidate,
+        ));
+        assert_eq!(fs::read(&head_log).unwrap(), expected);
+        assert_eq!(
+            repository.find_reference("HEAD").unwrap().symbolic_target(),
+            Some("refs/heads/main")
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stock_ref_effect_reflog_write_normalizes_prior_bytes_and_discards_partial_lines() {
+    let (_root, repository, old, _candidate) = ref_effect_api_fixture();
+    let path = repository.path().join("logs/refs/heads/main");
+    let normalized =
+        format!("{old} {old} Frozen Identity <frozen@example.invalid> 5678 +0000\thistoric\n");
+    let image = format!(
+        "{old} {old} Frozen Identity <frozen@example.invalid> 5678 +0000\thistoric   \n{old} "
+    );
+    fs::write(&path, image.as_bytes()).unwrap();
+    let mut log = repository.reflog("refs/heads/main").unwrap();
+    assert_eq!(log.len(), 1); // Invalid partial line silently skipped.
+    assert_eq!(fs::read(&path).unwrap(), image.as_bytes()); // Existing read alone preserves bytes.
+    let lock = path.with_extension("lock");
+    fs::write(&lock, b"foreign reflog lock").unwrap();
+    // This locked version surfaces GenericError, not ErrorCode::Locked.
+    assert_eq!(
+        log.write().unwrap_err().code(),
+        git2::ErrorCode::GenericError
+    );
+    assert_eq!(fs::read(&lock).unwrap(), b"foreign reflog lock");
+    assert_eq!(fs::read(&path).unwrap(), image.as_bytes());
+    // Disposable fixture simulates operator handling; this does NOT authorize
+    // production repair of the remaining partial log image.
+    fs::remove_file(&lock).unwrap();
+    log.write().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), normalized.as_bytes());
+    assert_eq!(repository.refname_to_id("HEAD").unwrap(), old);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stock_ref_effect_linked_worktree_updates_common_branch_and_only_target_head_log() {
+    let (root, repository, old, candidate) = ref_effect_api_fixture();
+    let branch = repository
+        .reference("refs/heads/linked", old, false, "linked baseline")
+        .unwrap();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&branch));
+    let linked_path = root.path().join("linked");
+    repository
+        .worktree("linked", &linked_path, Some(&options))
+        .unwrap();
+    let linked = git2::Repository::open(&linked_path).unwrap();
+    let primary_head = fs::read(repository.path().join("logs/HEAD")).unwrap();
+    let branch_log = repository.path().join("logs/refs/heads/linked");
+    let target_head_log = linked.path().join("logs/HEAD");
+    let mut expected_branch = fs::read(&branch_log).unwrap();
+    assert!(!target_head_log.exists()); // Worktree creation does not seed its HEAD log.
+    let mut expected_head = Vec::new();
+    let signature = git2::Signature::new(
+        "Frozen Identity",
+        "frozen@example.invalid",
+        &git2::Time::new(5678, 0),
+    )
+    .unwrap();
+    let mut transaction = linked.transaction().unwrap();
+    transaction.lock_ref("refs/heads/linked").unwrap();
+    transaction
+        .set_target(
+            "refs/heads/linked",
+            candidate,
+            Some(&signature),
+            "owned effect",
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    expected_branch.extend(ref_effect_entry(old, candidate));
+    expected_head.extend(ref_effect_entry(old, candidate));
+    assert_eq!(fs::read(&branch_log).unwrap(), expected_branch);
+    assert_eq!(fs::read(&target_head_log).unwrap(), expected_head);
+    assert_eq!(
+        fs::read(repository.path().join("logs/HEAD")).unwrap(),
+        primary_head
+    );
+    assert_eq!(repository.refname_to_id("HEAD").unwrap(), old);
+    assert_eq!(linked.refname_to_id("HEAD").unwrap(), candidate);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn uncertain_ref_effect_matrix_preserves_log_images_after_operator_lock_handling() {
+    // Explicitly simulated images, not process death inside libgit2. HEAD-only
+    // is an adversarial state, not the normal branch-then-HEAD backend ordering.
+    for absent in [false, true] {
+        for image in [
+            "none",
+            "branch",
+            "head",
+            "both",
+            "partial_branch",
+            "partial_head",
+            "changed",
+            "third_ref",
+        ] {
+            let (root, data, service, request) = protocol_resolution_fixture();
+            if absent {
+                let repository = git2::Repository::open(root.path()).unwrap();
+                for role in ["logs/refs/heads/main", "logs/HEAD"] {
+                    fs::remove_file(repository.path().join(role)).unwrap();
+                }
+            }
+            set_resolution_index_install_hook(root.path().to_owned(), || {
+                panic!("fixture stop before ref invocation")
+            });
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || service.resolve_synchronization(request.clone())
+                ))
+                .is_err()
+            );
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let old = repository.refname_to_id("HEAD").unwrap();
+            let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            connection
+                .execute_batch("UPDATE remote_resolution_index_artifacts SET ref_phase='intent';")
+                .unwrap();
+            let candidate: String = connection
+                .query_row(
+                    "SELECT candidate_oid FROM remote_resolution_attempts",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let candidate_oid = git2::Oid::from_str(&candidate).unwrap();
+            let logs = [
+                repository.path().join("logs/refs/heads/main"),
+                repository.path().join("logs/HEAD"),
+            ];
+            for (index, log) in logs.iter().enumerate() {
+                let mut bytes = if absent {
+                    Vec::new()
+                } else {
+                    fs::read(log).unwrap()
+                };
+                match (image, index) {
+                    ("branch", 0) | ("head", 1) | ("both", _) | ("partial_head", 0) => {
+                        bytes.extend(ref_effect_entry(old, candidate_oid))
+                    }
+                    ("partial_branch", 0) | ("partial_head", 1) => {
+                        bytes.extend(&ref_effect_entry(old, candidate_oid)[..45])
+                    }
+                    ("changed", _) => bytes = b"foreign changed log image\n".to_vec(),
+                    _ => {}
+                }
+                if absent && bytes.is_empty() {
+                    assert!(!log.exists());
+                } else {
+                    fs::write(log, bytes).unwrap();
+                }
+            }
+            if image == "third_ref" {
+                // Incoming is a real third OID, but never an authorized candidate.
+                let third = repository
+                    .find_commit(candidate_oid)
+                    .unwrap()
+                    .parent_id(1)
+                    .unwrap();
+                assert_ne!(third, old);
+                assert_ne!(third, candidate_oid);
+                fs::write(
+                    repository.path().join("refs/heads/main"),
+                    format!("{third}\n"),
+                )
+                .unwrap();
+            }
+            let before_head = repository.refname_to_id("HEAD").unwrap();
+            let before_logs = logs
+                .iter()
+                .map(|log| fs::read(log).ok())
+                .collect::<Vec<_>>();
+            let before_index = fs::read(repository.path().join("index")).unwrap();
+            let backend_lock = repository.path().join("refs/heads/main.lock");
+            // Matching candidate bytes are still not backend lock provenance.
+            let lock_bytes = format!("{candidate}\n");
+            fs::write(&backend_lock, &lock_bytes).unwrap();
+            let restarted = RepositoryService::open_at(data.path()).unwrap();
+            assert!(matches!(
+                restarted.resolve_synchronization(request.clone()),
+                Err(SynchronizationError::RecoveryRequired)
+            ));
+            assert_eq!(fs::read(&backend_lock).unwrap(), lock_bytes.as_bytes());
+            fs::remove_file(&backend_lock).unwrap(); // Quiesced fixture operator only.
+            let result = restarted.resolve_synchronization(request);
+            if image == "none" {
+                assert!(
+                    matches!(result.unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate_oid)
+                );
+                assert!(!repository.path().join("index.lock").exists());
+                continue;
+            }
+            if image == "third_ref" {
+                assert!(matches!(result, Err(SynchronizationError::ExternalChange)));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(SynchronizationError::RecoveryRequired)
+                ));
+            }
+            assert_eq!(
+                logs.iter()
+                    .map(|log| fs::read(log).ok())
+                    .collect::<Vec<_>>(),
+                before_logs
+            );
+            assert_eq!(repository.refname_to_id("HEAD").unwrap(), before_head);
+            assert_eq!(
+                fs::read(repository.path().join("index")).unwrap(),
+                before_index
+            );
+            assert!(repository.path().join("index.lock").exists());
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT candidate_oid FROM remote_resolution_attempts",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                candidate
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn candidate_ref_effect_before_checkpoint_observation_replays_without_another_append() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterRefTransition);
+    assert!(service.resolve_synchronization(request.clone()).is_err());
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let candidate = repository.refname_to_id("HEAD").unwrap();
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT phase FROM remote_resolution_attempts", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "candidate_prepared"
+    );
+    let logs = [
+        repository.path().join("logs/refs/heads/main"),
+        repository.path().join("logs/HEAD"),
+    ];
+    let before = logs
+        .iter()
+        .map(|log| fs::read(log).unwrap())
+        .collect::<Vec<_>>();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(
+        matches!(restarted.resolve_synchronization(request).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+    );
+    assert_eq!(
+        logs.iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>(),
+        before
+    );
+    // Actual successful backend return followed by an injected service failure;
+    // not death in the backend, nor proof of candidate-HEAD log authentication.
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stock_ref_effect_head_append_failure_leaves_branch_append_and_replay_duplicates_it() {
+    let (_root, repository, old, candidate) = ref_effect_api_fixture();
+    let branch_log = repository.path().join("logs/refs/heads/main");
+    let head_log = repository.path().join("logs/HEAD");
+    let baseline_branch = fs::read(&branch_log).unwrap();
+    let baseline_head = fs::read(&head_log).unwrap();
+    // A real PUBLIC backend error, not a simulated successful append or death.
+    // A nonempty directory makes HEAD appending fail after branch appending.
+    fs::remove_file(&head_log).unwrap();
+    fs::create_dir(&head_log).unwrap();
+    let foreign = head_log.join("foreign-canary");
+    fs::write(&foreign, b"preserve foreign obstruction").unwrap();
+    let signature = git2::Signature::new(
+        "Frozen Identity",
+        "frozen@example.invalid",
+        &git2::Time::new(5678, 0),
+    )
+    .unwrap();
+    let apply = || {
+        let mut transaction = repository.transaction().unwrap();
+        transaction.lock_ref("refs/heads/main").unwrap();
+        transaction
+            .set_target(
+                "refs/heads/main",
+                candidate,
+                Some(&signature),
+                "owned effect",
+            )
+            .unwrap();
+        transaction.commit()
+    };
+    assert!(apply().is_err());
+    assert_eq!(repository.refname_to_id("HEAD").unwrap(), old);
+    let mut branch_once = baseline_branch;
+    branch_once.extend(ref_effect_entry(old, candidate));
+    assert_eq!(fs::read(&branch_log).unwrap(), branch_once);
+    assert_eq!(fs::read(&foreign).unwrap(), b"preserve foreign obstruction");
+    // This is fixture restoration ONLY, not operator permission for production
+    // reflog effects. The second stock invocation demonstrates duplicate append.
+    fs::remove_file(foreign).unwrap();
+    fs::remove_dir(&head_log).unwrap();
+    fs::write(&head_log, &baseline_head).unwrap();
+    apply().unwrap();
+    branch_once.extend(ref_effect_entry(old, candidate));
+    assert_eq!(fs::read(&branch_log).unwrap(), branch_once);
+    let mut head_once = baseline_head;
+    head_once.extend(ref_effect_entry(old, candidate));
+    assert_eq!(fs::read(&head_log).unwrap(), head_once);
+    assert_eq!(repository.refname_to_id("HEAD").unwrap(), candidate);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_no_effect_intent_restarts_with_original_images() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let database = data.path().join(REGISTRY_FILE);
+    set_resolution_index_install_hook(root.path().to_owned(), move || {
+        rusqlite::Connection::open(database)
+            .unwrap()
+            .execute_batch("UPDATE remote_resolution_index_artifacts SET ref_phase='intent';")
+            .unwrap();
+        panic!("fixture stop after intent, before backend");
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || service.resolve_synchronization(request.clone())
+        ))
+        .is_err()
+    );
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request).unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_candidate_requires_exact_logs_and_operator_restoration() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterRefTransition);
+    assert!(service.resolve_synchronization(request.clone()).is_err());
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let candidate = repository.head().unwrap().target().unwrap();
+    let path = repository.path().join("logs/HEAD");
+    let intended = fs::read(&path).unwrap();
+    let partial = intended[..intended.len() - 5].to_vec();
+    fs::write(&path, &partial).unwrap();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), partial);
+    assert!(repository.path().join("index.lock").exists());
+    // Disposable fixture operator restores complete intended backend metadata.
+    fs::write(&path, &intended).unwrap();
+    assert!(
+        matches!(restarted.resolve_synchronization(request).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+    );
+    assert_eq!(fs::read(&path).unwrap(), intended);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_static_unsafe_metadata_and_policy_refuse_before_canonical_writes() {
+    for adverse in [
+        "symlink",
+        "executable",
+        "directory",
+        "ancestor",
+        "fifo",
+        "ref_symlink",
+        "policy",
+    ] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let canonical = root.path().join("docs/document.md");
+        let original = fs::read(&canonical).unwrap();
+        let log = repository.path().join("logs/HEAD");
+        match adverse {
+            "symlink" => {
+                fs::remove_file(&log).unwrap();
+                std::os::unix::fs::symlink(&canonical, &log).unwrap();
+            }
+            "executable" => {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&log, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            "directory" => {
+                fs::remove_file(&log).unwrap();
+                fs::create_dir(&log).unwrap();
+            }
+            "ancestor" => {
+                let logs = repository.path().join("logs");
+                let saved = repository.path().join("saved-logs");
+                fs::rename(&logs, &saved).unwrap();
+                std::os::unix::fs::symlink(saved, logs).unwrap();
+            }
+            "fifo" => {
+                fs::remove_file(&log).unwrap();
+                let path = CString::new(log.as_os_str().as_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            }
+            "ref_symlink" => {
+                let reference = repository.path().join("refs/heads/main");
+                let saved = repository.path().join("saved-main-ref");
+                fs::rename(&reference, &saved).unwrap();
+                std::os::unix::fs::symlink(saved, reference).unwrap();
+            }
+            _ => repository
+                .config()
+                .unwrap()
+                .set_str("core.logallrefupdates", "unsupported-policy")
+                .unwrap(),
+        }
+        assert!(service.resolve_synchronization(request).is_err());
+        assert_eq!(fs::read(&canonical).unwrap(), original);
+        assert_eq!(
+            rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM remote_resolution_attempts",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn frozen_resolution_log_entry(
+    repository: &git2::Repository,
+    old: git2::Oid,
+    candidate: git2::Oid,
+) -> Vec<u8> {
+    let commit = repository.find_commit(candidate).unwrap();
+    let signer = commit.committer();
+    format!(
+        "{old} {candidate} {} <{}> 0 +0000\tmanyhands resolution\n",
+        signer.name().unwrap(),
+        signer.email().unwrap()
+    )
+    .into_bytes()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_policy_opaque_history_and_frozen_signer_are_private_and_exact() {
+    for policy in [None, Some("false"), Some("true"), Some("always")] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let mut config = repository.config().unwrap();
+        match policy {
+            Some(value) => config.set_str("core.logallrefupdates", value).unwrap(),
+            None => {
+                let _ = config.remove("core.logallrefupdates");
+            }
+        }
+        const SIGNER: &str = "PRIVATE-REF-SIGNER-CANARY";
+        const EMAIL: &str = "PRIVATE-REF-EMAIL-CANARY@example.invalid";
+        const HISTORY: &[u8] = b"PRIVATE-REF-HISTORY-CANARY\xff opaque spaces  \nunterminated";
+        config.set_str("user.name", SIGNER).unwrap();
+        config.set_str("user.email", EMAIL).unwrap();
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        for log in &logs {
+            fs::write(log, HISTORY).unwrap();
+        }
+        let old = repository.head().unwrap().target().unwrap();
+        *service.failure_point.lock().unwrap() =
+            Some(FailurePoint::ResolutionAfterCandidatePrepared);
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        let database = data.path().join(REGISTRY_FILE);
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let candidate: String = connection
+            .query_row(
+                "SELECT candidate_oid FROM remote_resolution_attempts",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let candidate = git2::Oid::from_str(&candidate).unwrap();
+        let commit = repository.find_commit(candidate).unwrap();
+        assert!(commit.committer().name() == Some(SIGNER));
+        assert_eq!(commit.committer().when().seconds(), 0);
+        // A changed configured identity cannot regenerate the candidate or signer.
+        config.set_str("user.name", "Changed Identity").unwrap();
+        config
+            .set_str("user.email", "changed@example.invalid")
+            .unwrap();
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        assert!(
+            matches!(restarted.resolve_synchronization(request.clone()).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+        );
+        let mut expected = HISTORY.to_vec();
+        if policy != Some("false") {
+            expected.extend(frozen_resolution_log_entry(&repository, old, candidate));
+        }
+        for log in &logs {
+            assert!(fs::read(log).unwrap() == expected);
+        }
+        // Completed replay rechecks both exact images and never appends again.
+        assert!(
+            matches!(restarted.resolve_synchronization(request.clone()).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+        );
+        for log in &logs {
+            assert!(fs::read(log).unwrap() == expected);
+        }
+        let backup = data.path().join("ref-evidence-backup.sqlite");
+        connection
+            .execute("VACUUM INTO ?1", [backup.to_str().unwrap()])
+            .unwrap();
+        let staging = repository
+            .path()
+            .join(format!(".manyhands-resolution-{}", request.attempt_id));
+        let mut private_files = vec![
+            database,
+            data.path().join(format!("{REGISTRY_FILE}-wal")),
+            backup,
+        ];
+        for role in ["baseline", "transition"] {
+            private_files.push(staging.join(format!("ref-log-{role}")));
+            private_files.push(staging.join(format!("ref-log-{role}-anchor")));
+        }
+        for path in private_files {
+            if let Ok(bytes) = fs::read(path) {
+                for canary in [
+                    SIGNER.as_bytes(),
+                    EMAIL.as_bytes(),
+                    b"PRIVATE-REF-HISTORY-CANARY",
+                ] {
+                    assert!(
+                        !bytes.windows(canary.len()).any(|window| window == canary),
+                        "private ref evidence leaked raw authority"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_old_ref_effects_preserve_then_accept_operator_restored_original_images() {
+    for shape in [
+        "branch",
+        "head",
+        "both",
+        "partial_branch",
+        "partial_head",
+        "foreign",
+    ] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        let originals = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        let old = repository.head().unwrap().target().unwrap();
+        let database = data.path().join(REGISTRY_FILE);
+        set_resolution_index_install_hook(root.path().to_owned(), move || {
+            rusqlite::Connection::open(database)
+                .unwrap()
+                .execute_batch("UPDATE remote_resolution_index_artifacts SET ref_phase='intent';")
+                .unwrap();
+            panic!("simulated old-ref backend interruption");
+        });
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || service.resolve_synchronization(request.clone())
+            ))
+            .is_err()
+        );
+        let candidate: String = rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT candidate_oid FROM remote_resolution_attempts",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let candidate = git2::Oid::from_str(&candidate).unwrap();
+        let entry = frozen_resolution_log_entry(&repository, old, candidate);
+        for (index, log) in logs.iter().enumerate() {
+            let mut image = originals[index].clone();
+            match (shape, index) {
+                ("branch", 0) | ("head", 1) | ("both", _) | ("partial_head", 0) => {
+                    image.extend(&entry)
+                }
+                ("partial_branch", 0) | ("partial_head", 1) => image.extend(&entry[..45]),
+                ("foreign", _) => image = b"foreign backend metadata".to_vec(),
+                _ => {}
+            }
+            fs::write(log, image).unwrap();
+        }
+        let interrupted = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        assert!(matches!(
+            restarted.resolve_synchronization(request.clone()),
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+        assert_eq!(repository.head().unwrap().target(), Some(old));
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            interrupted
+        );
+        // Operator restores both original images, not merely an absent lock.
+        for (log, image) in logs.iter().zip(&originals) {
+            fs::write(log, image).unwrap();
+        }
+        let mut altered = request.clone();
+        altered.resolutions[0].1 = RedactedConflictBytes::from_bytes(b"altered same ID".to_vec());
+        assert!(restarted.resolve_synchronization(altered).is_err());
+        assert!(
+            matches!(restarted.resolve_synchronization(request).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+        );
+        for (log, mut expected) in logs.iter().zip(originals) {
+            expected.extend(&entry);
+            assert_eq!(fs::read(log).unwrap(), expected);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_unproved_candidate_states_and_policy_changes_preserve_effects() {
+    for shape in [
+        "original",
+        "branch_only",
+        "head_only",
+        "partial_branch",
+        "partial_head",
+        "foreign",
+        "policy",
+    ] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        let originals = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        let original_policy = repository
+            .config()
+            .unwrap()
+            .get_string("core.logallrefupdates")
+            .ok();
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterRefTransition);
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        let candidate = repository.head().unwrap().target().unwrap();
+        let intended = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        for (index, log) in logs.iter().enumerate() {
+            let image = match (shape, index) {
+                ("original", _) | ("branch_only", 1) | ("head_only", 0) => originals[index].clone(),
+                ("partial_branch", 0) | ("partial_head", 1) => {
+                    intended[index][..intended[index].len() - 5].to_vec()
+                }
+                ("foreign", _) => b"foreign candidate log".to_vec(),
+                _ => intended[index].clone(),
+            };
+            fs::write(log, image).unwrap();
+        }
+        if shape == "policy" {
+            repository
+                .config()
+                .unwrap()
+                .set_bool("core.logallrefupdates", false)
+                .unwrap();
+        }
+        let interrupted = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        assert!(matches!(
+            restarted.resolve_synchronization(request.clone()),
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+        assert_eq!(repository.head().unwrap().target(), Some(candidate));
+        assert!(repository.path().join("index.lock").exists());
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            interrupted
+        );
+        // Fixture operator restores the COMPLETE candidate images and policy.
+        if shape == "policy" {
+            let mut config = repository.config().unwrap();
+            if let Some(policy) = original_policy {
+                config.set_str("core.logallrefupdates", &policy).unwrap();
+            } else {
+                config.remove("core.logallrefupdates").unwrap();
+            }
+        }
+        for (log, image) in logs.iter().zip(&intended) {
+            fs::write(log, image).unwrap();
+        }
+        assert!(
+            matches!(restarted.resolve_synchronization(request).unwrap(), ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid == candidate)
+        );
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            intended
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_missing_partial_tampered_or_substituted_evidence_never_authenticates() {
+    for corruption in [
+        "missing_baseline",
+        "missing_transition",
+        "partial_manifest",
+        "same_image_substitution",
+        "digest",
+        "symlink",
+        "missing_anchor",
+    ] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterRefTransition);
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let candidate = repository.head().unwrap().target();
+        let staging = repository
+            .path()
+            .join(format!(".manyhands-resolution-{}", request.attempt_id));
+        let manifest = staging.join("ref-log-transition");
+        let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        match corruption {
+            "missing_baseline" => {
+                connection
+                    .execute(
+                        "DELETE FROM remote_resolution_ref_log_artifacts WHERE role='baseline'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            "missing_transition" => {
+                connection
+                    .execute(
+                        "DELETE FROM remote_resolution_ref_log_artifacts WHERE role='transition'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            "partial_manifest" => fs::write(&manifest, b"version: 1\npartial:").unwrap(),
+            "same_image_substitution" => {
+                let bytes = fs::read(&manifest).unwrap();
+                fs::remove_file(&manifest).unwrap();
+                fs::write(&manifest, bytes).unwrap();
+            }
+            "digest" => {
+                connection.execute_batch("DROP TRIGGER remote_resolution_ref_log_artifact_immutable; UPDATE remote_resolution_ref_log_artifacts SET digest=zeroblob(32); CREATE TRIGGER remote_resolution_ref_log_artifact_immutable BEFORE UPDATE ON remote_resolution_ref_log_artifacts BEGIN SELECT RAISE(ABORT,'immutable ref log evidence'); END;").unwrap();
+            }
+            "symlink" => {
+                fs::remove_file(&manifest).unwrap();
+                std::os::unix::fs::symlink(staging.join("ref-log-baseline"), &manifest).unwrap();
+            }
+            _ => fs::remove_file(staging.join("ref-log-transition-anchor")).unwrap(),
+        }
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        let before = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        if let Ok(restarted) = RepositoryService::open_at(data.path()) {
+            assert!(restarted.resolve_synchronization(request).is_err());
+        }
+        assert_eq!(repository.head().unwrap().target(), candidate);
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert!(repository.path().join("index.lock").exists());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_manifest_observation_failure_recovers_only_private_preparation() {
+    for role in ["baseline", "transition"] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let database = data.path().join(REGISTRY_FILE);
+        let hook_database = database.clone();
+        set_resolution_index_lock_hook(root.path().to_owned(), move || {
+            let sql = format!(
+                "CREATE TRIGGER fail_ref_manifest BEFORE INSERT ON remote_resolution_ref_log_artifacts WHEN NEW.role='{role}' BEGIN SELECT RAISE(ABORT,'test manifest observation fault'); END;"
+            );
+            rusqlite::Connection::open(hook_database)
+                .unwrap()
+                .execute_batch(&sql)
+                .unwrap();
+        });
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let old = repository.head().unwrap().target();
+        let logs = [
+            repository.path().join("logs/refs/heads/main"),
+            repository.path().join("logs/HEAD"),
+        ];
+        let before = logs
+            .iter()
+            .map(|log| fs::read(log).unwrap())
+            .collect::<Vec<_>>();
+        assert!(service.resolve_synchronization(request.clone()).is_err());
+        assert_eq!(repository.head().unwrap().target(), old);
+        assert_eq!(
+            logs.iter()
+                .map(|log| fs::read(log).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+        let connection = rusqlite::Connection::open(database).unwrap();
+        connection
+            .execute_batch("DROP TRIGGER fail_ref_manifest;")
+            .unwrap();
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        assert!(matches!(
+            restarted.resolve_synchronization(request).unwrap(),
+            ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+        ));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_legacy_missing_all_evidence_refuses_even_old_no_effect_state() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    set_resolution_index_install_hook(root.path().to_owned(), || {
+        panic!("fixture old HEAD with candidate")
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || service.resolve_synchronization(request.clone())
+        ))
+        .is_err()
+    );
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let old = repository.head().unwrap().target();
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute("DELETE FROM remote_resolution_ref_log_artifacts", [])
+        .unwrap();
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(matches!(
+        restarted.resolve_synchronization(request),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(repository.head().unwrap().target(), old);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_ref_log_artifacts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_preserves_every_relevant_foreign_backend_lock_before_writes() {
+    for role in [
+        "HEAD.lock",
+        "logs/HEAD.lock",
+        "packed-refs.lock",
+        "refs/heads/main.lock",
+        "logs/refs/heads/main.lock",
+    ] {
+        let (root, data, service, request) = protocol_resolution_fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let canonical = root.path().join("docs/document.md");
+        let before = fs::read(&canonical).unwrap();
+        let path = repository.path().join(role);
+        fs::write(&path, b"foreign backend lock identity not inferred").unwrap();
+        assert!(matches!(
+            service.resolve_synchronization(request),
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+        assert_eq!(
+            fs::read(path).unwrap(),
+            b"foreign backend lock identity not inferred"
+        );
+        assert_eq!(fs::read(canonical).unwrap(), before);
+        assert_eq!(
+            rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM remote_resolution_attempts",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_snapshot_uses_common_branch_and_target_worktree_head_roles() {
+    let (root, repository, old, candidate) = ref_effect_api_fixture();
+    let reference = repository
+        .reference("refs/heads/log-proof-linked", old, false, "fixture")
+        .unwrap();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    let workdir = root.path().join("log-proof-linked");
+    repository
+        .worktree("log-proof-linked", &workdir, Some(&options))
+        .unwrap();
+    let target = git2::Repository::open(workdir).unwrap();
+    let primary_head = fs::read(repository.path().join("logs/HEAD")).unwrap();
+    let snapshot = RefLogSnapshot::read(&target).unwrap();
+    assert!(snapshot.logs[0].image.present);
+    assert!(!snapshot.logs[1].image.present);
+    snapshot.revalidate(&target).unwrap();
+    let signature = git2::Signature::new(
+        "Frozen Identity",
+        "frozen@example.invalid",
+        &git2::Time::new(5678, 0),
+    )
+    .unwrap();
+    let entry = ref_effect_entry(old, candidate);
+    let intended = snapshot
+        .logs
+        .each_ref()
+        .map(|log| log.intended(Some(&entry)));
+    let mut transaction = target.transaction().unwrap();
+    transaction.lock_ref("refs/heads/log-proof-linked").unwrap();
+    transaction
+        .set_target(
+            "refs/heads/log-proof-linked",
+            candidate,
+            Some(&signature),
+            "owned effect",
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    let result = RefLogSnapshot::read(&target).unwrap();
+    result.revalidate(&target).unwrap();
+    assert!(result.matches(&intended));
+    assert_eq!(
+        fs::read(repository.path().join("logs/HEAD")).unwrap(),
+        primary_head
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(old));
+    // Observer/role fidelity only, not full public context resolution/death proof.
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ref_log_proof_old_operator_restoration_after_failed_checkpoint_keeps_progress_monotonic() {
+    let (root, data, service, request) = protocol_resolution_fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let old = repository.head().unwrap().target().unwrap();
+    let logs = [
+        repository.path().join("logs/refs/heads/main"),
+        repository.path().join("logs/HEAD"),
+    ];
+    let original = logs
+        .iter()
+        .map(|log| fs::read(log).unwrap())
+        .collect::<Vec<_>>();
+    let connection = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_checkpoint_observation BEFORE UPDATE OF phase ON remote_resolution_attempts WHEN NEW.phase='applied' BEGIN SELECT RAISE(ABORT,'test checkpoint observation fault'); END;").unwrap();
+    assert!(service.resolve_synchronization(request.clone()).is_err());
+    let candidate = repository.head().unwrap().target().unwrap();
+    assert_ne!(candidate, old);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT ref_phase FROM remote_resolution_index_artifacts",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "observed"
+    );
+    connection
+        .execute_batch("DROP TRIGGER fail_checkpoint_observation;")
+        .unwrap();
+    // Fixture operator restores the original old-ref/log images after the failed
+    // checkpoint observation. Ref progress must not rewind or regenerate proof.
+    fs::write(
+        repository.path().join("refs/heads/main"),
+        format!("{old}\n"),
+    )
+    .unwrap();
+    for (log, image) in logs.iter().zip(&original) {
+        fs::write(log, image).unwrap();
+    }
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    assert!(
+        matches!(restarted.resolve_synchronization(request).unwrap(),ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } if commit_oid==candidate)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT ref_phase FROM remote_resolution_index_artifacts",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "observed"
     );
 }

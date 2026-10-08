@@ -583,3 +583,274 @@ and Devenv changes, without Rust implementation changes. Preserve the existing
 checkpoint before rebasing the ticket onto fetched main. Never stash/reset/clean
 or modify the main checkout's unrelated `.superpowers/` directory. Record the
 post-rebase accepted-task mapping before dispatching implementation.
+
+Rebase completed without conflicts. The shared `origin/main` ref advanced during
+preflight to `ceb1be49477cfec5e14093082d00cf01a5367fb3`; this is the actual
+verified ancestor/base of rebased ticket HEAD
+`45a139b0d799d4129e5af45688a33938be375e8b`. The intervening commits are
+approved Wave 3 ticket relationships/short-code documentation, not Rust source.
+All 19 ticket commit subjects/order were preserved. Source/Cargo trees are
+identical to the pre-rebase WIP; the only `tests/` change is main's interim-ticket
+shell test. Main's unrelated `.superpowers/` remains untouched.
+
+| Checkpoint | Before | After |
+| --- | --- | --- |
+| Task 0 | `456b509` | `151b0cc` |
+| Task 1 through lint remediation | `46fb3cc` | `e125f8c` |
+| Task 2 accepted | `50fea1c` | `22d1406` |
+| Task 3 accepted; Task 4 whole-change review base | `6bd1f18` | `51fe6f2` |
+| Unaccepted Task 4 preservation WIP | `6e07c8e` | `45a139b` |
+
+Full pre-rebase diff, untracked archive, logs and commit mapping are retained at
+`/tmp/manyhands-task4-pre-rebase-qK7blK`. Do not treat the WIP as Task 4 acceptance.
+Reread rebased AGENTS: rebase direction is now explicitly ticket onto main.
+Reviewed changed canonical RFC: editor normalization is desktop-only, not a
+headless exact-byte exception; new Wave 3 optional fields remain forward-compatible
+unknown metadata for this Cycle. Devenv adds Claude Code tooling and its locked
+input, so obtain fresh compile/focused verification before mutation.
+
+Dispatch first bounded redesign milestone as one tightly coupled protocol seam:
+owned artifact evidence, stable sentinel, and separate authoritative index
+serialization/lifecycle integration. One writer owns the state/reservation/sync
+seam and its tests; splitting those across concurrent writers would overlap the
+same protocol/files. Later sequential milestones cover remaining path/closure/
+metadata/native helpers and real process-death proof. Independent read-only
+review follows each milestone; maximum three fix-review rounds before escalating
+unresolved feasibility. No Task 5 or checkpoint acceptance until Task 4 gates.
+
+### Milestone 1 timeout recovery — 2026-10-08
+
+Workflow `97d778e9-9e54-405a-800a-9a006acc0c02` failed when writer
+`d961bb54-0fc8-4a33-bcf2-020862914b80` reached its 1,800-second deadline.
+No dependent reviewer launched and the requested handoff was missing. HEAD and
+branch remain `45a139b` on the ticket branch; no staged files. Partial tracked
+binary diff, staged diff, untracked archive and status are preserved at
+`/tmp/manyhands-task4-m1-timeout-fzxDuy`. No Cargo/rustc process remained in the
+ticket cwd; the remaining MCP server was unrelated and was left alone.
+
+The transcript records fresh cargo check and 150 focused remote tests passing,
+plus additional focused suites; final command/report attribution and remaining
+fmt/clippy status must be confirmed by the retained writer. Do not claim a
+full-suite or milestone acceptance from this transcript alone.
+
+Worker was authorized to add only the new evidence table to
+`tests/repository_enablement.rs`'s exact schema inventory expectation. It also
+identified libgit2's reflog-append-before-ref-install split. This remains a
+blocking next-milestone recovery item: uncertain ref/reflog effects must fail
+closed without duplicate replay, truncation, or foreign-lock cleanup. The
+approved manual exception concerns ambiguous backend locks only, not automatic
+reflog repair. No Task 4 acceptance or Task 5 follows from milestone progress.
+
+Same-protocol recovery will resume the exact retained writer only for missing
+validation and handoff, with a distinct output binding, then independent review.
+No foreground/CLI fallback, extra implementation scope, or replay of accepted
+Tasks 0–3 is authorized by the timeout.
+
+### Milestone 1 reviewed; next canonical seam — 2026-10-08
+
+Recovery workflow `7342286e-49ff-44c8-8044-85afe0c97e8a` completed the
+retained writer's handoff (`26b19c94-bb80-439b-bd12-85af3d9902d1`) and fresh
+independent review (`de57b8fe-5928-49f8-a272-6b71f7caf3bf`). The recovered
+writer made no new source changes or duplicate validation runs. Review verdict:
+**OK with notes, milestone 1 only**; no delivered-seam issues. This does not
+accept the committed unaccepted WIP range or all Task 4.
+
+Artifact directory:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/7342286e-49ff-44c8-8044-85afe0c97e8a/`:
+`task4-protocol-m1-recovered-handoff.md` and
+`task4-protocol-m1-recovered-review.md`.
+Reviewed source diff/status snapshot:
+`/tmp/manyhands-task4-m1-reviewed-BJdTZH`. HEAD remains `45a139b`; nothing staged.
+
+Final source validation, after last writer changes, is handoff-attributed:
+Devenv all-feature locked check, fmt check, strict all-target/all-feature clippy,
+150 remote tests, 9 remote-reservation, 50 recovery-foundation, 73 repository-
+enablement tests, and diff checks passed. Reviewer corroborated retained test
+logs; it did not rerun commands. Full all-feature suite, CLI smoke and native
+runs were not performed for this milestone.
+
+The additive artifact journal proves ownership before stable-sentinel publication
+and retains exact private anchors through verified release. Separate libgit2
+serialization replaced the custom memfd serializer/direct SHA-1 dependency.
+The ref-intent fence safely stops old-HEAD uncertainty without another backend
+invocation after operator lock handling. It is deliberately not convergence.
+
+Next bounded milestone 2a owns canonical path-write observation recovery and
+all-side closure/comment-immutable validation. Keep stable-lock/ref-intent behavior
+unchanged except required wiring. Path results equal to bound caller output
+must be observed without rewriting; third values and unsafe paths stop. Validate
+invariants against every recorded side; an open base cannot authorize reopening
+or override immutable disagreement. Ref/reflog convergence, native helpers,
+real process death/storage ordering and final gates remain explicit later work.
+Do not broaden operator recovery or claim Task 4 acceptance; review this seam
+independently before moving to the next component.
+
+### Milestone 2a reviewed — 2026-10-08
+
+Workflow `3eddd263-1b22-43e7-9d1f-36eaa37c4250` completed writer
+`83bd1f32-ae31-4ece-aeb0-548f232a93d5` and fresh reviewer
+`d15ee6f9-e67d-49cb-a066-b122d9855d0b`. Verdict: **OK with notes,
+milestone 2a only**; no delivered-seam issues. Whole Task 4 remains unaccepted.
+Artifacts:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/3eddd263-1b22-43e7-9d1f-36eaa37c4250/task4-canonical-m2a-worker.md`
+and adjacent `task4-canonical-m2a-review.md`.
+
+Only sync.rs, sync_tests.rs and repository.rs changed from reviewed milestone 1.
+Exact old/result/third-image classification observes already installed bound
+results without rewriting. All members validate before any remaining writes.
+All recorded sides constrain closure/comment immutables for fresh requests and
+retained candidates. A descriptor-bound resolution read rejects unsafe modes;
+redundant checkout was removed because it rewrote caller paths. Stable sentinel,
+serialization, metadata checks and uncertain-ref replay fencing remain intact.
+
+Handoff and inspected logs show final Devenv check/fmt/strict clippy plus 70 sync,
+9 merge and 112 local-authoring tests passing. Six red/green regressions cover
+observation faults, no second write/inode-mtime changes, unsafe/third/stale input,
+all-side disagreements, exact bytes/unknown keys and legacy candidate rejection.
+Reviewer ran no commands. Reviewed source copies/diff/status are preserved at
+`/tmp/manyhands-task4-m2a-reviewed-5w6HFi`; HEAD remains `45a139b`, staging empty.
+
+Next milestone 2b is a bounded source-characterized pass on separate ref/reflog
+actual-state evidence and safe convergence. Use the approved public locked
+backend only; preserve the existing stop fence unless a tested safe path can
+prove which effects occurred. No duplicate append, automatic truncation/repair,
+custom backend or broadened operator exception is approved. If stock APIs cannot
+converge under those constraints, return the exact feasibility gap and owner
+decision rather than inventing scope. Native helpers, real process death/storage
+ordering, discovery contention and final whole-task/full-suite/CLI/native gates
+remain pending. No Task 5, checkpoint acceptance or delivery action yet.
+
+### Milestone 2b diagnosis verified; recovery decision required — 2026-10-08
+
+Workflow `1fe78e41-782d-4673-a7ce-258e1cd9c25e` completed writer
+`e8f91cb6-f196-4086-a30e-c9f810dabca7` and fresh reviewer
+`e706134b-85d5-42a4-b310-255e0b2e1777`. Verdict: **OK with notes for the
+bounded diagnosis/test-only delta; convergence incomplete, decision required**.
+Only sync_tests.rs changed from reviewed milestone 2a: seven stock-API tests and
+two fixture helpers. No production recovery, schema or dependency changes.
+Artifacts:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/1fe78e41-782d-4673-a7ce-258e1cd9c25e/task4-ref-m2b-worker.md`
+and adjacent `task4-ref-m2b-review.md`.
+Preserved reviewed diff/status: `/tmp/manyhands-task4-m2b-reviewed-7t3NUH`.
+HEAD remains unaccepted WIP `45a139b`, staging empty.
+
+Locked libgit2 appends branch then HEAD logs before installing the ref. Public
+transaction-supplied reflogs suppress both implicit appends but serialize/replace
+whole files; parsing can skip malformed lines and writing normalizes messages.
+Public reflog reads also create absent files. Real API tests demonstrate branch
+append followed by HEAD error leaves old ref and duplicates branch logging on
+stock retry. Source supports partial-write interruption; this is not real process-
+death or storage proof. Candidate-HEAD log authentication remains unimplemented.
+
+Both writer and independent reviewer conclude that old ref plus complete branch
+append plus partial HEAD append cannot converge under current stock APIs without
+duplicate append, prohibited full-log repair/replacement, or additional machinery.
+The existing uncertainty fence remains unchanged and preserves actual effects.
+The approved stale-backend-lock intervention alone does not resolve this state.
+Conditional byte-preserving complete-log replacement is only a subset candidate,
+not complete partial-tail recovery and not approved implementation.
+
+Retained logs show seven characterization tests and 163 remote tests passing,
+plus Devenv check/fmt/strict clippy and diff/empty-staging checks. Initial fixture/
+API expectation failures were corrected; do not label them production red/green.
+No full-suite/CLI/native/death gate was run or waived. Pause this seam for an
+owner decision: broader operator recovery of interrupted/failed backend ref/log
+effects, or separately scoped automatic mutation/backend feasibility work.
+Other owned sentinel/path/index replay and all prior safety gates remain required.
+
+### Owner backend-effects exception approved — 2026-10-08
+
+Owner selected **Broaden operator recovery** after independent stock-API diagnosis.
+This explicitly supersedes the lock-only exception: interrupted or failed backend
+ref/reflog effects, including partial logs and ambiguous locks, may require
+operator-controlled verification/repair after quiescing writers. Agents preserve
+state and never automatically delete ambiguous locks, normalize/rewrite history,
+repair partial tails, or add custom backend machinery. Other owned sentinel/path/
+index/metadata recovery remains automatic. Same-operation retry must prove an
+allowed recorded baseline or completed-candidate ref/log state and the rest of
+its frozen input, not infer authority merely because an operator removed a lock.
+Recorded in Cycle, design, implementation plan, protocol amendment and ticket.
+
+Internal completion ruling under this approved boundary: bind fixed branch/HEAD
+log roles, frozen normal-update signer/time/message authority and baseline/result
+images before a ref invocation. No raw log/signature text or arbitrary paths in
+SQLite/journals. Read live images without mutation/no-follow; prepare expensive
+read evidence outside the short lease and revalidate. Old ref with original log
+images may perform a missing native transition. Candidate plus exact intended
+logs may observe completion without reappend. Every partial/mixed/foreign image
+or ambiguous lock stops for operator recovery. Supplying whole reflogs for repair
+is not authorized. Legacy missing evidence is not invented.
+
+Resume only this bounded production proof/state-classification seam using stock
+normal updates with explicit frozen signatures, then independent review. Preserve
+reviewed milestones 1/2a and the seven 2b characterization tests. No new dependency,
+platform/native waiver, full-suite waiver, Task 4 acceptance or delivery authority.
+
+### OpenCode recovery authorization and evidence — 2026-10-08
+
+Owner selected **Use OpenCode recovery** in the fresh session: authorize replacing
+the unavailable Pi resume protocol with sequential OpenCode subagents and
+independent reviews, plus an explicitly unaccepted preservation checkpoint before
+the current-main rebase. Reconstruct the missing handoff first; approved scope,
+policies and acceptance gates remain unchanged. No delivery authority was added.
+
+Read-only recovery agent `ses_ee647b3d4ffeiOLG0Gb4ZOKZ49` inspected the exact
+latest writer `dcefc734-637f-432e-8955-783b74ec8206`, its transcript/logs and
+retained timeout source against the reviewed milestone 2b baseline. The runner
+terminated, canonical session lease was released, required report was missing,
+and no independent review launched. Current process-name-only inspection found
+no Cargo/rustc/test validation process; it exposed no command lines/environment.
+
+Recovered source implements fixed-role anchored baseline/transition manifests,
+frozen signer authority, no-follow branch/HEAD observations, stock explicit-
+signature expected-old updates and old-baseline/candidate-result classification.
+This inventory is not acceptance; no production defect was conclusively diagnosed
+by evidence recovery alone. Seven latest-writer files are identified in the
+fresh-session handoff. Preserve earlier milestones and review only this delta
+before extending implementation.
+
+Attributed final retained-source evidence: the last `repository::remote` suite
+passed 176 tests after final edits and formatting. The interrupted final integration
+run passed 112 local-authoring and 50 recovery-foundation tests, but reservation
+ended after seven individual successes and enablement was not reached. Earlier
+complete integration coverage passed 9 reservation, 73 enablement, 112 authoring
+and 50 foundation tests, but predates final sync.rs edits. All-feature check,
+fmt check and strict all-target/all-feature clippy passed before those final edits;
+they require fresh verification. `/tmp/task4-m2c-remote-final.log` and
+`integration-final.log` hold final-run logs; earlier overwritten results survive in
+the attributed writer transcript. A combined earlier batch ended with wrapper exit
+2 after its Cargo checks, so it is not an entirely successful validation batch.
+
+Fresh fetch observes main `60b0324f3993b32f783fcb98e0f6e24dd9f750dd`, matching
+local main. Ticket HEAD before preservation is `45a139b`; it is dirty with
+unaccepted Task 4 source/docs. Main adds effective-copy discovery/indexing fixes
+in repository.rs/discovery.rs and discovery tests. Main's unrelated `.superpowers/`
+is preserved. Inspect and preserve this identified agent-owned diff, then rebase
+the ticket onto fetched main and record checkpoint mapping before new source edits.
+
+### Milestone 2c timeout; fresh-session handoff saved — 2026-10-08
+
+Workflow `c65ad8a8-a967-4447-89c9-38336033372e` failed because retained writer
+`dcefc734-637f-432e-8955-783b74ec8206` exceeded 1,800,000 ms. Process terminal
+observed; requested handoff missing; independent reviewer never launched. Seven
+owned source/inventory files changed. No milestone2c validation or correctness
+claim is attributed/accepted from this failure.
+
+Partial diff, staging/status, exact seven-file copies and scoped untracked archive
+are preserved at `/tmp/manyhands-task4-m2c-timeout-f20R2v`. Branch/HEAD match
+expected ticket/45a139b; staging empty. Preliminary source inventory locates a new
+ref-log-artifact table and snapshot/manifest/context helpers; this is not review.
+No Cargo/Rust process found with ticket cwd in a narrow names-only check; this
+is not proof about all detached jobs. Unrelated MCP processes left untouched.
+
+Owner advised targeted tests and a longer timeout: full suites alone may take
+15–20 minutes or more. Next combined implementation/validation run should budget
+longer (e.g. 90 minutes), checkpoint before long checks, and separate broad final
+validation where appropriate. Do not duplicate already attributed gates or waive
+mandatory final checks.
+
+Owner then requested a saved handoff for a fresh session. Saved
+`docs/plans/2026-10-08-wave-02-cycle-06-task-04-handoff.md` with all approvals,
+latest run/session IDs, exact baselines/snapshots, remaining gates and recovery
+sequence. Work is paused. No resume, source fixes, validation, commit or delivery
+was launched after that request. Task4 unaccepted; Task5 not begun.

@@ -1008,6 +1008,87 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
     other
         .begin_synchronization_resolution_path_effects(root.path(), &reacquired, attempt.attempt_id)
         .unwrap();
+    let artifact = state::ResolutionIndexArtifact {
+        device: 1,
+        inode: 2,
+        sentinel_digest: [7; 32],
+        baseline_digest: [8; 32],
+        baseline_identity: (1, 3),
+        metadata: [Some([9; 32]), None, Some([10; 32])],
+        output: None,
+        ref_phase: "not_started".into(),
+        phase: "intent".into(),
+    };
+    assert!(
+        service
+            .prepare_synchronization_index_artifact(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                &artifact
+            )
+            .is_err(),
+        "old owner is fenced"
+    );
+    other
+        .prepare_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            &artifact,
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            &artifact,
+        )
+        .unwrap();
+    let changed_artifact = state::ResolutionIndexArtifact {
+        inode: 4,
+        ..artifact.clone()
+    };
+    assert!(
+        other
+            .prepare_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                &changed_artifact
+            )
+            .is_err()
+    );
+    assert!(
+        other
+            .advance_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "release_intent"
+            )
+            .is_err()
+    );
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "published",
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_index_output(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                (1, 5, [11; 32])
+            )
+            .is_err(),
+        "candidate must precede install intent"
+    );
     other
         .observe_synchronization_resolution_path_effect(
             root.path(),
@@ -1016,6 +1097,44 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             0,
         )
         .unwrap();
+    let ref_artifact = state::ResolutionRefLogArtifact {
+        device: 1,
+        inode: 17,
+        digest: [13; 32],
+    };
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                "baseline",
+                &ref_artifact
+            )
+            .is_err(),
+        "stale owner cannot bind proof"
+    );
+    other
+        .prepare_synchronization_ref_log_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "baseline",
+            &ref_artifact,
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "transition",
+                &ref_artifact
+            )
+            .is_err(),
+        "candidate must precede result proof"
+    );
     let checkpoint = git2::Oid::from_str("4444444444444444444444444444444444444444").unwrap();
     let tree = git2::Oid::from_str("5555555555555555555555555555555555555555").unwrap();
     other
@@ -1027,6 +1146,92 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
         )
         .unwrap();
     other
+        .prepare_synchronization_index_output(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            (1, 5, [11; 32]),
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_index_output(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            (1, 5, [11; 32]),
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_index_output(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                (1, 6, [11; 32])
+            )
+            .is_err()
+    );
+    assert!(
+        other
+            .advance_synchronization_resolution_ref_effect(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "intent"
+            )
+            .is_err(),
+        "result proof must precede invocation intent"
+    );
+    other
+        .prepare_synchronization_ref_log_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "transition",
+            &ref_artifact,
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "transition",
+                &state::ResolutionRefLogArtifact {
+                    inode: 18,
+                    ..ref_artifact.clone()
+                }
+            )
+            .is_err()
+    );
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "intent",
+        )
+        .unwrap();
+    // Repeating the durable marker is not permission to repeat a native effect:
+    // the service additionally proves exact actual ref/log images under exclusion.
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "intent",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "observed",
+        )
+        .unwrap();
+    other
         .observe_synchronization_resolution_checkpoint(
             root.path(),
             &reacquired,
@@ -1035,6 +1240,40 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             tree,
         )
         .unwrap();
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "release_intent",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "released",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "released",
+        )
+        .unwrap();
+    assert!(
+        other
+            .advance_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "published"
+            )
+            .is_err()
+    );
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     assert_eq!(
         connection

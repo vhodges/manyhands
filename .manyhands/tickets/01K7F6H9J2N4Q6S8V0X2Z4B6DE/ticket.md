@@ -108,14 +108,36 @@ verification, code-review/PR approval, delivery, and closure remain pending.
 
 ## Task 4 approved protocol revision — 2026-10-08
 
-Task 3 remediation checkpoint is `6bd1f18`; Task 4 is still unaccepted.
-Owner approved cooperative-writer concurrency, narrow operator recovery for
-ambiguous libgit2-created live locks after crashes, and the
+Task 3 remediation checkpoint was `6bd1f18`, now `51fe6f2` after the
+conflict-free current-main rebase; Task 4 is still unaccepted. The explicitly
+unaccepted preservation WIP is `45a139b`, based on main `ceb1be4`.
+Owner approved cooperative-writer concurrency, operator recovery for
+interrupted/failed libgit2 ref/reflog effects (including partial logs and
+ambiguous locks), and the
 [revised protocol](../../../docs/plans/2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md).
 Resume sequential subagent implementation and independent review locally.
-Preserve existing agent-owned work in an explicitly unaccepted WIP checkpoint
-for the required current-main rebase. No validation/native waiver or delivery,
-closure, or cleanup authority was granted.
+Existing agent-owned work was preserved and rebased without Rust/Cargo tree
+changes. See the ledger for accepted-task mapping; do not replay Tasks 0–3.
+No validation/native waiver or delivery, closure, or cleanup authority was granted.
+
+Milestone 1 stable-sentinel/evidence/libgit2-serialization changes have independent
+review **OK with notes**, with no delivered-seam blockers. Check/fmt/strict clippy,
+150 remote and 9/50/73 reservation/foundation/enablement tests passed. This is
+milestone evidence only; Task 4 stays unaccepted and uncommitted beyond its WIP.
+Milestone 2a canonical write-observation replay and all-side closure/immutable
+validation also received independent review OK with notes, with 70 sync, 9 merge
+and 112 local-authoring tests plus check/fmt/strict clippy passing. Milestone 2b
+stock-API characterization is independently reviewed, with seven new tests and
+163 remote tests passing. Owner then approved broader operator-controlled
+backend ref/log recovery; automatic log repair/rewriting remains forbidden.
+Implement baseline/complete-image proof for safe same-operation retry, preserving
+uncertain effects rather than blindly reappending. Milestone2c writer timed out
+at 30 minutes without an attributed handoff; partial changes are preserved, not
+accepted. Owner requested pause/fresh session; see
+`docs/plans/2026-10-08-wave-02-cycle-06-task-04-handoff.md`. Use targeted tests and
+longer future validation budgets. Native helpers, real process death and final
+gates remain blocking. See ledger and milestone
+comments for exact evidence; no whole-task acceptance.
 
 ## Entry Gate
 
