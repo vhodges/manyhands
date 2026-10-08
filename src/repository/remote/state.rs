@@ -1410,7 +1410,7 @@ pub(in super::super) fn read_operations(
     read_operation_rows(connection, repository_id, false)
 }
 
-pub(super) fn read_operation_rows(
+pub(in super::super) fn read_operation_rows(
     connection: &Connection,
     repository_id: i64,
     active_only: bool,
@@ -1432,7 +1432,7 @@ pub(super) fn read_operation_rows(
         .collect()
 }
 
-pub(super) fn read_operation(
+pub(in super::super) fn read_operation(
     connection: &Connection,
     repository_id: i64,
     operation_id: crate::repository::OperationId,

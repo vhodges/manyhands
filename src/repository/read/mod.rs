@@ -29,15 +29,19 @@ mod credentials;
 mod dto;
 mod items;
 mod resolve;
+mod status;
 
 pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
     ConfigurationDto, ConfigurationState, DependencyDto, DependencyState, HostPinDto,
-    HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexState, IndexStateDto,
-    ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto,
-    KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto, ProblemDto,
-    PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto, ReadinessState, RemoteDto,
-    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
+    HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexProblemDto, IndexState,
+    IndexStateDto, IndexStatusDto, IndexStatusState, ItemContextDto, ItemContextKind, ItemDto,
+    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
+    KeyPublicMetadataState, NewIdDto, OperationAction, OperationDto, OperationFamily,
+    OperationListDto, OperationNextAction, OperationScope, PollingOutcome, PollingStatusDto,
+    ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto,
+    ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
+    RepositorySummaryDto,
 };
 pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;

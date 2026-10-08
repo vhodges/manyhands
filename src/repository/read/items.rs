@@ -776,7 +776,7 @@ fn row_rank(repo: &ResolvedRepository, row: &StoredItem) -> u8 {
 /// is the effective one if that worktree is still there, and otherwise the
 /// primary one; and the index, which is in the middle of changing, is
 /// behind.
-fn effective_rows<'a>(
+pub(super) fn effective_rows<'a>(
     repo: &ResolvedRepository,
     stored: &'a [StoredItem],
 ) -> (Vec<&'a StoredItem>, bool) {

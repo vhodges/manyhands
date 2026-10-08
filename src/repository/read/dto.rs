@@ -6,7 +6,7 @@
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
-use crate::results::{ProblemCode, contract_enum};
+use crate::results::{OperationFailureCode, ProblemCode, contract_enum};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NewIdDto {
@@ -471,4 +471,221 @@ pub struct CommentDto {
     /// that is not a non-empty string.
     pub problems: Vec<ProblemDto>,
     pub replies: Vec<CommentDto>,
+}
+
+contract_enum!(
+    /// What the index status read found. `unavailable` is an index that
+    /// cannot be read at all, which every other read reports as the
+    /// `index_unavailable` failure.
+    IndexStatusState {
+        Current => "current",
+        Stale => "stale",
+        NeverRefreshed => "never_refreshed",
+        Unavailable => "unavailable",
+    }
+);
+
+/// One registration's index: how far behind it is, how much it holds and
+/// what it could not make sense of.
+///
+/// `state` and `refreshed_at` are what every list reports as its `index`,
+/// with one more state: an index that cannot be read is `unavailable`, and
+/// then the counts are null, both lists are empty, and rebuilding the index
+/// is the way out. Nothing here is found by looking at the repository: a
+/// change the index has not been told of does not make it `stale`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct IndexStatusDto {
+    pub state: IndexStatusState,
+    pub refreshed_at: Option<String>,
+    /// The working trees the index observed: the root, and each item
+    /// worktree.
+    pub context_count: Option<u64>,
+    /// Documents and tickets, each counted once however many working trees
+    /// hold a copy.
+    pub item_count: Option<u64>,
+    /// The length of `problems`.
+    pub problem_count: Option<u64>,
+    /// Every problem the last refresh stored, ordered by worktree, path and
+    /// code. This is the only read that reports a problem with no path, or
+    /// one about a branch, a working tree or an unreadable file.
+    pub problems: Vec<IndexProblemDto>,
+    /// The repository's local operations that have not completed, in the
+    /// order they were stored and as the operation list has them. Each ends
+    /// by bringing the index up to date, so until it does the index may not
+    /// hold what it changed.
+    pub pending_operations: Vec<OperationDto>,
+}
+
+/// A problem the index stored, and the working tree it was found in.
+///
+/// `guidance` is written from the code's registry entry when the problem
+/// serializes, so text stored with a problem can never take its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexProblemDto {
+    pub code: ProblemCode,
+    /// As the index stored it: relative to `worktree` when the problem is
+    /// about something inside it, and null when the problem has no path.
+    pub path: Option<String>,
+    /// Null for a problem about the registration as a whole.
+    pub worktree: Option<String>,
+}
+
+impl IndexProblemDto {
+    pub fn guidance(&self) -> &'static str {
+        self.code.guidance()
+    }
+}
+
+impl Serialize for IndexProblemDto {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut problem = serializer.serialize_struct("IndexProblemDto", 4)?;
+        problem.serialize_field("code", &self.code)?;
+        problem.serialize_field("path", &self.path)?;
+        problem.serialize_field("worktree", &self.worktree)?;
+        problem.serialize_field("guidance", self.guidance())?;
+        problem.end()
+    }
+}
+
+contract_enum!(
+    /// How the latest attempt to observe the publication remote ended.
+    PollingOutcome {
+        Completed => "completed",
+        ConfigurationRequired => "configuration_required",
+        SelectedKeyUnavailable => "selected_key_unavailable",
+        UnlockRequired => "unlock_required",
+        HostApprovalRequired => "host_approval_required",
+        TransportUnavailable => "transport_unavailable",
+        ProtocolRejected => "protocol_rejected",
+        Cancelled => "cancelled",
+        RepositoryUnavailable => "repository_unavailable",
+    }
+);
+
+/// The stored polling policy of one registration and what polling last
+/// observed. Nothing here says whether any process is polling now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollingStatusDto {
+    pub enabled: bool,
+    pub paused: bool,
+    pub interval_seconds: u64,
+    /// The delay automatic polling adds after failures, and null when it
+    /// adds none.
+    pub backoff_seconds: Option<u64>,
+    /// Whether polling waits for the user after the index was recovered.
+    pub recovery_suspended: bool,
+    /// Null when none is stored.
+    pub latest_outcome: Option<PollingOutcome>,
+    /// When the remote's branches were last observed completely, which is
+    /// not when `latest_outcome` was recorded: no time is stored for that.
+    /// Null when they never were.
+    pub latest_observed_at: Option<String>,
+    /// The remote operation that holds the registration's reservation now,
+    /// whatever its action, and null when none does.
+    pub active_operation_id: Option<String>,
+    /// Always null: nothing stores when the next attempt is due.
+    pub next_eligible_at: Option<String>,
+}
+
+contract_enum!(
+    /// Which of the three stores an operation is recorded in.
+    OperationFamily {
+        Local => "local",
+        Remote => "remote",
+        KeyMaterial => "key_material",
+    }
+);
+
+contract_enum!(
+    /// What an operation belongs to. A key-material operation belongs to
+    /// the application and is listed with every repository.
+    OperationScope {
+        Repository => "repository",
+        Application => "application",
+    }
+);
+
+contract_enum!(
+    /// What an operation does. The first twelve are local, the next five
+    /// remote and the last two key-material.
+    OperationAction {
+        CreateAndEnable => "create_and_enable",
+        Enable => "enable",
+        RemoveRegistration => "remove_registration",
+        AddRemote => "add_remote",
+        RemoveRemote => "remove_remote",
+        SetPublicationRemote => "set_publication_remote",
+        Refresh => "refresh",
+        Rebuild => "rebuild",
+        PrepareContext => "prepare_context",
+        SaveDocument => "save_document",
+        SaveTicket => "save_ticket",
+        SubmitComment => "submit_comment",
+        Poll => "poll",
+        SynchronizeContext => "synchronize_context",
+        SynchronizePrimary => "synchronize_primary",
+        Promote => "promote",
+        Close => "close",
+        GenerateKey => "generate_key",
+        DeleteKey => "delete_key",
+    }
+);
+
+contract_enum!(
+    /// What an unfinished operation waits for. `resume` is to ask for
+    /// `action` again with the same operation ID; the other three are what
+    /// key-material recovery offers.
+    OperationNextAction {
+        Resume => "resume",
+        RetryGeneration => "retry_generation",
+        ReviewDeletionAgain => "review_deletion_again",
+        InspectRetainedFiles => "inspect_retained_files",
+    }
+);
+
+/// The operations that have not finished, ordered by operation ID, which is
+/// the order they were started in; an operation recorded before operations
+/// had IDs follows the rest, in the order it was stored.
+///
+/// These are the local operations that have not completed, the remote
+/// operation that holds the reservation, and the key-material operations
+/// that have not completed or that failed. An operation that is not listed
+/// can still be read by its ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationListDto {
+    pub items: Vec<OperationDto>,
+    pub complete: bool,
+}
+
+/// One stored operation, as its store last recorded it. Nothing is
+/// observed again: this is not what Git or the file system holds now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationDto {
+    /// Null only for a local operation recorded before operations had IDs.
+    pub operation_id: Option<String>,
+    pub family: OperationFamily,
+    pub scope: OperationScope,
+    pub action: OperationAction,
+    /// The store's own name for where the operation stands, in
+    /// lower_snake_case: a local operation's state, a remote operation's
+    /// phase or a key-material operation's phase. `completed` means the
+    /// same in all three.
+    pub state: String,
+    /// The last step a local or remote operation recorded as done, and
+    /// null when it recorded none. Always null for a key-material
+    /// operation, whose `state` is that step.
+    pub completed_step: Option<String>,
+    /// Null when the operation completed, and for a remote operation,
+    /// whose store does not say.
+    pub next_action: Option<OperationNextAction>,
+    pub item_id: Option<String>,
+    /// The working tree a local operation last worked in, as an absolute
+    /// path. Null for the other two families.
+    pub context: Option<String>,
+    /// When the store last changed the record. Null for a key-material
+    /// operation, which stores no time.
+    pub updated_at: Option<String>,
+    /// Why a remote or key-material operation did not complete. Always
+    /// null for a local operation, which stores no reason.
+    pub failure_code: Option<OperationFailureCode>,
 }
