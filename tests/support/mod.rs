@@ -24,6 +24,7 @@ pub mod golden;
 pub mod items;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
+pub mod operations;
 pub mod schema;
 
 pub struct TestRepository {

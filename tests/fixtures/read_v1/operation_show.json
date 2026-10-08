@@ -1,0 +1,39 @@
+{
+  "code": "ok",
+  "command": "operation show",
+  "data": {
+    "action": "poll",
+    "completed_step": "after_advertisement",
+    "context": null,
+    "failure_code": "protocol_rejected",
+    "family": "remote",
+    "item_id": null,
+    "next_action": null,
+    "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA5",
+    "scope": "repository",
+    "state": "failed",
+    "updated_at": "2023-11-14T22:15:00Z"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

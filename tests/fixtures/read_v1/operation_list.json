@@ -1,0 +1,83 @@
+{
+  "code": "ok",
+  "command": "operation list",
+  "data": {
+    "complete": true,
+    "items": [
+      {
+        "action": "generate_key",
+        "completed_step": null,
+        "context": null,
+        "failure_code": "source_missing",
+        "family": "key_material",
+        "item_id": null,
+        "next_action": "inspect_retained_files",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
+        "scope": "application",
+        "state": "retained_for_inspection",
+        "updated_at": null
+      },
+      {
+        "action": "poll",
+        "completed_step": null,
+        "context": null,
+        "failure_code": null,
+        "family": "remote",
+        "item_id": null,
+        "next_action": null,
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1",
+        "scope": "repository",
+        "state": "reserved",
+        "updated_at": "2023-11-14T22:15:00Z"
+      },
+      {
+        "action": "save_document",
+        "completed_step": "authoring_destination_observed",
+        "context": "<repository>",
+        "failure_code": null,
+        "family": "local",
+        "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+        "next_action": "resume",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA2",
+        "scope": "repository",
+        "state": "authoring_destination_observed",
+        "updated_at": "2023-11-14T22:13:20Z"
+      },
+      {
+        "action": "refresh",
+        "completed_step": null,
+        "context": null,
+        "failure_code": null,
+        "family": "local",
+        "item_id": null,
+        "next_action": "resume",
+        "operation_id": null,
+        "scope": "repository",
+        "state": "failed",
+        "updated_at": "2023-11-14T22:13:20Z"
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

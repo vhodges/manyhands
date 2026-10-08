@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 polling status",
+  "description": "The stored polling policy and what polling last observed. next_eligible_at is always null in this version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "enabled",
+    "paused",
+    "interval_seconds",
+    "backoff_seconds",
+    "recovery_suspended",
+    "latest_outcome",
+    "latest_observed_at",
+    "active_operation_id",
+    "next_eligible_at"
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "paused": {
+      "type": "boolean"
+    },
+    "interval_seconds": {
+      "type": "integer"
+    },
+    "backoff_seconds": {
+      "type": ["integer", "null"]
+    },
+    "recovery_suspended": {
+      "type": "boolean"
+    },
+    "latest_outcome": {
+      "type": ["string", "null"],
+      "enum": [
+        "completed",
+        "configuration_required",
+        "selected_key_unavailable",
+        "unlock_required",
+        "host_approval_required",
+        "transport_unavailable",
+        "protocol_rejected",
+        "cancelled",
+        "repository_unavailable",
+        null
+      ]
+    },
+    "latest_observed_at": {
+      "type": ["string", "null"]
+    },
+    "active_operation_id": {
+      "type": ["string", "null"]
+    },
+    "next_eligible_at": {
+      "type": ["string", "null"]
+    }
+  }
+}

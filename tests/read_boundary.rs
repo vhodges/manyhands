@@ -12,13 +12,13 @@ use std::{
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, LeaseKind, ReadError, RepositoryService, ResolvedRepository, SharedKeyId,
-        TicketFilter, transport::SshAuthority,
+        ClosureFilter, IndexStatusState, LeaseKind, ReadError, RepositoryService,
+        ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
     },
     results::{Outcome, ResultCode},
 };
 use serde_json::Value;
-use support::{credentials, items};
+use support::{credentials, items, operations};
 
 mod support;
 
@@ -711,6 +711,142 @@ fn item_reads_are_busy_under_the_exclusive_lock_and_succeed_under_the_shared_one
         every_item_read(&enabled.service, &repo, &fixture.root),
         unlocked
     );
+    assert!(started.elapsed() < NOT_BLOCKED);
+    holder.release();
+    assert_git_transport_uninitialized();
+}
+
+/// The repository of the item reads with an operation in each store: a
+/// refresh that has not completed, the poll that holds the reservation and
+/// a key generation kept for inspection.
+fn repository_with_operations() -> (support::TestRepository, support::EnabledRepository) {
+    let (fixture, enabled) = repository_with_items();
+    let data = enabled.data_directory.path();
+    operations::configure_remote(data);
+    operations::insert_current_observation(data);
+    operations::insert_local(
+        data,
+        Some(operations::OPERATION_C),
+        "refresh",
+        "failed",
+        None,
+    );
+    operations::insert_remote_poll(data, operations::OPERATION_B, "reserved", None, None);
+    operations::insert_key_material(
+        data,
+        operations::OPERATION_A,
+        "generate",
+        "retained-for-inspection",
+        Some("source-missing"),
+    );
+    (fixture, enabled)
+}
+
+/// Every status and operation read, with an operation ID from each store
+/// and one no store holds. Returns the outcome of each, in order: success,
+/// or the code it failed with.
+fn every_status_read(
+    service: &RepositoryService,
+    repo: &ResolvedRepository,
+) -> Vec<Result<(), ResultCode>> {
+    let outcome = |result: Result<(), ReadError>| result.map_err(|error| error.code());
+    let show = |id: &str| {
+        outcome(
+            service
+                .show_operation(repo, operations::operation_id(id))
+                .map(drop),
+        )
+    };
+    vec![
+        outcome(service.index_status(repo).map(|status| {
+            assert_eq!(status.state, IndexStatusState::Current);
+            assert_eq!(status.pending_operations.len(), 1);
+        })),
+        outcome(service.polling_status(repo).map(|status| {
+            assert_eq!(
+                status.active_operation_id.as_deref(),
+                Some(operations::OPERATION_B)
+            );
+        })),
+        outcome(
+            service
+                .list_operations(repo)
+                .map(|list| assert_eq!(list.items.len(), 3)),
+        ),
+        show(operations::OPERATION_A),
+        show(operations::OPERATION_B),
+        show(operations::OPERATION_C),
+        show(operations::OPERATION_ABSENT),
+    ]
+}
+
+#[test]
+fn status_reads_change_nothing_in_the_repository_or_its_index() {
+    let (fixture, enabled) = repository_with_operations();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let data_before = credentials::data_directory_files(enabled.data_directory.path());
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let outcomes = every_status_read(&enabled.service, &repo);
+
+    assert_eq!(
+        outcomes,
+        [
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::OperationNotFound),
+        ]
+    );
+    // The index is byte for byte what it was, so no read resumed, claimed
+    // or touched an operation, and none opened it to write.
+    credentials::assert_reads_left_the_data_directory(
+        &data_before,
+        &credentials::data_directory_files(enabled.data_directory.path()),
+    );
+    assert!(before == support::repository_and_worktree_snapshot(&fixture));
+    assert!(git_before == support::repository_git_file_bytes(&fixture));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn status_reads_are_busy_under_the_exclusive_lock_and_succeed_under_the_shared_one() {
+    let (fixture, enabled) = repository_with_operations();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let root = fs::canonicalize(&fixture.root).unwrap();
+    let unlocked = every_status_read(&enabled.service, &repo);
+
+    // A lock that cannot be had is `busy` for the index status too: it is
+    // not an index that cannot be read.
+    let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheWrite);
+    let started = Instant::now();
+    let outcomes = every_status_read(&enabled.service, &repo);
+    let error = enabled.service.index_status(&repo).unwrap_err();
+    assert!(
+        started.elapsed() < NOT_BLOCKED * 3,
+        "{:?}",
+        started.elapsed()
+    );
+    holder.release();
+
+    assert!(
+        outcomes
+            .iter()
+            .all(|outcome| outcome == &Err(ResultCode::Busy)),
+        "{outcomes:?}"
+    );
+    assert_eq!(error.code(), ResultCode::Busy);
+    assert_eq!(error.scope.repository.as_deref(), root.to_str());
+    assert!(error.recovery.is_empty());
+
+    // Reading operations takes no write lock.
+    let holder = hold_index_lock(&fixture, &enabled, LeaseKind::CacheRead);
+    let started = Instant::now();
+    assert_eq!(every_status_read(&enabled.service, &repo), unlocked);
     assert!(started.elapsed() < NOT_BLOCKED);
     holder.release();
     assert_git_transport_uninitialized();

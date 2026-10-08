@@ -8,21 +8,26 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         Accessibility, ChangeSource, ClosureState, ConfigurationState, DependencyState,
-        IdentityAvailability, IdentitySource, IndexState, ItemContextKind, ItemDto, ItemDtoKind,
-        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, ProblemDto,
-        ReadinessReasonCode, ReadinessState, RepositoryService, ResolvedRepository, SharedKeyId,
-        TicketFilter, transport::SshAuthority,
+        IdentityAvailability, IdentitySource, IndexProblemDto, IndexState, IndexStatusState,
+        ItemContextKind, ItemDto, ItemDtoKind, KeyOwnership, KeyPrivateSourceState,
+        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
+        OperationScope, PollingInterval, PollingOutcome, ProblemDto, ReadinessReasonCode,
+        ReadinessState, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+        transport::SshAuthority,
     },
     results::{
-        CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect, Outcome,
-        ProblemCode, PublicationEffect, ResultCode, Scope, WriteEffect,
+        CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect,
+        OperationFailureCode, Outcome, ProblemCode, PublicationEffect, ResultCode, Scope,
+        WriteEffect,
     },
 };
 use serde_json::{Value, json};
 use support::{
     credentials::{self, SECRET_SENTINELS},
     golden::{self, ContractCase},
-    items, schema,
+    items,
+    operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
+    schema,
 };
 
 mod support;
@@ -780,6 +785,50 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "public_metadata_state",
             KeyPublicMetadataState::ALL
                 .map(KeyPublicMetadataState::as_str)
+                .to_vec(),
+        ),
+        (
+            "index_status.schema.json",
+            "state",
+            IndexStatusState::ALL.map(IndexStatusState::as_str).to_vec(),
+        ),
+        (
+            "index_problem.schema.json",
+            "code",
+            ProblemCode::ALL.map(ProblemCode::as_str).to_vec(),
+        ),
+        (
+            "polling_status.schema.json",
+            "latest_outcome",
+            PollingOutcome::ALL.map(PollingOutcome::as_str).to_vec(),
+        ),
+        (
+            "operation.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "operation.schema.json",
+            "scope",
+            OperationScope::ALL.map(OperationScope::as_str).to_vec(),
+        ),
+        (
+            "operation.schema.json",
+            "action",
+            OperationAction::ALL.map(OperationAction::as_str).to_vec(),
+        ),
+        (
+            "operation.schema.json",
+            "next_action",
+            OperationNextAction::ALL
+                .map(OperationNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "operation.schema.json",
+            "failure_code",
+            OperationFailureCode::ALL
+                .map(OperationFailureCode::as_str)
                 .to_vec(),
         ),
     ]
@@ -1595,5 +1644,316 @@ fn host_inspect_matches_its_schema_and_golden() {
         &data,
         &not_found.to_envelope::<Value>("host inspect"),
     );
+    assert_git_transport_uninitialized();
+}
+
+/// Stored beside a problem's code, where no read may take it from.
+const GUIDANCE_SENTINEL: &str = "SENTINEL-2f6b";
+
+#[test]
+fn every_index_problem_matches_its_schema() {
+    for code in ProblemCode::ALL {
+        for (path, worktree) in [
+            (Some("docs/a.md".to_owned()), Some("/repository".to_owned())),
+            (None, None),
+        ] {
+            let problem = serde_json::to_value(IndexProblemDto {
+                code,
+                path,
+                worktree,
+            })
+            .unwrap();
+            schema::check_published("index_problem.schema.json", &problem).unwrap();
+            assert_eq!(problem["guidance"], code.guidance());
+        }
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn index_status_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let data = enabled.data_directory.path();
+    items::write(
+        &fixture.root,
+        "docs/marker.md",
+        "---\nmanyhands_managed: true\n---\n",
+    );
+    items::refresh_completely(&enabled.service, &fixture.root);
+    let index = items::index(data);
+    index
+        .execute(
+            "INSERT INTO problems (repository_id, code, guidance, observed_at)
+             SELECT id, 'retry-required', ?1, 0 FROM repositories",
+            [GUIDANCE_SENTINEL],
+        )
+        .unwrap();
+    index
+        .execute("UPDATE problems SET guidance = ?1", [GUIDANCE_SENTINEL])
+        .unwrap();
+    drop(index);
+    operations::insert_local(data, Some(OPERATION_A), "refresh", "failed", None);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let status = enabled.service.index_status(&repo).unwrap();
+    let refreshed_at = status.refreshed_at.clone().unwrap();
+    let envelope = Envelope::read_success("index status", repo.scope(), status.clone());
+
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.problems.len(), 2);
+    assert_eq!(status.pending_operations.len(), 1);
+    golden::assert_contract(
+        &ContractCase {
+            name: "index_status",
+            data_schema: Some("index_status.schema.json"),
+            placeholders: &[
+                (repo.root().to_str().unwrap(), "<repository>"),
+                (&refreshed_at, "<refreshed-at>"),
+            ],
+            sentinels: &[GUIDANCE_SENTINEL, data.to_str().unwrap()],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_unavailable_index_status_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let (data, service) = items::degraded_service(enabled);
+
+    let status = service.index_status(&repo).unwrap();
+    let envelope = Envelope::read_success("index status", repo.scope(), status);
+
+    golden::assert_contract(
+        &ContractCase {
+            name: "index_status_unavailable",
+            data_schema: Some("index_status.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[
+                data.path().to_str().unwrap(),
+                "not sqlite",
+                "manyhands.sqlite3",
+            ],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn poll_status_matches_its_schema_and_golden() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let data = enabled.data_directory.path();
+    enabled
+        .service
+        .set_remote_polling(
+            &fixture.root,
+            true,
+            false,
+            PollingInterval::from_seconds(600).unwrap(),
+        )
+        .unwrap();
+    operations::configure_remote(data);
+    items::index(data)
+        .execute_batch(
+            "UPDATE remote_polling_state
+                SET latest_outcome = 'host_approval_required',
+                    automatic_backoff_seconds = 120",
+        )
+        .unwrap();
+    operations::insert_current_observation(data);
+    operations::insert_remote_poll(
+        data,
+        OPERATION_B,
+        "advertising",
+        Some("before_transport"),
+        None,
+    );
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let status = enabled.service.polling_status(&repo).unwrap();
+    let envelope = Envelope::read_success("poll status", repo.scope(), status.clone());
+
+    assert_eq!(status.next_eligible_at, None);
+    assert_eq!(
+        status.latest_outcome,
+        Some(PollingOutcome::HostApprovalRequired)
+    );
+    golden::assert_contract(
+        &ContractCase {
+            name: "poll_status",
+            data_schema: Some("polling_status.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[data.to_str().unwrap()],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// A repository with an operation in each store: a key generation kept for
+/// inspection, the poll that holds the reservation, a document save part of
+/// the way through, and a refresh from before operations had IDs.
+fn repository_with_operations() -> (
+    support::TestRepository,
+    support::EnabledRepository,
+    ResolvedRepository,
+) {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let data = enabled.data_directory.path();
+    operations::configure_remote(data);
+    operations::insert_local(data, None, "refresh", "failed", None);
+    operations::insert_local(
+        data,
+        Some(OPERATION_C),
+        "save_document",
+        "authoring_destination_observed",
+        Some("authoring_destination_observed"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE operation_records SET item_id = ?1, context_path = root_path
+              WHERE operation_ulid = ?2",
+            [items::DOCUMENT_A, OPERATION_C],
+        )
+        .unwrap();
+    operations::insert_remote_poll(data, OPERATION_B, "reserved", None, None);
+    operations::insert_key_material(
+        data,
+        OPERATION_A,
+        "generate",
+        "retained-for-inspection",
+        Some("source-missing"),
+    );
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    (fixture, enabled, repo)
+}
+
+#[test]
+fn operation_list_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo) = repository_with_operations();
+
+    let list = enabled.service.list_operations(&repo).unwrap();
+    let envelope = Envelope::read_success("operation list", repo.scope(), list.clone());
+
+    let families: Vec<_> = list.items.iter().map(|item| item.family).collect();
+    assert_eq!(
+        families,
+        [
+            OperationFamily::KeyMaterial,
+            OperationFamily::Remote,
+            OperationFamily::Local,
+            OperationFamily::Local,
+        ]
+    );
+    golden::assert_contract(
+        &ContractCase {
+            name: "operation_list",
+            data_schema: Some("operation_list.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[
+                operations::KEY_MATERIAL_SENTINEL,
+                enabled.data_directory.path().to_str().unwrap(),
+            ],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn operation_show_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo) = repository_with_operations();
+    let data = enabled.data_directory.path();
+    operations::insert_remote_poll(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA5",
+        "failed",
+        Some("after_advertisement"),
+        Some("protocol_rejected"),
+    );
+
+    let operation = enabled
+        .service
+        .show_operation(
+            &repo,
+            operations::operation_id("01ARZ3NDEKTSV4RRFFQ69G5FA5"),
+        )
+        .unwrap();
+    let envelope = Envelope::read_success("operation show", repo.scope(), operation.clone());
+    let not_found = enabled
+        .service
+        .show_operation(
+            &repo,
+            operations::operation_id(operations::OPERATION_ABSENT),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        operation.failure_code,
+        Some(OperationFailureCode::ProtocolRejected)
+    );
+    let placeholders = [(repo.root().to_str().unwrap(), "<repository>")];
+    let sentinels = [operations::KEY_MATERIAL_SENTINEL, data.to_str().unwrap()];
+    golden::assert_contract(
+        &ContractCase {
+            name: "operation_show",
+            data_schema: Some("operation.schema.json"),
+            placeholders: &placeholders,
+            sentinels: &sentinels,
+        },
+        &envelope,
+    );
+    assert_eq!(not_found.code(), ResultCode::OperationNotFound);
+    golden::assert_contract(
+        &ContractCase {
+            name: "failure_operation_not_found",
+            data_schema: None,
+            placeholders: &placeholders,
+            sentinels: &sentinels,
+        },
+        &not_found.to_envelope::<Value>("operation show"),
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn every_stored_operation_shape_matches_the_operation_schema() {
+    let (_fixture, enabled, repo) = repository_with_operations();
+    let data = enabled.data_directory.path();
+    operations::insert_key_material(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA6",
+        "delete",
+        "completed",
+        None,
+    );
+    operations::insert_local(
+        data,
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FA7"),
+        "rebuild",
+        "completed",
+        Some("completed"),
+    );
+
+    let mut shapes = enabled.service.list_operations(&repo).unwrap().items;
+    for id in ["01ARZ3NDEKTSV4RRFFQ69G5FA6", "01ARZ3NDEKTSV4RRFFQ69G5FA7"] {
+        shapes.push(
+            enabled
+                .service
+                .show_operation(&repo, operations::operation_id(id))
+                .unwrap(),
+        );
+    }
+
+    assert_eq!(shapes.len(), 6);
+    for operation in shapes {
+        let value = serde_json::to_value(&operation).unwrap();
+        schema::check_published("operation.schema.json", &value).unwrap();
+    }
     assert_git_transport_uninitialized();
 }

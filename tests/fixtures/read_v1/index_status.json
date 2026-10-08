@@ -1,0 +1,62 @@
+{
+  "code": "ok",
+  "command": "index status",
+  "data": {
+    "context_count": 1,
+    "item_count": 4,
+    "pending_operations": [
+      {
+        "action": "refresh",
+        "completed_step": null,
+        "context": null,
+        "failure_code": null,
+        "family": "local",
+        "item_id": null,
+        "next_action": "resume",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0",
+        "scope": "repository",
+        "state": "failed",
+        "updated_at": "2023-11-14T22:13:20Z"
+      }
+    ],
+    "problem_count": 2,
+    "problems": [
+      {
+        "code": "retry_required",
+        "guidance": "The repository changed while it was being observed; refresh the index again.",
+        "path": null,
+        "worktree": null
+      },
+      {
+        "code": "missing_field",
+        "guidance": "Add the required front matter field.",
+        "path": "docs/marker.md",
+        "worktree": "<repository>"
+      }
+    ],
+    "refreshed_at": "<refreshed-at>",
+    "state": "current"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}
