@@ -231,7 +231,8 @@ pub(super) struct Targets<'a>(BTreeMap<&'a str, Target>);
 
 impl<'a> Targets<'a> {
     /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment.
+    /// `comments` the ID of every stored comment a relationship read here
+    /// can name.
     pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
         let mut targets: BTreeMap<&str, Target> = comments
             .iter()
@@ -299,7 +300,8 @@ pub(super) struct Related<'a> {
 
 impl<'a> Related<'a> {
     /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment.
+    /// `comments` the ID of every stored comment a relationship read here
+    /// can name.
     pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
         let targets = Targets::of(rows, comments);
         let tickets: Vec<&StoredItem> = rows
@@ -339,23 +341,99 @@ impl<'a> Related<'a> {
     }
 }
 
-/// The ID of every comment the index holds for the registration. They are
-/// only compared with IDs that were checked, so none is checked here.
-pub(super) fn stored_comment_ids(
+/// The ID of every comment the index holds for the registration that one of
+/// its stored edges names and that no stored item has: the only comments a
+/// relationship can be read against. They are only compared with IDs that
+/// were checked, so none is checked here.
+///
+/// A comment no edge names is never asked about, and an ID an item has is
+/// that item's whatever comment shares it, so leaving both out changes no
+/// answer, and a registration's comments are not all loaded to read its
+/// tickets.
+pub(super) fn stored_comment_targets(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<String>, ReadError> {
     let mut statement = connection.prepare(
-        "SELECT comments.comment_id
+        "SELECT DISTINCT comments.comment_id
            FROM discovered_comments AS comments
            JOIN discovered_items AS items ON items.id = comments.item_id
            JOIN contexts ON contexts.id = items.context_id
-          WHERE contexts.repository_id = ?1",
+          WHERE contexts.repository_id = ?1
+            AND comments.comment_id IN (
+                SELECT edges.target_id
+                  FROM item_edges AS edges
+                  JOIN discovered_items AS sources ON sources.id = edges.item_id
+                  JOIN contexts AS source_contexts
+                    ON source_contexts.id = sources.context_id
+                 WHERE source_contexts.repository_id = ?1)
+            AND comments.comment_id NOT IN (
+                SELECT held.item_id
+                  FROM discovered_items AS held
+                  JOIN contexts AS held_contexts ON held_contexts.id = held.context_id
+                 WHERE held_contexts.repository_id = ?1)",
     )?;
     let ids = statement
         .query_map([repo.registration_id()], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
     Ok(ids)
+}
+
+/// How many IDs one statement asks about, well under what SQLite binds.
+const IDS_IN_A_STATEMENT: usize = 500;
+
+/// Those of `ids` that are the ID of a comment the index holds for the
+/// registration.
+fn stored_comments_among(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    ids: &[String],
+) -> Result<Vec<String>, ReadError> {
+    let mut found = Vec::new();
+    for ids in ids.chunks(IDS_IN_A_STATEMENT) {
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        let mut statement = connection.prepare(&format!(
+            "SELECT DISTINCT comments.comment_id
+               FROM discovered_comments AS comments
+               JOIN discovered_items AS items ON items.id = comments.item_id
+               JOIN contexts ON contexts.id = items.context_id
+              WHERE contexts.repository_id = ?
+                AND comments.comment_id IN ({placeholders})"
+        ))?;
+        let parameters = std::iter::once(rusqlite::types::Value::from(repo.registration_id()))
+            .chain(ids.iter().cloned().map(rusqlite::types::Value::from));
+        let rows = statement.query_map(rusqlite::params_from_iter(parameters), |row| row.get(0))?;
+        for id in rows {
+            found.push(id?);
+        }
+    }
+    Ok(found)
+}
+
+/// The comments a complete read of the file `source` reads relationships
+/// against: the ones a stored edge names, and the ones only the file as it
+/// is now names. `stored` is every item row of the registration.
+fn comment_targets(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    stored: &[StoredItem],
+    source: &ReadSource,
+) -> Result<Vec<String>, ReadError> {
+    let mut comments = stored_comment_targets(connection, repo)?;
+    let unseen: Vec<String> = {
+        let known: BTreeSet<&str> = comments
+            .iter()
+            .chain(stored.iter().map(|item| &item.id))
+            .map(String::as_str)
+            .collect();
+        let unseen: BTreeSet<&String> = source
+            .named()
+            .filter(|id| !known.contains(id.as_str()))
+            .collect();
+        unseen.into_iter().cloned().collect()
+    };
+    comments.extend(stored_comments_among(connection, repo, &unseen)?);
+    Ok(comments)
 }
 
 /// A problem row that has both a path and a context.
@@ -842,6 +920,7 @@ pub(super) fn stored_item_dto(
 /// other ticket.
 fn parsed_item_dto(
     item: canonical::CanonicalItem,
+    relationships: &Relationships,
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
@@ -874,14 +953,13 @@ fn parsed_item_dto(
         ..bare_item(kind, path, context, Vec::new(), index)
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
-        let relationships = Relationships::from(&canonical::ticket_relationships(&ticket));
         let targets = &related.targets;
         let graph = related.graph_with(targets.node(
             &ticket.id.to_string(),
             ticket.closed_at.is_some(),
-            &relationships,
+            relationships,
         ));
-        relate(&mut dto, &relationships, targets, &graph);
+        relate(&mut dto, relationships, targets, &graph);
         dto.closure = Some(closure(
             ticket.closed_at.and_then(timestamp_string),
             ticket.closed_by,
@@ -1121,23 +1199,75 @@ enum ParsedFile {
     },
 }
 
+/// A file's text as it parses, before anything is said about what its
+/// relationships name.
+enum ReadSource {
+    Parsed {
+        item: Box<canonical::CanonicalItem>,
+        /// Empty unless the item is a ticket.
+        relationships: Relationships,
+        source: String,
+    },
+    Nonconforming {
+        code: ProblemCode,
+        source: Option<String>,
+    },
+}
+
+impl ReadSource {
+    fn of(bytes: Vec<u8>, path: &str) -> Self {
+        let Ok(source) = String::from_utf8(bytes) else {
+            return Self::Nonconforming {
+                code: ProblemCode::SourceUnreadable,
+                source: None,
+            };
+        };
+        // The problem's message can repeat the file's text; only its code
+        // is kept.
+        match canonical::parse_item(Path::new(path), &source) {
+            Ok(item) => Self::Parsed {
+                relationships: match &item {
+                    canonical::CanonicalItem::Ticket(ticket) => {
+                        Relationships::from(&canonical::ticket_relationships(ticket))
+                    }
+                    canonical::CanonicalItem::Document(_)
+                    | canonical::CanonicalItem::Comment(_) => Relationships::default(),
+                },
+                item: Box::new(item),
+                source,
+            },
+            Err(problem) => Self::Nonconforming {
+                code: ProblemCode::from(&problem.code),
+                source: Some(source),
+            },
+        }
+    }
+
+    /// The IDs the file's `parent` and `deps` name.
+    fn named(&self) -> impl Iterator<Item = &String> {
+        let relationships = match self {
+            Self::Parsed { relationships, .. } => Some(relationships),
+            Self::Nonconforming { .. } => None,
+        };
+        relationships
+            .into_iter()
+            .flat_map(|relationships| relationships.parent.iter().chain(&relationships.deps))
+    }
+}
+
 fn parse_file(
-    bytes: Vec<u8>,
+    read: ReadSource,
     path: &str,
     context: &StoredContext,
     index: &IndexStateDto,
     related: &Related<'_>,
 ) -> ParsedFile {
-    let Ok(source) = String::from_utf8(bytes) else {
-        return ParsedFile::Nonconforming {
-            code: ProblemCode::SourceUnreadable,
-            source: None,
-        };
-    };
-    // The problem's message can repeat the file's text; only its code is
-    // kept.
-    match canonical::parse_item(Path::new(path), &source) {
-        Ok(item) => match parsed_item_dto(item, path, context, index, related) {
+    match read {
+        ReadSource::Parsed {
+            item,
+            relationships,
+            source,
+        } => match parsed_item_dto(*item, &relationships, path, context, index, related) {
             Some(dto) => ParsedFile::Item {
                 dto: Box::new(dto),
                 source,
@@ -1147,10 +1277,7 @@ fn parse_file(
                 source: Some(source),
             },
         },
-        Err(problem) => ParsedFile::Nonconforming {
-            code: ProblemCode::from(&problem.code),
-            source: Some(source),
-        },
+        ReadSource::Nonconforming { code, source } => ParsedFile::Nonconforming { code, source },
     }
 }
 
@@ -1330,7 +1457,7 @@ impl RepositoryService {
             let problems = stored_problems(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let comments = stored_comment_ids(connection, repo)?;
+            let comments = stored_comment_targets(connection, repo)?;
             let related = match kind {
                 ItemDtoKind::Document => Related::for_documents(&rows, &comments),
                 ItemDtoKind::Ticket => Related::of(&rows, &comments),
@@ -1403,14 +1530,15 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let comments = stored_comment_ids(connection, repo)?;
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
+            let read = ReadSource::of(file.bytes, &row.path);
+            let comments = comment_targets(connection, repo, &stored, &read)?;
+            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
             let listed = stored_item_dto(row, &related, &index);
-            let mut item = match parse_file(file.bytes, &row.path, &row.context, &index, &related) {
+            let mut item = match parse_file(read, &row.path, &row.context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
                     // Another item is now where this one was.
                     if dto.id != listed.id || dto.kind != listed.kind {
@@ -1547,12 +1675,13 @@ impl RepositoryService {
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
-            let comments = stored_comment_ids(connection, repo)?;
+            let read = ReadSource::of(file.bytes, path);
+            let comments = comment_targets(connection, repo, &stored, &read)?;
             let related = Related::of(&effective_rows(repo, &stored).0, &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
-            let mut item = match parse_file(file.bytes, path, &context, &index, &related) {
+            let mut item = match parse_file(read, path, &context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
                     let mut item = *dto;
                     match row.map(|row| stored_item_dto(row, &related, &index)) {

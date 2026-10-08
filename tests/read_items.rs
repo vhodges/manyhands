@@ -4469,3 +4469,77 @@ fn stored_unknown_metadata_that_cannot_be_read_back_is_empty_and_reported() {
     }
     assert_git_transport_uninitialized();
 }
+
+// A complete read decides what the file names now, so it has to find a
+// comment that no edge in the index names yet.
+#[test]
+fn a_complete_read_finds_a_comment_only_the_file_names() {
+    use support::items::COMMENT_B;
+
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(TICKET_B, "B", ""),
+    );
+    write_comment(root, TICKET_B, COMMENT_A, None, "2026-09-30T12:00:00Z", "");
+    write_comment(root, TICKET_B, COMMENT_B, None, "2026-09-30T12:00:01Z", "");
+    let path = ticket_path(TICKET_A);
+    let file = write(
+        root,
+        &path,
+        &ticket_source(TICKET_A, "A", &format!("deps: [{COMMENT_A}]\n")),
+    );
+    // C has an edge to a comment in the index, and is not the ticket read.
+    write(
+        root,
+        &ticket_path(TICKET_C),
+        &ticket_source(TICKET_C, "C", &format!("deps: [{COMMENT_A}, {TICKET_A}]\n")),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // The file now names the other comment, a ticket, and an ID nothing has.
+    fs::write(
+        &file,
+        ticket_source(
+            TICKET_A,
+            "A",
+            &format!("parent: {COMMENT_B}\ndeps: [{COMMENT_B}, {TICKET_B}, {TICKET_D}]\n"),
+        ),
+    )
+    .unwrap();
+
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    let by_path = enabled
+        .service
+        .show_path(&repo, None, Path::new(&path))
+        .unwrap();
+
+    for item in [&shown, &by_path] {
+        assert!(item.parent.is_none(), "{item:?}");
+        assert_eq!(
+            item.deps,
+            [
+                dependency(TICKET_B, DependencyState::Open),
+                dependency(TICKET_D, DependencyState::Unresolved),
+            ]
+        );
+        assert_eq!(codes(item), [ProblemCode::RelationshipNotATicket]);
+        assert_eq!(target_ids(item), [Some(COMMENT_B)]);
+        assert_eq!(item.index.state, IndexState::Stale);
+    }
+    // The list is the index's, which still names the first comment.
+    let listed = all_tickets(&enabled.service, &repo);
+    assert_eq!(target_ids(ticket(&listed, TICKET_A)), [Some(COMMENT_A)]);
+    let other = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_C))
+        .unwrap();
+    assert_eq!(target_ids(&other), [Some(COMMENT_A)]);
+    assert_eq!(other.deps, [dependency(TICKET_A, DependencyState::Open)]);
+    assert_git_transport_uninitialized();
+}

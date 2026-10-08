@@ -21,7 +21,7 @@ use super::{
     ReadinessState, ResolvedRepository, TicketFilter, UnplannableReasonCode, UnplannableReasonDto,
     UnplannableTicketDto,
     items::{
-        Related, StoredItem, behind, effective_rows, item_not_found, stored_comment_ids,
+        Related, StoredItem, behind, effective_rows, item_not_found, stored_comment_targets,
         stored_index_state, stored_item_dto, stored_items, ticket_list_order,
     },
 };
@@ -816,7 +816,7 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let comments = stored_comment_ids(connection, repo)?;
+            let comments = stored_comment_targets(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let related = Related::of(&rows, &comments);
             read(&Tickets {

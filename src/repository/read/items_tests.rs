@@ -195,7 +195,7 @@ fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
     let sentinel = "SENTINEL-2b6f";
     let parse = |bytes: &[u8]| {
         parse_file(
-            bytes.to_vec(),
+            ReadSource::of(bytes.to_vec(), "docs/a.md"),
             "docs/a.md",
             &context("/r"),
             &index(),
@@ -657,7 +657,7 @@ fn a_file_decides_its_own_readiness_against_what_the_index_holds_of_the_rest() {
         );
         let path = format!(".manyhands/tickets/{SELF}/ticket.md");
         let ParsedFile::Item { dto, .. } = parse_file(
-            source.into_bytes(),
+            ReadSource::of(source.into_bytes(), &path),
             &path,
             &context("/r"),
             &index(),
