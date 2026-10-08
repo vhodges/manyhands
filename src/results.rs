@@ -490,14 +490,36 @@ impl Serialize for OperationFailureCode {
 /// scp-like form, `file:///` URLs and local paths are returned as written.
 /// Input that cannot be parsed, or that may still hold a credential,
 /// becomes `REDACTED` whole: a wrongly redacted location is acceptable and
-/// a surviving secret is not.
+/// a surviving secret is not. That includes any location without a
+/// `scheme://` that holds whitespace or a control character, a local path
+/// among them, and Git's remote-helper form `<transport>::<address>`, whose
+/// address is handed to a program.
 pub fn redact_url(url: &str) -> String {
     let redacted = match url.split_once("://") {
         Some((scheme, rest)) => redact_scheme_url(scheme, rest),
-        None if has_schemeless_credential(url) => None,
+        None if has_schemeless_credential(url)
+            || is_remote_helper_location(url)
+            || has_whitespace_or_control(url) =>
+        {
+            None
+        }
         None => Some(url.to_owned()),
     };
     redacted.unwrap_or_else(|| REDACTED.to_owned())
+}
+
+fn has_whitespace_or_control(text: &str) -> bool {
+    text.chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+}
+
+/// Recognizes Git's remote-helper form, `<transport>::<address>`: a `::`
+/// with no path separator before it. What follows is passed to the program
+/// `git-remote-<transport>`, and for `ext` it is a command line.
+fn is_remote_helper_location(url: &str) -> bool {
+    url.split(['/', '\\'])
+        .next()
+        .is_some_and(|first| first.contains("::"))
 }
 
 fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
@@ -512,10 +534,7 @@ fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
     if scheme.eq_ignore_ascii_case("file") && rest.starts_with('/') {
         return Some(format!("{scheme}://{rest}"));
     }
-    if rest
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-    {
+    if has_whitespace_or_control(rest) {
         return None;
     }
 
@@ -552,7 +571,7 @@ fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
 }
 
 /// Accepts `host`, `host:port` and `[address]:port`, with a host of ASCII
-/// letters, digits, `.`, `_` and `-` and a numeric port, so that part of a
+/// letters, digits, `.`, `_` and `-` and a port of one or more digits, so that part of a
 /// credential is not mistaken for a host.
 fn is_host_port(host_port: &str) -> bool {
     let (host, port, is_address) = if let Some(bracketed) = host_port.strip_prefix('[') {
@@ -579,7 +598,8 @@ fn is_host_port(host_port: &str) -> bool {
     };
     !host.is_empty()
         && host.bytes().all(is_host_byte)
-        && port.is_none_or(|port| port.bytes().all(|byte| byte.is_ascii_digit()))
+        && port
+            .is_none_or(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Recognizes a credential in a location that has no `scheme://`: a URL

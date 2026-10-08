@@ -622,7 +622,9 @@ fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
         // Local paths are unchanged.
         ("/srv/git/repo.git", "/srv/git/repo.git"),
         ("../sibling/repo.git", "../sibling/repo.git"),
-        ("repo with spaces", "repo with spaces"),
+        // A local path with a space cannot be told from a location with
+        // arguments after it, and is replaced whole.
+        ("repo with spaces", REDACTED),
         (
             r"C:\Users\alice@example\repo",
             r"C:\Users\alice@example\repo",
@@ -834,4 +836,49 @@ fn non_utf8_paths_serialize_as_null() {
 
     assert_eq!(relative_path_string(&relative), None);
     assert_eq!(absolute_path_string(&absolute), None);
+}
+
+// Git runs a remote helper for `<transport>::<address>`, and the address is
+// then whatever that helper takes: a command line, with its secrets.
+#[test]
+fn redact_url_replaces_a_remote_helper_location_whole() {
+    for input in [
+        "ext::git-remote-foo --token=SECRET %S",
+        "ext::sh -c \"curl -H 'Authorization: Bearer X'\"",
+        "ext::helper",
+        "fd::7",
+        "transport::address/with/a/path",
+        "ext::ssh://git@example.com/repo.git",
+    ] {
+        assert_eq!(redact_url(input), REDACTED, "{input}");
+    }
+    // After a separator, `::` is path text.
+    for kept in ["/srv/a::b/repo", "relative/a::b", "git@host:team/a::b"] {
+        assert_eq!(redact_url(kept), kept);
+    }
+}
+
+#[test]
+fn redact_url_replaces_a_schemeless_location_with_whitespace_or_a_control_character() {
+    for input in [
+        "host:repo --upload-pack=SECRET",
+        "git@example.com:team/repo.git\tSECRET",
+        "/srv/git/repo\nSECRET",
+        "repo\u{0}SECRET",
+        "repo\u{7f}SECRET",
+        "repo\u{a0}SECRET",
+    ] {
+        assert_eq!(redact_url(input), REDACTED, "{input:?}");
+    }
+}
+
+#[test]
+fn a_host_with_an_empty_port_is_not_a_host() {
+    assert!(!super::is_host_port("host:"));
+    assert!(!super::is_host_port("[::1]:"));
+    assert!(super::is_host_port("host:22"));
+    assert!(super::is_host_port("host"));
+    assert!(super::is_host_port("[::1]"));
+    assert_eq!(redact_url("https://example.com:/repo"), REDACTED);
+    assert_eq!(redact_url("ssh://git@example.com:/repo"), REDACTED);
 }
