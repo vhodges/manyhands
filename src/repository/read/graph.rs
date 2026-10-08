@@ -21,8 +21,9 @@ use super::{
     ReadinessState, ResolvedRepository, TicketFilter, UnplannableReasonCode, UnplannableReasonDto,
     UnplannableTicketDto,
     items::{
-        Related, StoredItem, behind, effective_rows, item_not_found, stored_comment_targets,
-        stored_index_state, stored_item_dto, stored_items, ticket_list_order,
+        Related, StoredItem, behind, effective_rows, is_completely_observed, item_not_found,
+        stored_comment_targets, stored_index_state, stored_item_dto, stored_items, stored_problems,
+        ticket_list_order,
     },
 };
 use crate::{
@@ -763,6 +764,9 @@ struct Tickets<'a> {
     by_id: BTreeMap<&'a str, &'a StoredItem>,
     related: Related<'a>,
     index: IndexStateDto,
+    /// Whether the last refresh saw every ticket there is to see. When it
+    /// did not, an answer made from the tickets may lack some of them.
+    complete: bool,
 }
 
 impl Tickets<'_> {
@@ -793,7 +797,7 @@ impl Tickets<'_> {
     fn list_of<'b>(&self, ids: impl IntoIterator<Item = &'b str>) -> ItemListDto {
         ItemListDto {
             items: self.items(ids),
-            complete: true,
+            complete: self.complete,
             index: self.index.clone(),
         }
     }
@@ -819,7 +823,10 @@ impl RepositoryService {
             let comments = stored_comment_targets(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let related = Related::of(&rows, &comments);
+            let complete =
+                is_completely_observed(ItemDtoKind::Ticket, &stored_problems(connection, repo)?);
             read(&Tickets {
+                complete,
                 by_id: rows
                     .into_iter()
                     .filter(|row| row.kind == ItemDtoKind::Ticket)
@@ -934,7 +941,7 @@ impl RepositoryService {
                 depth,
                 dependencies,
                 dependents,
-                complete: true,
+                complete: tickets.complete,
                 index: tickets.index.clone(),
             })
         })
@@ -981,7 +988,7 @@ impl RepositoryService {
         self.read_tickets(repo, |tickets| {
             Ok(CycleListDto {
                 items: tickets.graph().cycles(),
-                complete: true,
+                complete: tickets.complete,
                 index: tickets.index.clone(),
             })
         })
@@ -1036,7 +1043,7 @@ impl RepositoryService {
             Ok(PlanDto {
                 batches,
                 unplannable,
-                complete: true,
+                complete: tickets.complete,
                 index: tickets.index.clone(),
             })
         })

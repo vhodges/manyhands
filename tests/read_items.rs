@@ -4543,3 +4543,141 @@ fn a_complete_read_finds_a_comment_only_the_file_names() {
     assert_eq!(other.deps, [dependency(TICKET_A, DependencyState::Open)]);
     assert_git_transport_uninitialized();
 }
+
+/// Stores a problem of `code` at `path` in the primary context, as a
+/// refresh would.
+fn insert_problem(data_directory: &Path, path: &str, code: &str) {
+    index(data_directory)
+        .execute(
+            "INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at)
+             SELECT repository_id, id, ?1, ?2, 'unused', 0 FROM contexts WHERE kind = 'primary'",
+            [path, code],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_list_is_not_complete_when_the_refresh_could_not_read_all_of_its_directory() {
+    // `(stored path, documents complete, tickets complete)`
+    let cases = [
+        ("docs", false, true),
+        ("docs/sub", false, true),
+        ("docs/a/b.c", false, true),
+        // A file that could not be read is one file, not a directory.
+        ("docs/link.md", true, true),
+        ("docs/sub/link.md", true, true),
+        (".manyhands/tickets", true, false),
+        (".manyhands", true, false),
+        // One ticket's directory or file.
+        (".manyhands/tickets/linked", true, true),
+        (
+            ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC9/ticket.md",
+            true,
+            true,
+        ),
+        (".manyhands/comments", true, true),
+        ("", true, true),
+        ("docsx", true, true),
+        ("notes", true, true),
+    ];
+    for (path, documents_complete, tickets_complete) in cases {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+        write(
+            root,
+            &ticket_path(TICKET_A),
+            &ticket_source(TICKET_A, "A", ""),
+        );
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+        let lists = || {
+            (
+                enabled.service.list_documents(&repo).unwrap(),
+                all_tickets(&enabled.service, &repo),
+            )
+        };
+        let (documents, tickets) = lists();
+        assert!(documents.complete && tickets.complete);
+
+        // Any other problem there says nothing about what was listed.
+        insert_problem(enabled.data_directory.path(), path, "context");
+        let (documents, tickets) = lists();
+        assert!(documents.complete && tickets.complete, "{path}");
+
+        insert_problem(enabled.data_directory.path(), path, "source");
+        let (documents, tickets) = lists();
+        assert_eq!(documents.complete, documents_complete, "{path}");
+        assert_eq!(tickets.complete, tickets_complete, "{path}");
+        // What the index does hold is still listed, and the index is not
+        // behind: a refresh would stop at the same place.
+        assert_eq!(ids(&documents), [Some(DOCUMENT_A)], "{path}");
+        assert_eq!(ids(&tickets), [Some(TICKET_A)], "{path}");
+        assert_eq!(documents.index.state, IndexState::Current);
+        assert_eq!(tickets.index.state, IndexState::Current);
+    }
+    assert_git_transport_uninitialized();
+}
+
+/// The `(path, code)` of every stored problem.
+fn stored_problem_rows(data_directory: &Path) -> Vec<(Option<String>, String)> {
+    index(data_directory)
+        .prepare("SELECT path, code FROM problems ORDER BY path, code")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+// The refresh reads at most 1,024 entries of the tree under `docs`, and of
+// `.manyhands/tickets`. It stops there and stores where it stopped.
+#[test]
+fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(TICKET_A, "A", ""),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    assert!(enabled.service.list_documents(&repo).unwrap().complete);
+    assert!(all_tickets(&enabled.service, &repo).complete);
+
+    fs::create_dir_all(root.join("docs/sub")).unwrap();
+    for entry in 0..1025 {
+        fs::write(root.join(format!("docs/sub/{entry:04}.txt")), "").unwrap();
+    }
+    refresh_completely(&enabled.service, root);
+
+    assert!(
+        stored_problem_rows(enabled.data_directory.path())
+            .contains(&(Some("docs/sub".to_owned()), "source".to_owned()))
+    );
+    let documents = enabled.service.list_documents(&repo).unwrap();
+    assert!(!documents.complete);
+    assert_eq!(documents.index.state, IndexState::Current);
+    assert!(all_tickets(&enabled.service, &repo).complete);
+
+    fs::remove_dir_all(root.join("docs/sub")).unwrap();
+    for entry in 0..1025 {
+        fs::create_dir(root.join(format!(".manyhands/tickets/{entry:04}"))).unwrap();
+    }
+    refresh_completely(&enabled.service, root);
+
+    assert_eq!(
+        stored_problem_rows(enabled.data_directory.path())
+            .into_iter()
+            .filter(|(_, code)| code == "source")
+            .collect::<Vec<_>>(),
+        [(Some(".manyhands/tickets".to_owned()), "source".to_owned())]
+    );
+    let tickets = all_tickets(&enabled.service, &repo);
+    assert!(!tickets.complete);
+    assert_eq!(tickets.index.state, IndexState::Current);
+    assert!(enabled.service.list_documents(&repo).unwrap().complete);
+    assert_git_transport_uninitialized();
+}

@@ -122,7 +122,11 @@ const RELATIONSHIP_PROBLEMS: [ProblemCode; 5] = [
 /// Where item worktrees are, below the repository root.
 const WORKTREES_DIRECTORY: &str = ".manyhands/worktrees";
 
+const DOCUMENTS_DIRECTORY: &str = "docs";
 const DOCUMENT_PREFIX: &str = "docs/";
+/// Where Manyhands keeps what it manages, and the tickets within it.
+const MANAGED_DIRECTORY: &str = ".manyhands";
+const TICKETS_DIRECTORY: &str = ".manyhands/tickets";
 const TICKET_PREFIX: &str = ".manyhands/tickets/";
 
 impl ItemDtoKind {
@@ -747,6 +751,42 @@ pub(super) fn stored_problems(
         });
     }
     Ok(problems)
+}
+
+/// Whether the last refresh saw every place an item of `kind` can be, as
+/// far as the index says: false when it stored that it could not read, or
+/// stopped part of the way through, a directory that holds them.
+///
+/// A refresh stores that as a `source` problem at the directory, relative
+/// to the context, and completes, so the index still reads `current`.
+///
+/// - Tickets are each in a directory of their own directly under
+///   `.manyhands/tickets`, so only that directory, or `.manyhands` above
+///   it, can hide tickets.
+/// - Documents can be in any directory under `docs`, and the limit on how
+///   many entries a refresh reads is for that whole tree, so it is stored
+///   at whichever directory the refresh was in. Every problem at `docs` or
+///   below it counts, except at a path ending in `.md`: that is one file
+///   the refresh could not read, as an unreadable ticket file is, and not
+///   a directory. A directory that is itself named `*.md` is not told
+///   apart from such a file.
+///
+/// A problem in any context of the registration counts: each can hold the
+/// effective copy of an item.
+pub(super) fn is_completely_observed(kind: ItemDtoKind, problems: &[StoredProblem]) -> bool {
+    !problems.iter().any(|problem| {
+        problem.code == ProblemCode::SourceUnreadable
+            && match kind {
+                ItemDtoKind::Document => {
+                    problem.path == DOCUMENTS_DIRECTORY
+                        || (problem.path.starts_with(DOCUMENT_PREFIX)
+                            && !problem.path.ends_with(".md"))
+                }
+                ItemDtoKind::Ticket => {
+                    problem.path == TICKETS_DIRECTORY || problem.path == MANAGED_DIRECTORY
+                }
+            }
+    })
 }
 
 pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
@@ -1502,7 +1542,7 @@ impl RepositoryService {
             };
             Ok(ItemListDto {
                 items,
-                complete: true,
+                complete: is_completely_observed(kind, &problems),
                 index,
             })
         })

@@ -338,6 +338,12 @@ contract_enum!(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ItemListDto {
     pub items: Vec<ItemDto>,
+    /// False when the last refresh could not read, or stopped part of the
+    /// way through, a directory that holds items of the kind listed: `docs`
+    /// or a directory under it for documents; `.manyhands/tickets` or
+    /// `.manyhands` for tickets and for every relationship query. Items
+    /// may then be missing, and `index.state` can still be `current`: a
+    /// refresh stops at the same place again.
     pub complete: bool,
     pub index: IndexStateDto,
 }
@@ -826,6 +832,9 @@ pub struct DependencyTreeDto {
     pub depth: Option<u32>,
     pub dependencies: Vec<DependencyTreeNodeDto>,
     pub dependents: Vec<DependencyTreeNodeDto>,
+    /// False when the last refresh could not read every ticket's
+    /// directory, as for a list of tickets: tickets may be missing from
+    /// what this was made from.
     pub complete: bool,
     pub index: IndexStateDto,
 }
@@ -855,6 +864,9 @@ pub struct DependencyTreeNodeDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CycleListDto {
     pub items: Vec<CycleDto>,
+    /// False when the last refresh could not read every ticket's
+    /// directory, as for a list of tickets: tickets may be missing from
+    /// what this was made from.
     pub complete: bool,
     pub index: IndexStateDto,
 }
@@ -874,6 +886,9 @@ pub struct PlanDto {
     pub batches: Vec<PlanBatchDto>,
     /// In ID order.
     pub unplannable: Vec<UnplannableTicketDto>,
+    /// False when the last refresh could not read every ticket's
+    /// directory, as for a list of tickets: tickets may be missing from
+    /// what this was made from.
     pub complete: bool,
     pub index: IndexStateDto,
 }

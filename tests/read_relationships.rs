@@ -1623,3 +1623,70 @@ fn a_ticket_with_very_many_dependencies_is_read_from_the_index_with_all_of_them(
     );
     assert_git_transport_uninitialized();
 }
+
+// A refresh that could not read all of the tickets' directory may have
+// missed tickets, and then every answer made from the tickets may lack them.
+#[test]
+fn a_relationship_read_is_not_complete_when_the_refresh_could_not_read_every_ticket() {
+    let (fixture, enabled) = relationship_repository();
+    let service = &enabled.service;
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let all = TicketFilter::default();
+    let complete = || {
+        [
+            service.ticket_readiness(&repo, &all).unwrap().complete,
+            service
+                .ticket_dependencies(&repo, &item_id(RELATED_C), DependencyDirection::Both, None)
+                .unwrap()
+                .complete,
+            service
+                .ticket_children(&repo, &item_id(RELATED_B))
+                .unwrap()
+                .complete,
+            service.ticket_cycles(&repo).unwrap().complete,
+            service.ticket_plan(&repo, &all).unwrap().complete,
+            service.ticket_critical_path(&repo).unwrap().complete,
+            service
+                .find_tickets_by_slug(&repo, SHARED_SLUG)
+                .unwrap()
+                .complete,
+        ]
+    };
+    let insert = |path: &str, code: &str| {
+        index(enabled.data_directory.path())
+            .execute(
+                "INSERT INTO problems
+                     (repository_id, context_id, path, code, guidance, observed_at)
+                 SELECT repository_id, id, ?1, ?2, 'unused', 0
+                   FROM contexts WHERE kind = 'primary'",
+                [path, code],
+            )
+            .unwrap();
+    };
+    assert_eq!(complete(), [true; 7]);
+
+    // The documents' directory, one ticket's file, and another problem at
+    // the tickets' directory say nothing about which tickets were seen.
+    insert("docs", "source");
+    insert(&ticket_path(TICKET_ABSENT), "source");
+    insert(".manyhands/tickets", "context");
+    assert_eq!(complete(), [true; 7]);
+
+    for path in [".manyhands/tickets", ".manyhands"] {
+        index(enabled.data_directory.path())
+            .execute("DELETE FROM problems WHERE code = 'source'", [])
+            .unwrap();
+        insert(path, "source");
+        assert_eq!(complete(), [false; 7], "{path}");
+    }
+    // The answers themselves are made from what the index holds.
+    assert_eq!(
+        sorted_ids(&service.find_tickets_by_slug(&repo, SHARED_SLUG).unwrap()),
+        [RELATED_B, RELATED_C]
+    );
+    assert_eq!(
+        service.ticket_cycles(&repo).unwrap().index.state,
+        IndexState::Current
+    );
+    assert_git_transport_uninitialized();
+}
