@@ -43,6 +43,13 @@ https://github.com/vhodges/manyhands/actions/runs/37799832943
 Current next action: inspect/fix this exact source run, then accept Task 4 only
 after native gates are handled. The ledger records earlier failures and fixes.
 
+Run 3 passes both complete Linux jobs; remaining Windows runtime/Mac authoring
+corrections have independent source review and complete local verification.
+Published current source 4776157, fourth native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37837512832
+This is the current run to inspect. Native FileRenameInfoEx behavior and APFS
+authoring cases remain pending until actual results; Task 4 stays unaccepted.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.
