@@ -90,7 +90,8 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Task 2: complete; review accepted with fixes, range `c553744..df02e79`.
 - Task 3: complete; review accepted with fixes (one blocker), range
   `a1223c0..9639595`.
-- Tasks 4–10: pending.
+- Task 4: complete; review accepted with fixes, range `9fbe74d..a04acb3`.
+- Tasks 5–10: pending.
 
 ## Decisions and rulings
 
@@ -213,6 +214,57 @@ refresh path; to be raised as its own defect ticket at Task 10 handoff.
 Inherited, unchanged: a remote with a non-UTF-8 URL is skipped by the existing
 remote enumeration while the list still says `complete: true`.
 
+Task 4:
+
+- **More change in `keys/` than the plan allowed, accepted.** Besides widening
+  `bounded_public_key_contents`, the row reader and the fingerprint
+  expressions were extracted for reuse (`stored_shared_key_registrations`,
+  `StoredSharedKeysError`, `openssh_public_key`, `public_key_fingerprint`), all
+  `pub(in super::super)`. The review confirmed existing callers behave
+  identically. The alternative was duplicating the decoder in `read/`.
+- **`trust.rs` visibility.** `valid_identity` and `valid_authority` are
+  `pub(in super::super)`; three `#[doc(hidden)]` `_for_testing` hooks create
+  pins and the marker through the real trust code. No existing body changed.
+- **`key public` returns the canonical encoding** of the parsed key, without a
+  line ending, never the file's bytes. It is `public_key_unavailable` when the
+  file is missing, over 16 KiB, not one line of OpenSSH public key text, has a
+  comment that is not printable ASCII, contains `PRIVATE KEY`, or exceeds 256
+  bytes, or when the public path equals any registration's private path. A
+  registration whose stored state is `available` can therefore still be
+  unavailable here.
+- **`matches_registration`** is true only when the computed fingerprint equals
+  a stored one.
+- **Key lists are in registration order**, as `list_shared_keys` is. Host pins
+  order by host, then port.
+- **Enum strings.** Ownership `imported | generated`; private source state
+  `available | missing | unavailable`; public metadata state
+  `not_provided | available | unavailable`.
+- **Host reads.** `inspect_host` normalizes the caller's authority with the
+  parser the trust code uses before storing. An authority no pin can have is
+  `authority_not_found` without reading other rows. `reapproval_required` is
+  application-wide: it is on the list and repeated on each pin.
+- **Invalid stored data is `internal_error`** with no partial list: a key row
+  with invalid metadata, a pin failing the trust checks, an invalid marker.
+- **Scope is empty** for all five reads; they are application-global. The CLI
+  RFC exempts `host list` from `--repo` but not `host inspect`; the facade
+  Cycle (C1) decides what `--repo` means there.
+- **The first read after a writer closes recreates empty `-shm` and `-wal`
+  files** beside the index. That is permitted application-local bookkeeping.
+  Snapshot tests assert those are the only names that may appear and that the
+  index and marker are byte-identical.
+
+Accepted limits:
+
+- A public path that reaches a private key through a symbolic or hard link is
+  not detected by the path comparison. The file is opened, read into a
+  zeroized buffer and refused by the parser; nothing is returned.
+- The parsed key's comment is copied into an ordinary string that cannot be
+  zeroized.
+- The open-detection test is Linux-only. Other platforms have portable checks
+  that cannot detect an open whose result is discarded.
+- On Windows a registered device or pipe path would be opened before being
+  rejected as not a regular file. Not executed.
+
 ## Verification and review
 
 Per-task evidence is recorded below as it is produced. Nothing below this line
@@ -287,3 +339,22 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
 - The behavior tests for the first commit were written before the code but
   only seen failing to compile; the review-fix tests were seen failing against
   the wrong behavior.
+
+### Task 4 — credential reads, range `9fbe74d..a04acb3`
+
+- `ca7f292` implementation; `003c46f` review fixes; `a04acb3` comment bound.
+- Independent review of `ca7f292`: accept with fixes, no blocker. Five
+  should-fix and four minor findings, all addressed in `003c46f`.
+- `003c46f` and `a04acb3` were not independently re-reviewed.
+- Controller rerun at `a04acb3`: `read_credentials` 25, `read_contract` 30,
+  `read_boundary` 13, `read_repository` 20, `shared_key_registry` 39,
+  `key_material` 39, `key_storage` 2, `session_credentials` 11 passed,
+  0 failed. No `unsafe` under `src/repository/read/`.
+- Implementer: `cargo test --locked --lib` 209 passed, `cargo fmt --check` and
+  clippy pass at `a04acb3`; `ssh_transport` 103 SSH cases (baseline 103),
+  `cargo test --locked --doc` 9 passed, `cargo check --all-features --locked`
+  pass at `003c46f`.
+- Not run for this task: `ssh_fixture`, `remote_observation`,
+  `remote_synchronization` and the full suite.
+- The first commit's tests were written after the code and checked by nine
+  mutations. The review-fix tests were seen failing first.
