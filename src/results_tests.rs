@@ -617,9 +617,8 @@ fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
         // Local paths are unchanged.
         ("/srv/git/repo.git", "/srv/git/repo.git"),
         ("../sibling/repo.git", "../sibling/repo.git"),
-        // A local path with a space cannot be told from a location with
-        // arguments after it, and is replaced whole.
-        ("repo with spaces", REDACTED),
+        ("repo with spaces", "repo with spaces"),
+        ("/home/me/My Projects/repo", "/home/me/My Projects/repo"),
         (
             r"C:\Users\alice@example\repo",
             r"C:\Users\alice@example\repo",
@@ -854,16 +853,20 @@ fn redact_url_replaces_a_remote_helper_location_whole() {
 }
 
 #[test]
-fn redact_url_replaces_a_schemeless_location_with_whitespace_or_a_control_character() {
+fn redact_url_replaces_a_schemeless_location_with_a_control_character() {
     for input in [
-        "host:repo --upload-pack=SECRET",
+        "/home/me/My Projects/repo\nSECRET",
+        "repo\u{1b}[2JSECRET",
         "git@example.com:team/repo.git\tSECRET",
         "/srv/git/repo\nSECRET",
         "repo\u{0}SECRET",
         "repo\u{7f}SECRET",
-        "repo\u{a0}SECRET",
     ] {
         assert_eq!(redact_url(input), REDACTED, "{input:?}");
+    }
+    // A space, of any kind, is path text.
+    for kept in ["repo\u{a0}with a space", "host:My Projects/repo"] {
+        assert_eq!(redact_url(kept), kept);
     }
 }
 

@@ -568,15 +568,16 @@ impl Serialize for OperationFailureCode {
 /// Input that cannot be parsed, or that may still hold a credential,
 /// becomes `REDACTED` whole: a wrongly redacted location is acceptable and
 /// a surviving secret is not. That includes any location without a
-/// `scheme://` that holds whitespace or a control character, a local path
+/// `scheme://` that holds a control character, a line break or a tab
 /// among them, and Git's remote-helper form `<transport>::<address>`, whose
-/// address is handed to a program.
+/// address is handed to a program. A space is not one: a local path with
+/// spaces is returned as written.
 pub fn redact_url(url: &str) -> String {
     let redacted = match url.split_once("://") {
         Some((scheme, rest)) => redact_scheme_url(scheme, rest),
         None if has_schemeless_credential(url)
             || is_remote_helper_location(url)
-            || has_whitespace_or_control(url) =>
+            || url.chars().any(char::is_control) =>
         {
             None
         }
