@@ -2131,6 +2131,8 @@ fn index_status_matches_its_schema_and_golden() {
         "---\nmanyhands_managed: true\n---\n",
     );
     items::refresh_completely(&enabled.service, &fixture.root);
+    // What a refresh leaves when the repository changes under it: the
+    // problem, the mark that the index is behind, and its own record.
     let index = items::index(data);
     index
         .execute(
@@ -2138,6 +2140,9 @@ fn index_status_matches_its_schema_and_golden() {
              SELECT id, 'retry-required', ?1, 0 FROM repositories",
             [GUIDANCE_SENTINEL],
         )
+        .unwrap();
+    index
+        .execute("UPDATE repositories SET refresh_required = 1", [])
         .unwrap();
     index
         .execute("UPDATE problems SET guidance = ?1", [GUIDANCE_SENTINEL])
@@ -2150,7 +2155,7 @@ fn index_status_matches_its_schema_and_golden() {
     let refreshed_at = status.refreshed_at.clone().unwrap();
     let envelope = Envelope::read_success("index status", repo.scope(), status.clone());
 
-    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.state, IndexStatusState::Stale);
     assert_eq!(status.problems.len(), 2);
     assert_eq!(status.pending_operations.len(), 1);
     golden::assert_contract(
