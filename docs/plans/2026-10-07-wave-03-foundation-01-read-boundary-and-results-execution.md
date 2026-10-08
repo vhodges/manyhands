@@ -88,7 +88,9 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 - Baseline: passed at `6346caa` (evidence below).
 - Task 1: complete; review accepted with fixes, range `2824eff..ae757b0`.
 - Task 2: complete; review accepted with fixes, range `c553744..df02e79`.
-- Tasks 3–10: pending.
+- Task 3: complete; review accepted with fixes (one blocker), range
+  `a1223c0..9639595`.
+- Tasks 4–10: pending.
 
 ## Decisions and rulings
 
@@ -159,6 +161,58 @@ Task 2:
   read-only-directory test. The design dropped that test, and a read-only data
   directory does fail a read. The lock tests are the proof.
 
+Task 3:
+
+- **A worktree's owner is verified.** A candidate owner is accepted only when
+  it is not itself a linked worktree and its canonical common Git directory
+  equals the worktree's. Otherwise the result is `not_repository`.
+- **Resolution also requires** the opened repository's canonical working
+  directory to equal the selected path, so `<root>/.git` and
+  `.git/worktrees/<x>` are `not_repository_root`.
+- **Failure classes.** Git "not found" is `not_repository`; any other open or
+  discover failure is `repository_inaccessible`. A missing path, a path
+  through a file or an invalid path is `invalid_path`; any other I/O failure
+  is `repository_inaccessible`. A worktree of a bare repository is
+  `bare_repository`.
+- **Recovery actions.** `not_repository_root` carries `repo.inspect` with
+  `{"root": <discovered root>}`. `index.rebuild` carries `{"root": <root>}`
+  once a repository is resolved. The argument key is `root` everywhere.
+  `repository_not_registered` carries none; `repo.enable` is a mutation and
+  belongs to F2.
+- **`repo inspect` resolves first.** A linked worktree is inspected as its
+  owning repository: `root` and `head_branch` are the owner's, and
+  `selected_path` echoes what the caller passed. A detached HEAD is
+  `head_branch: null`. `identity_state` is `available` or `required`.
+- **Exception to "busy without exception".** `repository_identity`,
+  `list_remotes_redacted`, the Git part of `inspect_repository` and
+  `new_item_id` read no index data and do not use the read session, so they
+  are not `busy` under the exclusive lock. This departs from the design's
+  wording and is accepted.
+- **`selected_for_publication` comes from the working-tree configuration**, as
+  `repo inspect` does. It can differ from the index's stored observation and
+  includes uncommitted edits.
+- **`repo list` shapes.** `configuration` is
+  `{state, primary_branch, publication_remote, problems}`; `index` is
+  `{state, refreshed_at}`, provisional until Task 5 fills `refreshed_at` and
+  `never_refreshed`; `problem_count` counts every stored problem.
+- **Enum strings.** Accessibility `accessible | inaccessible`; configuration
+  `valid | invalid | missing`; index `current | stale | never_refreshed`;
+  identity source `repository | global | xdg | system | program_data |
+  application | none`.
+- **A third test target**, `tests/read_repository.rs`, holds resolution and
+  repository read behavior. Task 10 adds it to the workflow list with the
+  others, and the plan's "two read test targets" now means three.
+- **The `repository_inaccessible` message** is "The repository cannot be
+  read.", since resolution can return it for an unregistered path.
+
+Known gap, carried: nothing in the existing code writes an accessibility other
+than `accessible`, so a registered repository whose folder was deleted lists
+as accessible. The read reports what is stored and does not probe. Owner: the
+refresh path; to be raised as its own defect ticket at Task 10 handoff.
+
+Inherited, unchanged: a remote with a non-UTF-8 URL is skipped by the existing
+remote enumeration while the list still says `complete: true`.
+
 ## Verification and review
 
 Per-task evidence is recorded below as it is produced. Nothing below this line
@@ -210,3 +264,26 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
   features, and `cargo check --all-features --locked` pass.
 - Not run for this task: the full suite.
 - Tests were written alongside the code, not strictly first.
+
+### Task 3 — resolution and repository reads, range `a1223c0..9639595`
+
+- `d63ec8f` implementation; `81ead8f` review fixes; `9639595` message wording.
+- Independent review of `d63ec8f`: accept with fixes. One blocker (wrong-owner
+  resolution, reproduced by the reviewer), three should-fix and four minor
+  findings. The blocker, the detached-HEAD failure and the failure
+  classification are fixed in `81ead8f`, each with a test the implementer saw
+  fail first.
+- `81ead8f` and `9639595` were not independently re-reviewed.
+- Controller rerun at `9639595`: `read_boundary` 13, `read_contract` 24,
+  `read_repository` 20, `repository_enablement` 73, `local_authoring` 112
+  passed, 0 failed.
+- Implementer: `cargo test --locked --lib` 209 passed, `cargo fmt --check` and
+  clippy pass at `9639595`; `cargo test --locked --doc` 9 passed and
+  `cargo check --all-features --locked` pass at `81ead8f`.
+- Not run for this task: the full suite.
+- Not tested: permission-denied and ownership failures during resolution;
+  the `system`, `program_data` and `application` identity sources beyond a
+  unit test of the level mapping.
+- The behavior tests for the first commit were written before the code but
+  only seen failing to compile; the review-fix tests were seen failing against
+  the wrong behavior.
