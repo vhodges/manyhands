@@ -36,6 +36,13 @@ root causes and isolated/default/full-suite evidence). Current second native run
 https://github.com/vhodges/manyhands/actions/runs/37795672482
 Next inspect this exact d108e73 matrix; Task 4 remains unaccepted while pending.
 
+Run 2 built all five release targets but exposed additional test-fixture
+portability failures. Independently reviewed test-only fixes are published as
+c3ad08c; third native matrix is running:
+https://github.com/vhodges/manyhands/actions/runs/37799832943
+Current next action: inspect/fix this exact source run, then accept Task 4 only
+after native gates are handled. The ledger records earlier failures and fixes.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.

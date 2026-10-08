@@ -34,6 +34,13 @@ fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, Repositor
     let root = fixture_tempdir_in(parent);
     let data = fixture_tempdir_in(parent);
     let repo = git2::Repository::init(root.path()).unwrap();
+    // Pin byte-exact fixtures before any staging. Production checkout continues
+    // to honor Git filters (characterized separately with local autocrlf=true).
+    // CI proved CRLF checkout, but did not log inherited config provenance.
+    repo.config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
     repo.set_head("refs/heads/main").unwrap();
     repo.config()
         .unwrap()
@@ -729,6 +736,99 @@ fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
         Err(SynchronizationError::ExternalChange)
     ));
 }
+#[test]
+fn fixture_pins_autocrlf_locally_before_initial_staging() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let local = repo
+        .config()
+        .unwrap()
+        .open_level(git2::ConfigLevel::Local)
+        .unwrap();
+    assert_eq!(local.get_bool("core.autocrlf").ok(), Some(false));
+    let tree = repo.head().unwrap().peel_to_tree().unwrap();
+    let blob = repo
+        .find_blob(tree.get_name("fixture.txt").unwrap().id())
+        .unwrap();
+    assert!(blob.content() == b"original\n");
+}
+
+#[test]
+fn fast_forward_respects_local_autocrlf_checkout_policy() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    repo.config()
+        .unwrap()
+        .set_bool("core.autocrlf", true)
+        .unwrap();
+    let old = repo.head().unwrap().target().unwrap();
+    let new = child(&repo, old, b"advanced\n");
+    fast_forward(&repo, "refs/heads/main", old, new).unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(new));
+    assert!(fs::read(root.path().join("fixture.txt")).unwrap() == b"advanced\r\n");
+    local_target(root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+}
+
+#[test]
+fn collected_native_document_and_ticket_paths_are_canonical() {
+    let root = fixture_tempdir();
+    let document = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbody\n";
+    let ticket = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"\ntitle: \"Ticket\"\ntype: \"task\"\nstatus: \"open\"\n---\n\nbody\n";
+    fs::create_dir_all(root.path().join("docs/nested")).unwrap();
+    fs::create_dir_all(
+        root.path()
+            .join(".manyhands/tickets/01BX5ZZKBKACTAV9WEVGEMMVRZ"),
+    )
+    .unwrap();
+    fs::write(root.path().join("docs/nested/document.md"), document).unwrap();
+    fs::write(
+        root.path()
+            .join(".manyhands/tickets/01BX5ZZKBKACTAV9WEVGEMMVRZ/ticket.md"),
+        ticket,
+    )
+    .unwrap();
+    let mut sources = Vec::new();
+    crate::repository::collect_canonical_sources(
+        root.path(),
+        &mut sources,
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .unwrap();
+    assert_eq!(sources.len(), 2);
+    assert!(
+        sources
+            .iter()
+            .all(|(path, _)| !path.to_str().unwrap().contains('\\'))
+    );
+    let validated = canonical::validate_context(sources);
+    assert_eq!(validated.items.len(), 2);
+    assert!(validated.problems.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn collected_literal_backslash_filename_stays_invalid() {
+    let root = fixture_tempdir();
+    fs::create_dir(root.path().join("docs")).unwrap();
+    fs::write(root.path().join("docs/literal\\name.md"), "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbody\n").unwrap();
+    let mut sources = Vec::new();
+    crate::repository::collect_canonical_sources(
+        root.path(),
+        &mut sources,
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .unwrap();
+    assert_eq!(sources.len(), 1);
+    let validated = canonical::validate_context(sources);
+    assert!(validated.items.is_empty());
+    assert!(
+        validated
+            .problems
+            .iter()
+            .any(|problem| problem.code == canonical::ValidationCode::InvalidPath)
+    );
+}
+
 #[test]
 fn checkout_failure_preserves_old_ref_and_user_content_without_rollback() {
     let (root, _data, _service) = fixture();
@@ -2041,6 +2141,39 @@ fn review_resolution_preserves_clean_merge_entries_in_initial_and_candidate_reco
                 expected.as_bytes()
             );
         }
+    }
+}
+
+#[test]
+fn explicit_resolution_preserves_lf_and_crlf_under_local_autocrlf() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    for crlf in [false, true] {
+        let local = base.replace("base", "local");
+        let incoming = base.replace("base", "incoming");
+        let (root, _data, service, operation, _, _) =
+            resolution_fixture(&[("docs/document.md", base, &local, &incoming)]);
+        let repo = git2::Repository::open(root.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", true)
+            .unwrap();
+        let result = base.replace("base", "resolved");
+        let result = if crlf {
+            result.replace('\n', "\r\n")
+        } else {
+            result
+        };
+        let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+            resolve_fixture(root.path(), &service, operation, &[&result])
+        else {
+            panic!("expected local checkpoint");
+        };
+        assert!(fs::read(root.path().join("docs/document.md")).unwrap() == result.as_bytes());
+        let tree = repo.find_commit(commit_oid).unwrap().tree().unwrap();
+        let blob = repo
+            .find_blob(tree.get_path(Path::new("docs/document.md")).unwrap().id())
+            .unwrap();
+        assert!(blob.content() == result.as_bytes());
     }
 }
 

@@ -1272,3 +1272,52 @@ checks and diff check. Independent spec `ses_ee3eccb60ffeHYOQh7Frnmcw6H` and
 quality `ses_ee3eb2572ffe9uUM6fdmsYylWK` approved the bounded fixes. Next publish
 and run the same complete native coverage; Windows runtime remains unexecuted
 because compilation of the newly included discovery target previously failed.
+
+Published the reviewed test-only portability fixes as
+c3ad08c83059a53635f7411021e7f0705d87783a through normal push. Third complete
+native matrix is manually dispatched on that source:
+https://github.com/vhodges/manyhands/actions/runs/37799832943
+Continue inspecting actual results; no source/coverage gate is waived.
+
+### Native run 3: Linux green; Windows runtime and macOS authoring fixes — 2026-10-08
+
+Run 37799832943 passed complete native build/test/artifact jobs on Linux x86_64
+and ARM64. macOS reached local-authoring (103 passed/9 failed): eight alias-path
+assertions and one APFS-invalid-byte fixture constructor EILSEQ. Both Windows
+jobs built and executed library tests (217 passed/43 failed): two primitive
+existing-destination replacements returned AccessDenied, most resolution cases
+stopped before candidate creation; separate LF assumptions and native separators
+in canonical collection caused checkout/context failures. Logs are retained at
+/tmp/opencode/cycle06-native-37799832943-failures.log.
+
+Read-only diagnosis `ses_ee3cf87dbffes8BMpj5oJswb0T` traced classic MoveFileEx
+open-destination replacement semantics, fixture checkout filtering and component
+path representation. It rejected an unproved verbatim-prefix hypothesis: relevant
+production registration guards already canonicalize. Worker
+`ses_ee39ea6f6ffeYoUXGSdUTZNlDd` adds one verified requested-source DELETE-handle
+FileRenameInfoEx helper (POSIX replacement for existing targets, absent-only flags
+otherwise), retaining parent/proof handles and exact pre/post identity/bytes.
+Durable anchors survive; unsupported/ACL/readonly errors propagate with no classic
+fallback or readonly override. Five native controls include alternate-anchor source
+proof, non-BMP names, old-target readability, identical-byte substitution, absence
+and readonly refusal. Existing windows-sys WindowsProgramming feature supplies named
+flags; no new dependency or lockfile change.
+
+The small canonical collector fix joins native OsStr components with '/', without
+lossy conversion or replacing literal Unix backslashes. Fixture-local autocrlf=false
+isolates LF assumptions; separate tests verify production CRLF checkout and exact
+LF/CRLF caller bytes in both resolved worktree and blob. Root/path guards remain.
+
+Worker `ses_ee3cf87caffeGduWuBXPVTLL38` changed only local_authoring.rs: eight
+alias regressions first failed old expectations, then canonical expectations pass
+while alias requests and preservation/redaction checks stay. Exact macOS EILSEQ
+constructor refusal verifies all protected state unchanged and explicitly proves
+filesystem rejection, not unreachable app-guard coverage; filesystems supporting
+invalid names still execute the original application rejection. No ignored case.
+
+Final Devenv sync 120/path 2/authoring 120, check/fmt/strict clippy, full all-feature
+suite (300 library tests and complete integration/SSH/doc suites) and CLI pass.
+Spec `ses_ee2e5b1b1ffeql3VtSxhSPsWJc` and quality
+`ses_ee2e1e5f0ffe12GBg2EOGkzsRq` approved this actual correction diff, conditional
+on native results. FileRenameInfoEx and APFS branch execution still need the next
+matrix; local success is not native Windows/macOS success. Task 4 remains unaccepted.

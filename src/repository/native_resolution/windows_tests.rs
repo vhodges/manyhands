@@ -286,6 +286,130 @@ fn journaled_output_install_keeps_source_anchor_and_exact_installed_identity() {
 }
 
 #[test]
+fn install_renames_requested_link_when_proof_was_opened_through_anchor() {
+    let root = root();
+    let parent = Directory::open(root.path()).unwrap();
+    let staging = parent.child("private", true).unwrap();
+    let output = staging.create_image("anchor", b"caller\r\nbytes").unwrap();
+    staging
+        .publish_anchor("anchor", &staging, "install", &output)
+        .unwrap();
+    // Publication changes ChangeTime; refresh through the durable anchor, not
+    // the disposable source role that the rename must remove.
+    let prepared = staging.image("anchor").unwrap().unwrap();
+    // Exercise a non-BMP UTF-16 name as well as an alternate proof anchor.
+    let target = "target-\u{1f9f5}";
+    let original = parent.create_image(target, b"old\nbytes").unwrap();
+    staging
+        .install_anchor("install", &parent, target, &prepared, &original)
+        .unwrap();
+    assert!(staging.image("install").unwrap().is_none());
+    let anchor = staging.image("anchor").unwrap().unwrap();
+    let installed = parent.image(target).unwrap().unwrap();
+    assert!(anchor.bytes == prepared.bytes && installed.bytes == prepared.bytes);
+    assert_eq!(anchor.stamp.identity, prepared.stamp.identity);
+    assert_eq!(installed.stamp.identity, prepared.stamp.identity);
+    let mut old_handle = original.file;
+    old_handle.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = Vec::new();
+    old_handle.read_to_end(&mut bytes).unwrap();
+    assert!(bytes == b"old\nbytes");
+}
+
+#[test]
+fn guarded_replacement_keeps_retained_target_handle_readable() {
+    let root = root();
+    let parent = Directory::open(root.path()).unwrap();
+    let staging = parent.child("private", true).unwrap();
+    let original = parent.create_image("target", b"original\r\n").unwrap();
+    replace_owned(
+        root.path(),
+        Path::new("target"),
+        staging.path(),
+        b"resolved\n",
+        super::super::owned_prewrite_digest(Some(b"original\r\n")),
+    )
+    .unwrap();
+    let installed = parent.image("target").unwrap().unwrap();
+    assert!(installed.bytes == b"resolved\n");
+    assert_ne!(installed.stamp.identity, original.stamp.identity);
+    let mut old_handle = original.file;
+    old_handle.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = Vec::new();
+    old_handle.read_to_end(&mut bytes).unwrap();
+    assert!(bytes == b"original\r\n");
+}
+
+#[test]
+fn readonly_target_replacement_is_an_honest_native_refusal() {
+    let root = root();
+    let parent = Directory::open(root.path()).unwrap();
+    let staging = parent.child("private", true).unwrap();
+    let output = staging.create_image("install", b"resolved").unwrap();
+    parent.create_image("target", b"baseline").unwrap();
+    let path = root.path().join("target");
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    let original = parent.image("target").unwrap().unwrap();
+    let result = staging.install_anchor("install", &parent, "target", &output, &original);
+    // Restore fixture permissions before assertions so an unexpected success
+    // does not leave a read-only remnant that prevents TempDir cleanup.
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    assert_eq!(
+        result.unwrap_err().raw_os_error(),
+        Some(ERROR_ACCESS_DENIED as i32)
+    );
+    assert!(parent.image("target").unwrap().unwrap().bytes == b"baseline");
+    staging.matches("install", &output).unwrap();
+}
+
+#[test]
+fn install_refuses_byte_identical_source_substitution() {
+    let root = root();
+    let parent = Directory::open(root.path()).unwrap();
+    let staging = parent.child("private", true).unwrap();
+    let output = staging.create_image("install", b"output").unwrap();
+    let original = parent.create_image("target", b"baseline").unwrap();
+    std::fs::rename(staging.path().join("install"), staging.path().join("saved")).unwrap();
+    let foreign = staging.create_image("install", b"output").unwrap();
+    assert_ne!(output.stamp.identity, foreign.stamp.identity);
+    assert!(
+        staging
+            .install_anchor("install", &parent, "target", &output, &original)
+            .is_err()
+    );
+    parent.matches("target", &original).unwrap();
+    staging.matches("install", &foreign).unwrap();
+    assert!(staging.image("saved").unwrap().unwrap().bytes == b"output");
+}
+
+#[test]
+fn absent_only_install_is_independent_and_never_overwrites() {
+    let root = root();
+    let parent = Directory::open(root.path()).unwrap();
+    let staging = parent.child("private", true).unwrap();
+    let first = staging.create_image("first", b"first").unwrap();
+    staging
+        .rename_image("first", &parent, "target", &first, None)
+        .unwrap();
+    assert!(staging.image("first").unwrap().is_none());
+    let installed = parent.image("target").unwrap().unwrap();
+    assert_eq!(installed.stamp.identity, first.stamp.identity);
+    assert!(installed.bytes == b"first");
+    let second = staging.create_image("second", b"second").unwrap();
+    assert!(
+        staging
+            .rename_image("second", &parent, "target", &second, None)
+            .is_err()
+    );
+    parent.matches("target", &installed).unwrap();
+    staging.matches("second", &second).unwrap();
+}
+
+#[test]
 fn journaled_output_install_preserves_substituted_original() {
     let root = root();
     let parent = Directory::open(root.path()).unwrap();
