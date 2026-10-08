@@ -25,6 +25,21 @@ fn owned_path_hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .expect("owned-path hook test lock")
 }
 
+#[cfg(unix)]
+fn repository_with_symlinked_parent() -> (tempfile::TempDir, support::TestRepository) {
+    let mut fixture = support::born_repository();
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("parent-alias");
+    std::os::unix::fs::symlink(
+        fixture.root.parent().unwrap().canonicalize().unwrap(),
+        &parent,
+    )
+    .unwrap();
+    fixture.root = parent.join(fixture.root.file_name().unwrap());
+    assert_ne!(fixture.root, fixture.root.canonicalize().unwrap());
+    (directory, fixture)
+}
+
 #[test]
 fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
     let fixture = support::born_repository();
@@ -46,7 +61,17 @@ fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
 
 #[test]
 fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
-    let fixture = support::born_repository();
+    assert_linked_worktree_snapshot(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_linked_worktree_snapshot_exposes_live_checked_out_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_linked_worktree_snapshot(fixture);
+}
+
+fn assert_linked_worktree_snapshot(fixture: support::TestRepository) {
     let worktree = fixture.root.join(".manyhands/worktrees/document-context");
     fs::create_dir_all(worktree.parent().unwrap()).unwrap();
     fixture
@@ -56,7 +81,7 @@ fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
 
     let snapshot = support::open_linked_worktree(&worktree);
 
-    assert_eq!(snapshot.worktree, worktree);
+    assert_eq!(snapshot.worktree, worktree.canonicalize().unwrap());
     assert_eq!(snapshot.head_branch, "document-context");
     assert_eq!(
         Some(snapshot.head_commit),
@@ -75,7 +100,17 @@ fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
 
 #[test]
 fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
-    let fixture = support::born_repository();
+    assert_document_context_location(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_document_context_uses_its_deterministic_location() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_document_context_location(fixture);
+}
+
+fn assert_document_context_location(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(
@@ -113,6 +148,8 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
         context.worktree,
         fixture
             .root
+            .canonicalize()
+            .unwrap()
             .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV")
     );
     assert_eq!(
@@ -123,7 +160,17 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
 
 #[test]
 fn context_ticket_create_uses_its_deterministic_branch_and_worktree() {
-    let fixture = support::born_repository();
+    assert_ticket_context_location(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_ticket_context_uses_its_deterministic_branch_and_worktree() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_ticket_context_location(fixture);
+}
+
+fn assert_ticket_context_location(fixture: support::TestRepository) {
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
 
@@ -148,6 +195,8 @@ fn context_ticket_create_uses_its_deterministic_branch_and_worktree() {
         context.worktree,
         fixture
             .root
+            .canonicalize()
+            .unwrap()
             .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW")
     );
 }
@@ -382,14 +431,46 @@ fn context_rejects_a_non_utf8_registered_worktree_name_without_mutation() {
         .unwrap();
     let worktrees_directory = fixture.repository.commondir().join("worktrees");
     let invalid_name = std::ffi::OsString::from_vec(b"non-utf8-\xff".to_vec());
-    fs::rename(
+    let configuration_path = fixture.root.join(".manyhands/config.toml");
+    let filesystem_state_before =
+        context_state(&fixture, &enabled.service, Some(&configuration_path));
+    let snapshot_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_files_before = support::repository_git_file_bytes(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let names_before = registered_worktree_names(&fixture.repository);
+
+    if let Err(error) = fs::rename(
         worktrees_directory.join("registered"),
         worktrees_directory.join(&invalid_name),
-    )
-    .unwrap();
-    let configuration_path = fixture.root.join(".manyhands/config.toml");
+    ) {
+        match error.raw_os_error() {
+            Some(libc::EILSEQ) if cfg!(target_os = "macos") => {}
+            _ => panic!("invalid-byte worktree fixture rename failed unexpectedly: {error}"),
+        }
+        // APFS can reject the invalid bytes before the application can inspect them.
+        // This branch proves filesystem rejection and nonmutation, not the application guard.
+        assert_context_state(
+            &fixture,
+            &enabled.service,
+            Some(&configuration_path),
+            &filesystem_state_before,
+        );
+        assert_eq!(
+            support::repository_and_worktree_snapshot(&fixture),
+            snapshot_before
+        );
+        assert_eq!(
+            support::repository_git_file_bytes(&fixture),
+            git_files_before
+        );
+        assert_eq!(operation_record_rows(&enabled.service), records_before);
+        assert_eq!(registered_worktree_names(&fixture.repository), names_before);
+        return;
+    }
+
     let before = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let worktree_names_before = registered_worktree_names(&fixture.repository);
+    assert!(worktree_names_before.contains(&b"non-utf8-\xff".to_vec()));
 
     let error = context_error(enabled.service.prepare_context(target(
         &fixture.root,
@@ -5848,7 +5929,17 @@ fn stale_document_edit_preserves_external_replacement() {
 
 #[test]
 fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_document_move_source(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_document_move_source_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_document_move_source(fixture);
+}
+
+fn assert_stale_document_move_source(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -5884,7 +5975,7 @@ fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state()
     let error = document_error(enabled.service.save_document(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -5903,7 +5994,17 @@ fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state()
 
 #[test]
 fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_document_move_destination(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_document_move_destination_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_document_move_destination(fixture);
+}
+
+fn assert_stale_document_move_destination(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -5939,7 +6040,7 @@ fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_st
     let error = document_error(enabled.service.save_document(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -5964,7 +6065,17 @@ fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_st
 
 #[test]
 fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_ticket_edit(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_ticket_edit_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_ticket_edit(fixture);
+}
+
+fn assert_stale_ticket_edit(fixture: support::TestRepository) {
     commit_source(
         &fixture,
         &ticket_relative_path().display().to_string(),
@@ -6000,7 +6111,7 @@ fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
     let error = document_error(enabled.service.save_ticket(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveTicket);
     assert_eq!(diagnostic.item_id, support::ticket_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -6018,7 +6129,17 @@ fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
 
 #[test]
 fn stale_comment_creation_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_comment_creation(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_comment_creation_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_comment_creation(fixture);
+}
+
+fn assert_stale_comment_creation(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -6054,7 +6175,7 @@ fn stale_comment_creation_preserves_pre_save_repository_and_worktree_state() {
     let error = comment_error(enabled.service.submit_comment(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SubmitComment);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -6334,7 +6455,17 @@ fn document_same_id_different_move_source_is_an_operation_mismatch() {
 
 #[test]
 fn externally_populated_missing_document_destination_is_redacted_external_change() {
-    let fixture = support::born_repository();
+    assert_populated_missing_document_destination(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_populated_missing_document_destination_is_redacted_external_change() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_populated_missing_document_destination(fixture);
+}
+
+fn assert_populated_missing_document_destination(fixture: support::TestRepository) {
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
     let item_id = support::document_id();
@@ -6371,7 +6502,7 @@ fn externally_populated_missing_document_destination_is_redacted_external_change
 
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().expect("external-change diagnostic");
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.item_id, item_id);
     assert_eq!(diagnostic.context, context.worktree);
     assert_eq!(diagnostic.path, std::path::PathBuf::from("docs/new.md"));

@@ -7596,10 +7596,15 @@ fn collect_canonical_source(
         Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return Ok(()),
         Err(error) => return Err(RepositoryError::io(operation, Some(root.to_owned()), error)),
     };
-    let relative = path
-        .strip_prefix(root)
-        .expect("source is below its root")
-        .to_owned();
+    let relative = path.strip_prefix(root).expect("source is below its root");
+    // Match discovery: canonical paths use '/' even on Windows. Join native
+    // components without rewriting a literal backslash in a Unix filename.
+    let relative = PathBuf::from(
+        relative
+            .iter()
+            .collect::<Vec<_>>()
+            .join(std::ffi::OsStr::new("/")),
+    );
     sources.push((relative, source));
     Ok(())
 }

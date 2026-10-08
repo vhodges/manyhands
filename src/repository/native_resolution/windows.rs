@@ -9,10 +9,11 @@
 //! durability; unexpected errors still stop resolution.
 
 use std::{
+    alloc::{Layout, alloc_zeroed, dealloc},
     ffi::OsStr,
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
-    mem::{size_of, zeroed},
+    mem::{align_of, offset_of, size_of, zeroed},
     os::windows::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle},
@@ -20,7 +21,13 @@ use std::{
     path::{Component, Path, PathBuf, Prefix},
     ptr::{null, null_mut},
 };
-use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+use windows_sys::Win32::{
+    Foundation::*,
+    Storage::FileSystem::*,
+    System::WindowsProgramming::{
+        FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
+    },
+};
 
 #[path = "windows_path.rs"]
 mod windows_path;
@@ -408,32 +415,119 @@ impl Directory {
         prepared: &Image,
         original: &Image,
     ) -> io::Result<()> {
-        self.matches(source, prepared)?;
-        destination.matches(target, original)?;
+        self.rename_image(source, destination, target, prepared, Some(original))?;
+        destination.flush(target)?;
+        self.revalidate()?;
+        destination.revalidate()
+    }
+
+    /// Rename the requested source role, never the handle supplied as ownership
+    /// proof: that handle may have been opened through a durable hard-link anchor.
+    /// Retained parent pins and pre/post proofs exclude cooperative substitution;
+    /// this is not namespace CAS against arbitrary concurrent writers.
+    fn rename_image(
+        &self,
+        source: &str,
+        destination: &Self,
+        target: &str,
+        prepared: &Image,
+        original: Option<&Image>,
+    ) -> io::Result<()> {
         if self.identity()?[0] != destination.identity()?[0] {
             return Err(changed());
         }
-        let source_path = wide(&self.leaf(source)?)?;
-        let target_path = wide(&destination.leaf(target)?)?;
-        if unsafe {
-            MoveFileExW(
-                source_path.as_ptr(),
-                target_path.as_ptr(),
-                MOVEFILE_WRITE_THROUGH | MOVEFILE_REPLACE_EXISTING,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
+        let source_image = Image::read(open_with_access(
+            &self.leaf(source)?,
+            false,
+            false,
+            GENERIC_READ | DELETE,
+        )?)?;
+        if source_image.stamp != prepared.stamp || source_image.bytes != prepared.bytes {
+            return Err(changed());
         }
+        let target_path = wide(&destination.leaf(target)?)?;
+        // Follow std's Windows rename buffer construction: actual trailing-field
+        // offset, native struct alignment, UTF-16 byte length excluding the NUL.
+        // Full absolute paths have already passed component and NUL validation.
+        let name_bytes = (target_path.len() - 1)
+            .checked_mul(size_of::<u16>())
+            .and_then(|length| u32::try_from(length).ok())
+            .ok_or(io::ErrorKind::InvalidInput)?;
+        let buffer_size = offset_of!(FILE_RENAME_INFO, FileName)
+            .checked_add(name_bytes as usize)
+            .and_then(|length| length.checked_add(size_of::<u16>()))
+            .ok_or(io::ErrorKind::InvalidInput)?;
+        let buffer_len = u32::try_from(buffer_size).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let layout = Layout::from_size_align(
+            buffer_size.max(size_of::<FILE_RENAME_INFO>()),
+            align_of::<FILE_RENAME_INFO>(),
+        )
+        .map_err(|_| io::ErrorKind::InvalidInput)?;
+        self.matches(source, prepared)?;
+        self.matches(source, &source_image)?;
+        match original {
+            Some(image) => destination.matches(target, image)?,
+            None if destination.image(target)?.is_some() => return Err(changed()),
+            None => {}
+        }
+        self.revalidate()?;
+        destination.revalidate()?;
+        // SAFETY: layout provides FILE_RENAME_INFO alignment and space for the
+        // complete header plus the UTF-16 name and NUL. Raw field pointers retain
+        // the allocation's provenance for the variable-length trailing field.
+        let result = unsafe {
+            let info = alloc_zeroed(layout).cast::<FILE_RENAME_INFO>();
+            if info.is_null() {
+                return Err(io::ErrorKind::OutOfMemory.into());
+            }
+            (&raw mut (*info).Anonymous).write(FILE_RENAME_INFO_0 {
+                Flags: if original.is_some() {
+                    FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+                } else {
+                    0
+                },
+            });
+            (&raw mut (*info).RootDirectory).write(null_mut());
+            (&raw mut (*info).FileNameLength).write(name_bytes);
+            target_path.as_ptr().copy_to_nonoverlapping(
+                (&raw mut (*info).FileName).cast::<u16>(),
+                target_path.len(),
+            );
+            let status = SetFileInformationByHandle(
+                source_image.file.as_raw_handle(),
+                FileRenameInfoEx,
+                info.cast(),
+                buffer_len,
+            );
+            // Capture the rename error before deallocation; no classic fallback,
+            // readonly override, or suppression of ACL/unsupported errors.
+            let result = if status == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            };
+            dealloc(info.cast(), layout);
+            result
+        };
+        result?;
         let installed = destination.image(target)?.ok_or_else(changed)?;
+        let retained = Image::read(prepared.file.try_clone()?)?;
         if installed.stamp.identity != prepared.stamp.identity
             || installed.bytes != prepared.bytes
-            || identity(&prepared.file)? != prepared.stamp.identity
+            || retained.stamp.identity != prepared.stamp.identity
+            || retained.bytes != prepared.bytes
             || self.image(source)?.is_some()
         {
             return Err(changed());
         }
-        destination.flush(target)?;
+        if let Some(original) = original {
+            let retained = Image::read(original.file.try_clone()?)?;
+            if retained.stamp.identity != original.stamp.identity
+                || retained.bytes != original.bytes
+            {
+                return Err(changed());
+            }
+        }
         self.revalidate()?;
         destination.revalidate()
     }
@@ -515,47 +609,14 @@ pub(super) fn replace_owned(
         return Err(changed());
     }
     let staging = Directory::open(private)?;
-    // Identity of the retained directory establishes the volume, not a guessed
-    // drive-letter comparison. MOVEFILE_COPY_ALLOWED is deliberately absent.
-    if parent.ancestors.last().ok_or_else(changed)?.identity[0]
-        != staging.ancestors.last().ok_or_else(changed)?.identity[0]
-    {
+    // Establish the volume from both retained parents before writing staging
+    // bytes; rename_image repeats this proof before the namespace effect.
+    if parent.identity()?[0] != staging.identity()?[0] {
         return Err(changed());
     }
     let temp = format!(".manyhands-write-{}", ulid::Ulid::new());
     let written = staging.create_image(&temp, bytes)?;
-    match &original {
-        Some(image) => parent.matches(&leaf, image)?,
-        None if parent.image(&leaf)?.is_some() => return Err(changed()),
-        None => {}
-    }
-    staging.matches(&temp, &written)?;
-    let source = wide(&staging.leaf(&temp)?)?;
-    let target = wide(&parent.leaf(&leaf)?)?;
-    if unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            target.as_ptr(),
-            MOVEFILE_WRITE_THROUGH
-                | if original.is_some() {
-                    MOVEFILE_REPLACE_EXISTING
-                } else {
-                    0
-                },
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // Rename may change ChangeTime; verify installed identity and exact bytes.
-    let installed = parent.image(&leaf)?.ok_or_else(changed)?;
-    if installed.stamp.identity != written.stamp.identity
-        || installed.bytes != bytes
-        || identity(&written.file)? != written.stamp.identity
-        || staging.image(&temp)?.is_some()
-    {
-        return Err(changed());
-    }
+    staging.rename_image(&temp, &parent, &leaf, &written, original.as_ref())?;
     written.file.sync_all()?;
     parent.revalidate()?;
     staging.revalidate()
