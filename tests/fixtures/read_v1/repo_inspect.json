@@ -9,7 +9,7 @@
       "state": "valid"
     },
     "head_branch": "main",
-    "identity": "available",
+    "identity_state": "available",
     "local_branches": [
       "main"
     ],
@@ -30,7 +30,8 @@
         "selected_for_publication": true
       }
     ],
-    "root": "<repository>"
+    "root": "<repository>",
+    "selected_path": "<repository>"
   },
   "effects": {
     "checkpoint": "not_requested",

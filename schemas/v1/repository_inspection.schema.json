@@ -4,15 +4,19 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "selected_path",
     "root",
     "registered",
     "head_branch",
     "local_branches",
     "configuration",
-    "identity",
+    "identity_state",
     "remotes"
   ],
   "properties": {
+    "selected_path": {
+      "type": "string"
+    },
     "root": {
       "type": "string"
     },
@@ -31,7 +35,7 @@
     "configuration": {
       "$ref": "repository_configuration.schema.json"
     },
-    "identity": {
+    "identity_state": {
       "type": "string",
       "enum": ["available", "required"]
     },

@@ -113,20 +113,25 @@ pub struct ConfigurationDto {
     pub problems: Vec<ProblemDto>,
 }
 
+/// Provisional until the index-status work (Task 5), which fills
+/// `refreshed_at` and reports `never_refreshed`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IndexStateDto {
     pub state: IndexState,
     pub refreshed_at: Option<String>,
 }
 
+/// `selected_path` is the canonical path the caller gave; `root` is the
+/// repository it selects, which differs for a linked worktree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RepositoryInspectionDto {
+    pub selected_path: String,
     pub root: String,
     pub registered: bool,
     pub head_branch: Option<String>,
     pub local_branches: Vec<String>,
     pub configuration: ConfigurationDto,
-    pub identity: IdentityAvailability,
+    pub identity_state: IdentityAvailability,
     pub remotes: Vec<RemoteDto>,
 }
 

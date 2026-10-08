@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use git2::{Config, ConfigLevel};
+use git2::{Config, ConfigLevel, Repository, RepositoryInitOptions, Signature, Time};
 use manyhands::{
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
@@ -364,11 +364,12 @@ fn inspect_repository_reports_an_unregistered_repository_without_enabling_it() {
     let inspection = service.inspect_repository(&fixture.root).unwrap();
 
     assert_eq!(inspection.root, path_string(&fixture.root));
+    assert_eq!(inspection.selected_path, inspection.root);
     assert!(!inspection.registered);
     assert_eq!(inspection.head_branch.as_deref(), Some("main"));
     assert_eq!(inspection.local_branches, ["main"]);
     assert_eq!(inspection.configuration.state, ConfigurationState::Missing);
-    assert_eq!(inspection.identity, IdentityAvailability::Available);
+    assert_eq!(inspection.identity_state, IdentityAvailability::Available);
     assert!(inspection.remotes.is_empty());
     assert!(service.list_repositories().unwrap().items.is_empty());
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
@@ -410,7 +411,10 @@ fn inspect_repository_reports_registration_configuration_and_redacted_remotes() 
             .contains(SENTINEL)
     );
     // A linked worktree is inspected as the repository that owns it.
-    let from_linked = enabled.service.inspect_repository(&linked).unwrap();
+    let mut from_linked = enabled.service.inspect_repository(&linked).unwrap();
+    assert_eq!(from_linked.selected_path, path_string(&linked));
+    assert_eq!(from_linked.root, path_string(&fixture.root));
+    from_linked.selected_path = inspection.selected_path.clone();
     assert_eq!(from_linked, inspection);
 
     fs::write(
@@ -592,5 +596,260 @@ fn a_registered_root_removed_from_disk_is_inaccessible_to_the_reads_that_open_it
     let error = enabled.service.list_remotes_redacted(&repo).unwrap_err();
     assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
     assert_eq!(error.scope.repository.as_deref(), Some(root.as_str()));
+    assert_git_transport_uninitialized();
+}
+
+fn commit_empty_tree(repository: &Repository) {
+    let signature = Signature::new(
+        "Manyhands Test",
+        "manyhands-test@example.invalid",
+        &Time::new(0, 0),
+    )
+    .unwrap();
+    let tree = repository
+        .find_tree(repository.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    repository
+        .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+        .unwrap();
+}
+
+/// A repository whose Git directory is `git_directory` and whose working
+/// directory is elsewhere, with one commit.
+fn separate_git_directory_repository(git_directory: &Path, working_directory: &Path) -> Repository {
+    fs::create_dir_all(working_directory).unwrap();
+    let mut options = RepositoryInitOptions::new();
+    options
+        .no_dotgit_dir(true)
+        .workdir_path(working_directory)
+        .initial_head("main");
+    let repository = Repository::init_opts(git_directory, &options).unwrap();
+    commit_empty_tree(&repository);
+    repository
+}
+
+/// Removes `core.worktree`, as `git init --separate-git-dir` leaves it: the
+/// Git directory then no longer says where its working directory is.
+fn forget_working_directory(git_directory: &Path) {
+    Config::open(&git_directory.join("config"))
+        .unwrap()
+        .remove("core.worktree")
+        .unwrap();
+}
+
+// Without `core.worktree`, Git takes the parent of a Git directory to be its
+// working directory. That parent is not thereby the owner of its worktrees.
+#[test]
+fn a_linked_worktree_never_resolves_to_a_repository_that_does_not_own_it() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    fixture
+        .repository
+        .remote("origin", "ssh://git@example.invalid/registered.git")
+        .unwrap();
+    let outside = tempfile::tempdir().unwrap();
+
+    // An unrelated repository keeps its Git directory inside the registered
+    // root and does not record where its own working directory is.
+    let other_git = fixture.root.join("other.git");
+    let other = separate_git_directory_repository(&other_git, &outside.path().join("other"));
+    let other_worktree = outside.path().join("other-worktree");
+    other
+        .worktree("other-worktree", &other_worktree, None)
+        .unwrap();
+    forget_working_directory(&other_git);
+
+    // A bare repository inside the registered root, marked as not bare.
+    let not_bare_git = fixture.root.join("nb.git");
+    let not_bare = Repository::init_bare(&not_bare_git).unwrap();
+    commit_empty_tree(&not_bare);
+    let not_bare_worktree = outside.path().join("nb-worktree");
+    not_bare
+        .worktree("nb-worktree", &not_bare_worktree, None)
+        .unwrap();
+    Config::open(&not_bare_git.join("config"))
+        .unwrap()
+        .set_bool("core.bare", false)
+        .unwrap();
+
+    for worktree in [&other_worktree, &not_bare_worktree] {
+        let error = enabled.service.resolve_repository(worktree).unwrap_err();
+        assert_eq!(error.code(), ResultCode::NotRepository, "{worktree:?}");
+        assert_eq!(error.scope.repository, Some(path_string(worktree)));
+        assert_eq!(recovery(&error), json!([]));
+        assert_eq!(
+            enabled
+                .service
+                .inspect_repository(worktree)
+                .unwrap_err()
+                .code(),
+            ResultCode::NotRepository
+        );
+    }
+    // The registered repository still resolves, and its own worktrees do.
+    let linked = outside.path().join("linked");
+    linked_worktree(&fixture, "linked", &linked);
+    let root = enabled.service.resolve_repository(&fixture.root).unwrap();
+    assert_eq!(enabled.service.resolve_repository(&linked).unwrap(), root);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_linked_worktree_whose_owner_cannot_be_verified_names_no_directory_that_is_not_a_repository() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let plain = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let git_directory = plain.path().join("other.git");
+    let other = separate_git_directory_repository(&git_directory, &outside.path().join("other"));
+    let worktree = outside.path().join("worktree");
+    other.worktree("worktree", &worktree, None).unwrap();
+    forget_working_directory(&git_directory);
+
+    let error = enabled.service.resolve_repository(&worktree).unwrap_err();
+
+    // Not `repository_not_registered` for the parent of the Git directory.
+    assert_eq!(error.code(), ResultCode::NotRepository);
+    assert_eq!(error.scope.repository, Some(path_string(&worktree)));
+    assert_ne!(error.scope.repository, Some(path_string(plain.path())));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_linked_worktree_of_a_repository_with_a_separate_git_directory_resolves_to_its_owner() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let outside = tempfile::tempdir().unwrap();
+    let working_directory = outside.path().join("owner");
+    let owner =
+        separate_git_directory_repository(&outside.path().join("owner.git"), &working_directory);
+    let worktree = outside.path().join("worktree");
+    owner.worktree("worktree", &worktree, None).unwrap();
+
+    // The owner is found and verified; it is simply not registered.
+    for path in [&working_directory, &worktree] {
+        let error = enabled.service.resolve_repository(path).unwrap_err();
+        assert_eq!(
+            error.code(),
+            ResultCode::RepositoryNotRegistered,
+            "{path:?}"
+        );
+        assert_eq!(
+            error.scope.repository,
+            Some(path_string(&working_directory))
+        );
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_linked_worktree_whose_owner_has_lost_its_working_directory_is_inaccessible() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let outside = tempfile::tempdir().unwrap();
+    let working_directory = outside.path().join("owner");
+    let owner =
+        separate_git_directory_repository(&outside.path().join("owner.git"), &working_directory);
+    let worktree = outside.path().join("worktree");
+    owner.worktree("worktree", &worktree, None).unwrap();
+    fs::remove_dir_all(&working_directory).unwrap();
+
+    let error = enabled.service.resolve_repository(&worktree).unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
+    assert_eq!(error.scope.repository, Some(path_string(&worktree)));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_repository_git_cannot_open_is_inaccessible_not_absent() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let subdirectory = fixture.root.join("nested");
+    fs::create_dir_all(&subdirectory).unwrap();
+    // A repository format this build of Git does not support.
+    Config::open(&fixture.repository.path().join("config"))
+        .unwrap()
+        .set_i32("core.repositoryformatversion", 99)
+        .unwrap();
+
+    for path in [&fixture.root, &subdirectory] {
+        for error in [
+            enabled.service.resolve_repository(path).unwrap_err(),
+            enabled.service.inspect_repository(path).unwrap_err(),
+        ] {
+            assert_eq!(error.code(), ResultCode::RepositoryInaccessible, "{path:?}");
+            assert_eq!(error.scope.repository, Some(path_string(path)));
+            assert_eq!(recovery(&error), json!([]));
+        }
+    }
+    // Already resolved, it is inaccessible to the reads that open it too.
+    assert_eq!(
+        enabled
+            .service
+            .repository_identity(&repo)
+            .unwrap_err()
+            .code(),
+        ResultCode::RepositoryInaccessible
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_path_through_a_file_is_an_invalid_path() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+
+    let error = enabled
+        .service
+        .resolve_repository(&fixture.root.join("fixture.txt/below"))
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_eq!(error.scope.repository, None);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_repository_with_a_detached_head_is_read_like_any_other() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    fixture
+        .repository
+        .remote("origin", "ssh://git@example.invalid/team/repo.git")
+        .unwrap();
+    let head = fixture.repository.head().unwrap().target().unwrap();
+    fixture.repository.set_head_detached(head).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let inspection = enabled.service.inspect_repository(&fixture.root).unwrap();
+
+    assert_eq!(inspection.head_branch, None);
+    assert!(inspection.registered);
+    assert_eq!(inspection.local_branches, ["main"]);
+    assert_eq!(inspection.configuration.state, ConfigurationState::Valid);
+    assert_eq!(inspection.remotes.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&inspection).unwrap()["head_branch"],
+        Value::Null
+    );
+    assert_eq!(
+        enabled.service.repository_identity(&repo).unwrap().source,
+        IdentitySource::Repository
+    );
+    assert_eq!(
+        enabled
+            .service
+            .list_remotes_redacted(&repo)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    // The existing inspection still refuses a detached HEAD.
+    assert!(enabled.service.inspect(&fixture.root).is_err());
+    assert!(before == support::repository_and_worktree_snapshot(&fixture));
     assert_git_transport_uninitialized();
 }

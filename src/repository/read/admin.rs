@@ -10,7 +10,7 @@ use super::{
     Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
     IdentitySource, IndexState, IndexStateDto, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
-    resolve::{at_root, repository_root},
+    resolve::{at_root, selected_repository},
 };
 use crate::{
     canonical,
@@ -201,27 +201,37 @@ impl RepositoryService {
     /// registered, and enables nothing.
     ///
     /// The path is resolved as `resolve_repository` resolves it, short of
-    /// requiring a registration: `registered` reports that instead.
+    /// requiring a registration: `registered` reports that instead. A linked
+    /// worktree is inspected as the repository that owns it; `selected_path`
+    /// is the path that was given and `root` the repository's.
     pub fn inspect_repository(&self, path: &Path) -> Result<RepositoryInspectionDto, ReadError> {
-        let root = repository_root(path)?;
-        self.inspect_root(&root)
-            .map_err(|error| at_root(error, &root))
+        let selected = selected_repository(path)?;
+        self.inspect_selected(&selected.selected, &selected.root)
+            .map_err(|error| at_root(error, &selected.root))
     }
 
-    fn inspect_root(&self, root: &Path) -> Result<RepositoryInspectionDto, ReadError> {
+    fn inspect_selected(
+        &self,
+        selected: &Path,
+        root: &Path,
+    ) -> Result<RepositoryInspectionDto, ReadError> {
         let registered = self.registration_id(root)?.is_some();
-        let inspection = self.inspect(root)?;
+        let inspection = self.inspect_reporting_detached_head(root)?;
         // A root that cannot be written as text cannot be enabled either.
-        let Some(root) = absolute_path_string(&inspection.root) else {
+        let (Some(selected_path), Some(root)) = (
+            absolute_path_string(selected),
+            absolute_path_string(&inspection.root),
+        ) else {
             return Err(ReadError::invalid_path());
         };
         let configuration = inspected_configuration(inspection.configuration);
         Ok(RepositoryInspectionDto {
+            selected_path,
             root,
             registered,
             head_branch: inspection.head_branch,
             local_branches: inspection.local_branches,
-            identity: match inspection.identity {
+            identity_state: match inspection.identity {
                 IdentityInspection::Available => IdentityAvailability::Available,
                 IdentityInspection::Required => IdentityAvailability::Required,
             },

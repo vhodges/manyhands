@@ -4001,9 +4001,36 @@ impl RepositoryService {
         selected: &Path,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<RepositoryInspection, RepositoryError> {
+        self.inspect_with_head_policy(selected, identity_config, false)
+    }
+
+    /// `inspect` for a read: a detached HEAD is reported as no head branch
+    /// instead of being refused. Everything else is as `inspect` has it.
+    fn inspect_reporting_detached_head(
+        &self,
+        root: &Path,
+    ) -> Result<RepositoryInspection, RepositoryError> {
+        self.inspect_with_head_policy(root, &mut RepositoryIdentityConfig, true)
+    }
+
+    fn inspect_with_head_policy(
+        &self,
+        selected: &Path,
+        identity_config: &mut impl IdentityConfigProvider,
+        report_detached_head: bool,
+    ) -> Result<RepositoryInspection, RepositoryError> {
         self.require_index_available(RepositoryOperation::Inspect, Some(selected))?;
         let (repository, root) = canonical_repository_root(selected, RepositoryOperation::Inspect)?;
-        let head_branch = checked_out_branch(&repository, &root, RepositoryOperation::Inspect)?;
+        let head_branch = match checked_out_branch(&repository, &root, RepositoryOperation::Inspect)
+        {
+            Ok(branch) => Some(branch),
+            Err(error)
+                if report_detached_head && error.kind == RepositoryErrorKind::DetachedHead =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
         let local_branches = local_branches(&repository, &root)?;
         let configuration = read_configuration(&root)?;
         let local_config = repository.config().map_err(|error| {
@@ -4027,7 +4054,7 @@ impl RepositoryService {
 
         Ok(RepositoryInspection {
             root,
-            head_branch: Some(head_branch),
+            head_branch,
             local_branches,
             configuration,
             identity,

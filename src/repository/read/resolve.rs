@@ -5,7 +5,7 @@
 
 use std::{
     ffi::OsStr,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -86,6 +86,33 @@ fn open_exactly(path: &Path) -> Result<Repository, git2::Error> {
     Repository::open_ext(path, RepositoryOpenFlags::NO_SEARCH, &[] as &[&OsStr])
 }
 
+/// A failure to open or find a repository. Only "not found" means there is
+/// none; a repository Git refuses to open is there and cannot be read.
+fn git_failure(error: git2::Error) -> ReadError {
+    let code = match error.code() {
+        git2::ErrorCode::NotFound => ResultCode::NotRepository,
+        _ => ResultCode::RepositoryInaccessible,
+    };
+    ReadError::new(code).with_source(error)
+}
+
+/// A failure to canonicalize the selected path. A path that names nothing
+/// is the caller's mistake; one that cannot be reached is not.
+fn selected_path_failure(error: io::Error) -> ReadError {
+    let code = match error.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory | io::ErrorKind::InvalidInput => {
+            ResultCode::InvalidPath
+        }
+        _ => ResultCode::RepositoryInaccessible,
+    };
+    ReadError::new(code).with_source(error)
+}
+
+/// A directory Git names that cannot be reached.
+fn inaccessible(error: io::Error) -> ReadError {
+    ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)
+}
+
 /// The canonical working directory of `repository`, or `bare_repository`.
 fn working_directory(repository: &Repository) -> Result<PathBuf, ReadError> {
     let Some(directory) = repository.workdir().filter(|_| !repository.is_bare()) else {
@@ -95,24 +122,67 @@ fn working_directory(repository: &Repository) -> Result<PathBuf, ReadError> {
             .and_then(|path| absolute_path_string(&path));
         return Err(error);
     };
-    fs::canonicalize(directory)
-        .map_err(|error| ReadError::new(ResultCode::NotRepository).with_source(error))
+    fs::canonicalize(directory).map_err(inaccessible)
 }
 
-/// The root of the repository `path` selects, registered or not: the first
-/// four steps of resolution.
+/// The root of the repository that owns the linked worktree `worktree`.
+///
+/// The common Git directory names a working directory, but not reliably:
+/// without `core.worktree` Git takes it to be the directory's parent, which
+/// may be nothing, or another repository. So the root is accepted only when
+/// the repository opened there has the same common Git directory.
+fn owner_root(worktree: &Repository) -> Result<PathBuf, ReadError> {
+    let common_directory = fs::canonicalize(worktree.commondir()).map_err(inaccessible)?;
+    // The worktree exists and names this directory, so failing to open it
+    // is a repository that cannot be read, never the absence of one.
+    let common = open_exactly(&common_directory)
+        .map_err(|error| ReadError::new(ResultCode::RepositoryInaccessible).with_source(error))?;
+    let root = working_directory(&common)?;
+    let owner = open_exactly(&root).map_err(git_failure)?;
+    if owner.is_worktree()
+        || fs::canonicalize(owner.commondir()).map_err(inaccessible)? != common_directory
+    {
+        return Err(ReadError::new(ResultCode::NotRepository));
+    }
+    Ok(root)
+}
+
+/// What a selected path names: itself, canonical, and the root of the
+/// repository it selects.
+pub(super) struct SelectedRepository {
+    pub(super) selected: PathBuf,
+    pub(super) root: PathBuf,
+}
+
+/// The repository `path` selects, registered or not: the first four steps
+/// of resolution.
 ///
 /// `path` must be a working-directory root. A linked worktree root selects
 /// the repository that owns it, through their common Git directory.
-pub(super) fn repository_root(path: &Path) -> Result<PathBuf, ReadError> {
-    let selected =
-        fs::canonicalize(path).map_err(|error| ReadError::invalid_path().with_source(error))?;
-    let repository = open_exactly(&selected).or_else(|open_error| {
+pub(super) fn selected_repository(path: &Path) -> Result<SelectedRepository, ReadError> {
+    let selected = fs::canonicalize(path).map_err(selected_path_failure)?;
+    repository_root(&selected)
+        .map(|root| SelectedRepository {
+            root,
+            selected: selected.clone(),
+        })
+        // What cannot be read is, so far, only the path that was selected.
+        .map_err(|error| match error.code() {
+            ResultCode::RepositoryInaccessible => at_root(error, &selected),
+            _ => error,
+        })
+}
+
+fn repository_root(selected: &Path) -> Result<PathBuf, ReadError> {
+    let repository = match open_exactly(selected) {
+        Ok(repository) => repository,
         // Whatever is found above is not at the selected path, so the
         // comparison below reports it with its root.
-        Repository::discover(&selected)
-            .map_err(|_| ReadError::new(ResultCode::NotRepository).with_source(open_error))
-    })?;
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            Repository::discover(selected).map_err(git_failure)?
+        }
+        Err(error) => return Err(git_failure(error)),
+    };
     let directory = working_directory(&repository)?;
     if directory != selected {
         let root = absolute_path_string(&directory);
@@ -120,12 +190,12 @@ pub(super) fn repository_root(path: &Path) -> Result<PathBuf, ReadError> {
             .with_recovery(vec![root_action(INSPECT_ROOT_ACTION, root.as_deref())])
             .with_scope(root_scope(&directory)));
     }
-    if !repository.is_worktree() {
-        return Ok(directory);
+    if repository.is_worktree() {
+        // No owner is known, so the failure is about the worktree itself.
+        owner_root(&repository).map_err(|error| at_root(error, selected))
+    } else {
+        Ok(directory)
     }
-    let owner = open_exactly(repository.commondir())
-        .map_err(|error| ReadError::new(ResultCode::NotRepository).with_source(error))?;
-    working_directory(&owner)
 }
 
 impl RepositoryService {
@@ -137,7 +207,7 @@ impl RepositoryService {
     /// searched for: a path inside a repository is `not_repository_root`,
     /// and its recovery names the root.
     pub fn resolve_repository(&self, path: &Path) -> Result<ResolvedRepository, ReadError> {
-        let root = repository_root(path)?;
+        let root = selected_repository(path)?.root;
         match self.registration_id(&root) {
             Ok(Some(registration_id)) => Ok(ResolvedRepository {
                 registration_id,

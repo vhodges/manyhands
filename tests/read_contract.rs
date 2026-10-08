@@ -701,7 +701,7 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         ),
         (
             "repository_inspection.schema.json",
-            "identity",
+            "identity_state",
             IdentityAvailability::ALL
                 .map(IdentityAvailability::as_str)
                 .to_vec(),
