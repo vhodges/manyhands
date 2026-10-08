@@ -876,3 +876,218 @@ fn a_repository_with_a_detached_head_is_read_like_any_other() {
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
     assert_git_transport_uninitialized();
 }
+
+/// The configuration both reads report, after putting `arrange`'s file where
+/// the configuration is, and what the index stores for it after a refresh.
+fn configuration_reads(
+    arrange: impl FnOnce(&Path),
+) -> (
+    manyhands::repository::ConfigurationDto,
+    manyhands::repository::RemoteListDto,
+    manyhands::repository::ConfigurationDto,
+) {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    fixture
+        .repository
+        .remote("publish", "ssh://git@example.invalid/team/repo.git")
+        .unwrap();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let config = fixture.root.join(".manyhands/config.toml");
+    fs::remove_file(&config).unwrap();
+    arrange(&config);
+
+    let inspected = enabled
+        .service
+        .inspect_repository(&fixture.root)
+        .unwrap()
+        .configuration;
+    let remotes = enabled.service.list_remotes_redacted(&repo).unwrap();
+    support::items::refresh(&enabled.service, &fixture.root);
+    let listed = enabled
+        .service
+        .list_repositories()
+        .unwrap()
+        .items
+        .remove(0)
+        .configuration;
+    assert_git_transport_uninitialized();
+    (inspected, remotes, listed)
+}
+
+/// A configuration that would select `publish` if it were read.
+const SELECTING_CONFIGURATION: &str =
+    "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"publish\"\n";
+
+fn assert_invalid_configuration(
+    (inspected, remotes, listed): &(
+        manyhands::repository::ConfigurationDto,
+        manyhands::repository::RemoteListDto,
+        manyhands::repository::ConfigurationDto,
+    ),
+) {
+    assert_eq!(inspected.state, ConfigurationState::Invalid);
+    assert_eq!(inspected.primary_branch, None);
+    assert_eq!(inspected.publication_remote, None);
+    assert_eq!(inspected.problems.len(), 1);
+    assert_eq!(
+        inspected.problems[0].code,
+        ProblemCode::MalformedConfiguration
+    );
+    assert_eq!(
+        inspected.problems[0].path.as_deref(),
+        Some(".manyhands/config.toml")
+    );
+    assert_eq!(remotes.items.len(), 1);
+    assert!(
+        !remotes.items[0].selected_for_publication,
+        "a configuration that is not read selects nothing"
+    );
+    assert!(!serde_json::to_string(inspected).unwrap().contains(SENTINEL));
+    assert_eq!(
+        inspected, listed,
+        "the read and the indexer report the same configuration"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_configuration_is_invalid_and_is_not_followed() {
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("config.toml");
+    fs::write(&target, SELECTING_CONFIGURATION).unwrap();
+
+    let reads = configuration_reads(|config| {
+        std::os::unix::fs::symlink(&target, config).unwrap();
+    });
+
+    assert_invalid_configuration(&reads);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configuration_directory_that_is_a_link_is_invalid_and_is_not_followed() {
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("config.toml"), SELECTING_CONFIGURATION).unwrap();
+
+    let reads = configuration_reads(|config| {
+        let directory = config.parent().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+        std::os::unix::fs::symlink(outside.path(), directory).unwrap();
+    });
+
+    assert_invalid_configuration(&reads);
+}
+
+#[test]
+fn a_configuration_that_is_a_directory_is_invalid() {
+    let reads = configuration_reads(|config| fs::create_dir(config).unwrap());
+
+    assert_invalid_configuration(&reads);
+}
+
+#[test]
+fn a_configuration_that_is_not_text_is_invalid() {
+    let reads = configuration_reads(|config| fs::write(config, [0xff, 0xfe, b'\n']).unwrap());
+
+    assert_invalid_configuration(&reads);
+}
+
+/// A FIFO with no writer would hold an unguarded read for ever. The indexer
+/// is not asked: its own observation of the configuration is not the reads'.
+#[cfg(unix)]
+#[test]
+fn a_configuration_that_is_a_fifo_is_invalid_and_is_never_waited_on() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let config = fixture.root.join(".manyhands/config.toml");
+    fs::remove_file(&config).unwrap();
+    let name = std::ffi::CString::new(config.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+
+    let inspected = enabled
+        .service
+        .inspect_repository(&fixture.root)
+        .unwrap()
+        .configuration;
+    let remotes = enabled.service.list_remotes_redacted(&repo).unwrap();
+
+    assert_eq!(inspected.state, ConfigurationState::Invalid);
+    assert_eq!(inspected.problems.len(), 1);
+    assert_eq!(
+        inspected.problems[0].code,
+        ProblemCode::MalformedConfiguration
+    );
+    assert!(remotes.items.is_empty());
+    assert_git_transport_uninitialized();
+}
+
+/// The reads take at most 64 KiB of configuration. The indexer has no such
+/// bound, so only the two reads are compared here.
+#[test]
+fn a_configuration_larger_than_the_bound_is_invalid_for_the_reads() {
+    const BOUND: usize = 64 * 1024;
+    let padded = |length: usize| {
+        let mut source = SELECTING_CONFIGURATION.to_owned();
+        source.push('#');
+        while source.len() < length {
+            source.push('x');
+        }
+        source
+    };
+
+    let (at_the_bound, remotes, _) =
+        configuration_reads(|config| fs::write(config, padded(BOUND)).unwrap());
+    assert_eq!(at_the_bound.state, ConfigurationState::Valid);
+    assert!(remotes.items[0].selected_for_publication);
+
+    let (over, remotes, _) =
+        configuration_reads(|config| fs::write(config, padded(BOUND + 1)).unwrap());
+    assert_eq!(over.state, ConfigurationState::Invalid);
+    assert_eq!(over.problems.len(), 1);
+    assert_eq!(over.problems[0].code, ProblemCode::MalformedConfiguration);
+    assert!(!remotes.items[0].selected_for_publication);
+}
+
+#[test]
+fn a_missing_configuration_is_missing_for_the_reads() {
+    let (inspected, remotes, listed) = configuration_reads(|_| {});
+
+    assert_eq!(inspected.state, ConfigurationState::Missing);
+    assert!(inspected.problems.is_empty());
+    assert!(!remotes.items[0].selected_for_publication);
+    assert_eq!(inspected, listed);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configuration_that_cannot_be_opened_is_inaccessible() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let config = fixture.root.join(".manyhands/config.toml");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&config).is_ok() {
+        // This user opens what its mode forbids, so nothing can be shown.
+        return;
+    }
+
+    let error = enabled
+        .service
+        .inspect_repository(&fixture.root)
+        .unwrap_err();
+    assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
+    assert_eq!(
+        error.scope.repository,
+        Some(path_string(&fixture.root)),
+        "the failure names the repository"
+    );
+    let error = enabled.service.list_remotes_redacted(&repo).unwrap_err();
+    assert_eq!(error.code(), ResultCode::RepositoryInaccessible);
+    assert_git_transport_uninitialized();
+}

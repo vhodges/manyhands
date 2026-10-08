@@ -17,7 +17,7 @@ use crate::{
     repository::{
         ConfigurationInspection, IdentityConfigProvider, IdentityInspection, RemoteInfo,
         RepositoryError, RepositoryIdentityConfig, RepositoryOperation, RepositoryService,
-        SuppliedIdentityConfig, read_configuration_for, remote_info_for, resolve_identity,
+        SuppliedIdentityConfig, read_configuration_guarded, remote_info_for, resolve_identity,
     },
     results::{
         ProblemCode, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -298,8 +298,8 @@ impl RepositoryService {
         let repository = repo.open()?;
         let remotes = remote_info_for(&repository, repo.root(), operation)
             .map_err(|error| repo.failure(error))?;
-        let configuration =
-            read_configuration_for(repo.root(), operation).map_err(|error| repo.failure(error))?;
+        let configuration = read_configuration_guarded(repo.root(), operation)
+            .map_err(|error| repo.failure(error))?;
         let publication_remote = match &configuration {
             ConfigurationInspection::Valid(configuration) => {
                 configuration.publication_remote.as_deref()

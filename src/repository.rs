@@ -4051,7 +4051,13 @@ impl RepositoryService {
             Err(error) => return Err(error),
         };
         let local_branches = local_branches(&repository, &root)?;
-        let configuration = read_configuration(&root)?;
+        // Only a read asks for a detached HEAD to be reported, and a read
+        // takes the configuration through the guarded reader.
+        let configuration = if report_detached_head {
+            read_configuration_guarded(&root, RepositoryOperation::Inspect)?
+        } else {
+            read_configuration(&root)?
+        };
         let local_config = repository.config().map_err(|error| {
             RepositoryError::git(RepositoryOperation::Inspect, Some(root.clone()), error)
         })?;
@@ -6078,6 +6084,18 @@ enum GuardedFile {
 /// may not open, is the error itself.
 #[cfg(unix)]
 fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
+    // Without a bound nothing is too large.
+    guarded_file_within(root, relative, None).map(|file| file.unwrap_or(GuardedFile::NotAFile))
+}
+
+/// `guarded_file`, reading at most `limit` bytes when there is one: `None`
+/// for a regular file that holds more, of which nothing is returned.
+#[cfg(unix)]
+fn guarded_file_within(
+    root: &Path,
+    relative: &Path,
+    limit: Option<u64>,
+) -> std::io::Result<Option<GuardedFile>> {
     use std::io::{Error, ErrorKind};
 
     fn name(text: &std::ffi::OsStr) -> std::io::Result<CString> {
@@ -6126,7 +6144,7 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
                 Ok(next) => break next,
                 // Interrupted before anything was opened: ask again.
                 Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(error) => return absent(&error).ok_or(error),
+                Err(error) => return absent(&error).map(Some).ok_or(error),
             }
         };
         if !is_file {
@@ -6135,17 +6153,33 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
         }
         let metadata = next.metadata()?;
         if !metadata.is_file() {
-            return Ok(GuardedFile::NotAFile);
+            return Ok(Some(GuardedFile::NotAFile));
         }
         let mut bytes = Vec::new();
-        next.read_to_end(&mut bytes)?;
-        return Ok(GuardedFile::Found {
+        match limit {
+            None => {
+                next.read_to_end(&mut bytes)?;
+            }
+            Some(limit) => {
+                if metadata.len() > limit {
+                    return Ok(None);
+                }
+                // One byte past the bound shows a file that grew since.
+                (&mut next)
+                    .take(limit.saturating_add(1))
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() as u64 > limit {
+                    return Ok(None);
+                }
+            }
+        }
+        return Ok(Some(GuardedFile::Found {
             bytes,
             modified: metadata.modified().ok(),
-        });
+        }));
     }
     // An empty path names the root, which is not a file.
-    Ok(GuardedFile::NotAFile)
+    Ok(Some(GuardedFile::NotAFile))
 }
 
 #[cfg(unix)]
@@ -7627,6 +7661,104 @@ fn read_configuration_for(
         Ok(config) => ConfigurationInspection::Valid(config),
         Err(problem) => ConfigurationInspection::Invalid(problem),
     })
+}
+
+/// The most configuration a read takes. A configuration holds a few short
+/// keys; no other bound on it exists to agree with.
+const MAX_READ_CONFIGURATION_BYTES: u64 = 64 * 1024;
+
+/// The configuration as a read service reports it, read through the guarded
+/// reader: no symbolic link is followed, nothing is waited on, and at most
+/// `MAX_READ_CONFIGURATION_BYTES` are taken.
+///
+/// A configuration that is reached through a link, is not a regular file,
+/// is larger than the bound or is not UTF-8 is invalid, the state the
+/// indexer stores for a configuration it will not read. Nothing at the path
+/// is `Missing`. A file or directory that cannot be opened is
+/// `InaccessibleRepository`.
+fn read_configuration_guarded(
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<ConfigurationInspection, RepositoryError> {
+    let unsafe_configuration = || {
+        ConfigurationInspection::Invalid(canonical::ValidationProblem {
+            path: PathBuf::from(canonical::CONFIG_PATH),
+            code: canonical::ValidationCode::MalformedConfiguration,
+            message: "the repository configuration is not a readable regular file".to_owned(),
+        })
+    };
+    let bytes = match guarded_configuration_file(root) {
+        Ok(Some(GuardedFile::Found { bytes, .. })) => bytes,
+        Ok(Some(GuardedFile::Missing)) => return Ok(ConfigurationInspection::Missing),
+        Ok(Some(GuardedFile::NotAFile) | None) => return Ok(unsafe_configuration()),
+        Err(error) => {
+            return Err(RepositoryError::with_source(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::InaccessibleRepository,
+                error,
+            ));
+        }
+    };
+    let Ok(source) = String::from_utf8(bytes) else {
+        return Ok(unsafe_configuration());
+    };
+    Ok(match canonical::parse_repository_config(&source) {
+        Ok(config) => ConfigurationInspection::Valid(config),
+        Err(problem) => ConfigurationInspection::Invalid(problem),
+    })
+}
+
+#[cfg(unix)]
+fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
+    guarded_file_within(
+        root,
+        Path::new(canonical::CONFIG_PATH),
+        Some(MAX_READ_CONFIGURATION_BYTES),
+    )
+}
+
+// Weaker than the Unix reader, and never compiled or executed here: it
+// checks the path and then uses it, as the indexer's own configuration
+// observation does. Making it sound is a native obligation.
+#[cfg(not(unix))]
+fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
+    use std::io::ErrorKind;
+
+    let path = root.join(canonical::CONFIG_PATH);
+    for (checked, is_file) in [(root.join(".manyhands"), false), (path.clone(), true)] {
+        match std::fs::symlink_metadata(&checked) {
+            Ok(metadata) if is_file && metadata.file_type().is_file() => {
+                if metadata.len() > MAX_READ_CONFIGURATION_BYTES {
+                    return Ok(None);
+                }
+            }
+            Ok(metadata) if !is_file && metadata.file_type().is_dir() => {}
+            Ok(_) => return Ok(Some(GuardedFile::NotAFile)),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(Some(GuardedFile::Missing));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut bytes = Vec::new();
+    match std::fs::File::open(&path) {
+        Ok(file) => {
+            file.take(MAX_READ_CONFIGURATION_BYTES.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(Some(GuardedFile::Missing));
+        }
+        Err(error) => return Err(error),
+    }
+    if bytes.len() as u64 > MAX_READ_CONFIGURATION_BYTES {
+        return Ok(None);
+    }
+    Ok(Some(GuardedFile::Found {
+        bytes,
+        modified: None,
+    }))
 }
 
 fn canonical_configuration(
