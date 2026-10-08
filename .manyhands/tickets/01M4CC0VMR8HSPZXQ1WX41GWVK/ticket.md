@@ -33,6 +33,20 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: F1.
 
+## Added Scope (2026-10-07)
+
+Ticket relationships and short codes, per the
+[RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
+rebased onto main.
+
+Ticket create and save accept `deps` and `parent`, write them in canonical
+form and reject a cycle before any write. Create generates the short code.
+Add the explicit short-code assign operation, repository-local initials and
+the optional repository prefix. Exit evidence adds: golden vectors for the
+short-code and initials derivations, and a short code unchanged by rename,
+identity change and prefix change.
+
 ## Exit Evidence
 
 Real save and clean-sync fixtures prove stale preview
