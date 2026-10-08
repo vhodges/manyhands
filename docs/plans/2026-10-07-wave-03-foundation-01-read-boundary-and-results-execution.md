@@ -98,13 +98,18 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
   `dffa110..bcbe2e6`; full gate passed at `bcbe2e6`.
 - Task 6: complete; review accepted with fixes, range `a65fb40..540a2a1`.
 - Task 7: complete; review accepted with fixes, range `8f9499f..52714e0`.
-- Tasks 8–10: pending.
+- Task 8: complete; review accepted with fixes, range `fcbe353..de6f876`. The
+  full gate at `de6f876` had one failing test that passes on every rerun (see
+  the Task 8 evidence).
+- Tasks 9–10: pending.
 
 ## Resume here — 2026-10-08
 
-Tasks 5, 6 and 7 are complete. The full gate last passed at `bcbe2e6`
-(Task 5); Tasks 6 and 7 have focused runs only. Next: Task 8 (relationship
-view and index edges), by a fresh implementer, then an independent review.
+Tasks 5 to 8 are complete. The full gate last passed cleanly at `bcbe2e6`
+(Task 5); at `de6f876` (Task 8) it passed except for one load-sensitive
+existing test. Next: Task 9 (relationship queries, `read/graph.rs`,
+`tests/read_relationships.rs`), by a fresh implementer, then an independent
+review. Task 10's gate must pass cleanly.
 
 All cargo runs are local through Devenv. A same-day trial of running cargo on
 remote sprites was abandoned by the product owner: both sprites lost their
@@ -114,6 +119,16 @@ Carried to the Task 10 handoff, each to be raised as its own defect ticket:
 
 - Nothing writes an `accessibility` other than `accessible`, so a deleted
   registered repository lists as accessible (from Task 3).
+- Index versioning (product owner, 2026-10-08: no builds are in use yet, so
+  not a concern for F1; a version stamp may also serve to version the schema).
+  Two things to design together: a schema version, replacing the growing list
+  of probes and letting a build refuse an index newer than it understands; and
+  a content version on rows an older build rewrites. Without the second, an
+  older build sharing the data directory can refresh the index, drop slugs,
+  edges, `closed_by` and unknown metadata, and leave it reading `current`.
+- `concurrent_corrupt_rebuilds_replace_the_cache_once` in
+  `tests/discovery_rebuild.rs` depends on a second rebuild getting the lease
+  within 250 ms of the first finishing; it failed once under full-suite load.
 - Refresh persists the root, each active context and the disappeared-context
   cleanup in separate transactions, so the index can briefly, or after a
   `RetryRequired`, hold an item twice or not at all. Reads tolerate it; the
@@ -301,6 +316,51 @@ Accepted limits:
 - No test forces a busy or corrupt database inside the remote readers.
 - Task 7's tests were written after the code and checked by sixteen
   mutations; none was seen failing before its fix.
+
+## Task 8 rulings — 2026-10-08
+
+- **Index.** `discovered_items.slug`; `item_edges` (item row, target ID, kind
+  `deps` or `parent`, unique together); `item_problems` (item row, code,
+  optional detail that must be an item ID); indexes on the slug and on
+  `item_problems.item_id`. Added by the Task 5 probing step, which now also
+  creates tables and indexes; any addition marks every registration for
+  refresh.
+- **Writes.** `persist_context` writes the slug; `persist_relationships`
+  writes edges (parent first, then deps in file order) and item problems,
+  inside the same transaction that replaces the context's items, for refresh
+  and rebuild. Old rows go by cascade from the existing context delete;
+  every writable connection has foreign keys on. No save path changed.
+- **The fields stay in the file's unknown keys.** F1 only reads them. A save
+  keeps each once; the read DTO's `unknown_metadata` never repeats them for a
+  ticket, including on an index written before this task.
+- **Validation.** An invalid value is left out and reported on the item; the
+  ticket stays conforming. Codes: `invalid_slug`,
+  `relationship_wrong_type`, `relationship_invalid_id`,
+  `relationship_self_reference`, `duplicate_dependency`, and at read time
+  `relationship_not_a_ticket` for a document or comment target. `deps` and
+  `parent` share codes. A dangling target is stored and reads `unresolved`.
+- **Controller decisions on points the reviewer marked for the product
+  owner**, reported to the product owner the same day and not objected to: a
+  null value is absent; an uppercase slug is accepted and lowercased; problem
+  objects gain `target_id`; `parent` is `{id, state}`. The design is amended.
+- **State** (`open`, `closed`, `unresolved`) comes from the index rows of the
+  effective copies, so it can lag the files while the index reads `current`.
+- **`TicketFilter.slug`** is applied now: whole code, case-insensitive, every
+  match. `readiness` is still ignored until Task 9.
+- **A bad stored relationship row** fails every read that loads items with
+  `internal_error`, consistent with the Task 7 ruling.
+- **Dropped by the product owner:** a content stamp for older builds; see
+  "Resume here".
+
+Accepted limits:
+
+- Repository and index problem counts exclude relationship problems.
+- A parent and a dependency naming the same non-ticket produce one problem.
+- An index written before this task can still flag a ticket's metadata as
+  not representable because of these keys, until its next refresh.
+- An unquoted slug that YAML reads as a number (`1e-12345`) is invalid; F2
+  must write slugs as strings.
+- `discovered_items_slug` is not used by any query yet.
 
 ## Decisions and rulings
 
@@ -697,3 +757,36 @@ from this work without asking.
 - Not run for this task: the full suite.
 - Test-first: none. Nine mutations of the first commit and seven of the fixes
   were each caught by a test.
+
+### Task 8 — relationship view and index edges, range `fcbe353..de6f876`
+
+- `0356c01` canonical view; `eb16e41` problem codes; `1ef40b8` index schema
+  and writes; `7a9ffe4` item reads; `a6cb893` schema test; `6374474` and
+  `de6f876` review fixes.
+- Independent review of `fcbe353..a6cb893`: accept with fixes, no blocker. It
+  confirmed foreign keys are on for every writable connection, that edges and
+  item problems are replaced in the items' transaction for refresh and
+  rebuild, that no unique-constraint abort is reachable, and that the save
+  path keeps the three keys. One design-level finding (older builds sharing
+  the data directory), dropped by the product owner, and six minor ones,
+  addressed.
+- `6374474` and `de6f876` were not independently re-reviewed.
+- Controller full gate at `de6f876`, through Devenv on Linux:
+  `cargo check --all-features --locked`, `cargo fmt --check`, clippy with
+  warnings denied over all targets and features, and
+  `cargo run --locked --bin manyhands-cli` exit 0.
+  `cargo test --all-features --locked --no-fail-fast` exit 101: 915 passed, 1
+  failed in the standard harness (lib 241, `canonical_foundation` 43,
+  `read_items` 61, `read_contract` 46, `read_status` 23, `read_comments` 19,
+  `read_boundary` 17, `read_repository` 21, `read_credentials` 25,
+  `local_authoring` 112, `repository_enablement` 73, `discovery_rebuild` 66
+  of 67); 15, 35, 31 and 103 SSH cases passed.
+- The failure: `concurrent_corrupt_rebuilds_replace_the_cache_once`; the
+  second of two rebuilds returned `RepositoryBusy`. The lease wait is 250 ms
+  and the target took 10.5 s in that run against about 6 s alone. Reruns at
+  the same head: 8 of 8 alone, 6 of 6 whole-target runs, 40 of 40 run eight at
+  a time. `tests/discovery_rebuild.rs` is unchanged by F1. Not measured:
+  whether F1's added index work lengthens the first rebuild enough to matter.
+- Implementer: one test seen failing before its fix (a comment as a target);
+  the first commits were checked by three mutations applied together; most
+  review-fix tests were only run passing.

@@ -568,6 +568,25 @@ keys under their own fields and omits them from `unknown_metadata`.
 F2 makes them written fields. Until then, a ticket has them only if someone
 edited the file by hand, which is how this project's own tickets will get them.
 
+Amended 2026-10-08, after implementation and review:
+
+- A null value for `slug`, `parent` or `deps` is read as absent, without a
+  problem. A null entry inside a `deps` list is still a wrong type.
+- A slug written with uppercase letters is accepted and carried in lowercase
+  in the view, the index and the DTO; the file is not rewritten. The rest of
+  the grammar is strict.
+- `parent` on the item DTO is `{id, state}` or null, the same shape as a
+  dependency, so an unresolved parent is visible.
+- A `deps` or `parent` value naming a document or a comment is left out and
+  reported as `relationship_not_a_ticket`, decided at read time.
+- A problem object carries `target_id`: the item a relationship problem is
+  about when a validated ID exists, null otherwise. It is never raw
+  front-matter text.
+- Relationship problems live on the item only. They are not in the stored
+  `problems` table, so repository and index problem counts exclude them.
+- `TicketFilter.slug` matches the whole code, ignoring case, and returns
+  every match.
+
 ### Index
 
 `migrate_registry` gains additive changes, in the existing
