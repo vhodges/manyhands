@@ -236,7 +236,7 @@ fn index_status_succeeds_when_the_index_cannot_be_read() {
         assert_eq!(error.code(), ResultCode::IndexUnavailable);
         assert_eq!(error.scope.repository.as_deref(), repo.root().to_str());
         assert_eq!(error.recovery.len(), 1);
-        assert_eq!(error.recovery[0].action, "index.rebuild");
+        assert_eq!(error.recovery[0].action.as_str(), "index.rebuild");
     }
 
     // An index that went away under a service that had opened it.

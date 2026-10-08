@@ -18,14 +18,17 @@ use time::OffsetDateTime;
 use super::{
     ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
     IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
-    REFRESH_INDEX_ACTION, ReadError, ReadinessState, ResolvedRepository,
+    ReadError, ReadinessState, ResolvedRepository,
     graph::{TicketGraph, TicketNode},
     index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
     repository::{GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
-    results::{ProblemCode, RecoveryAction, ResultCode, absolute_path_string, timestamp_string},
+    results::{
+        ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
+        timestamp_string,
+    },
 };
 
 /// Which tickets a list returns, by lifecycle closure metadata: a ticket is
@@ -1836,7 +1839,7 @@ pub(super) fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadEr
 /// The recovery that refreshes this repository's index.
 fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
     let root = absolute_path_string(repo.root());
-    root_action(REFRESH_INDEX_ACTION, root.as_deref())
+    root_action(RecoveryActionKind::IndexRefresh, root.as_deref())
 }
 
 #[cfg(test)]

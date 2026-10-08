@@ -1211,7 +1211,7 @@ fn credential_reads_report_a_degraded_index_as_unavailable() {
     for error in &errors {
         assert_eq!(error.code(), ResultCode::IndexUnavailable);
         assert_eq!(error.recovery.len(), 1);
-        assert_eq!(error.recovery[0].action, "index.rebuild");
+        assert_eq!(error.recovery[0].action.as_str(), "index.rebuild");
     }
     assert_git_transport_uninitialized();
 }

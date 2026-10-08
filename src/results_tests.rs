@@ -9,8 +9,8 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 use super::{
     CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
     IntegrationEffect, OperationFailureCode, Outcome, ProblemCode, PublicationEffect, REDACTED,
-    RecoveryAction, ResultCode, SCHEMA_VERSION, Scope, WriteEffect, absolute_path_string,
-    object_id_string, redact_url, relative_path_string, timestamp_string,
+    RecoveryAction, RecoveryActionKind, ResultCode, SCHEMA_VERSION, Scope, WriteEffect,
+    absolute_path_string, object_id_string, redact_url, relative_path_string, timestamp_string,
 };
 
 const ENVELOPE_FIELDS: [&str; 11] = [
@@ -250,18 +250,14 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
         worktree: None,
         remote: Some("origin".to_owned()),
     };
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("repository".to_owned(), json!("/projects/example"));
     let recovery = vec![
+        RecoveryAction::new(
+            RecoveryActionKind::IndexRebuild,
+            [("root", json!("/projects/example"))],
+        ),
         RecoveryAction {
-            action: "index.rebuild".to_owned(),
-            operation_id: None,
-            arguments,
-        },
-        RecoveryAction {
-            action: "operation.resume".to_owned(),
             operation_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".to_owned()),
-            arguments: serde_json::Map::new(),
+            ..RecoveryAction::new(RecoveryActionKind::IndexRefresh, [])
         },
     ];
 
@@ -293,10 +289,10 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
                 {
                     "action": "index.rebuild",
                     "operation_id": null,
-                    "arguments": {"repository": "/projects/example"},
+                    "arguments": {"root": "/projects/example"},
                 },
                 {
-                    "action": "operation.resume",
+                    "action": "index.refresh",
                     "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
                     "arguments": {},
                 },
@@ -881,4 +877,70 @@ fn a_host_with_an_empty_port_is_not_a_host() {
     assert!(super::is_host_port("[::1]"));
     assert_eq!(redact_url("https://example.com:/repo"), REDACTED);
     assert_eq!(redact_url("ssh://git@example.com:/repo"), REDACTED);
+}
+
+/// Every recovery action, with the keys of its arguments.
+const RECOVERY_ACTIONS: [(&str, &[&str]); 3] = [
+    ("index.rebuild", &["root"]),
+    ("index.refresh", &["root"]),
+    ("repo.inspect", &["root"]),
+];
+
+#[test]
+fn recovery_actions_are_a_closed_registry_of_dotted_names_and_argument_keys() {
+    let registered: Vec<(&str, &[&str])> = RecoveryActionKind::ALL
+        .iter()
+        .map(|action| (action.as_str(), action.argument_keys()))
+        .collect();
+    assert_eq!(registered, RECOVERY_ACTIONS);
+
+    let mut names = BTreeSet::new();
+    for action in RecoveryActionKind::ALL {
+        let name = action.as_str();
+        assert!(names.insert(name), "{name} is registered twice");
+        // `<resource>.<verb>`, as the CLI contract writes `operation.resume`.
+        let (resource, verb) = name.split_once('.').unwrap();
+        for part in [resource, verb] {
+            assert!(
+                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase()),
+                "{name}"
+            );
+        }
+        assert_eq!(serde_json::to_value(action).unwrap(), json!(name));
+        let keys: BTreeSet<_> = action.argument_keys().iter().collect();
+        assert_eq!(keys.len(), action.argument_keys().len(), "{name}");
+    }
+}
+
+#[test]
+fn a_recovery_action_is_made_with_all_of_its_arguments_or_none() {
+    for action in RecoveryActionKind::ALL {
+        let with = RecoveryAction::new(
+            action,
+            action
+                .argument_keys()
+                .iter()
+                .map(|key| (*key, json!("value"))),
+        );
+        assert_eq!(
+            with.arguments
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            action.argument_keys()
+        );
+        assert_eq!(with.operation_id, None);
+        assert_eq!(with.action, action);
+        assert!(RecoveryAction::new(action, []).arguments.is_empty());
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a recovery action carries exactly its registered arguments")]
+fn a_recovery_action_rejects_an_argument_it_does_not_register() {
+    let _ = RecoveryAction::new(
+        RecoveryActionKind::IndexRebuild,
+        [("repository", json!("/projects/example"))],
+    );
 }

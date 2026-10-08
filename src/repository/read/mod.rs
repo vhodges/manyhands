@@ -20,7 +20,10 @@ use super::{
 };
 use crate::{
     canonical,
-    results::{Envelope, ProblemCode, RecoveryAction, ResultCode, Scope, timestamp_string},
+    results::{
+        Envelope, ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
+        timestamp_string,
+    },
 };
 
 mod admin;
@@ -49,25 +52,15 @@ pub use dto::{
 pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;
 
-/// The recovery action a degraded index calls for.
-const REBUILD_INDEX_ACTION: &str = "index.rebuild";
-
-/// The recovery action for an index that no longer matches the repository.
-const REFRESH_INDEX_ACTION: &str = "index.refresh";
-
 /// The argument of a recovery action that names a repository root.
 const ROOT_ARGUMENT: &str = "root";
 
-/// A recovery action that takes a repository root, when one is known.
-fn root_action(action: &str, root: Option<&str>) -> RecoveryAction {
-    RecoveryAction {
-        action: action.to_owned(),
-        operation_id: None,
-        arguments: root
-            .map(|root| (ROOT_ARGUMENT.to_owned(), root.into()))
-            .into_iter()
-            .collect(),
-    }
+/// A recovery action that takes a repository root and nothing else, with
+/// the root when one is known. Every action the reads suggest is one, and
+/// each is made here, from the registry.
+fn root_action(action: RecoveryActionKind, root: Option<&str>) -> RecoveryAction {
+    debug_assert_eq!(action.argument_keys(), [ROOT_ARGUMENT]);
+    RecoveryAction::new(action, root.map(|root| (ROOT_ARGUMENT, root.into())))
 }
 
 /// How far a registration's index is behind its repository.
@@ -115,7 +108,9 @@ impl ReadError {
         );
         let code = failure_code(code);
         let recovery = match code {
-            ResultCode::IndexUnavailable => vec![root_action(REBUILD_INDEX_ACTION, None)],
+            ResultCode::IndexUnavailable => {
+                vec![root_action(RecoveryActionKind::IndexRebuild, None)]
+            }
             _ => Vec::new(),
         };
         Self {

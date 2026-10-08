@@ -18,8 +18,8 @@ use manyhands::{
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect,
-        OperationFailureCode, Outcome, ProblemCode, PublicationEffect, ResultCode, Scope,
-        WriteEffect,
+        OperationFailureCode, Outcome, ProblemCode, PublicationEffect, RecoveryActionKind,
+        ResultCode, Scope, WriteEffect,
     },
 };
 use serde_json::{Value, json};
@@ -836,6 +836,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "operation.schema.json",
             "family",
             OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "recovery_action.schema.json",
+            "action",
+            RecoveryActionKind::ALL
+                .map(RecoveryActionKind::as_str)
+                .to_vec(),
         ),
         (
             "operation.schema.json",
@@ -2414,6 +2421,116 @@ fn every_stored_operation_shape_matches_the_operation_schema() {
     for operation in shapes {
         let value = serde_json::to_value(&operation).unwrap();
         schema::check_published("operation.schema.json", &value).unwrap();
+    }
+    assert_git_transport_uninitialized();
+}
+
+/// The `(action, argument keys)` of each recovery action of a failure.
+fn recovery_of(error: &manyhands::repository::ReadError) -> Vec<(String, Vec<String>)> {
+    let envelope = serde_json::to_value(error.to_envelope::<Value>("item list")).unwrap();
+    schema::check_published(golden::ENVELOPE_SCHEMA, &envelope).unwrap();
+    golden::assert_registered_recovery("recovery", &envelope);
+    envelope["recovery"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| {
+            assert_eq!(action["operation_id"], Value::Null);
+            (
+                action["action"].as_str().unwrap().to_owned(),
+                action["arguments"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_recovery_action_a_read_suggests_carries_exactly_its_registered_arguments() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let service = &enabled.service;
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let nested = fixture.root.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    let registered = |kind: RecoveryActionKind| {
+        vec![(
+            kind.as_str().to_owned(),
+            kind.argument_keys()
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect::<Vec<_>>(),
+        )]
+    };
+    let mut suggested = BTreeSet::new();
+    let mut check = |error: manyhands::repository::ReadError, kind: RecoveryActionKind| {
+        assert_eq!(recovery_of(&error), registered(kind), "{error:?}");
+        suggested.insert(kind.as_str());
+    };
+
+    check(
+        service.resolve_repository(&nested).unwrap_err(),
+        RecoveryActionKind::RepoInspect,
+    );
+    // An item the index holds and the working tree no longer does.
+    let path = items::write(
+        &fixture.root,
+        "docs/a.md",
+        &items::document_source(items::DOCUMENT_A, "A", ""),
+    );
+    items::refresh_completely(service, &fixture.root);
+    fs::remove_file(path).unwrap();
+    check(
+        service
+            .show_item(&repo, &items::item_id(items::DOCUMENT_A))
+            .unwrap_err(),
+        RecoveryActionKind::IndexRefresh,
+    );
+    let (_data, degraded) = items::degraded_service(enabled);
+    check(
+        degraded.list_documents(&repo).unwrap_err(),
+        RecoveryActionKind::IndexRebuild,
+    );
+    // A read of no one repository cannot say which root to rebuild.
+    let unnamed = degraded.list_repositories().unwrap_err();
+    assert_eq!(unnamed.scope.repository, None);
+    assert_eq!(
+        recovery_of(&unnamed),
+        [("index.rebuild".to_owned(), Vec::<String>::new())]
+    );
+
+    // Every registered action is one a read suggests.
+    assert_eq!(
+        suggested.into_iter().collect::<Vec<_>>(),
+        RecoveryActionKind::ALL.map(RecoveryActionKind::as_str)
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn the_recovery_check_refuses_an_unregistered_argument() {
+    let envelope = |arguments: Value| {
+        json!({
+            "scope": {"repository": "/projects/example"},
+            "recovery": [{"action": "index.rebuild", "operation_id": null, "arguments": arguments}],
+        })
+    };
+    golden::assert_registered_recovery("sample", &envelope(json!({"root": "/projects/example"})));
+    for arguments in [
+        json!({}),
+        json!({"repo": "x"}),
+        json!({"root": "x", "extra": 1}),
+    ] {
+        let envelope = envelope(arguments);
+        assert!(
+            std::panic::catch_unwind(|| golden::assert_registered_recovery("sample", &envelope))
+                .is_err(),
+            "{envelope}"
+        );
     }
     assert_git_transport_uninitialized();
 }

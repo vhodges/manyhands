@@ -12,15 +12,11 @@ use std::{
 use git2::{Repository, RepositoryOpenFlags};
 use rusqlite::OptionalExtension;
 
-use super::{REBUILD_INDEX_ACTION, ReadError, root_action};
+use super::{ReadError, root_action};
 use crate::{
     repository::{RepositoryOperation, RepositoryService},
-    results::{ResultCode, Scope, absolute_path_string},
+    results::{RecoveryActionKind, ResultCode, Scope, absolute_path_string},
 };
-
-/// The recovery action for a path inside a repository: inspect the root it
-/// lies in, which is given as the action's argument.
-const INSPECT_ROOT_ACTION: &str = "repo.inspect";
 
 /// A registered repository: the target every repository-scoped read takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,7 +68,10 @@ fn root_scope(root: &Path) -> Scope {
 pub(super) fn at_root(mut error: ReadError, root: &Path) -> ReadError {
     let root = absolute_path_string(root);
     if error.code() == ResultCode::IndexUnavailable {
-        error.recovery = vec![root_action(REBUILD_INDEX_ACTION, root.as_deref())];
+        error.recovery = vec![root_action(
+            RecoveryActionKind::IndexRebuild,
+            root.as_deref(),
+        )];
     }
     if error.scope.repository.is_none() {
         error.scope.repository = root;
@@ -202,8 +201,12 @@ fn repository_root(selected: &Path) -> Result<PathBuf, ReadError> {
     let directory = working_directory(&repository)?;
     if directory != selected {
         let root = absolute_path_string(&directory);
+        // Inspect the root the path lies in, which the action names.
         return Err(ReadError::new(ResultCode::NotRepositoryRoot)
-            .with_recovery(vec![root_action(INSPECT_ROOT_ACTION, root.as_deref())])
+            .with_recovery(vec![root_action(
+                RecoveryActionKind::RepoInspect,
+                root.as_deref(),
+            )])
             .with_scope(root_scope(&directory)));
     }
     if repository.is_worktree() {

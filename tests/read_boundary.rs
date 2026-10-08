@@ -98,7 +98,7 @@ fn assert_rebuild_is_the_recovery(error: &manyhands::repository::ReadError) {
     let envelope = error.to_envelope::<Value>("document list");
     assert_eq!(envelope.outcome, Outcome::Blocked);
     assert_eq!(envelope.recovery.len(), 1);
-    assert_eq!(envelope.recovery[0].action, "index.rebuild");
+    assert_eq!(envelope.recovery[0].action.as_str(), "index.rebuild");
 }
 
 #[test]

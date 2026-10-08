@@ -1402,7 +1402,7 @@ fn a_relationship_read_says_how_far_behind_the_index_is_and_fails_only_when_it_i
         let error = failure.unwrap_err();
         assert_eq!(error.code(), ResultCode::IndexUnavailable);
         assert_eq!(error.recovery.len(), 1);
-        assert_eq!(error.recovery[0].action, "index.rebuild");
+        assert_eq!(error.recovery[0].action.as_str(), "index.rebuild");
     }
     assert_git_transport_uninitialized();
 }

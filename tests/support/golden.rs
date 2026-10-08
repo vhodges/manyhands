@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use manyhands::results::RecoveryActionKind;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -100,6 +101,7 @@ pub fn assert_contract(case: &ContractCase<'_>, envelope: &impl Serialize) {
     if let Err(problem) = schema::check_published(ENVELOPE_SCHEMA, &value) {
         panic!("{name}: the envelope does not match {ENVELOPE_SCHEMA}: {problem}");
     }
+    assert_registered_recovery(name, &value);
     let data = &value["data"];
     assert_eq!(
         data.is_null(),
@@ -117,6 +119,32 @@ pub fn assert_contract(case: &ContractCase<'_>, envelope: &impl Serialize) {
     }
 
     assert_golden(name, &value, case.placeholders);
+}
+
+/// Checks that every recovery action of `envelope` is a registered one and
+/// carries exactly the arguments it registers. The one exception is an
+/// envelope that names no repository: its actions carry no arguments.
+pub fn assert_registered_recovery(name: &str, envelope: &Value) {
+    for action in envelope["recovery"].as_array().unwrap() {
+        let kind = action["action"].as_str().unwrap();
+        let registered = RecoveryActionKind::ALL
+            .into_iter()
+            .find(|registered| registered.as_str() == kind)
+            .unwrap_or_else(|| panic!("{name}: {kind} is not a registered recovery action"));
+        let keys: Vec<&str> = action["arguments"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        if envelope["scope"]["repository"].is_null() {
+            assert!(keys.is_empty(), "{name}: {kind} names no repository");
+        } else {
+            let mut expected = registered.argument_keys().to_vec();
+            expected.sort_unstable();
+            assert_eq!(keys, expected, "{name}: the arguments of {kind}");
+        }
+    }
 }
 
 /// The first sentinel found in a key or a string value, with where it is.

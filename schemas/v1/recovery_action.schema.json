@@ -6,7 +6,9 @@
   "required": ["action", "operation_id", "arguments"],
   "properties": {
     "action": {
-      "type": "string"
+      "type": "string",
+      "enum": ["index.rebuild", "index.refresh", "repo.inspect"],
+      "description": "What to do next. Each of these takes one argument, root, the repository's root, and carries no arguments when the result names no repository."
     },
     "operation_id": {
       "type": ["string", "null"]

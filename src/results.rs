@@ -190,11 +190,90 @@ impl Effects {
     }
 }
 
+/// Defines `RecoveryActionKind` from one list: its contract string and the
+/// keys of its arguments. Adding an action is one entry.
+macro_rules! recovery_actions {
+    ($($(#[$meta:meta])* $variant:ident => $string:literal, [$($argument:literal),* $(,)?];)+) => {
+        /// What a result suggests doing next. `as_str` is the contract; the
+        /// variant name is not. A front end maps each to a command or a
+        /// control of its own; none is a shell command.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum RecoveryActionKind {
+            $($(#[$meta])* $variant),+
+        }
+
+        impl RecoveryActionKind {
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $string),+
+                }
+            }
+
+            /// The keys of the action's `arguments`. An action carries all
+            /// of them, or none when the result names no repository.
+            pub const fn argument_keys(self) -> &'static [&'static str] {
+                match self {
+                    $(Self::$variant => &[$($argument),*]),+
+                }
+            }
+        }
+    };
+}
+
+recovery_actions! {
+    /// Rebuild the index of the repository at `root`.
+    IndexRebuild => "index.rebuild", ["root"];
+    /// Refresh the index of the repository at `root`.
+    IndexRefresh => "index.refresh", ["root"];
+    /// Inspect the repository whose root is `root`.
+    RepoInspect => "repo.inspect", ["root"];
+}
+
+impl Serialize for RecoveryActionKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RecoveryAction {
-    pub action: String,
+    pub action: RecoveryActionKind,
     pub operation_id: Option<String>,
     pub arguments: serde_json::Map<String, serde_json::Value>,
+}
+
+impl RecoveryAction {
+    /// The action with these arguments and no operation.
+    ///
+    /// `arguments` holds a value for every key the action registers, in
+    /// that order, or nothing at all: an action about a repository that
+    /// the result cannot name carries no arguments. Anything else is a
+    /// mistake in the caller, caught in debug builds.
+    pub fn new(
+        action: RecoveryActionKind,
+        arguments: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+    ) -> Self {
+        let arguments: serde_json::Map<String, serde_json::Value> = arguments
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        debug_assert!(
+            arguments.is_empty()
+                || (arguments.len() == action.argument_keys().len()
+                    && action
+                        .argument_keys()
+                        .iter()
+                        .all(|key| arguments.contains_key(*key))),
+            "a recovery action carries exactly its registered arguments"
+        );
+        Self {
+            action,
+            operation_id: None,
+            arguments,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
