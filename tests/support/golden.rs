@@ -275,11 +275,18 @@ fn normalize(value: &Value, placeholders: &[(&str, &str)]) -> Value {
 /// Replaces `text` when it is a placeholder's value, or a path under it:
 /// the value followed by a path separator. Nothing else is touched, so a
 /// value that merely occurs inside other data stays as it is.
+///
+/// What follows the placeholder is the rest of an absolute path, which the
+/// platform writes with its own separator, so it is written with `/` here
+/// and one fixture serves every platform. A relative path is given no
+/// placeholder and is compared as it is.
 fn substitute(text: &str, placeholders: &[(&str, &str)]) -> String {
     for (value, placeholder) in placeholders {
         match text.strip_prefix(value) {
             Some("") => return (*placeholder).to_owned(),
-            Some(rest) if rest.starts_with(['/', '\\']) => return format!("{placeholder}{rest}"),
+            Some(rest) if rest.starts_with(['/', '\\']) => {
+                return format!("{placeholder}{}", rest.replace('\\', "/"));
+            }
             _ => {}
         }
     }

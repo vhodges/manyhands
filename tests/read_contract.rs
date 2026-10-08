@@ -341,10 +341,19 @@ fn golden_placeholders_replace_a_whole_value_or_a_path_under_it() {
 
     assert_eq!(render("/tmp/run-1"), "<temporary>");
     assert_eq!(render("/tmp/run-1/docs/a.md"), "<temporary>/docs/a.md");
-    assert_eq!(render("/tmp/run-1\\docs"), "<temporary>\\docs");
+    // The rest of the path is written with `/` whatever the platform
+    // writes it with, so that one fixture serves them all.
+    assert_eq!(render("/tmp/run-1\\docs"), "<temporary>/docs");
+    assert_eq!(
+        render("/tmp/run-1\\keys\\imported.pub"),
+        "<temporary>/keys/imported.pub"
+    );
     assert_eq!(render("01ARZ3NDEKTSV4RRFFQ69G5FAV"), "<id>");
-    // Not a path under the value, and not the value: left alone.
+    // Not a path under the value, and not the value: left alone, with its
+    // separators as they are.
     for unrelated in [
+        "docs\\a.md",
+        "see /tmp/run-1\\docs",
         "/tmp/run-10",
         "/tmp/run-1.bak",
         "see /tmp/run-1",

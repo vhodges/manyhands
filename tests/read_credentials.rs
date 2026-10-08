@@ -116,7 +116,8 @@ impl Fixture {
 }
 
 /// Runs `work` on another thread, so that work that blocks fails the test
-/// instead of hanging it.
+/// instead of hanging it. Only the FIFO tests, which are Unix's, need it.
+#[cfg(unix)]
 fn within_the_bound<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

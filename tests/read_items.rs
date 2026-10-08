@@ -2476,7 +2476,11 @@ fn insert_item_worktree_row(
             rusqlite::params![
                 repository_id,
                 format!("manyhands/document/{worktree_id}"),
-                format!("{root}/.manyhands/worktrees/{worktree_id}"),
+                Path::new(root)
+                    .join(".manyhands/worktrees")
+                    .join(worktree_id)
+                    .to_str()
+                    .unwrap(),
                 worktree_id
             ],
         )
@@ -4218,7 +4222,11 @@ fn insert_second_ticket_row(data_directory: &Path, root: &str, worktree_id: &str
             rusqlite::params![
                 repository_id,
                 format!("manyhands/ticket/{worktree_id}"),
-                format!("{root}/.manyhands/worktrees/{worktree_id}"),
+                Path::new(root)
+                    .join(".manyhands/worktrees")
+                    .join(worktree_id)
+                    .to_str()
+                    .unwrap(),
                 worktree_id
             ],
         )
