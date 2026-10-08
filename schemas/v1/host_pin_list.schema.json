@@ -3,7 +3,7 @@
   "title": "Manyhands JSON v1 SSH host pins",
   "type": "object",
   "additionalProperties": false,
-  "required": ["items", "complete"],
+  "required": ["items", "complete", "reapproval_required"],
   "properties": {
     "items": {
       "type": "array",
@@ -12,6 +12,9 @@
       }
     },
     "complete": {
+      "type": "boolean"
+    },
+    "reapproval_required": {
       "type": "boolean"
     }
   }

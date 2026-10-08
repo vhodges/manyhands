@@ -67,23 +67,10 @@ fn hold_index_lock(
     )
 }
 
-/// The index and its journal files, which no read may change.
-fn index_file_bytes(enabled: &support::EnabledRepository) -> Vec<(PathBuf, Vec<u8>)> {
-    let mut files: Vec<_> = index_files(enabled)
-        .into_iter()
-        .map(|path| {
-            let bytes = fs::read(&path).unwrap();
-            (path, bytes)
-        })
-        .collect();
-    files.sort();
-    files
-}
-
 /// Pins one host in the index and returns its authority.
 fn pinned_authority(enabled: &support::EnabledRepository) -> SshAuthority {
     credentials::pin_host(
-        enabled.data_directory.path(),
+        &enabled.service,
         "pinned.example",
         22,
         "ssh-ed25519",
@@ -136,12 +123,16 @@ fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
         .unwrap();
     let keys = credentials::register_keys(&enabled.service);
     let pinned = pinned_authority(&enabled);
-    credentials::require_host_reapproval(enabled.data_directory.path());
-    // The first read after a writer has closed recreates SQLite's empty
-    // journal files; the snapshot is of the index as a read finds it.
-    assert_eq!(registered_repositories(&enabled.service), 1);
+    credentials::require_host_reapproval(&enabled.service);
+    // Taken before the first read, which finds the index as its last
+    // writer left it.
     let before = support::repository_and_worktree_snapshot(&fixture);
-    let index_before = index_file_bytes(&enabled);
+    let data_before = credentials::data_directory_files(enabled.data_directory.path());
+    assert!(
+        data_before
+            .iter()
+            .any(|(name, _)| name == credentials::REAPPROVAL_MARKER_FILE)
+    );
     let key_files_before = credentials::key_file_states(&keys.key_files());
     assert_eq!(key_files_before.len(), 5);
 
@@ -199,20 +190,15 @@ fn read_session_changes_nothing_in_the_repository_or_its_worktrees() {
         })
         .unwrap_err();
 
-    assert!(index_before == index_file_bytes(&enabled));
+    // The index and the reapproval marker are byte for byte what they were;
+    // the only files that may appear are SQLite's two journal files.
+    credentials::assert_reads_left_the_data_directory(
+        &data_before,
+        &credentials::data_directory_files(enabled.data_directory.path()),
+    );
     assert_eq!(
         credentials::key_file_states(&keys.key_files()),
         key_files_before
-    );
-    assert_eq!(
-        fs::read(
-            enabled
-                .data_directory
-                .path()
-                .join("ssh-host-trust-reapproval-required")
-        )
-        .unwrap(),
-        b"manyhands SSH host trust reapproval required v1\n"
     );
 
     assert!(before == support::repository_and_worktree_snapshot(&fixture));

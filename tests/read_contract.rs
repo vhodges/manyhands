@@ -1166,9 +1166,9 @@ fn service_with_host_pins() -> (tempfile::TempDir, RepositoryService) {
             credentials::OTHER_FINGERPRINT,
         ),
     ] {
-        credentials::pin_host(data.path(), host, port, algorithm, sha256);
+        credentials::pin_host(&service, host, port, algorithm, sha256);
     }
-    credentials::require_host_reapproval(data.path());
+    credentials::require_host_reapproval(&service);
     (data, service)
 }
 

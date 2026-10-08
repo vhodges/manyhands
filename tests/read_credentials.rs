@@ -72,6 +72,38 @@ fn fixture() -> Fixture {
     }
 }
 
+/// A service with no key registrations, for the host tests that need many.
+fn fixture_without_keys() -> HostFixture {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    HostFixture { service, data }
+}
+
+struct HostFixture {
+    service: RepositoryService,
+    data: tempfile::TempDir,
+}
+
+trait Pins {
+    fn service(&self) -> &RepositoryService;
+
+    fn pin(&self, host: &str, port: u16, algorithm: &str, sha256: &str) {
+        credentials::pin_host(self.service(), host, port, algorithm, sha256);
+    }
+}
+
+impl Pins for Fixture {
+    fn service(&self) -> &RepositoryService {
+        &self.service
+    }
+}
+
+impl Pins for HostFixture {
+    fn service(&self) -> &RepositoryService {
+        &self.service
+    }
+}
+
 impl Fixture {
     fn hold_index_lock(&self, kind: LeaseKind) -> support::LeaseHolder {
         support::hold_lease_in_child_for_test(
@@ -81,9 +113,40 @@ impl Fixture {
             "credentials_lease_child",
         )
     }
+}
 
-    fn pin(&self, host: &str, port: u16, algorithm: &str, sha256: &str) {
-        credentials::pin_host(self.data.path(), host, port, algorithm, sha256);
+/// Runs `work` on another thread, so that work that blocks fails the test
+/// instead of hanging it.
+fn within_the_bound<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    match receiver.recv_timeout(NOT_BLOCKED) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("{what} blocked"),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("{what} panicked"),
+    }
+}
+
+/// Registers an imported key whose files are whatever is at the two paths.
+fn register(
+    service: &RepositoryService,
+    label: &str,
+    private: &Path,
+    public: Option<&Path>,
+) -> manyhands::repository::SharedKeyRegistration {
+    let outcome = service
+        .register_shared_key(manyhands::repository::RegisterSharedKeyRequest {
+            label: label.to_owned(),
+            ownership: manyhands::repository::SharedKeyOwnership::Imported,
+            private_key_path: private.to_owned(),
+            public_key_path: public.map(Path::to_owned),
+        })
+        .unwrap();
+    match outcome {
+        manyhands::repository::RegisterSharedKeyOutcome::Registered(registration) => registration,
+        _ => panic!("{label} was not registered"),
     }
 }
 
@@ -339,10 +402,10 @@ fn permissions_bind(directory: &Path) -> bool {
 
 #[cfg(unix)]
 #[test]
-fn no_key_read_opens_a_private_key_file() {
+fn key_reads_do_not_depend_on_what_is_at_a_private_key_path() {
     use std::os::unix::fs::PermissionsExt;
 
-    let fixture = fixture();
+    let fixture = std::sync::Arc::new(fixture());
     let keys = &fixture.keys;
     let expected = every_key_read(&fixture);
     assert!(permissions_bind(fixture.keys.files.path()));
@@ -359,7 +422,8 @@ fn no_key_read_opens_a_private_key_file() {
         unreadable
     );
 
-    // A FIFO with no writer: opening one to read would block for ever.
+    // A FIFO with no writer: opening one to read would block for ever, so
+    // the reads run where a block is a failure.
     for path in [
         &keys.imported.private_key_path,
         &keys.without_public.private_key_path,
@@ -368,9 +432,11 @@ fn no_key_read_opens_a_private_key_file() {
         let name = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
     }
-    let started = Instant::now();
-    assert_eq!(every_key_read(&fixture), expected);
-    assert!(started.elapsed() < NOT_BLOCKED);
+    let reader = std::sync::Arc::clone(&fixture);
+    let read = within_the_bound("a key read of a FIFO private key", move || {
+        every_key_read(&reader)
+    });
+    assert_eq!(read, expected);
 
     // A directory, and then nothing at all.
     fs::remove_file(&keys.imported.private_key_path).unwrap();
@@ -387,8 +453,104 @@ fn no_key_read_opens_a_private_key_file() {
     assert_git_transport_uninitialized();
 }
 
+/// Reports whether any watched file has been opened or read since the
+/// last call.
+#[cfg(target_os = "linux")]
+struct OpenWatch {
+    descriptor: libc::c_int,
+}
+
+#[cfg(target_os = "linux")]
+impl OpenWatch {
+    fn on(paths: &[PathBuf]) -> Self {
+        let descriptor = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(descriptor >= 0);
+        for path in paths {
+            let name = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+            let watch = unsafe {
+                libc::inotify_add_watch(descriptor, name.as_ptr(), libc::IN_OPEN | libc::IN_ACCESS)
+            };
+            assert!(watch >= 0, "{path:?} cannot be watched");
+        }
+        Self { descriptor }
+    }
+
+    fn saw_an_open_or_a_read(&self) -> bool {
+        let mut events = [0u8; 4096];
+        let mut seen = false;
+        loop {
+            let read =
+                unsafe { libc::read(self.descriptor, events.as_mut_ptr().cast(), events.len()) };
+            if read > 0 {
+                seen = true;
+                continue;
+            }
+            assert_eq!(read, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EAGAIN)
+            );
+            return seen;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for OpenWatch {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.descriptor) };
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[test]
-fn public_key_text_is_the_file_text_and_a_fingerprint_computed_from_it() {
+fn no_credential_read_opens_a_private_key_file() {
+    let fixture = fixture();
+    let keys = &fixture.keys;
+    let service = &fixture.service;
+    let directory = fs::canonicalize(keys.files.path()).unwrap();
+    // A registration whose public key path is its own private key file, and
+    // one whose public key path is another registration's private key file.
+    let own = directory.join("own");
+    fs::write(&own, credentials::private_fixture_bytes()).unwrap();
+    let same_file = register(service, "Same file", &own, Some(&own));
+    let other = directory.join("other");
+    fs::write(&other, credentials::private_fixture_bytes()).unwrap();
+    let anothers = register(
+        service,
+        "Another's private key",
+        &other,
+        Some(&keys.without_public.private_key_path),
+    );
+    fixture.pin("a.example", 22, "ssh-ed25519", OTHER_FINGERPRINT);
+    let mut private_files = keys.private_key_files();
+    private_files.extend([own.clone(), other]);
+    let watch = OpenWatch::on(&private_files);
+    assert!(!watch.saw_an_open_or_a_read());
+
+    every_key_read(&fixture);
+    assert_eq!(service.list_keys().unwrap().items.len(), 5);
+    for registration in [&same_file, &anothers] {
+        assert_no_secret("key show", &service.show_key(registration.id).unwrap());
+        let error = service.public_key_text(registration.id).unwrap_err();
+        assert_eq!(error.code(), ResultCode::PublicKeyUnavailable);
+        assert_failure_has_no_secret("key public", &error);
+    }
+    service.list_host_pins().unwrap();
+    service.inspect_host(&authority("a.example", 22)).unwrap();
+
+    assert!(
+        !watch.saw_an_open_or_a_read(),
+        "a credential read opened or read a private key file"
+    );
+    // The watch does see an open: this is one.
+    fs::read(&own).unwrap();
+    assert!(watch.saw_an_open_or_a_read());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn public_key_text_is_the_key_in_the_file_and_a_fingerprint_computed_from_it() {
     let fixture = fixture();
     let keys = &fixture.keys;
 
@@ -512,7 +674,7 @@ fn assert_public_key_unavailable(fixture: &Fixture, id: SharedKeyId, why: &str) 
 
 #[test]
 fn a_public_key_file_that_cannot_be_returned_is_unavailable() {
-    let fixture = fixture();
+    let fixture = std::sync::Arc::new(fixture());
     let keys = &fixture.keys;
     let id = keys.imported.id;
     let public = keys.imported.public_key_path.clone().unwrap();
@@ -521,12 +683,16 @@ fn a_public_key_file_that_cannot_be_returned_is_unavailable() {
 
     assert_public_key_unavailable(&fixture, keys.without_public.id, "no public key path");
 
-    // 16 KiB is the largest file read; one byte more is refused.
-    let padding = |length: usize| "x".repeat(length - line.len() - 1);
-    fs::write(&public, format!("{line} {}", padding(16 * 1024))).unwrap();
+    // 16 KiB is the largest file read; one byte more is refused. The
+    // padding is line endings, which are no part of the key.
+    let padded = |length: usize| format!("{line}{}", "\n".repeat(length - line.len()));
+    fs::write(&public, padded(16 * 1024)).unwrap();
     assert_eq!(fs::metadata(&public).unwrap().len(), 16 * 1024);
-    fixture.service.public_key_text(id).unwrap();
-    fs::write(&public, format!("{line} {}", padding(16 * 1024 + 1))).unwrap();
+    assert_eq!(
+        fixture.service.public_key_text(id).unwrap().public_key,
+        line
+    );
+    fs::write(&public, padded(16 * 1024 + 1)).unwrap();
     assert_public_key_unavailable(&fixture, id, "oversized");
 
     let mut not_utf8 = line.as_bytes().to_vec();
@@ -557,9 +723,10 @@ fn a_public_key_file_that_cannot_be_returned_is_unavailable() {
         // A FIFO with no writer must not block the read.
         let name = std::ffi::CString::new(public.to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        let started = Instant::now();
-        assert_public_key_unavailable(&fixture, id, "a FIFO");
-        assert!(started.elapsed() < NOT_BLOCKED);
+        let reader = std::sync::Arc::clone(&fixture);
+        within_the_bound("reading a FIFO public key file", move || {
+            assert_public_key_unavailable(&reader, id, "a FIFO");
+        });
         fs::remove_file(&public).unwrap();
     }
 
@@ -600,24 +767,115 @@ fn a_private_key_in_the_public_key_file_is_never_returned() {
         assert_public_key_unavailable(&fixture, id, &contents);
     }
 
-    // And where the registration names the private key file as its public.
+    // Where a registration names a private key file as its public key
+    // file, the file is refused by its path, even when what it holds is a
+    // public key that would otherwise be returned.
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
-    let outcome = service
-        .register_shared_key(manyhands::repository::RegisterSharedKeyRequest {
-            label: "Same file".to_owned(),
-            ownership: manyhands::repository::SharedKeyOwnership::Imported,
-            private_key_path: keys.without_public.private_key_path.clone(),
-            public_key_path: Some(keys.without_public.private_key_path.clone()),
-        })
-        .unwrap();
-    let manyhands::repository::RegisterSharedKeyOutcome::Registered(same) = outcome else {
-        panic!("not registered");
-    };
-    let error = service.public_key_text(same.id).unwrap_err();
-    assert_eq!(error.code(), ResultCode::PublicKeyUnavailable);
-    assert_failure_has_no_secret("key public", &error);
-    assert_no_secret("key show", &service.show_key(same.id).unwrap());
+    let directory = fs::canonicalize(keys.files.path()).unwrap();
+    let own = directory.join("own");
+    fs::write(&own, format!("{line}\n")).unwrap();
+    let same = register(&service, "Same file", &own, Some(&own));
+    let other = directory.join("other");
+    let anothers = register(&service, "Another's", &other, Some(&own));
+    // Written as another spelling of the same stored path.
+    let respelled = directory.join("unused").join("..").join("own");
+    let spelled = register(
+        &service,
+        "Respelled",
+        &directory.join("third"),
+        Some(&respelled),
+    );
+    for registration in [&same, &anothers, &spelled] {
+        let error = service.public_key_text(registration.id).unwrap_err();
+        assert_eq!(
+            error.code(),
+            ResultCode::PublicKeyUnavailable,
+            "{}",
+            registration.label
+        );
+        assert_failure_has_no_secret("key public", &error);
+        assert_no_secret("key show", &service.show_key(registration.id).unwrap());
+    }
+    assert_git_transport_uninitialized();
+}
+
+/// The fixture public key without its comment.
+fn fixture_key_without_comment() -> String {
+    let text = credentials::public_fixture_text();
+    let (key, _comment) = text.trim_end().rsplit_once(' ').unwrap();
+    key.to_owned()
+}
+
+#[test]
+fn public_key_text_is_the_canonical_encoding_of_the_key() {
+    let fixture = fixture();
+    let id = fixture.keys.imported.id;
+    let public = fixture.keys.imported.public_key_path.clone().unwrap();
+    let key = fixture_key_without_comment();
+
+    let cases = [
+        // Trailing spaces are no part of the key or its comment.
+        (format!("{key} comment   \n"), format!("{key} comment")),
+        (
+            format!("{key} comment \t \r\n\r\n"),
+            format!("{key} comment"),
+        ),
+        (format!("{key}   \n"), key.clone()),
+        (format!("{key}\n"), key.clone()),
+        (
+            format!("{key} a comment of several words\n"),
+            format!("{key} a comment of several words"),
+        ),
+    ];
+    for (contents, expected) in cases {
+        fs::write(&public, &contents).unwrap();
+        let public_key = fixture.service.public_key_text(id).unwrap();
+        assert_eq!(public_key.public_key, expected, "{contents:?}");
+        assert_eq!(public_key.fingerprint, PUBLIC_FIXTURE_FINGERPRINT);
+        assert!(public_key.matches_registration);
+    }
+
+    // The longest line returned is 1024 bytes.
+    let commented = |length: usize| format!("{key} {}", "c".repeat(length - key.len() - 1));
+    fs::write(&public, format!("{}\n", commented(1024))).unwrap();
+    assert_eq!(
+        fixture.service.public_key_text(id).unwrap().public_key,
+        commented(1024)
+    );
+    fs::write(&public, format!("{}\n", commented(1025))).unwrap();
+    assert_public_key_unavailable(&fixture, id, "a line of 1025 bytes");
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_public_key_whose_comment_is_not_plain_text_is_unavailable() {
+    let fixture = fixture();
+    let id = fixture.keys.imported.id;
+    let public = fixture.keys.imported.public_key_path.clone().unwrap();
+    let key = fixture_key_without_comment();
+    let private = String::from_utf8(credentials::private_fixture_bytes()).unwrap();
+    let armor_on_one_line = private.trim_end().replace('\n', " ");
+    assert!(armor_on_one_line.contains(credentials::PRIVATE_KEY_SENTINEL));
+    assert!(!armor_on_one_line.contains('\n'));
+
+    let comments = [
+        ("a private key armor on one line", armor_on_one_line),
+        ("the words alone", "my PRIVATE KEY backup".to_owned()),
+        ("15 KB", "c".repeat(15 * 1000)),
+        ("a line separator", "first\u{2028}second".to_owned()),
+        ("a right-to-left override", "safe\u{202e}txt.exe".to_owned()),
+        ("a letter outside ASCII", "caf\u{e9}".to_owned()),
+        ("a tab", "two\twords".to_owned()),
+        ("an escape", "\u{1b}[2Jcleared".to_owned()),
+        ("a delete", "gone\u{7f}".to_owned()),
+        ("a line feed", "first\nsecond".to_owned()),
+        ("a carriage return", "first\rsecond".to_owned()),
+    ];
+    for (why, comment) in comments {
+        fs::write(&public, format!("{key} {comment}\n")).unwrap();
+        assert_public_key_unavailable(&fixture, id, why);
+    }
     assert_git_transport_uninitialized();
 }
 
@@ -632,7 +890,7 @@ fn pin(host: &str, port: u16, algorithm: &str, sha256: &str, reapproval: bool) -
 }
 
 /// Pins stored out of order, with ports that sort differently as text.
-fn pin_hosts(fixture: &Fixture) {
+fn pin_hosts(fixture: &impl Pins) {
     fixture.pin("b.example", 22, "ssh-ed25519", OTHER_FINGERPRINT);
     fixture.pin("a.example", 10022, "ssh-rsa", PUBLIC_FIXTURE_FINGERPRINT);
     fixture.pin("::1", 22, "ssh-ed25519", PUBLIC_FIXTURE_FINGERPRINT);
@@ -648,13 +906,16 @@ fn pin_hosts(fixture: &Fixture) {
 #[test]
 fn host_pins_list_by_host_and_then_port() {
     let fixture = fixture();
-    assert!(fixture.service.list_host_pins().unwrap().items.is_empty());
-    assert!(fixture.service.list_host_pins().unwrap().complete);
+    let empty = fixture.service.list_host_pins().unwrap();
+    assert!(empty.items.is_empty());
+    assert!(empty.complete);
+    assert!(!empty.reapproval_required);
     pin_hosts(&fixture);
 
     let list = fixture.service.list_host_pins().unwrap();
 
     assert!(list.complete);
+    assert!(!list.reapproval_required);
     assert_eq!(
         list.items,
         [
@@ -744,10 +1005,18 @@ fn the_reapproval_marker_is_reflected_in_every_pin() {
             .reapproval_required
     );
 
-    credentials::require_host_reapproval(fixture.data.path());
+    credentials::require_host_reapproval(&fixture.service);
+    // The marker the fixture leaves is the one an operation reads.
+    assert_eq!(
+        fixture
+            .service
+            .host_reapproval_required_for_testing(&target),
+        Ok(true)
+    );
 
     let list = fixture.service.list_host_pins().unwrap();
     assert_eq!(list.items.len(), 5);
+    assert!(list.reapproval_required);
     assert!(list.items.iter().all(|pin| pin.reapproval_required));
     assert_eq!(
         fixture.service.inspect_host(&target).unwrap(),
@@ -757,11 +1026,11 @@ fn the_reapproval_marker_is_reflected_in_every_pin() {
     let marker = fixture
         .data
         .path()
-        .join("ssh-host-trust-reapproval-required");
-    assert_eq!(
-        fs::read(&marker).unwrap(),
-        b"manyhands SSH host trust reapproval required v1\n"
-    );
+        .join(credentials::REAPPROVAL_MARKER_FILE);
+    let marker_bytes = fs::read(&marker).unwrap();
+    assert!(!marker_bytes.is_empty());
+    fixture.service.list_host_pins().unwrap();
+    assert_eq!(fs::read(&marker).unwrap(), marker_bytes);
 
     // A marker that is not the marker is a failure, not a guess.
     fs::write(&marker, b"something else").unwrap();
@@ -772,6 +1041,125 @@ fn the_reapproval_marker_is_reflected_in_every_pin() {
         assert_eq!(error.code(), ResultCode::InternalError);
     }
     assert_eq!(fs::read(&marker).unwrap(), b"something else");
+    assert_git_transport_uninitialized();
+}
+
+// After the pin registry is lost there are no pins, and the fence is all
+// there is to report.
+#[test]
+fn the_reapproval_marker_is_reported_when_there_are_no_pins() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let before = service.list_host_pins().unwrap();
+    assert!(before.items.is_empty());
+    assert!(!before.reapproval_required);
+
+    credentials::require_host_reapproval(&service);
+
+    let list = service.list_host_pins().unwrap();
+    assert!(list.items.is_empty());
+    assert!(list.complete);
+    assert!(list.reapproval_required);
+    assert_eq!(
+        serde_json::to_value(&list).unwrap(),
+        serde_json::json!({"items": [], "complete": true, "reapproval_required": true})
+    );
+    assert_eq!(
+        service
+            .inspect_host(&authority("a.example", 22))
+            .unwrap_err()
+            .code(),
+        ResultCode::AuthorityNotFound
+    );
+    assert_git_transport_uninitialized();
+}
+
+// What `trust.rs` would refuse to trust, a read refuses to report.
+#[test]
+fn a_stored_pin_that_is_not_a_valid_pin_is_an_internal_error() {
+    let corruptions = [
+        (
+            "control characters in the fingerprint",
+            "UPDATE ssh_host_pins SET sha256 = 'SHA256:' || char(27) || '[2J' || char(10)
+              WHERE host = 'b.example'",
+        ),
+        (
+            "a fingerprint that is not one",
+            "UPDATE ssh_host_pins SET sha256 = 'MD5:00:11' WHERE host = 'b.example'",
+        ),
+        (
+            "an unknown algorithm",
+            "UPDATE ssh_host_pins SET algorithm = 'ssh-unknown' WHERE host = 'b.example'",
+        ),
+        (
+            "a host that is not normalized",
+            "UPDATE ssh_host_pins SET host = 'B.Example' WHERE host = 'b.example'",
+        ),
+        (
+            "a host that is no host",
+            "UPDATE ssh_host_pins SET host = 'b.example/x' WHERE host = 'b.example'",
+        ),
+        (
+            "port zero",
+            "UPDATE ssh_host_pins SET port = 0 WHERE host = 'b.example'",
+        ),
+    ];
+    for (why, corruption) in corruptions {
+        let fixture = fixture_without_keys();
+        pin_hosts(&fixture);
+        assert_eq!(fixture.service.list_host_pins().unwrap().items.len(), 5);
+        let connection = credentials::index_connection(fixture.data.path());
+        assert_eq!(connection.execute(corruption, []).unwrap(), 1, "{why}");
+        drop(connection);
+
+        let error = fixture.service.list_host_pins().unwrap_err();
+        assert_eq!(error.code(), ResultCode::InternalError, "{why}");
+        assert!(error.recovery.is_empty());
+        assert_eq!(
+            error.to_envelope::<Value>("host list").data,
+            None,
+            "{why}: no partial list"
+        );
+
+        // A pin is found by its authority without reading any other row.
+        assert_eq!(
+            fixture
+                .service
+                .inspect_host(&authority("a.example", 22))
+                .unwrap()
+                .algorithm,
+            "ecdsa-sha2-nistp256",
+            "{why}"
+        );
+        // An authority that no pin can have is not found, whatever is stored.
+        for unknown in [authority("", 22), authority("a.example", 0)] {
+            assert_eq!(
+                fixture.service.inspect_host(&unknown).unwrap_err().code(),
+                ResultCode::AuthorityNotFound,
+                "{why}"
+            );
+        }
+    }
+
+    // The damaged row itself is an error where its authority still names it.
+    let fixture = fixture_without_keys();
+    pin_hosts(&fixture);
+    let connection = credentials::index_connection(fixture.data.path());
+    connection
+        .execute(
+            "UPDATE ssh_host_pins SET algorithm = 'ssh-unknown' WHERE host = 'b.example'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        fixture
+            .service
+            .inspect_host(&authority("b.example", 22))
+            .unwrap_err()
+            .code(),
+        ResultCode::InternalError
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -846,31 +1234,20 @@ fn credential_reads_report_a_degraded_index_as_unavailable() {
 fn credential_reads_change_neither_the_index_nor_the_data_directory() {
     let fixture = fixture();
     pin_hosts(&fixture);
-    credentials::require_host_reapproval(fixture.data.path());
-    let snapshot = |directory: &Path| {
-        let mut entries: Vec<_> = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            // The lock file is opened by every lease; its bytes are not data.
-            .filter(|path| !path.to_str().unwrap().ends_with(".lock"))
-            .map(|path| {
-                let bytes = fs::read(&path).unwrap();
-                (path, bytes)
-            })
-            .collect();
-        entries.sort();
-        entries
-    };
-    let names = |entries: &[(PathBuf, Vec<u8>)]| -> Vec<PathBuf> {
-        entries.iter().map(|(path, _)| path.clone()).collect()
-    };
-    // The first read-only connection after a writer has closed recreates
-    // SQLite's empty journal files, as every read session does; that is the
-    // session's own behavior, so it happens before the snapshot.
-    fixture.service.list_keys().unwrap();
-    let before = snapshot(fixture.data.path());
-    assert!(before.len() > 2);
+    credentials::require_host_reapproval(&fixture.service);
+    // Taken before the first read, which finds the index as its last
+    // writer left it.
+    let before = credentials::data_directory_files(fixture.data.path());
+    let names: Vec<_> = before.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["manyhands.sqlite3", credentials::REAPPROVAL_MARKER_FILE]
+    );
     let files_before = credentials::key_file_states(&fixture.keys.key_files());
+
+    fixture.service.list_keys().unwrap();
+    let after_first_read = credentials::data_directory_files(fixture.data.path());
+    credentials::assert_reads_left_the_data_directory(&before, &after_first_read);
 
     every_key_read(&fixture);
     fixture.service.list_host_pins().unwrap();
@@ -883,11 +1260,10 @@ fn credential_reads_change_neither_the_index_nor_the_data_directory() {
         .inspect_host(&authority("nowhere.example", 22))
         .unwrap_err();
 
-    let after = snapshot(fixture.data.path());
-    assert_eq!(names(&before), names(&after));
-    for ((path, before), (_, after)) in before.iter().zip(&after) {
-        assert!(before == after, "{path:?} changed");
-    }
+    let after = credentials::data_directory_files(fixture.data.path());
+    credentials::assert_reads_left_the_data_directory(&before, &after);
+    // Nor do later reads change what the first one found.
+    credentials::assert_reads_left_the_data_directory(&after_first_read, &after);
     assert_eq!(
         credentials::key_file_states(&fixture.keys.key_files()),
         files_before

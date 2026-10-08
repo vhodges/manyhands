@@ -226,10 +226,15 @@ pub struct PublicKeyDto {
 }
 
 /// Host pins ordered by host, then port.
+///
+/// `reapproval_required` is the application-wide marker left when the pin
+/// registry was lost. It is reported here as well as on each pin because
+/// that loss leaves no pins to report it on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HostPinListDto {
     pub items: Vec<HostPinDto>,
     pub complete: bool,
+    pub reapproval_required: bool,
 }
 
 /// One pinned host key. `reapproval_required` is the application-wide

@@ -20,6 +20,9 @@ use super::{
 };
 
 const MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES: u64 = 16 * 1024;
+/// One byte more than can be read, so the buffer is never full and never
+/// grows.
+const PUBLIC_KEY_BUFFER_CAPACITY: usize = MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES as usize + 1;
 
 impl RepositoryService {
     pub fn register_shared_key(
@@ -390,26 +393,34 @@ fn public_key_metadata(path: Option<&Path>) -> (Option<String>, PublicKeyMetadat
     let Ok(contents) = std::str::from_utf8(&contents) else {
         return (None, PublicKeyMetadataState::Unavailable);
     };
-    match openssh_public_key_fingerprint(contents) {
-        Some(fingerprint) => (
-            Some(fingerprint),
+    match openssh_public_key(contents) {
+        Some(public_key) => (
+            Some(public_key_fingerprint(&public_key)),
             PublicKeyMetadataState::FingerprintAvailable,
         ),
         None => (None, PublicKeyMetadataState::Unavailable),
     }
 }
 
-/// The fingerprint a registration stores for OpenSSH public key text, or
-/// `None` when the text is not such a key.
-pub(in super::super) fn openssh_public_key_fingerprint(contents: &str) -> Option<String> {
-    ssh_key::PublicKey::from_openssh(contents)
-        .ok()
-        .map(|public_key| public_key.fingerprint(Default::default()).to_string())
+/// The key in OpenSSH public key text, or `None` when the text is not one.
+pub(in super::super) fn openssh_public_key(contents: &str) -> Option<ssh_key::PublicKey> {
+    ssh_key::PublicKey::from_openssh(contents).ok()
+}
+
+/// The fingerprint a registration stores for a public key.
+pub(in super::super) fn public_key_fingerprint(public_key: &ssh_key::PublicKey) -> String {
+    public_key.fingerprint(Default::default()).to_string()
 }
 
 /// The bytes of a regular file of at most 16 KiB, or `None`. Opening never
 /// blocks, and nothing is written.
-pub(in super::super) fn bounded_public_key_contents(path: &Path) -> Option<Vec<u8>> {
+///
+/// The buffer is erased when it is dropped, and is allocated once at a size
+/// the read cannot outgrow, so no copy of the bytes is left behind by a
+/// reallocation. A caller cannot know that the file holds a public key.
+pub(in super::super) fn bounded_public_key_contents(
+    path: &Path,
+) -> Option<zeroize::Zeroizing<Vec<u8>>> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -420,7 +431,7 @@ pub(in super::super) fn bounded_public_key_contents(path: &Path) -> Option<Vec<u
         return None;
     }
 
-    let mut contents = Vec::with_capacity(metadata.len() as usize);
+    let mut contents = zeroize::Zeroizing::new(Vec::with_capacity(PUBLIC_KEY_BUFFER_CAPACITY));
     std::io::Read::by_ref(&mut file)
         .take(MAX_OPENSSH_PUBLIC_KEY_FILE_BYTES)
         .read_to_end(&mut contents)

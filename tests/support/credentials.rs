@@ -13,6 +13,7 @@ use manyhands::repository::{
         GenerateSharedKeyOutcome, GenerateSharedKeyRequest, KeyProtection, KeyStore,
         SecretPassphrase,
     },
+    transport::{HostKeyIdentity, SshAuthority},
 };
 
 /// The two markers inside `tests/shared_key_registry_private_fixture`.
@@ -33,8 +34,9 @@ pub const PUBLIC_FIXTURE_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy
 /// A second well-formed fingerprint, for a host key.
 pub const OTHER_FINGERPRINT: &str = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU";
 
-const REAPPROVAL_MARKER: &str = "ssh-host-trust-reapproval-required";
-const REAPPROVAL_MARKER_BYTES: &[u8] = b"manyhands SSH host trust reapproval required v1\n";
+/// The marker's file name, for the tests that damage or compare the file.
+/// The marker itself is only ever written by the service.
+pub const REAPPROVAL_MARKER_FILE: &str = "ssh-host-trust-reapproval-required";
 
 fn fixture_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -185,22 +187,74 @@ fn permission_bits(metadata: &fs::Metadata) -> u32 {
     u32::from(metadata.permissions().readonly())
 }
 
-/// Stores a pin as the transport does after an approval, without one.
-pub fn pin_host(data_directory: &Path, host: &str, port: u16, algorithm: &str, sha256: &str) {
-    let connection = rusqlite::Connection::open(data_directory.join(REGISTRY_FILE)).unwrap();
-    connection
-        .execute(
-            "INSERT INTO ssh_host_pins (host, port, algorithm, sha256) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![host, port, algorithm, sha256],
+/// Pins a host through the code an approved operation uses.
+pub fn pin_host(service: &RepositoryService, host: &str, port: u16, algorithm: &str, sha256: &str) {
+    service
+        .approve_host_pin_for_testing(
+            &SshAuthority {
+                host: host.to_owned(),
+                port,
+            },
+            &HostKeyIdentity {
+                algorithm: algorithm.to_owned(),
+                sha256: sha256.to_owned(),
+            },
         )
         .unwrap();
 }
 
-/// Leaves the marker a recovery of the pin registry leaves.
-pub fn require_host_reapproval(data_directory: &Path) {
-    fs::write(
-        data_directory.join(REAPPROVAL_MARKER),
-        REAPPROVAL_MARKER_BYTES,
-    )
-    .unwrap();
+/// Leaves the marker a recovery of the pin registry leaves, as it does.
+pub fn require_host_reapproval(service: &RepositoryService) {
+    service.require_host_reapproval_for_testing().unwrap();
+}
+
+/// A writable connection to the index, for a test that damages a row.
+pub fn index_connection(data_directory: &Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(data_directory.join(REGISTRY_FILE)).unwrap()
+}
+
+/// Every file in the data directory but the lock files, whose bytes are not
+/// data, with its bytes.
+pub fn data_directory_files(data_directory: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = fs::read_dir(data_directory)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .map(|entry| {
+            (
+                entry.file_name().into_string().unwrap(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .filter(|(name, _)| !name.ends_with(".lock"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// What reads may do to the data directory between two snapshots: nothing,
+/// except that the first read-only connection after a writer has closed
+/// creates SQLite's two journal files. The index and every other file that
+/// was there is byte for byte what it was.
+pub fn assert_reads_left_the_data_directory(
+    before: &[(String, Vec<u8>)],
+    after: &[(String, Vec<u8>)],
+) {
+    let journal = [
+        format!("{REGISTRY_FILE}-shm"),
+        format!("{REGISTRY_FILE}-wal"),
+    ];
+    assert!(before.iter().any(|(name, _)| name == REGISTRY_FILE));
+    for (name, bytes) in before {
+        let now = after.iter().find(|(after, _)| after == name);
+        let Some((_, now)) = now else {
+            panic!("{name} was removed");
+        };
+        assert!(now == bytes, "{name} changed");
+    }
+    for (name, _) in after {
+        assert!(
+            before.iter().any(|(before, _)| before == name) || journal.contains(name),
+            "{name} appeared"
+        );
+    }
 }

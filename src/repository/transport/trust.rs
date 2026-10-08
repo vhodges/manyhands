@@ -32,7 +32,7 @@ pub(in super::super) fn migrate_host_pins(
         .map_err(RepositoryError::sqlite)
 }
 
-pub(super) fn valid_identity(identity: &HostKeyIdentity) -> bool {
+pub(in super::super) fn valid_identity(identity: &HostKeyIdentity) -> bool {
     matches!(
         identity.algorithm.as_str(),
         "ssh-ed25519"
@@ -48,7 +48,7 @@ pub(super) fn valid_identity(identity: &HostKeyIdentity) -> bool {
             value.algorithm() == ssh_key::HashAlg::Sha256 && value.to_string() == identity.sha256
         })
 }
-fn valid_authority(authority: &SshAuthority) -> bool {
+pub(in super::super) fn valid_authority(authority: &SshAuthority) -> bool {
     let host = if authority.host.contains(':') {
         format!("[{}]", authority.host)
     } else {
@@ -121,6 +121,43 @@ impl RepositoryService {
             pin: read_pin(&connection, authority)?,
             reapproval_required,
         })
+    }
+    /// Pins `identity` for `authority` as an exact approval does, through
+    /// the code an operation uses and without contacting the host.
+    #[doc(hidden)]
+    pub fn approve_host_pin_for_testing(
+        &self,
+        authority: &SshAuthority,
+        identity: &HostKeyIdentity,
+    ) -> Result<(), SshTransportErrorKind> {
+        let snapshot = self.read_host_trust(authority)?;
+        let approval = HostApproval {
+            authority: authority.clone(),
+            expected: snapshot.pin.clone(),
+            presented: identity.clone(),
+        };
+        self.finalize_host_trust(authority, &snapshot, identity, Some(&approval))
+    }
+    /// Leaves the marker that the recovery of a lost pin registry leaves.
+    #[doc(hidden)]
+    pub fn require_host_reapproval_for_testing(&self) -> Result<(), SshTransportErrorKind> {
+        let data = self
+            .registry_path
+            .parent()
+            .ok_or(SshTransportErrorKind::RegistryUnavailable)?;
+        let _guard =
+            cache_write_guard(&self.registry_path, data, RepositoryOperation::OpenRegistry)
+                .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?;
+        publish_reapproval_marker(data).map_err(|_| SshTransportErrorKind::RegistryUnavailable)
+    }
+    /// Whether an operation would find the reapproval marker set.
+    #[doc(hidden)]
+    pub fn host_reapproval_required_for_testing(
+        &self,
+        authority: &SshAuthority,
+    ) -> Result<bool, SshTransportErrorKind> {
+        self.read_host_trust(authority)
+            .map(|snapshot| snapshot.reapproval_required)
     }
     /// Pin-only convenience. Operations must use finalize_host_trust with their
     /// original marker snapshot to detect recovery across network work.
