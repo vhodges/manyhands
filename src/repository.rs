@@ -4020,16 +4020,27 @@ impl RepositoryService {
         selected: &Path,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<RepositoryInspection, RepositoryError> {
-        self.inspect_with_head_policy(selected, identity_config, false)
+        self.inspect_with_head_policy(
+            selected,
+            identity_config,
+            false,
+            ConfigurationReader::Unguarded,
+        )
     }
 
     /// `inspect` for a read: a detached HEAD is reported as no head branch
-    /// instead of being refused. Everything else is as `inspect` has it.
+    /// instead of being refused, and the configuration is taken through
+    /// the guarded reader. Everything else is as `inspect` has it.
     fn inspect_reporting_detached_head(
         &self,
         root: &Path,
     ) -> Result<RepositoryInspection, RepositoryError> {
-        self.inspect_with_head_policy(root, &mut RepositoryIdentityConfig, true)
+        self.inspect_with_head_policy(
+            root,
+            &mut RepositoryIdentityConfig,
+            true,
+            ConfigurationReader::Guarded,
+        )
     }
 
     fn inspect_with_head_policy(
@@ -4037,6 +4048,7 @@ impl RepositoryService {
         selected: &Path,
         identity_config: &mut impl IdentityConfigProvider,
         report_detached_head: bool,
+        configuration_reader: ConfigurationReader,
     ) -> Result<RepositoryInspection, RepositoryError> {
         self.require_index_available(RepositoryOperation::Inspect, Some(selected))?;
         let (repository, root) = canonical_repository_root(selected, RepositoryOperation::Inspect)?;
@@ -4051,12 +4063,11 @@ impl RepositoryService {
             Err(error) => return Err(error),
         };
         let local_branches = local_branches(&repository, &root)?;
-        // Only a read asks for a detached HEAD to be reported, and a read
-        // takes the configuration through the guarded reader.
-        let configuration = if report_detached_head {
-            read_configuration_guarded(&root, RepositoryOperation::Inspect)?
-        } else {
-            read_configuration(&root)?
+        let configuration = match configuration_reader {
+            ConfigurationReader::Guarded => {
+                read_configuration_guarded(&root, RepositoryOperation::Inspect)?
+            }
+            ConfigurationReader::Unguarded => read_configuration(&root)?,
         };
         let local_config = repository.config().map_err(|error| {
             RepositoryError::git(RepositoryOperation::Inspect, Some(root.clone()), error)
@@ -7665,6 +7676,15 @@ fn read_configuration_for(
         Ok(config) => ConfigurationInspection::Valid(config),
         Err(problem) => ConfigurationInspection::Invalid(problem),
     })
+}
+
+/// How an inspection reads the repository's configuration file.
+#[derive(Clone, Copy)]
+enum ConfigurationReader {
+    /// As a read service does: `read_configuration_guarded`.
+    Guarded,
+    /// As enablement and the other changes do: `read_configuration`.
+    Unguarded,
 }
 
 /// The most configuration a read takes. A configuration holds a few short
