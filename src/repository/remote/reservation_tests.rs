@@ -921,6 +921,7 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
         step_ordinal: 0,
         observation_digest: conflict,
         input_digest: [3; 32],
+        preflight_digest: [6; 32],
         identity_confirmation_id: Some(confirmation.confirmation_id),
     };
     let path = state::ResolutionPathIntent {
@@ -928,6 +929,7 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
         path_digest: [1; 32],
         expected_digest: [2; 32],
         result_digest: [3; 32],
+        prewrite_digest: [4; 32],
         base_blob_oid: None,
         local_blob_oid: None,
         incoming_blob_oid: None,

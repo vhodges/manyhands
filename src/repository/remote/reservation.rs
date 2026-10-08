@@ -853,7 +853,10 @@ impl RepositoryService {
                 .ok_or_else(state::recovery_required)?;
             if &record.target != target
                 || !is_sync(target)
-                || record.phase != RemoteOperationPhase::Interrupted
+                || !matches!(
+                    record.phase,
+                    RemoteOperationPhase::Interrupted | RemoteOperationPhase::Reconciling
+                )
                 || record.generation != state::generation(tx, id)?
                 || record.cancel_requested
             {
@@ -861,8 +864,13 @@ impl RepositoryService {
             }
             let step = state::integration_step(tx, record.id, ordinal)?
                 .ok_or_else(state::recovery_required)?;
-            if step.phase != state::IntegrationStepPhase::ConflictPending
-                || step.conflict_digest != Some(conflict_digest)
+            if !matches!(
+                step.phase,
+                state::IntegrationStepPhase::ConflictPending
+                    | state::IntegrationStepPhase::ResolutionPrepared
+                    | state::IntegrationStepPhase::CommitPrepared
+                    | state::IntegrationStepPhase::Applied
+            ) || step.conflict_digest != Some(conflict_digest)
             {
                 return Err(state::recovery_required());
             }

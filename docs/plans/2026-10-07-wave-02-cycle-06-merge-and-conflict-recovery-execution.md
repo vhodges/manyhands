@@ -463,3 +463,123 @@ had managed frontmatter, valid ULIDs, balanced fences/final newlines/whitespace;
 `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6D9/01M44B2KM3C6H6SG8M2W5P7R9.md`.
 Verified it is already in HEAD; left this unrelated canonical content untouched.
 This is not a Cycle 06 metadata regression or a claim of globally valid content.
+
+## Task 4 blocked protocol review — 2026-10-08
+
+Task 3 checkpoint is `6bd1f18`; HEAD remains there. Task 4 is uncommitted
+and is not accepted. Tasks 5–7 have not begun. Ticket remains open; no delivery
+action is authorized or performed.
+
+Latest worker run `94696a95-3fd3-4b3b-b147-879d7fb721f6` reports 139 remote
+tests, check, strict clippy, formatting, and diff checks passing through Devenv.
+Its full all-feature test attempt failed in the concurrent discovery test
+`services_sharing_a_corrupt_cache_replace_it_once` with `RepositoryBusy`; an
+isolated retry passed. This is not evidence of a complete full-suite pass.
+Native five-target verification remains pending.
+
+Independent static review `51579227-f2bd-4461-a115-d69ac8468b33` reports
+BLOCK with seven P1s and one P2. These are source-traced findings, not executed
+breakpoint reproductions: real acquisition/serialization/pre-ref crash windows;
+path replacement before durable applied observation; retirement placeholder
+crashes; content-only recovered lock ownership; foreign-lock release during
+retirement; same-image inode substitution at persistence; ticket closure
+invariants checked against only one side; and partial merge-metadata cleanup.
+Review artifact:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/51579227-f2bd-4461-a115-d69ac8468b33/task4-lock-crash-review.md`.
+
+These findings concern the promised effect-aware recovery and preservation
+contracts, not optional test depth. Another patch-only loop is paused pending
+a bounded protocol-design decision. Preserve the existing dirty diff and prior
+accepted checkpoints. The current Linux-only implementation and added direct
+SHA-1 dependency also need explicit reconciliation with the approved platform
+and dependency assumptions; they are not silently accepted plan changes.
+
+Owner selected **Protocol redesign review** on 2026-10-08: authorize a bounded
+delegated design review of ownership, syscall/crash states, platform support,
+and dependency changes. Preserve all work and present a revised protocol for
+approval before further implementation. This authorizes analysis, not new code,
+acceptance, commits, delivery, or a change to preservation guarantees.
+
+Protocol workflow `a9313d9d-e75f-4cfc-9d9b-161a4ee421be` completed its
+proposal and independent challenge, then failed before launching the response:
+`protocol-design` and `protocol-response` inherited the same output path.
+This was an orchestration artifact-collision failure, not source/test evidence.
+Before same-protocol retry, HEAD/branch were verified unchanged and the tracked
+binary diff/status/untracked inventory captured under
+`/tmp/manyhands-task4-design-retry-h3GSuP`. The original dirty worktree remains
+preserved. Retry `e16722d7-48f0-42fa-a222-2af305b7a1e3` resumes only the
+completed advisor, with a distinct response output binding. No execution-mode
+fallback, new implementation, or approved contract change occurred.
+
+Independent design challenge additionally requires a live backend ref-lock
+crash/provenance strategy and concrete native operation choices. The owner's
+question about possible relaxations is not approval of a concurrency boundary
+or manual-recovery limitation; these remained explicit decisions to present
+at that checkpoint.
+
+### Owner concurrency decision and bounded review completion — 2026-10-08
+
+Owner subsequently approved relaxing concurrent-writer protection because
+per-item worktrees reduce collision risk and autonomous writers are instructed
+to access canonical contents through Manyhands API/CLI. Record the supported
+boundary as cooperative writers participating in reservation/lease/authoring
+guards. Direct mutation bypassing coordination during bounded resolution apply
+and reconciliation is unsupported. Reads and unrelated safe work remain allowed;
+external repair outside that interval invalidates observations. Worktrees do not
+isolate shared Git refs. No guarantee of perfect expected-inode pathname CAS or
+continuous foreign-lock exclusion is claimed against arbitrary namespace
+substitution. Observed stale changes still reject, and ambiguous/foreign locks
+remain preserved. This is recorded in Cycle, design, and implementation plan.
+
+The response-only retry completed with advisor run
+`90d44f5b-8d62-4f56-ae6d-d7ae9f7e3a35`. Final response artifact:
+`/home/vhodges/.pi/agent/sessions/--home-vhodges-work-src-manyhands--/subagent-artifacts/outputs/e16722d7-48f0-42fa-a222-2af305b7a1e3/task4-protocol-response.md`.
+The scoped concurrency decision arrived after that report was finalized; its
+statement that concurrency is still unapproved is superseded by the owner
+answer here. A follow-up steer was queued but did not change the report.
+
+Recommended internal redesign: stable anchored index-lock sentinel, separate
+libgit2 index serialization (remove custom SHA-1 serializer/direct dependency),
+one actual-state recovery dispatcher, and independently recoverable metadata
+retirement. These are proposals, not implementation acceptance. Existing public
+API, validation, identity/fencing and applicable tests can be retained.
+
+A separate owner decision remains: ambiguous live locks created inside libgit2
+have a creation-before-record window without a public ownership hook. Proposed
+narrow exception is operator-controlled recovery after quiescing Git writers,
+then exact same-ID reconciliation; never automatic stale-lock deletion or
+content/age/PID-only ownership inference. Full automatic backend-lock recovery
+would require separately scoped feasibility/backend work. The exception was not
+yet approved at that checkpoint.
+
+Owner then selected **Allow narrow manual recovery**: preserve ambiguous live
+locks created internally by libgit2 after a crash, require operator quiescence
+and verified stale-lock handling, then exact same-ID reconciliation. No automatic
+foreign/stale-lock deletion or content/age/PID-only ownership inference. Other
+owned effects still recover automatically. This separate scoped policy amendment
+is recorded in Cycle, design, implementation plan, and ticket checkpoint.
+
+Prepared proposed technical amendment:
+[Task 4 resolution protocol](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md).
+It incorporates both approved owner policy decisions, stable anchored sentinel,
+separate libgit2 serialization without the new SHA-1 dependency, actual-state
+recovery, per-member metadata retirement, all-side closure validation, proposed
+native APIs, and real process-death validation. Technical implementation approval
+remains pending. Native functionality/storage-ordering proofs and full-suite
+validation remain unresolved; the policy answers waive neither.
+
+### Technical amendment approved; implementation preflight — 2026-10-08
+
+Owner approved the Task 4 protocol amendment and sequential local implementation.
+This supersedes the preceding pending-technical-approval notes; Task 4 itself
+is still unaccepted. Independent review and all validation/native gates remain
+binding. No delivery, closure, or cleanup authority was added.
+
+Fresh fetch observed main `0b9c7c2695fda0f178ce28fb993ea560929a9222`, which
+is not an ancestor of ticket HEAD `6bd1f185b3959375977dcfa1ff6ca22b0aa1d8eb`.
+Main adds Wave 3/editor documentation, interim ticket scripts, AGENTS changes,
+and Devenv changes, without Rust implementation changes. Preserve the existing
+19-path agent-owned Task 4/doc diff in an explicitly unaccepted local WIP
+checkpoint before rebasing the ticket onto fetched main. Never stash/reset/clean
+or modify the main checkout's unrelated `.superpowers/` directory. Record the
+post-rebase accepted-task mapping before dispatching implementation.

@@ -48,6 +48,24 @@ lifecycle. A1–A9 below refer to the Cycle acceptance IDs.
   the end. User may select authorized delegation later; this request does not.
 - Use one existing reservation/journal and the short common-Git lease. No
   network, full scan, user prompt or read-only merge preparation under the lease.
+- Owner concurrency amendment (2026-10-08): cooperative autonomous writers use
+  Manyhands API/CLI and the existing guards. Concurrent direct mutation bypassing
+  coordination of affected canonical paths/ancestors, target validation state,
+  Git metadata, or private staging during bounded apply/reconciliation is
+  unsupported. Reads/unrelated safe work remain allowed; external repair requires
+  fresh observation. Shared refs still need common-Git coordination despite
+  worktree isolation. Do not claim race-free expected-inode namespace operations
+  or continuous foreign-lock exclusion under arbitrary substitution. Still reject
+  observed stale state and preserve ambiguous recovery/foreign locks.
+- Separate owner recovery amendment (2026-10-08): ambiguous live locks created
+  internally by libgit2 after a crash may require operator intervention. Preserve
+  them/effects; no automatic ownership inference/deletion by age, PID, or content.
+  Operator quiescence and verified stale-lock handling precede identical retry,
+  exact actual-state revalidation, and recorded-candidate reuse. Other owned
+  resolution effects still recover automatically. This is not authority for
+  wider manual recovery or platform/dependency changes. Owner separately approved
+  the [Task 4 protocol redesign](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md)
+  and sequential local implementation on 2026-10-08; retain all review/gates.
 - Preserve exact fetch mappings, no `FETCH_HEAD` update/pruning, independent
   Push endpoint checks, ordinary non-force publication and authority/index replay.
 - Never rebase, choose a side, force checkout/push, stash/reset/discard, abort a

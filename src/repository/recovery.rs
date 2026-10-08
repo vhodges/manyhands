@@ -277,9 +277,12 @@ fn begin_or_reconcile(
             return Err(super::remote::state::recovery_required());
         }
     }
+    // A context synchronization owns only its exact authoring kind/item. Other
+    // contexts may continue authoring; the matching context is rejected again
+    // before any owned write by RepositoryService's checkpoint guard.
     let remote_active: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling'))",
-        [root_path], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
+        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if remote_active {
         return Err(super::remote::state::recovery_required());
     }

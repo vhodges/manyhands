@@ -106,6 +106,17 @@ controller-level restart regression covers the mandatory fresh fetch and
 finalization transition. Ticket remains open. Tasks 4–7, native five-target
 verification, code-review/PR approval, delivery, and closure remain pending.
 
+## Task 4 approved protocol revision — 2026-10-08
+
+Task 3 remediation checkpoint is `6bd1f18`; Task 4 is still unaccepted.
+Owner approved cooperative-writer concurrency, narrow operator recovery for
+ambiguous libgit2-created live locks after crashes, and the
+[revised protocol](../../../docs/plans/2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md).
+Resume sequential subagent implementation and independent review locally.
+Preserve existing agent-owned work in an explicitly unaccepted WIP checkpoint
+for the required current-main rebase. No validation/native waiver or delivery,
+closure, or cleanup authority was granted.
+
 ## Entry Gate
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite

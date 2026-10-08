@@ -336,6 +336,35 @@ be established; commit subject alone is insufficient.
 
 ## Concurrency, Cancellation And Discovery
 
+**Owner decision — cooperative writers, 2026-10-08:** autonomous canonical
+writers use Manyhands API/CLI and participate in the existing reservation,
+lease, and authoring guards. From final apply re-observation through checkpoint,
+metadata retirement, and sentinel release, direct external edits of affected
+canonical paths/ancestors or relevant target-worktree/Git/staging state that
+bypass coordination are unsupported. Reads and unrelated safe work remain
+allowed. External repair outside that bounded interval invalidates observations.
+Worktree isolation reduces canonical-file collisions, not shared-ref contention;
+common-Git coordination remains required.
+
+This is an explicit concurrency convention, not OS-enforced exclusion or proof
+that editors honor index locks. No perfect expected-inode rename/unlink or
+continuous foreign-lock exclusion is promised against arbitrary namespace
+substitution. Observed stale changes still reject before effects; ambiguous
+recovery preserves evidence and refuses foreign-lock adoption/removal. Scoped
+writes, no-follow access, closure invariants, privacy, and effect-aware replay
+remain binding. The concurrency answer alone approves no other change.
+
+**Separate owner decision — narrow backend-lock recovery, 2026-10-08:** allow
+operator intervention only for ambiguous live locks created internally by
+libgit2 after a crash. Preserve the lock and actual effects, return fixed redacted
+recovery-required, and never delete/adopt using contents, age, or PID alone.
+The operator quiesces writers and verifies/handles the stale lock before identical
+retry. Retry revalidates refs/index/worktree/metadata and intent, reuses the
+candidate, and refuses third states. Owned sentinel/path/index recovery remains
+automatic. Native/dependency scope remains unchanged. Owner separately approved
+the technical amendment and sequential local implementation on 2026-10-08:
+[Task 4 resolution protocol](2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md).
+
 Extend the existing repository-local authoring guard to block canonical
 checkpoints in the affected target worktree while synchronization merge state
 is outstanding. Other safe contexts remain subject to the existing coordination

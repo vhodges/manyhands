@@ -208,6 +208,35 @@ outstanding synchronization merge; other safe contexts retain existing
 coordination rules. External tools remain possible and invalidate stale
 observations.
 
+**Owner concurrency amendment — 2026-10-08:** resolution supports cooperative
+writers. Autonomous writers access canonical contents through Manyhands API/CLI
+operations participating in reservation, lease, and authoring guards. During the
+bounded apply/reconciliation interval, direct external mutations of affected
+canonical paths/ancestors, target-worktree validation state, or relevant Git
+metadata/private staging that bypass coordination are unsupported. Read-only
+inspection and unrelated safe work remain allowed; external repair outside this
+interval requires deliberate re-observation. Per-item worktrees reduce collision
+risk but do not isolate common Git refs, which remain coordinated.
+
+Observed stale changes still reject before effects, and ambiguous recovery stops
+without adopting/removing foreign locks. No-follow reads, scoped writes, privacy,
+closure preservation, and effect-aware replay remain required. The contract no
+longer promises race-free pathname preservation or continuous foreign-lock
+exclusion against arbitrary concurrent namespace substitution bypassing the
+cooperative protocol. The concurrency answer alone approves no other change.
+
+**Owner recovery amendment — 2026-10-08:** ambiguous live locks created inside
+libgit2 may require operator intervention after a crash. Manyhands must preserve
+the lock/effects and return redacted recovery-required; it must never infer lock
+ownership from contents, age, or PID alone or delete ambiguous locks automatically.
+An operator quiesces relevant writers, verifies and handles the stale lock, then
+retries the identical operation. Retry revalidates actual refs/index/worktree/
+metadata and reuses recorded candidates. Other owned resolution effects remain
+automatically recoverable. This narrow exception does not approve broader manual
+recovery or platform/dependency changes. Owner separately approved the
+[Task 4 protocol amendment](../plans/2026-10-08-wave-02-cycle-06-task-04-resolution-protocol-amendment.md)
+and sequential local implementation on 2026-10-08; all acceptance gates remain.
+
 Prepare merge/validation outside the lease without writing the destination ODB:
 locked libgit2 content merging writes blobs even with an in-memory index, so use
 a separate worker-local handle with a transient high-priority memory ODB backend
