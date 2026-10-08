@@ -33,6 +33,17 @@ capabilities this Cycle consumes.
 
 Wave 03 dependencies: F1 and F2. C1 consumes only F1 and may start when F1 exits if capacity allows.
 
+## Added Scope (2026-10-07)
+
+Ticket relationships and short codes, per the
+[RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
+rebased onto main.
+
+Add the relationship read verbs: `ticket ready`, `blocked`, `deps`,
+`children`, `cycles`, `plan`, `critical-path` and `find`. A short code passed
+as `--id` is rejected as an invalid ID.
+
 ## Exit Evidence
 
 Real-repository read tests through the binary, golden
