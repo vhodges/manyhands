@@ -1705,7 +1705,7 @@ mod tests {
     }
 
     #[test]
-    fn an_index_that_has_the_columns_is_opened_without_the_write_lock() {
+    fn migrate_item_read_columns_takes_no_write_lock_on_an_up_to_date_index() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("index.sqlite3");
         let mut holder = open_registry(&path, &mut |_| {}).unwrap();
@@ -1718,6 +1718,11 @@ mod tests {
         migrate_item_read_columns(&mut connection).unwrap();
 
         assert!(started.elapsed() < REGISTRY_BUSY_TIMEOUT / 2);
+        // The lock really is held: a writer is refused. It need not wait
+        // the whole timeout to show that.
+        connection
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
         assert!(
             connection
                 .execute_batch("BEGIN IMMEDIATE")

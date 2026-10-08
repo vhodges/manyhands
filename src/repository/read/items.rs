@@ -23,7 +23,7 @@ use super::{
 use crate::{
     canonical::{self, ItemId},
     repository::{GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
-    results::{ProblemCode, ResultCode, absolute_path_string, timestamp_string},
+    results::{ProblemCode, RecoveryAction, ResultCode, absolute_path_string, timestamp_string},
 };
 
 /// Which tickets a list returns, by lifecycle closure metadata: a ticket is
@@ -566,12 +566,12 @@ fn below(root: &Path, relative: &Path) -> PathBuf {
 }
 
 /// Whether `path` is written as a path inside a context: relative, with
-/// forward slashes, with no empty, `.` or `..` component, and not under the
-/// directory that holds item worktrees. This says nothing about whether it
+/// forward slashes, with no NUL, no empty, `.` or `..` component, and not
+/// under the directory that holds item worktrees. This says nothing about whether it
 /// is a place an item can be.
 fn is_plain_relative(path: &str) -> bool {
     !path.is_empty()
-        && !path.contains('\\')
+        && !path.contains(['\\', '\0'])
         && path
             .split('/')
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
@@ -732,15 +732,38 @@ fn context_exists(repo: &ResolvedRepository, context: &StoredContext) -> bool {
     })
 }
 
+/// Whether the row is the item's copy in the worktree created to edit that
+/// item: an active context at `.manyhands/worktrees/<the item's own ID>`.
+/// An item worktree's checkout holds every other item too, and a row for
+/// one of those is never the effective copy.
+fn is_own_worktree_row(repo: &ResolvedRepository, row: &StoredItem) -> bool {
+    row.context.kind == ItemContextKind::Active
+        && context_directory(repo, &row.context.worktree)
+            .is_some_and(|directory| directory == Path::new(WORKTREES_DIRECTORY).join(&row.id))
+}
+
+/// The order in which the rows of one item are tried: its own worktree's,
+/// then one outside any item worktree, then a copy in another item's.
+fn row_rank(repo: &ResolvedRepository, row: &StoredItem) -> u8 {
+    if is_own_worktree_row(repo, row) {
+        0
+    } else if row.context.kind != ItemContextKind::Active {
+        1
+    } else {
+        2
+    }
+}
+
 /// One row for each item, and whether the index held any item more than
 /// once.
 ///
 /// A refresh stores the root, each item worktree and the removal of
 /// worktrees that are gone in separate transactions, so a read can find an
 /// item both in the primary context and in the row of a worktree that no
-/// longer exists, or the reverse. Then the item worktree's row is the
-/// effective one if its worktree is still there, and otherwise the primary
-/// one; and the index, which is in the middle of changing, is behind.
+/// longer exists, or the reverse. Then the row of the item's own worktree
+/// is the effective one if that worktree is still there, and otherwise the
+/// primary one; and the index, which is in the middle of changing, is
+/// behind.
 fn effective_rows<'a>(
     repo: &ResolvedRepository,
     stored: &'a [StoredItem],
@@ -752,22 +775,21 @@ fn effective_rows<'a>(
     let mut duplicated = false;
     let rows = by_id
         .into_values()
-        .map(|rows| {
+        .map(|mut rows| {
             if rows.len() == 1 {
                 return rows[0];
             }
             duplicated = true;
-            let is_active = |row: &&&StoredItem| row.context.kind == ItemContextKind::Active;
+            rows.sort_by_key(|row| row_rank(repo, row));
             rows.iter()
-                .filter(is_active)
-                .find(|row| context_exists(repo, &row.context))
-                .or_else(|| rows.iter().find(|row| !is_active(row)))
+                .find(|row| row_rank(repo, row) != 0 || context_exists(repo, &row.context))
                 .copied()
                 .unwrap_or(rows[0])
         })
         .collect();
     (rows, duplicated)
 }
+
 
 impl RepositoryService {
     /// Every managed document, ordered by path and then ID, with a
@@ -869,8 +891,9 @@ impl RepositoryService {
     /// is `repository_inaccessible`.
     ///
     /// When the index holds the item in more than one context, which it can
-    /// while a refresh is under way, the item worktree's copy is read if it
-    /// is still there, otherwise the primary copy, and the index is `stale`.
+    /// while a refresh is under way, the copy in the item's own worktree is
+    /// read if it is still there, otherwise the primary copy, and the index
+    /// is `stale`. A copy that is there and cannot be read fails the read.
     pub fn show_item(&self, repo: &ResolvedRepository, id: &ItemId) -> Result<ItemDto, ReadError> {
         let id = id.to_string();
         self.read_session(RepositoryOperation::Read, |connection| {
@@ -886,26 +909,24 @@ impl RepositoryService {
             } else {
                 index
             };
-            // An item worktree's row first. The sort keeps the index's order
-            // among the rest.
-            rows.sort_by_key(|row| row.context.kind != ItemContextKind::Active);
+            // The item's own worktree first, then the primary copy, and a
+            // copy in another item's worktree last. The sort keeps the
+            // index's order within each.
+            rows.sort_by_key(|row| row_rank(repo, row));
             let mut found = None;
-            for (position, row) in rows.iter().enumerate() {
-                let read = match canonical_item_kind(&row.path) {
-                    Some(_) => read_item_file(repo, &row.context.worktree, &row.path),
-                    None => Err(invalid_stored_data()),
-                };
-                match read {
-                    Ok(ItemFileRead::Found(file)) => {
+            for row in &rows {
+                if canonical_item_kind(&row.path).is_none() {
+                    return Err(invalid_stored_data());
+                }
+                // Only a row with nothing behind it gives way to the next.
+                // A copy that is there and cannot be read is a failure, not
+                // a reason to answer from another copy.
+                match read_item_file(repo, &row.context.worktree, &row.path)? {
+                    ItemFileRead::Found(file) => {
                         found = Some((*row, file));
                         break;
                     }
-                    // A row with nothing behind it gives way to the next.
-                    _ if position + 1 < rows.len() => {}
-                    Ok(ItemFileRead::Missing | ItemFileRead::NotAFile) => {
-                        return Err(item_not_found(repo, true));
-                    }
-                    Err(error) => return Err(error),
+                    ItemFileRead::Missing | ItemFileRead::NotAFile => {}
                 }
             }
             let Some((row, file)) = found else {
@@ -1034,7 +1055,16 @@ impl RepositoryService {
                         .find(|kind| path.starts_with(kind.path_prefix()))
                         .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
                 })
-                .ok_or_else(ReadError::invalid_path)?;
+                .ok_or_else(|| {
+                    // An index that is behind may not yet hold the problem
+                    // that would make this path one a list shows.
+                    let error = ReadError::invalid_path();
+                    if index.state == IndexState::Current {
+                        error
+                    } else {
+                        error.with_recovery(vec![refresh_action(repo)])
+                    }
+                })?;
             let file = match read_item_file(repo, &context.worktree, path)? {
                 ItemFileRead::Found(file) => file,
                 ItemFileRead::Missing => return Err(ReadError::new(ResultCode::PathNotFound)),
@@ -1118,7 +1148,6 @@ fn nonconforming_entries(
     for stored_problem in problems {
         if !CONFORMITY_PROBLEMS.contains(&stored_problem.code)
             || !stored_problem.path.starts_with(kind.path_prefix())
-            || !is_plain_relative(&stored_problem.path)
             || stored.iter().any(|item| {
                 item.context.worktree == stored_problem.context.worktree
                     && item.path == stored_problem.path
@@ -1156,8 +1185,13 @@ fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadError {
     if !refresh {
         return error;
     }
+    error.with_recovery(vec![refresh_action(repo)])
+}
+
+/// The recovery that refreshes this repository's index.
+fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
     let root = absolute_path_string(repo.root());
-    error.with_recovery(vec![root_action(REFRESH_INDEX_ACTION, root.as_deref())])
+    root_action(REFRESH_INDEX_ACTION, root.as_deref())
 }
 
 #[cfg(test)]

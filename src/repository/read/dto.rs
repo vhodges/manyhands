@@ -317,6 +317,10 @@ contract_enum!(
 /// latest first, and then ID. Nonconforming entries have no ID: among
 /// documents they sort by path with the rest, and among tickets they
 /// follow every ticket, ordered by path.
+///
+/// A list opens no file, so while a refresh is under way it may name an
+/// item worktree as the context of an item whose file there is gone, where
+/// a complete read of that item returns the primary copy.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ItemListDto {
     pub items: Vec<ItemDto>,

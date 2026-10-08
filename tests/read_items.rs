@@ -2059,13 +2059,12 @@ fn show_path_reads_only_canonical_item_paths() {
 fn show_path_follows_no_symbolic_link() {
     use std::os::unix::fs::symlink;
 
-    const SECRET: &str = "SENTINEL-outside-3c1d";
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
     let outside = tempfile::tempdir().unwrap();
-    let secret = format!("{}{SECRET}\n", document_source(DOCUMENT_B, "Outside", ""));
-    write(outside.path(), "secret.md", &secret);
-    write(outside.path(), "directory/inner.md", &secret);
+    let elsewhere = document_source(DOCUMENT_B, "Outside", "");
+    write(outside.path(), "secret.md", &elsewhere);
+    write(outside.path(), "directory/inner.md", &elsewhere);
     write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
     // A file that is a link out of the repository, a directory that is one,
     // a link to a file inside the repository, and a ticket directory that
@@ -2079,7 +2078,7 @@ fn show_path_follows_no_symbolic_link() {
         root.join(".manyhands/tickets").join(TICKET_A),
     )
     .unwrap();
-    write(outside.path(), "directory/ticket.md", &secret);
+    write(outside.path(), "directory/ticket.md", &elsewhere);
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
 
@@ -2108,13 +2107,12 @@ fn show_path_follows_no_symbolic_link() {
 fn show_item_does_not_follow_a_link_that_replaced_an_indexed_file() {
     use std::os::unix::fs::symlink;
 
-    const SECRET: &str = "SENTINEL-outside-77b0";
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
     let outside = tempfile::tempdir().unwrap();
-    // The same item, by ID, with a secret in its body.
-    let secret = format!("{}{SECRET}\n", document_source(DOCUMENT_A, "A", ""));
-    write(outside.path(), "secret.md", &secret);
+    // The same item, by ID, kept outside the repository.
+    let elsewhere = document_source(DOCUMENT_A, "A", "");
+    write(outside.path(), "secret.md", &elsewhere);
     let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
@@ -2343,12 +2341,11 @@ fn show_item_does_not_follow_a_link_that_replaced_an_item_worktree() {
 
 #[test]
 fn an_index_row_that_points_outside_the_repository_is_not_read_from() {
-    const SECRET: &str = "SENTINEL-outside-0a9e";
     let outside = tempfile::tempdir().unwrap();
     let outside_root = fs::canonicalize(outside.path()).unwrap();
-    let secret = format!("{}{SECRET}\n", document_source(DOCUMENT_A, "A", ""));
-    write(&outside_root, "docs/a.md", &secret);
-    write(&outside_root, "plain.md", &secret);
+    let elsewhere = document_source(DOCUMENT_A, "A", "");
+    write(&outside_root, "docs/a.md", &elsewhere);
+    write(&outside_root, "plain.md", &elsewhere);
     let show = |change: &dyn Fn(&Connection)| {
         let (fixture, enabled) = enabled();
         write(
@@ -2356,7 +2353,7 @@ fn an_index_row_that_points_outside_the_repository_is_not_read_from() {
             "docs/a.md",
             &document_source(DOCUMENT_A, "A", ""),
         );
-        write(&fixture.root, "plain.md", &secret);
+        write(&fixture.root, "plain.md", &elsewhere);
         refresh_completely(&enabled.service, &fixture.root);
         let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
         change(&index(enabled.data_directory.path()));
@@ -2431,10 +2428,17 @@ fn a_root_the_index_has_not_observed_is_read_by_path_as_unverified() {
     assert_git_transport_uninitialized();
 }
 
-/// Adds an item worktree's context to the index, holding `id` at `path`,
+/// Adds the context of item `worktree_id`'s worktree to the index, holding
+/// item `id` at `path`,
 /// as a refresh that stored that context and has not yet removed it leaves
 /// it. Nothing is created on disk.
-fn insert_item_worktree_row(data_directory: &Path, root: &str, id: &str, path: &str) {
+fn insert_item_worktree_row(
+    data_directory: &Path,
+    root: &str,
+    worktree_id: &str,
+    id: &str,
+    path: &str,
+) {
     let connection = index(data_directory);
     let repository_id: i64 = connection
         .query_row("SELECT id FROM repositories", [], |row| row.get(0))
@@ -2445,9 +2449,9 @@ fn insert_item_worktree_row(data_directory: &Path, root: &str, id: &str, path: &
              VALUES (?1, 'active', ?2, ?3, ?4)",
             rusqlite::params![
                 repository_id,
-                format!("manyhands/document/{id}"),
-                format!("{root}/.manyhands/worktrees/{id}"),
-                id
+                format!("manyhands/document/{worktree_id}"),
+                format!("{root}/.manyhands/worktrees/{worktree_id}"),
+                worktree_id
             ],
         )
         .unwrap();
@@ -2477,6 +2481,7 @@ fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_t
     insert_item_worktree_row(
         enabled.data_directory.path(),
         &root_text,
+        DOCUMENT_A,
         DOCUMENT_A,
         "docs/a.md",
     );
@@ -2547,11 +2552,56 @@ fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_t
     assert_git_transport_uninitialized();
 }
 
+/// Sets a path's permission bits and puts back what they were when
+/// dropped, so that a failing assertion leaves nothing unreadable behind.
+#[cfg(unix)]
+struct ModeGuard {
+    path: PathBuf,
+    mode: u32,
+}
+
+#[cfg(unix)]
+impl ModeGuard {
+    fn set(path: &Path, mode: u32) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let before = fs::metadata(path).unwrap().permissions().mode();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            path: path.to_owned(),
+            mode: before,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ModeGuard {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
+    }
+}
+
+/// Whether permission bits stop this user from reading. They do not for a
+/// user that may read anything, and then a test of a refusal has nothing
+/// to observe: it says so and stops.
+#[cfg(unix)]
+fn permissions_bind_or_skip(test: &str, probe: &Path) -> bool {
+    let _guard = ModeGuard::set(probe, 0o000);
+    let bind = fs::read(probe).is_err();
+    if !bind {
+        eprintln!(
+            "SKIPPED {test}: this user can read a file with mode 000, \
+             so no open can be refused here"
+        );
+    }
+    bind
+}
+
 #[cfg(unix)]
 #[test]
 fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (fixture, enabled) = enabled();
     let root = &fixture.root;
     let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
@@ -2559,9 +2609,6 @@ fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
     let directory = root.join("docs/sub");
-    let set_mode = |path: &Path, mode| {
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-    };
     let assert_inaccessible = |id: &str, path: &str| {
         for error in [
             enabled.service.show_item(&repo, &item_id(id)).unwrap_err(),
@@ -2578,34 +2625,272 @@ fn a_file_or_directory_that_may_not_be_opened_is_inaccessible() {
             );
         }
     };
-
-    set_mode(&file, 0o000);
-    if fs::read(&file).is_ok() {
-        // This user may open anything, so nothing here can be refused.
-        set_mode(&file, 0o644);
+    if !permissions_bind_or_skip(
+        "a_file_or_directory_that_may_not_be_opened_is_inaccessible",
+        &file,
+    ) {
         return;
     }
-    assert_inaccessible(DOCUMENT_A, "docs/a.md");
-    // A list reads no file and is what it was.
-    assert_eq!(
-        ids(&enabled.service.list_documents(&repo).unwrap()),
-        [Some(DOCUMENT_A), Some(DOCUMENT_B)]
-    );
-    set_mode(&file, 0o644);
+
+    {
+        let _unreadable = ModeGuard::set(&file, 0o000);
+        assert_inaccessible(DOCUMENT_A, "docs/a.md");
+        // A list reads no file and is what it was.
+        assert_eq!(
+            ids(&enabled.service.list_documents(&repo).unwrap()),
+            [Some(DOCUMENT_A), Some(DOCUMENT_B)]
+        );
+    }
     enabled
         .service
         .show_item(&repo, &item_id(DOCUMENT_A))
         .unwrap();
 
-    set_mode(&directory, 0o000);
-    assert_inaccessible(DOCUMENT_B, "docs/sub/b.md");
-    set_mode(&directory, 0o755);
+    {
+        let _unreadable = ModeGuard::set(&directory, 0o000);
+        assert_inaccessible(DOCUMENT_B, "docs/sub/b.md");
+    }
     enabled
         .service
         .show_item(&repo, &item_id(DOCUMENT_B))
         .unwrap();
     assert_git_transport_uninitialized();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_copy_in_the_items_worktree_that_cannot_be_read_is_not_hidden_behind_the_primary_copy() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let primary = write(root, "docs/a.md", &document_source(DOCUMENT_A, "Primary", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    insert_item_worktree_row(
+        enabled.data_directory.path(),
+        &root_string(&fixture),
+        DOCUMENT_A,
+        DOCUMENT_A,
+        "docs/a.md",
+    );
+    let worktree = root.join(".manyhands/worktrees").join(DOCUMENT_A);
+    let copy = write(
+        &worktree,
+        "docs/a.md",
+        &document_source(DOCUMENT_A, "Worktree", ""),
+    );
+    let show = || enabled.service.show_item(&repo, &item_id(DOCUMENT_A));
+    assert_eq!(show().unwrap().title.as_deref(), Some("Worktree"));
+    if !permissions_bind_or_skip(
+        "a_copy_in_the_items_worktree_that_cannot_be_read_is_not_hidden_behind_the_primary_copy",
+        &primary,
+    ) {
+        return;
+    }
+
+    for unreadable in [copy.as_path(), worktree.join("docs").as_path()] {
+        let _unreadable = ModeGuard::set(unreadable, 0o000);
+        let error = show().unwrap_err();
+        assert_eq!(
+            error.code(),
+            ResultCode::RepositoryInaccessible,
+            "{unreadable:?}"
+        );
+    }
+    assert_eq!(show().unwrap().title.as_deref(), Some("Worktree"));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_broken_row_for_the_items_worktree_fails_the_read_instead_of_falling_back() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "Primary", ""));
+    write(root, "plain.md", "not an item\n");
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // The worktree's row names a path no item can be at.
+    insert_item_worktree_row(
+        enabled.data_directory.path(),
+        &root_string(&fixture),
+        DOCUMENT_A,
+        DOCUMENT_A,
+        "plain.md",
+    );
+
+    let error = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::InternalError);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_copy_of_an_item_in_another_items_worktree_is_never_the_effective_one() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let primary = document_source(DOCUMENT_A, "Primary", "");
+    write(root, "docs/a.md", &primary);
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // Item B's worktree is there and holds a copy of item A, and the index
+    // has a row for that copy.
+    insert_item_worktree_row(
+        enabled.data_directory.path(),
+        &root_string(&fixture),
+        DOCUMENT_B,
+        DOCUMENT_A,
+        "docs/a.md",
+    );
+    let other = root.join(".manyhands/worktrees").join(DOCUMENT_B);
+    write(
+        &other,
+        "docs/a.md",
+        &document_source(DOCUMENT_A, "Other worktree", ""),
+    );
+
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let shown = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap();
+
+    assert_eq!(ids(&list), [Some(DOCUMENT_A)]);
+    assert_eq!(list.items[0].title.as_deref(), Some("Primary"));
+    assert_eq!(list.items[0].context.kind, ItemContextKind::Primary);
+    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(shown.context.kind, ItemContextKind::Primary);
+    assert_eq!(shown.source.as_deref(), Some(primary.as_str()));
+    assert_eq!(shown.index.state, IndexState::Stale);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_nonconforming_entry_whose_path_cannot_be_read_by_path_is_still_listed() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let connection = index(enabled.data_directory.path());
+    let (repository_id, context_id): (i64, i64) = connection
+        .query_row("SELECT repository_id, id FROM contexts", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    // A file name with a backslash in it, as a Unix checkout can hold.
+    let path = "docs/a\\b.md";
+    connection
+        .execute(
+            "INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at)
+             VALUES (?1, ?2, ?3, 'invalid-path', 'stored guidance', 1)",
+            rusqlite::params![repository_id, context_id, path],
+        )
+        .unwrap();
+    drop(connection);
+
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let error = enabled
+        .service
+        .show_path(&repo, None, Path::new(path))
+        .unwrap_err();
+
+    assert_eq!(paths(&list), [path]);
+    assert_eq!(codes(&list.items[0]), [ProblemCode::InvalidPath]);
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_path_with_a_nul_is_invalid_and_a_name_too_long_to_exist_is_not_found() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let show = |path: &str| {
+        enabled
+            .service
+            .show_path(&repo, None, Path::new(path))
+            .unwrap_err()
+            .code()
+    };
+
+    assert_eq!(show("docs/a\0b.md"), ResultCode::InvalidPath);
+    assert_eq!(show("docs/a.md\0"), ResultCode::InvalidPath);
+    assert_eq!(
+        show(&format!("docs/{}.md", "n".repeat(300))),
+        ResultCode::PathNotFound
+    );
+    assert_eq!(
+        show(&format!("docs/{}/a.md", "n".repeat(300))),
+        ResultCode::PathNotFound
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_socket_where_an_item_file_was_is_not_a_file() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let file = write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    fs::remove_file(&file).unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(&file).unwrap();
+
+    let by_id = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap_err();
+    let by_path = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/a.md"))
+        .unwrap_err();
+
+    assert_eq!(by_id.code(), ResultCode::ItemNotFound);
+    assert_eq!(by_path.code(), ResultCode::InvalidPath);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_well_formed_path_no_list_shows_suggests_a_refresh_when_the_index_is_behind() {
+    let never = never_refreshed_repository();
+    let root = &never.fixture.root;
+    write(root, ".manyhands/tickets/not-an-id/ticket.md", "---\n---\n");
+    let repo = never.service.resolve_repository(root).unwrap();
+    let show = || {
+        never.service.show_path(
+            &repo,
+            None,
+            Path::new(".manyhands/tickets/not-an-id/ticket.md"),
+        )
+    };
+
+    // The index has not seen the file, so no list shows it yet.
+    let error = show().unwrap_err();
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_eq!(
+        recovery(&error),
+        refresh_recovery(&root_string(&never.fixture))
+    );
+    // A path that is not written as one gets no such advice.
+    let malformed = never
+        .service
+        .show_path(&repo, None, Path::new("../ticket.md"))
+        .unwrap_err();
+    assert_eq!(recovery(&malformed), json!([]));
+
+    // Refreshed, the list shows it and it reads.
+    assert!(matches!(
+        refresh_as(&never.service, root, never.operation_id),
+        RefreshOutcome::Refreshed { .. }
+    ));
+    assert_eq!(show().unwrap().id, None);
+    assert_git_transport_uninitialized();
+}
+
 
 #[cfg(unix)]
 #[test]

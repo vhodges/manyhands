@@ -176,6 +176,7 @@ fn a_plain_relative_path_has_only_normal_components_outside_the_worktrees() {
         "docs/../a.md",
         "docs/..",
         "docs\\a.md",
+        "docs/a\0b.md",
         ".manyhands/worktrees",
         ".manyhands/worktrees/x/docs/a.md",
     ] {

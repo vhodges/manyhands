@@ -6017,8 +6017,9 @@ enum GuardedFile {
 /// file's type and modification time come from the descriptor that was
 /// opened, not from a second look at the path.
 ///
-/// A missing component is `Missing`. A component that is a symbolic link or
-/// not a directory, and a file that is a link or not a regular file, is
+/// A missing component, or one whose name is too long to exist, is
+/// `Missing`. A component that is a symbolic link or not a directory, and a
+/// file that is a link, a socket or otherwise not a regular file, is
 /// `NotAFile`. Every other failure, such as a file or directory this user
 /// may not open, is the error itself.
 #[cfg(unix)]
@@ -6038,8 +6039,13 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
     /// `None` for a failure that is not about what is at the path.
     fn absent(error: &Error) -> Option<GuardedFile> {
         match error.raw_os_error() {
-            Some(libc::ENOENT) => Some(GuardedFile::Missing),
-            Some(libc::ELOOP | libc::ENOTDIR) => Some(GuardedFile::NotAFile),
+            // A name too long to exist names nothing.
+            Some(libc::ENOENT | libc::ENAMETOOLONG) => Some(GuardedFile::Missing),
+            // A symbolic link is ELOOP, or EMLINK on some systems; a socket
+            // is ENXIO.
+            Some(libc::ELOOP | libc::EMLINK | libc::ENOTDIR | libc::ENXIO) => {
+                Some(GuardedFile::NotAFile)
+            }
             _ => None,
         }
     }
@@ -6055,15 +6061,23 @@ fn guarded_file(root: &Path, relative: &Path) -> std::io::Result<GuardedFile> {
         let component = name(component)?;
         let is_file = components.peek().is_none();
         let flags = if is_file {
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC
+            libc::O_RDONLY
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK
+                | libc::O_NOCTTY
+                | libc::O_CLOEXEC
         } else {
             directory_flags
         };
-        let next =
-            opened(unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) });
-        let mut next = match next {
-            Ok(next) => next,
-            Err(error) => return absent(&error).ok_or(error),
+        let mut next = loop {
+            let next =
+                opened(unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) });
+            match next {
+                Ok(next) => break next,
+                // Interrupted before anything was opened: ask again.
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => return absent(&error).ok_or(error),
+            }
         };
         if !is_file {
             directory = next;
