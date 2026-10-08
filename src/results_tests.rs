@@ -450,6 +450,25 @@ fn redact_url_removes_secrets_and_keeps_what_identifies_the_remote() {
 }
 
 #[test]
+fn redact_url_keeps_an_at_sign_after_the_authority_only_for_ssh() {
+    let kept = "ssh://git@host/team/repo@v2";
+    assert_eq!(redact_url(kept), kept);
+    assert_eq!(
+        redact_url("ssh://git:hunter2@host/team/repo@v2"),
+        "ssh://git@host/team/repo@v2"
+    );
+    assert_eq!(redact_url("ssh://host/team/repo@v2"), REDACTED);
+
+    for input in [
+        "https://bob@x:123/hunter2@host/repo",
+        "https://bob@host/team/repo@v2",
+        "git+ssh://git@host/team/repo@v2",
+    ] {
+        assert_eq!(redact_url(input), REDACTED, "{input}");
+    }
+}
+
+#[test]
 fn redact_url_never_returns_the_secret() {
     let inputs = [
         "ssh://git:hunter2@example.com/team/repo.git",
@@ -472,6 +491,8 @@ fn redact_url_never_returns_the_secret() {
         "https:/alice:hunter2@example.com/repo",
         "//alice:hunter2@example.com/repo",
         "alice@corp.com:hunter2@example.com:repo",
+        "https://bob@x:123/hunter2@host/repo",
+        "https://bob@x/repo?hunter2@host",
     ];
     for input in inputs {
         let redacted = redact_url(input);

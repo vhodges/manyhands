@@ -338,16 +338,18 @@ fn redact_scheme_url(scheme: &str, rest: &str) -> Option<String> {
         Some((user_info, host_port)) => (Some(user_info), host_port),
         None => (None, authority),
     };
-    // An `@` after an authority without user-info means a credential held an
-    // unescaped `/`, `?` or `#` and what was parsed as the host is part of it.
-    if (user_info.is_none() && remainder.contains('@')) || !is_host_port(host_port) {
+    // An `@` after the authority may mean a credential held an unescaped `/`,
+    // `?` or `#`, so that what was parsed as the host is part of it. Only an
+    // ssh URL that names its user is trusted to have an `@` in its path.
+    let is_ssh = scheme.eq_ignore_ascii_case("ssh");
+    if (remainder.contains('@') && !(is_ssh && user_info.is_some())) || !is_host_port(host_port) {
         return None;
     }
     let path = remainder
         .find(['?', '#'])
         .map_or(remainder, |end| &remainder[..end]);
 
-    let user = if scheme.eq_ignore_ascii_case("ssh") {
+    let user = if is_ssh {
         user_info.map(|user_info| {
             user_info
                 .split_once(':')
