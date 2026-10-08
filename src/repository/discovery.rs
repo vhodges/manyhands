@@ -87,6 +87,9 @@ pub(super) struct ObservedItem {
     pub(super) closed_at: Option<OffsetDateTime>,
     pub(super) closed_by: Option<String>,
     pub(super) unknown_metadata: UnknownMetadata,
+    /// A ticket's short code, parent and dependencies, and which of their
+    /// values were ignored. Empty for a document.
+    pub(super) relationships: canonical::TicketRelationships,
     pub(super) comments: Vec<ObservedCommentThread>,
     pub(super) activity_at: OffsetDateTime,
     pub(super) activity_source: super::DiscoveryActivitySource,
@@ -120,6 +123,16 @@ impl UnknownMetadata {
             values,
             not_representable,
         }
+    }
+
+    /// A ticket's, without the relationship keys: those are read as fields
+    /// of their own and are not unknown to Manyhands.
+    pub(super) fn from_ticket(ticket: &canonical::Ticket) -> Self {
+        let mut unknown = ticket.unknown.clone();
+        for key in canonical::RELATIONSHIP_KEYS {
+            unknown.remove(key);
+        }
+        Self::from_yaml(&unknown)
     }
 
     /// The text of the index column: one JSON object holding both fields.
@@ -480,6 +493,7 @@ fn observe_items(
                     None,
                     None,
                     UnknownMetadata::from_yaml(&document.unknown),
+                    canonical::TicketRelationships::default(),
                 )),
                 canonical::CanonicalItem::Ticket(ticket) if ticket.id == *id => Some((
                     AuthoringKind::Ticket,
@@ -490,7 +504,8 @@ fn observe_items(
                     ticket.team.clone(),
                     ticket.closed_at,
                     ticket.closed_by.clone(),
-                    UnknownMetadata::from_yaml(&ticket.unknown),
+                    UnknownMetadata::from_ticket(ticket),
+                    canonical::ticket_relationships(ticket),
                 )),
                 _ => None,
             })?;
@@ -526,6 +541,7 @@ fn observe_items(
                 closed_at: metadata.6,
                 closed_by: metadata.7,
                 unknown_metadata: metadata.8,
+                relationships: metadata.9,
                 comments,
                 activity_at,
                 activity_source,
@@ -1515,43 +1531,89 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
-    migrate_item_read_columns(connection)?;
+    migrate_item_read_schema(connection)?;
     super::recovery::migrate_operation_records(connection)
 }
 
 /// The columns the item reads need: who closed a ticket, an item's unknown
-/// front matter, and when a registration was last refreshed.
-const ITEM_READ_COLUMNS: [(&str, &str, &str); 3] = [
+/// front matter, when a registration was last refreshed, and a ticket's
+/// short code.
+const ITEM_READ_COLUMNS: [(&str, &str, &str); 4] = [
     ("discovered_items", "closed_by", "TEXT"),
     ("discovered_items", "unknown_metadata", "TEXT"),
     ("repositories", "refreshed_at", "INTEGER"),
+    ("discovered_items", "slug", "TEXT"),
 ];
 
-/// Adds the item read columns to an index that lacks them.
+/// The tables and indexes the relationship reads need, each by its kind and
+/// name in `sqlite_master` and the statement that creates it, in an order
+/// in which they can be created once the columns are there.
 ///
-/// Rows stored before a column existed hold nothing in it, so an index that
-/// gains one here is marked as needing a refresh for every registration: it
-/// then reports itself stale instead of reporting, say, that no ticket has
-/// unknown metadata.
+/// An edge is one `deps` entry or the `parent` of the ticket whose row it
+/// belongs to; `target_id` is the item ID the file names, whether or not
+/// the index holds that item. An item problem is a relationship value that
+/// was ignored; `detail` is the item ID it is about, or NULL, and never
+/// text from the file. Both go when their item row goes, and an item row
+/// goes when its context is replaced, so neither outlives nor precedes the
+/// items of a context.
+const ITEM_READ_OBJECTS: [(&str, &str, &str); 4] = [
+    (
+        "table",
+        "item_edges",
+        "CREATE TABLE item_edges (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('deps', 'parent')),
+            UNIQUE (item_id, target_id, kind)
+        )",
+    ),
+    (
+        "table",
+        "item_problems",
+        "CREATE TABLE item_problems (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            code TEXT NOT NULL,
+            detail TEXT
+        )",
+    ),
+    (
+        "index",
+        "discovered_items_slug",
+        "CREATE INDEX discovered_items_slug ON discovered_items(slug)",
+    ),
+    (
+        "index",
+        "item_problems_item_id_idx",
+        "CREATE INDEX item_problems_item_id_idx ON item_problems(item_id)",
+    ),
+];
+
+/// Adds the item read columns, tables and indexes to an index that lacks
+/// them.
 ///
-/// An index that already has the columns is only read, so opening it takes
-/// no write lock. One that lacks any is migrated in a transaction that takes
+/// Rows stored before a column or table existed hold nothing in it, so an
+/// index that gains one here is marked as needing a refresh for every
+/// registration: it then reports itself stale instead of reporting, say,
+/// that no ticket has unknown metadata or a dependency.
+///
+/// An index that already has them all is only read, so opening it takes no
+/// write lock. One that lacks any is migrated in a transaction that takes
 /// the write lock before it looks again: of two processes that open an old
-/// index at once, the second waits for the first, then finds the columns
+/// index at once, the second waits for the first, then finds everything
 /// there and adds nothing.
-fn migrate_item_read_columns(connection: &mut Connection) -> Result<(), RepositoryError> {
-    if missing_item_read_columns(connection)?.is_empty() {
+fn migrate_item_read_schema(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if missing_item_read_schema(connection)?.is_empty() {
         return Ok(());
     }
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    let missing = missing_item_read_columns(&transaction)?;
-    for (table, column, definition) in &missing {
+    let missing = missing_item_read_schema(&transaction)?;
+    for statement in &missing {
         transaction
-            .execute_batch(&format!(
-                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-            ))
+            .execute_batch(statement)
             .map_err(RepositoryError::sqlite)?;
     }
     if !missing.is_empty() {
@@ -1562,9 +1624,9 @@ fn migrate_item_read_columns(connection: &mut Connection) -> Result<(), Reposito
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
-fn missing_item_read_columns(
-    connection: &Connection,
-) -> Result<Vec<(&'static str, &'static str, &'static str)>, RepositoryError> {
+/// The statements that add what the index lacks, in the order to run them:
+/// the columns first, since an index is created on one of them.
+fn missing_item_read_schema(connection: &Connection) -> Result<Vec<String>, RepositoryError> {
     let mut missing = Vec::new();
     for (table, column, definition) in ITEM_READ_COLUMNS {
         let exists: bool = connection
@@ -1575,7 +1637,21 @@ fn missing_item_read_columns(
             )
             .map_err(RepositoryError::sqlite)?;
         if !exists {
-            missing.push((table, column, definition));
+            missing.push(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ));
+        }
+    }
+    for (kind, name, statement) in ITEM_READ_OBJECTS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push(statement.to_owned());
         }
     }
     Ok(missing)
@@ -1606,9 +1682,21 @@ mod tests {
             .unwrap()
     }
 
-    /// An index file from before the item read columns, with one
-    /// registration that needs no refresh.
-    fn index_without_item_read_columns(directory: &Path) -> std::path::PathBuf {
+    fn object_count(connection: &Connection, kind: &str, name: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    const ITEM_READ_ADDITIONS: usize = ITEM_READ_COLUMNS.len() + ITEM_READ_OBJECTS.len();
+
+    /// An index file from before the item read columns, tables and
+    /// indexes, with one registration that needs no refresh.
+    fn index_without_item_read_schema(directory: &Path) -> std::path::PathBuf {
         let path = directory.join("index.sqlite3");
         let mut connection = open_registry(&path, &mut |_| {}).unwrap();
         migrate_registry(&mut connection).unwrap();
@@ -1619,17 +1707,29 @@ mod tests {
                 [],
             )
             .unwrap();
+        // An index goes before the table or the column it is on.
+        for (kind, name, _) in ITEM_READ_OBJECTS.iter().rev() {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
         for (table, column, _) in ITEM_READ_COLUMNS {
             connection
                 .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
                 .unwrap();
         }
-        assert_eq!(missing_item_read_columns(&connection).unwrap().len(), 3);
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            ITEM_READ_ADDITIONS
+        );
         path
     }
 
-    fn assert_item_read_columns_once_and_marked(path: &Path) {
+    fn assert_item_read_schema_once_and_marked(path: &Path) {
         let connection = open_registry(path, &mut |_| {}).unwrap();
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
         for (table, column, _) in ITEM_READ_COLUMNS {
             assert_eq!(
                 column_names(&connection, table)
@@ -1649,12 +1749,12 @@ mod tests {
     }
 
     // Two processes migrating one old index: the other holds the write lock
-    // and has added one column when this one, which saw all three missing,
+    // and has added one column when this one, which saw everything missing,
     // asks for it.
     #[test]
     fn a_migration_waits_for_one_in_progress_and_adds_only_what_is_still_missing() {
         let directory = tempfile::tempdir().unwrap();
-        let path = index_without_item_read_columns(directory.path());
+        let path = index_without_item_read_schema(directory.path());
         let first = open_registry(&path, &mut |_| {}).unwrap();
         first
             .execute_batch(
@@ -1667,8 +1767,11 @@ mod tests {
             let path = path.clone();
             move || {
                 let mut connection = open_registry(&path, &mut |_| {}).unwrap();
-                assert_eq!(missing_item_read_columns(&connection).unwrap().len(), 3);
-                migrate_item_read_columns(&mut connection).map_err(|error| format!("{error:?}"))
+                assert_eq!(
+                    missing_item_read_schema(&connection).unwrap().len(),
+                    ITEM_READ_ADDITIONS
+                );
+                migrate_item_read_schema(&mut connection).map_err(|error| format!("{error:?}"))
             }
         });
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -1676,14 +1779,14 @@ mod tests {
         first.execute_batch("COMMIT").unwrap();
 
         second.join().unwrap().unwrap();
-        assert_item_read_columns_once_and_marked(&path);
+        assert_item_read_schema_once_and_marked(&path);
     }
 
     #[test]
     fn migrations_started_together_all_succeed() {
         for _ in 0..8 {
             let directory = tempfile::tempdir().unwrap();
-            let path = index_without_item_read_columns(directory.path());
+            let path = index_without_item_read_schema(directory.path());
             let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
             let migrations: Vec<_> = (0..4)
                 .map(|_| {
@@ -1691,7 +1794,7 @@ mod tests {
                     std::thread::spawn(move || {
                         let mut connection = open_registry(&path, &mut |_| {}).unwrap();
                         barrier.wait();
-                        migrate_item_read_columns(&mut connection)
+                        migrate_item_read_schema(&mut connection)
                             .map_err(|error| format!("{error:?}"))
                     })
                 })
@@ -1700,12 +1803,12 @@ mod tests {
             for migration in migrations {
                 migration.join().unwrap().unwrap();
             }
-            assert_item_read_columns_once_and_marked(&path);
+            assert_item_read_schema_once_and_marked(&path);
         }
     }
 
     #[test]
-    fn migrate_item_read_columns_takes_no_write_lock_on_an_up_to_date_index() {
+    fn migrate_item_read_schema_takes_no_write_lock_on_an_up_to_date_index() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("index.sqlite3");
         let mut holder = open_registry(&path, &mut |_| {}).unwrap();
@@ -1715,7 +1818,7 @@ mod tests {
         // Another writer would wait the whole busy timeout and then fail.
         let started = std::time::Instant::now();
 
-        migrate_item_read_columns(&mut connection).unwrap();
+        migrate_item_read_schema(&mut connection).unwrap();
 
         assert!(started.elapsed() < REGISTRY_BUSY_TIMEOUT / 2);
         // The lock really is held: a writer is refused. It need not wait
@@ -1753,6 +1856,9 @@ mod tests {
                 "{table}.{column}"
             );
         }
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
         assert_eq!(
             (
                 column_names(&connection, "discovered_items"),
@@ -1760,6 +1866,90 @@ mod tests {
             ),
             once
         );
+    }
+
+    // An index written when the item read columns existed and the
+    // relationship column, tables and indexes did not.
+    #[test]
+    fn an_index_from_before_relationships_gains_only_what_it_lacks_and_is_marked() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_schema(directory.path());
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;
+                 ALTER TABLE discovered_items ADD COLUMN unknown_metadata TEXT;
+                 ALTER TABLE repositories ADD COLUMN refreshed_at INTEGER;
+                 UPDATE repositories SET refreshed_at = 7;",
+            )
+            .unwrap();
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            1 + ITEM_READ_OBJECTS.len()
+        );
+
+        migrate_item_read_schema(&mut connection).unwrap();
+
+        assert!(missing_item_read_schema(&connection).unwrap().is_empty());
+        drop(connection);
+        assert_item_read_schema_once_and_marked(&path);
+        // What the index already held is kept.
+        let refreshed_at: i64 = open_registry(&path, &mut |_| {})
+            .unwrap()
+            .query_row("SELECT refreshed_at FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(refreshed_at, 7);
+    }
+
+    #[test]
+    fn edges_and_item_problems_go_with_their_item_and_reject_what_is_not_one() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO discovered_items
+                    (id, context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+                 VALUES (1, 1, 'A', 'ticket', 'p', 'T', 0, 'git');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'parent');
+                 INSERT INTO item_problems (item_id, code) VALUES (1, 'invalid-slug');",
+            )
+            .unwrap();
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+
+        for rejected in [
+            // The same edge twice, a kind that is not one, and an item row
+            // that does not exist.
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'C', 'related')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (2, 'C', 'deps')",
+            "INSERT INTO item_problems (item_id, code) VALUES (2, 'invalid-slug')",
+        ] {
+            assert!(connection.execute(rejected, []).is_err(), "{rejected}");
+        }
+        assert_eq!(count(&connection, "item_edges"), 2);
+
+        // Replacing a context is deleting it: its items, and with them
+        // their edges and problems, go in that one statement.
+        connection.execute("DELETE FROM contexts", []).unwrap();
+        assert_eq!(count(&connection, "discovered_items"), 0);
+        assert_eq!(count(&connection, "item_edges"), 0);
+        assert_eq!(count(&connection, "item_problems"), 0);
     }
 
     fn repository_on_main() -> (tempfile::TempDir, Repository) {

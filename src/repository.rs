@@ -5042,16 +5042,12 @@ fn persist_context(
     let context_id = transaction.last_insert_rowid();
     for item in observed.items {
         transaction.execute(
-            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source, closed_by, unknown_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source), item.closed_by, item.unknown_metadata.to_stored()],
+            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source, closed_by, unknown_metadata, slug) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source), item.closed_by, item.unknown_metadata.to_stored(), item.relationships.slug],
         ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-        persist_comments(
-            transaction,
-            transaction.last_insert_rowid(),
-            &item.comments,
-            None,
-            root,
-        )?;
+        let item_row = transaction.last_insert_rowid();
+        persist_relationships(transaction, item_row, &item.relationships, root)?;
+        persist_comments(transaction, item_row, &item.comments, None, root)?;
     }
     let observed_at = OffsetDateTime::now_utc().unix_timestamp();
     for problem in observed.problems {
@@ -5080,6 +5076,53 @@ fn persist_context(
     }
     for problem in observed.validation_problems {
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, problem.path.to_str(), validation_code_name(problem.code.clone()), problem.message, observed_at])
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    }
+    Ok(())
+}
+
+/// Stores a ticket's edges and its ignored relationship values under the
+/// item row just inserted for it, in that row's transaction.
+///
+/// Nothing is deleted here: the rows of an item's earlier observation went
+/// with that item row when its context was deleted to be replaced. An edge
+/// is stored whether or not the index holds its target; what it resolves
+/// to is decided when it is read.
+fn persist_relationships(
+    transaction: &rusqlite::Transaction<'_>,
+    item_row: i64,
+    relationships: &canonical::TicketRelationships,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RefreshRepository;
+    let edges = relationships
+        .parent
+        .iter()
+        .map(|parent| (parent, "parent"))
+        .chain(
+            relationships
+                .deps
+                .iter()
+                .map(|dependency| (dependency, "deps")),
+        );
+    for (target, kind) in edges {
+        transaction
+            .execute(
+                "INSERT INTO item_edges (item_id, target_id, kind) VALUES (?1, ?2, ?3)",
+                params![item_row, target.to_string(), kind],
+            )
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    }
+    for problem in &relationships.problems {
+        transaction
+            .execute(
+                "INSERT INTO item_problems (item_id, code, detail) VALUES (?1, ?2, ?3)",
+                params![
+                    item_row,
+                    relationship_problem_code_name(problem.code),
+                    problem.detail.as_ref().map(ToString::to_string)
+                ],
+            )
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
     Ok(())
@@ -5125,6 +5168,17 @@ fn activity_source_name(source: DiscoveryActivitySource) -> &'static str {
         DiscoveryActivitySource::UncommittedFilesystem => "filesystem",
     }
 }
+/// The code string the index stores for an ignored relationship value.
+fn relationship_problem_code_name(code: canonical::RelationshipProblemCode) -> &'static str {
+    match code {
+        canonical::RelationshipProblemCode::WrongType => "relationship-wrong-type",
+        canonical::RelationshipProblemCode::InvalidId => "relationship-invalid-id",
+        canonical::RelationshipProblemCode::SelfReference => "relationship-self-reference",
+        canonical::RelationshipProblemCode::DuplicateDependency => "duplicate-dependency",
+        canonical::RelationshipProblemCode::InvalidSlug => "invalid-slug",
+    }
+}
+
 fn validation_code_name(code: canonical::ValidationCode) -> &'static str {
     match code {
         canonical::ValidationCode::InvalidPath => "invalid-path",
