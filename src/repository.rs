@@ -4447,10 +4447,12 @@ fn persist_rebuild_observation(
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     persist_observation(&transaction, repository_id, observation, root)
         .map_err(|error| error.for_operation(operation, root))?;
+    // The observation is stored and the index is current: this statement
+    // says so, and records when, in the transaction that stores it.
     transaction
         .execute(
-            "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1",
-            [repository_id],
+            "UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1",
+            params![repository_id, OffsetDateTime::now_utc().unix_timestamp()],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
@@ -4856,7 +4858,11 @@ fn reconcile_disappeared_contexts(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0 WHERE id = ?1", [repository_id]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    // Every context is stored and the refresh is about to be recorded as
+    // completed: this statement clears the stale mark and records when, in
+    // that same transaction. A refresh that fails or must be retried never
+    // reaches it.
+    transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
     if !transition_indexing(&transaction, owner, "completed", None)
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
@@ -5014,8 +5020,8 @@ fn persist_context(
     let context_id = transaction.last_insert_rowid();
     for item in observed.items {
         transaction.execute(
-            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source)],
+            "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source, closed_by, unknown_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source), item.closed_by, item.unknown_metadata.to_stored()],
         ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
         persist_comments(
             transaction,

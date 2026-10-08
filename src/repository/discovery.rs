@@ -85,9 +85,134 @@ pub(super) struct ObservedItem {
     pub(super) project: Option<String>,
     pub(super) team: Option<String>,
     pub(super) closed_at: Option<OffsetDateTime>,
+    pub(super) closed_by: Option<String>,
+    pub(super) unknown_metadata: UnknownMetadata,
     pub(super) comments: Vec<ObservedCommentThread>,
     pub(super) activity_at: OffsetDateTime,
     pub(super) activity_source: super::DiscoveryActivitySource,
+}
+
+/// The front matter keys of an item that Manyhands does not define, as JSON.
+///
+/// `values` holds every key that is a string, in key order at every depth.
+/// A YAML value JSON cannot express is `null` there: a mapping with a key
+/// that is not a string, a tagged value, and a number that is not finite. A
+/// top-level key that is not a string cannot be a JSON key and is left out.
+/// `not_representable` says that at least one of those happened, since a
+/// `null` or an absent key alone cannot.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct UnknownMetadata {
+    pub(super) values: serde_json::Map<String, serde_json::Value>,
+    pub(super) not_representable: bool,
+}
+
+impl UnknownMetadata {
+    const VALUES: &'static str = "values";
+    const NOT_REPRESENTABLE: &'static str = "not_representable";
+
+    pub(super) fn from_yaml(unknown: &serde_yaml::Mapping) -> Self {
+        let mut not_representable = false;
+        let values = match yaml_mapping_to_json(unknown, &mut not_representable, true) {
+            serde_json::Value::Object(values) => values,
+            _ => serde_json::Map::new(),
+        };
+        Self {
+            values,
+            not_representable,
+        }
+    }
+
+    /// The text of the index column: one JSON object holding both fields.
+    pub(super) fn to_stored(&self) -> String {
+        let mut stored = serde_json::Map::new();
+        stored.insert(
+            Self::NOT_REPRESENTABLE.to_owned(),
+            self.not_representable.into(),
+        );
+        stored.insert(Self::VALUES.to_owned(), self.values.clone().into());
+        serde_json::Value::Object(stored).to_string()
+    }
+
+    /// Reads the column back, or `None` when it does not hold what
+    /// `to_stored` writes.
+    pub(super) fn from_stored(stored: &str) -> Option<Self> {
+        let serde_json::Value::Object(mut stored) = serde_json::from_str(stored).ok()? else {
+            return None;
+        };
+        let serde_json::Value::Object(values) = stored.remove(Self::VALUES)? else {
+            return None;
+        };
+        let not_representable = stored.remove(Self::NOT_REPRESENTABLE)?.as_bool()?;
+        stored.is_empty().then_some(Self {
+            values,
+            not_representable,
+        })
+    }
+}
+
+/// `value` as JSON, or `null` with `not_representable` set where it has no
+/// JSON form.
+fn yaml_to_json(value: &serde_yaml::Value, not_representable: &mut bool) -> serde_json::Value {
+    match value {
+        serde_yaml::Value::Null => serde_json::Value::Null,
+        serde_yaml::Value::Bool(value) => (*value).into(),
+        serde_yaml::Value::String(value) => value.as_str().into(),
+        serde_yaml::Value::Number(number) => {
+            let json = match (number.as_i64(), number.as_u64(), number.as_f64()) {
+                (Some(integer), _, _) => Some(integer.into()),
+                (None, Some(integer), _) => Some(integer.into()),
+                // `None` for a number that is not finite.
+                (None, None, Some(float)) => serde_json::Number::from_f64(float),
+                (None, None, None) => None,
+            };
+            json.map(serde_json::Value::Number).unwrap_or_else(|| {
+                *not_representable = true;
+                serde_json::Value::Null
+            })
+        }
+        serde_yaml::Value::Sequence(values) => values
+            .iter()
+            .map(|value| yaml_to_json(value, not_representable))
+            .collect(),
+        serde_yaml::Value::Mapping(mapping) => {
+            yaml_mapping_to_json(mapping, not_representable, false)
+        }
+        serde_yaml::Value::Tagged(_) => {
+            *not_representable = true;
+            serde_json::Value::Null
+        }
+    }
+}
+
+/// A YAML mapping as a JSON object with its keys in order. A key that is
+/// not a string makes a nested mapping `null`; at the top level, where the
+/// result must stay an object, that one key is left out instead.
+fn yaml_mapping_to_json(
+    mapping: &serde_yaml::Mapping,
+    not_representable: &mut bool,
+    top_level: bool,
+) -> serde_json::Value {
+    let mut entries = Vec::with_capacity(mapping.len());
+    for (key, value) in mapping {
+        match key.as_str() {
+            Some(key) => entries.push((key, value)),
+            None => {
+                *not_representable = true;
+                if !top_level {
+                    return serde_json::Value::Null;
+                }
+            }
+        }
+    }
+    // Inserted in key order, so the object is ordered whether or not
+    // `serde_json` keeps insertion order.
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    serde_json::Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), yaml_to_json(value, not_representable)))
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -353,6 +478,8 @@ fn observe_items(
                     None,
                     None,
                     None,
+                    None,
+                    UnknownMetadata::from_yaml(&document.unknown),
                 )),
                 canonical::CanonicalItem::Ticket(ticket) if ticket.id == *id => Some((
                     AuthoringKind::Ticket,
@@ -362,6 +489,8 @@ fn observe_items(
                     ticket.project.clone(),
                     ticket.team.clone(),
                     ticket.closed_at,
+                    ticket.closed_by.clone(),
+                    UnknownMetadata::from_yaml(&ticket.unknown),
                 )),
                 _ => None,
             })?;
@@ -395,6 +524,8 @@ fn observe_items(
                 project: metadata.4,
                 team: metadata.5,
                 closed_at: metadata.6,
+                closed_by: metadata.7,
+                unknown_metadata: metadata.8,
                 comments,
                 activity_at,
                 activity_source,
@@ -1380,11 +1511,86 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
         transaction.execute_batch("ALTER TABLE index_operations ADD COLUMN persisted_context_count INTEGER NOT NULL DEFAULT 0;")
             .map_err(RepositoryError::sqlite)?;
     }
+    migrate_item_read_columns(&transaction)?;
     super::keys::migrate_material_schema(&transaction)?;
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     super::recovery::migrate_operation_records(connection)
+}
+
+/// The columns the item reads need: who closed a ticket, an item's unknown
+/// front matter, and when a registration was last refreshed.
+const ITEM_READ_COLUMNS: [(&str, &str, &str); 3] = [
+    ("discovered_items", "closed_by", "TEXT"),
+    ("discovered_items", "unknown_metadata", "TEXT"),
+    ("repositories", "refreshed_at", "INTEGER"),
+];
+
+/// Adds the item read columns to an index that lacks them.
+///
+/// Rows stored before a column existed hold nothing in it, so an index that
+/// gains one here is marked as needing a refresh for every registration: it
+/// then reports itself stale instead of reporting, say, that no ticket has
+/// unknown metadata. An index that already has the columns is not touched.
+fn migrate_item_read_columns(connection: &Connection) -> Result<(), RepositoryError> {
+    let mut added = false;
+    for (table, column, definition) in ITEM_READ_COLUMNS {
+        if !column_exists(connection, table, column)? {
+            added |= add_column(connection, table, column, definition)?;
+        }
+    }
+    if added {
+        connection
+            .execute("UPDATE repositories SET refresh_required = 1", [])
+            .map_err(RepositoryError::sqlite)?;
+    }
+    Ok(())
+}
+
+fn column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            [table, column],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)
+}
+
+/// Adds `column` to `table` and reports whether this call added it.
+///
+/// Two processes that open an old index at once can both find the column
+/// missing and both try to add it. The one that loses is told the column is
+/// a duplicate, which is the state it wanted: that is `Ok(false)`, and the
+/// winner has already marked the registrations.
+fn add_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<bool, RepositoryError> {
+    let statement = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+    match connection.execute_batch(&statement) {
+        Ok(()) => Ok(true),
+        Err(error) if is_duplicate_column(&error) => Ok(false),
+        Err(error) => Err(RepositoryError::sqlite(error)),
+    }
+}
+
+/// SQLite has no result code for a duplicate column; its message is the
+/// only thing that tells this failure from any other.
+fn is_duplicate_column(error: &rusqlite::Error) -> bool {
+    let message = match error {
+        rusqlite::Error::SqliteFailure(_, Some(message)) => message,
+        rusqlite::Error::SqlInputError { msg, .. } => msg,
+        _ => return false,
+    };
+    message.starts_with("duplicate column name")
 }
 
 #[cfg(test)]
@@ -1401,6 +1607,74 @@ mod tests {
         canonical,
         repository::{DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
     };
+
+    fn column_names(connection: &Connection, table: &str) -> Vec<String> {
+        connection
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .unwrap()
+            .query_map([table], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    // Two processes migrating one old index: this one found the column
+    // missing, and the other added it before this one's ALTER ran.
+    #[test]
+    fn adding_a_column_another_process_just_added_succeeds_without_adding_it() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE discovered_items (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        assert!(!column_exists(&connection, "discovered_items", "closed_by").unwrap());
+        connection
+            .execute_batch("ALTER TABLE discovered_items ADD COLUMN closed_by TEXT")
+            .unwrap();
+
+        assert!(!add_column(&connection, "discovered_items", "closed_by", "TEXT").unwrap());
+
+        assert!(column_exists(&connection, "discovered_items", "closed_by").unwrap());
+        assert_eq!(
+            column_names(&connection, "discovered_items"),
+            ["id", "closed_by"]
+        );
+        // A column that is really added says so, and any other failure is
+        // still a failure.
+        assert!(add_column(&connection, "discovered_items", "unknown_metadata", "TEXT").unwrap());
+        assert!(add_column(&connection, "absent_table", "closed_by", "TEXT").is_err());
+        assert!(add_column(&connection, "discovered_items", "other", "TEXT PRIMARY KEY").is_err());
+        assert!(!column_exists(&connection, "discovered_items", "other").unwrap());
+    }
+
+    #[test]
+    fn migrating_twice_adds_each_item_read_column_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+        let once = (
+            column_names(&connection, "discovered_items"),
+            column_names(&connection, "repositories"),
+        );
+        migrate_registry(&mut connection).unwrap();
+
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        assert_eq!(
+            (
+                column_names(&connection, "discovered_items"),
+                column_names(&connection, "repositories"),
+            ),
+            once
+        );
+    }
 
     fn repository_on_main() -> (tempfile::TempDir, Repository) {
         let directory = tempfile::tempdir().unwrap();
