@@ -2941,6 +2941,11 @@ pub(super) fn observe_resolution_checkpoint(
     )
     .map_err(|_| recovery_required())?;
     tx.execute("UPDATE remote_integration_steps SET phase='applied',result_oid=?2,observed_tree_oid=?3 WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1) AND phase='commit_prepared'",params![attempt_id,checkpoint_oid.to_string(),observed_tree_oid.to_string()]).map_err(|_| recovery_required())?;
+    tx.execute(
+        "UPDATE repositories SET refresh_required=1 WHERE id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
+        [record.id],
+    )
+    .map_err(|_| recovery_required())?;
     Ok(())
 }
 

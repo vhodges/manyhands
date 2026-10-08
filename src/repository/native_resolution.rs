@@ -6,6 +6,9 @@
 //! and ref/log barriers; packed/alternate object storage still depends on the
 //! backend's existing fsync policy. These helpers never change Git config.
 
+#[cfg(test)]
+mod windows_path;
+
 use std::{
     ffi::CString,
     fs::File,

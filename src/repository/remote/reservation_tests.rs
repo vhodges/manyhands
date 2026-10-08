@@ -6,8 +6,15 @@ use crate::repository::{
 use rusqlite::Connection;
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
-    let data = tempfile::tempdir().unwrap();
-    let root = tempfile::tempdir().unwrap();
+    fixture_in(&std::env::temp_dir())
+}
+
+fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    // Match canonical registry lookups, including Windows verbatim prefixes and
+    // macOS /var aliases, before creating either fixture directory.
+    let parent = parent.canonicalize().unwrap();
+    let data = tempfile::tempdir_in(&parent).unwrap();
+    let root = tempfile::tempdir_in(&parent).unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
         "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
@@ -51,6 +58,30 @@ fn publish(service: &RepositoryService, root: &Path, token: &RemoteReservation) 
         commit_observation_batch(service, root, token, &plan(), &[observation()], 123).unwrap(),
         RemoteSafePointOutcome::Continue
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn reservation_fixture_symlink_parent_reserves_and_reads_registered_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().canonicalize().unwrap();
+    let real = parent.join("real");
+    let alias = parent.join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let (data, root, service) = fixture_in(&alias);
+
+    let token = reserve(&service, root.path());
+    assert_eq!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap()
+            .operation_id(),
+        token.operation_id()
+    );
+    assert_eq!(data.path(), data.path().canonicalize().unwrap());
+    assert_eq!(root.path(), root.path().canonicalize().unwrap());
 }
 
 // Catches committing a partial observation/deletion batch on a per-ref SQL fault.
@@ -1240,6 +1271,17 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             tree,
         )
         .unwrap();
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                checkpoint
+            )
+            .is_err(),
+        "metadata/sentinel retirement must precede release"
+    );
     other
         .advance_synchronization_index_artifact(
             root.path(),
@@ -1303,6 +1345,71 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             .unwrap(),
         "applied"
     );
+    assert!(
+        connection
+            .query_row("SELECT refresh_required FROM repositories", [], |row| row
+                .get::<_, bool>(
+                0
+            ))
+            .unwrap()
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                checkpoint
+            )
+            .is_err(),
+        "stale owner is fenced"
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &reacquired,
+                OperationId::new(),
+                checkpoint
+            )
+            .is_err(),
+        "only the bound attempt can release ownership"
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(root.path(), &reacquired, attempt.attempt_id, tree)
+            .is_err(),
+        "only the exact checkpoint can release ownership"
+    );
+    let before = state::with_transaction(&other, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    other
+        .finalize_synchronization_resolution(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+        )
+        .unwrap();
+    assert!(
+        other
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+    let after = state::with_transaction(&other, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(after.phase, RemoteOperationPhase::Interrupted);
+    assert!(after.reconciliation_required);
+    assert_eq!(after.sync_evidence, before.sync_evidence);
+    assert_eq!(after.sync_checkpoint, before.sync_checkpoint);
+    assert!(after.authority.is_none());
 }
 
 #[test]
