@@ -59,6 +59,18 @@ fn orphan_remote_rows_require_recovery_during_automatic_startup_audit() {
     assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
 }
 
+fn legacy_preflight_schema() -> String {
+    MERGE_EVIDENCE_SCHEMA
+        .replace(
+            "            preflight_digest BLOB NOT NULL CHECK(typeof(preflight_digest)='blob' AND length(preflight_digest)=32),\n",
+            "",
+        )
+        .replace(
+            "observation_digest,input_digest,preflight_digest,identity_confirmation_id",
+            "observation_digest,input_digest,identity_confirmation_id",
+        )
+}
+
 fn plan() -> RemoteRefPlan {
     RemoteRefPlan::from_configuration("origin", "main").unwrap()
 }
@@ -802,6 +814,76 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
     transaction.commit().unwrap();
     assert!(
         matches!(reopened.reserve_remote_operation(root.path(), operation_id, &target).unwrap(), super::super::reservation::RemoteReservationOutcome::Replay(record) if record.index_pending())
+    );
+}
+
+#[test]
+fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populated_attempts() {
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .unwrap();
+    connection
+        .execute_batch(&legacy_preflight_schema())
+        .unwrap();
+    drop(connection);
+    // Empty legacy evidence has no unobserved attempt to preserve, so it is
+    // rebuilt with the immutable preflight column.
+    let _reopened = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert!(
+        connection
+            .prepare("PRAGMA table_info(remote_resolution_attempts)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .any(|column| column == "preflight_digest")
+    );
+
+    let (data, root, service) = fixture();
+    let operation = crate::repository::OperationId::new();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan());
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            operation,
+            &target,
+            RemoteOperationPriority::Manual,
+            123,
+        )
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let (operation_id, generation): (i64, i64) = connection
+        .query_row(
+            "SELECT id,configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .unwrap();
+    connection
+        .execute_batch(&legacy_preflight_schema())
+        .unwrap();
+    connection.execute(
+        "INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(?1,?2,0,0,'primary',?3,?4,?5,zeroblob(32),zeroblob(32),'conflict_pending')",
+        params![operation_id,generation,ADVERTISED,TRACKING,ADVERTISED],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,identity_confirmation_id,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),NULL,'prepared')",
+        params![crate::repository::OperationId::new().to_string(),operation_id,generation],
+    ).unwrap();
+    drop(connection);
+    // A populated old attempt has no authentic preflight observation and must
+    // fail closed rather than receive a manufactured digest.
+    assert!(
+        matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
     );
 }
 

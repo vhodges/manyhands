@@ -86,7 +86,7 @@ pub struct ConflictObservation {
 
 impl ConflictObservation {
     #[cfg(test)]
-    fn for_testing(value: [u8; 32]) -> Self {
+    pub(super) fn for_testing(value: [u8; 32]) -> Self {
         Self {
             operation_id: OperationId::new(),
             ordinal: 0,
@@ -186,7 +186,7 @@ pub(super) fn conflict_eligibility(entries: &[ConflictCandidate]) -> ConflictEli
 pub struct RedactedConflictBytes(Vec<u8>);
 
 impl RedactedConflictBytes {
-    pub(super) fn from_bytes(bytes: Vec<u8>) -> Self {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
 
@@ -245,15 +245,36 @@ pub(super) fn commit_identity_boundary(
 /// The only mutation request shape available to the later owned-resolution
 /// writer.  Results remain opaque in diagnostics; no raw repository path, ref,
 /// OID, or force authority is caller input.
-#[allow(dead_code)] // The request is consumed by the Task 4 writer.
+/// Explicit, observation-bound canonical conflict resolution. Paths can only
+/// be supplied through tokens issued by `inspect_synchronization_recovery`.
 #[derive(Clone)]
-pub(super) struct ResolveSynchronizationRequest {
+pub struct ResolveSynchronizationRequest {
     pub root: std::path::PathBuf,
     pub synchronization_id: OperationId,
     pub attempt_id: OperationId,
-    observation: ConflictObservation,
-    resolutions: Vec<(ConflictPathToken, RedactedConflictBytes)>,
+    pub(super) observation: ConflictObservation,
+    pub(super) resolutions: Vec<(ConflictPathToken, RedactedConflictBytes)>,
     pub identity: Option<ConfirmedCommitIdentity>,
+}
+
+impl ResolveSynchronizationRequest {
+    pub fn new(
+        root: std::path::PathBuf,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+        observation: ConflictObservation,
+        resolutions: Vec<(ConflictPathToken, RedactedConflictBytes)>,
+        identity: Option<ConfirmedCommitIdentity>,
+    ) -> Self {
+        Self {
+            root,
+            synchronization_id,
+            attempt_id,
+            observation,
+            resolutions,
+            identity,
+        }
+    }
 }
 
 impl fmt::Debug for ResolveSynchronizationRequest {
@@ -270,10 +291,10 @@ impl fmt::Debug for ResolveSynchronizationRequest {
     }
 }
 
-#[allow(dead_code)] // Outcomes are returned by the Task 4 writer.
+/// Local-only result of an explicit synchronization conflict resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ResolveSynchronizationOutcome {
-    LocalCheckpointComplete,
+pub enum ResolveSynchronizationOutcome {
+    LocalCheckpointComplete { commit_oid: Oid },
     IdentityRequired,
     StaleObservation,
     ValidationFailed,

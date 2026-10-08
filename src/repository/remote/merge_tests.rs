@@ -158,14 +158,15 @@ fn eligibility_requires_the_entire_conflict_set_to_be_canonical_regular_utf8() {
 #[test]
 fn redacted_recovery_contracts_never_format_caller_bytes_or_identity() {
     let secret = b"private resolution body";
-    let request = ResolveSynchronizationRequest {
-        root: PathBuf::from("/repository"),
-        synchronization_id: OperationId::new(),
-        attempt_id: OperationId::new(),
-        observation: ConflictObservation::for_testing([7; 32]),
-        resolutions: vec![(
+    let observation = ConflictObservation::for_testing([7; 32]);
+    let request = ResolveSynchronizationRequest::new(
+        PathBuf::from("/repository"),
+        OperationId::new(),
+        OperationId::new(),
+        observation.clone(),
+        vec![(
             super::ConflictPathToken {
-                observation: ConflictObservation::for_testing([7; 32]),
+                observation,
                 ordinal: 0,
                 path: b"private-path".to_vec(),
                 base: None,
@@ -177,8 +178,8 @@ fn redacted_recovery_contracts_never_format_caller_bytes_or_identity() {
             },
             RedactedConflictBytes::new(secret.to_vec()),
         )],
-        identity: None,
-    };
+        None,
+    );
     let formatted = format!("{request:?}");
     assert!(!formatted.contains("private resolution body"));
     assert!(formatted.contains("redacted"));
