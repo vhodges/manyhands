@@ -87,7 +87,8 @@ this ledger, ticket comments and checkpoint commits of bookkeeping.
 
 - Baseline: passed at `6346caa` (evidence below).
 - Task 1: complete; review accepted with fixes, range `2824eff..ae757b0`.
-- Tasks 2–10: pending.
+- Task 2: complete; review accepted with fixes, range `c553744..df02e79`.
+- Tasks 3–10: pending.
 
 ## Decisions and rulings
 
@@ -115,6 +116,48 @@ Task 1:
 Known and accepted: an SSH URL whose user position holds a token, or whose
 user is percent-encoded `user:password`, is kept as written, because SSH user
 names are configuration by the approved design.
+
+Task 2:
+
+- **Schema composition.** One envelope schema with `data` open, plus one
+  schema per DTO that the harness checks separately. A consumer has no
+  single-file schema per command. Cost if wrong: generate per-command schemas
+  from these files.
+- **Schemas are closed.** A lint requires `additionalProperties: false` and
+  `required` equal to the property keys on every object, except the envelope's
+  `data` and a recovery action's `arguments`. The checker accepts and ignores
+  `$schema`, `$id`, `title` and `description`; every published schema carries
+  `$schema` and a `title`.
+- **Error mapping.** `RepositoryNotEnabled` maps to
+  `repository_not_registered`. `SharedKeyRegistryUnavailable`, the key-material
+  `RegistryUnavailable` and every `SshTransportErrorKind` map to
+  `internal_error`. A SQLite failure maps the same way raw or wrapped: busy or
+  locked to `busy`; cannot-open, corrupt or not-a-database to
+  `index_unavailable`.
+- **No blanket validation conversion.** Caller input uses
+  `ReadError::invalid_id()` and `invalid_path()`; content problems become
+  `ProblemDto`s.
+- **Scope comes from the resolved target**, never from
+  `RepositoryError.root`, which is the data directory.
+- **Recovery action names are dotted**, as in the RFC's `operation.resume`:
+  `index.rebuild`. Task 3 gives it the repository root as an argument.
+- **The session is query-only and forbids attached databases.** A read cannot
+  use temporary tables. rusqlite's `limits` feature is enabled for this; it is
+  a feature of an existing dependency and `Cargo.lock` is unchanged. No
+  `unsafe` is permitted under `src/repository/read/`.
+- **`read_session` fails on a degraded index**, and takes the lock before
+  checking availability. Task 7's index status read checks availability itself
+  without a session.
+- **One `RepositoryOperation::Read` variant** for all reads.
+- **`ReadError::code` is private** behind `code()`; a `ReadError` cannot carry
+  `ok`. Its kept source can hold backend text and the data directory, so a
+  front end must not print error chains.
+- **Golden fixtures.** Placeholders replace a whole value or a path prefix
+  only; update mode refuses to run when `CI` is set; every fixture file must
+  be a registered case.
+- **Correction to the plan.** "Review Focus" item 1 cites a
+  read-only-directory test. The design dropped that test, and a read-only data
+  directory does fail a read. The lock tests are the proof.
 
 ## Verification and review
 
@@ -151,3 +194,19 @@ added to `tests/discovery_rebuild.rs`, which ran in this suite.
   `ae757b0`).
 - Not run for this task: the full suite. Windows path behavior is reasoned,
   not executed.
+
+### Task 2 — read module and contract harness, range `c553744..df02e79`
+
+- `b243959` implementation; `ca3219f` review fixes; `df02e79` replaces an
+  `unsafe` call with rusqlite's `limits` feature.
+- Independent review of `b243959`: accept with fixes. Four should-fix findings
+  and eight minor ones, all addressed in `ca3219f`.
+- `ca3219f` and `df02e79` were not independently re-reviewed.
+- Controller rerun at `df02e79`: `cargo test --locked --lib` 205 passed;
+  `--test read_contract` 19 passed; `--test read_boundary` 12 passed. No
+  `unsafe` under `src/repository/read/`.
+- Implementer at `df02e79`: `cargo test --locked --doc` 9 passed;
+  `cargo fmt --check`, clippy with warnings denied over all targets and
+  features, and `cargo check --all-features --locked` pass.
+- Not run for this task: the full suite.
+- Tests were written alongside the code, not strictly first.
