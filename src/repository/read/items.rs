@@ -593,14 +593,10 @@ pub(super) fn stored_items(
             // refresh, so the list that carries this says it is behind.
             unknown: match unknown {
                 Some(stored) => {
-                    // A column that does not read back is not worth every
-                    // read of the registration: the item keeps its row,
-                    // with no metadata and the problem that says so.
+                    // A refresh writes only what reads back, nesting
+                    // included, so anything else is an invalid row.
                     let mut unknown =
-                        UnknownMetadata::from_stored(&stored).unwrap_or(UnknownMetadata {
-                            values: serde_json::Map::new(),
-                            not_representable: true,
-                        });
+                        UnknownMetadata::from_stored(&stored).ok_or_else(invalid_stored_data)?;
                     // An index written before a ticket's relationship keys
                     // were fields of their own stored them here.
                     if kind == ItemDtoKind::Ticket {

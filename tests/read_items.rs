@@ -4395,7 +4395,7 @@ fn unknown_metadata_nested_past_a_fixed_depth_is_null_and_always_reads_back() {
 }
 
 #[test]
-fn stored_unknown_metadata_that_cannot_be_read_back_is_empty_and_reported() {
+fn stored_unknown_metadata_that_is_not_what_a_refresh_writes_is_an_invalid_row() {
     let deeper_than_json_reads = format!(
         r#"{{"not_representable":false,"values":{{"deep":{}1{}}}}}"#,
         "[".repeat(200),
@@ -4409,10 +4409,9 @@ fn stored_unknown_metadata_that_cannot_be_read_back_is_empty_and_reported() {
     ] {
         let (fixture, enabled) = enabled();
         let root = &fixture.root;
-        let path = ticket_path(TICKET_A);
         write(
             root,
-            &path,
+            &ticket_path(TICKET_A),
             &ticket_source(TICKET_A, "Tampered", "extra: kept\n"),
         );
         write(
@@ -4429,51 +4428,27 @@ fn stored_unknown_metadata_that_cannot_be_read_back_is_empty_and_reported() {
             )
             .unwrap();
 
-        let list = enabled
-            .service
-            .list_tickets(&repo, &TicketFilter::default())
-            .unwrap_or_else(|error| panic!("{stored}: {error:?}"));
-        let item = |id: &str| {
-            list.items
-                .iter()
-                .find(|item| item.id.as_deref() == Some(id))
-                .unwrap()
-        };
-
-        assert!(item(TICKET_A).unknown_metadata.is_empty(), "{stored}");
-        assert_eq!(
-            codes(item(TICKET_A)),
-            [ProblemCode::MetadataNotRepresentable],
-            "{stored}"
-        );
-        assert_eq!(
-            item(TICKET_A).problems[0].path.as_deref(),
-            Some(path.as_str())
-        );
-        // The rest of the row is still what the index stored.
-        assert_eq!(item(TICKET_A).title.as_deref(), Some("Tampered"));
-        assert_eq!(
-            Value::Object(item(TICKET_B).unknown_metadata.clone()),
-            json!({"extra": "kept"})
-        );
-        assert!(item(TICKET_B).problems.is_empty());
-        // The complete read answers from the file, and says the index
-        // does not hold what the file does.
-        let shown = enabled
-            .service
-            .show_item(&repo, &item_id(TICKET_A))
-            .unwrap_or_else(|error| panic!("{stored}: {error:?}"));
-        assert_eq!(
-            Value::Object(shown.unknown_metadata),
-            json!({"extra": "kept"})
-        );
-        assert!(shown.problems.is_empty());
-        assert_eq!(shown.index.state, IndexState::Stale);
-        enabled
-            .service
-            .show_item(&repo, &item_id(TICKET_B))
-            .unwrap();
-        enabled.service.ticket_cycles(&repo).unwrap();
+        // No refresh writes this, so the row is not one a read answers
+        // from, and the file is not blamed for it.
+        let codes = [
+            enabled
+                .service
+                .list_tickets(&repo, &TicketFilter::default())
+                .unwrap_err()
+                .code(),
+            enabled
+                .service
+                .show_item(&repo, &item_id(TICKET_A))
+                .unwrap_err()
+                .code(),
+            enabled
+                .service
+                .show_item(&repo, &item_id(TICKET_B))
+                .unwrap_err()
+                .code(),
+            enabled.service.ticket_cycles(&repo).unwrap_err().code(),
+        ];
+        assert_eq!(codes, [ResultCode::InternalError; 4], "{stored}");
     }
     assert_git_transport_uninitialized();
 }
