@@ -12,8 +12,8 @@ use std::{
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, IndexStatusState, LeaseKind, ReadError, RepositoryService,
-        ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
+        ClosureFilter, DependencyDirection, IndexStatusState, LeaseKind, ReadError,
+        RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
     },
     results::{Outcome, ResultCode},
 };
@@ -488,7 +488,18 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
     items::write(
         root,
         &items::ticket_path(items::TICKET_A),
-        &items::ticket_source(items::TICKET_A, "A", items::CLOSURE),
+        &items::ticket_source(
+            items::TICKET_A,
+            "A",
+            // Closed, with a short code, and a parent and a dependency that
+            // no context holds.
+            &format!(
+                "{}slug: mh-vh-k9x2b\nparent: {}\ndeps: [{}]\n",
+                items::CLOSURE,
+                items::TICKET_C,
+                items::TICKET_C
+            ),
+        ),
     );
     items::commit(
         &fixture,
@@ -537,8 +548,8 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
     (fixture, enabled)
 }
 
-/// Every item and comment read, with inputs that succeed and inputs that
-/// fail. Returns the outcome of each, in order: success, or the code it
+/// Every item, comment and ticket relationship read, with inputs that
+/// succeed and inputs that fail. Returns the outcome of each, in order: success, or the code it
 /// failed with.
 fn every_item_read(
     service: &RepositoryService,
@@ -626,6 +637,50 @@ fn every_item_read(
         ),
         outcome(
             service
+                .ticket_readiness(repo, &TicketFilter::default())
+                .map(drop),
+        ),
+        outcome(
+            service
+                .ticket_dependencies(
+                    repo,
+                    &items::item_id(items::TICKET_A),
+                    DependencyDirection::Both,
+                    None,
+                )
+                .map(drop),
+        ),
+        // A document is no ticket.
+        outcome(
+            service
+                .ticket_dependencies(
+                    repo,
+                    &items::item_id(items::DOCUMENT_A),
+                    DependencyDirection::Down,
+                    Some(1),
+                )
+                .map(drop),
+        ),
+        outcome(
+            service
+                .ticket_children(repo, &items::item_id(items::TICKET_A))
+                .map(drop),
+        ),
+        outcome(
+            service
+                .ticket_children(repo, &items::item_id(items::TICKET_B))
+                .map(drop),
+        ),
+        outcome(service.ticket_cycles(repo).map(drop)),
+        outcome(
+            service
+                .ticket_plan(repo, &TicketFilter::default())
+                .map(drop),
+        ),
+        outcome(service.ticket_critical_path(repo).map(drop)),
+        outcome(service.find_tickets_by_slug(repo, "mh-vh-k9x2b").map(drop)),
+        outcome(
+            service
                 .show_path(repo, None, path("../outside.md"))
                 .map(drop),
         ),
@@ -662,6 +717,15 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
             Ok(()),
             Ok(()),
             Err(ResultCode::ItemNotFound),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::ItemNotFound),
+            Ok(()),
+            Err(ResultCode::ItemNotFound),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
             Err(ResultCode::InvalidPath),
         ]
     );
