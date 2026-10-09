@@ -25,6 +25,15 @@ After A Rejection", on that ticket's branch, hold the detail. The product
 owner asked for this ticket on 2026-10-08. F2's Part B depends on it; Part A
 does not.
 
+## On Hold
+
+The product owner decided on 2026-10-09 to wait for Wave 02 Cycle 06
+(`01K7F6H9J2N4Q6S8V0X2Z4B6DE`) to land before fixing this. When it has:
+rebase this branch, rerun `tests/journal_rejection.rs`, add tests for the
+return sites that Cycle adds in `enable` and the saves, and check whether
+it settled the synchronization case (case 3 below). The shape of the fix is
+still undecided.
+
 ## Reproduction
 
 Reproduced on 2026-10-09 at main `6cf5d7f` by `tests/journal_rejection.rs`.
