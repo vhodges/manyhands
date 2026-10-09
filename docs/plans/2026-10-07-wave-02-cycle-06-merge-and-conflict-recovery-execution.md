@@ -1571,6 +1571,26 @@ Independent spec `ses_ee0f548eeffe2RG2d90OSqLbA5` and quality
 native CI. This fixes the integration gate, not Task 5 implementation. Task 4
 acceptance/evidence is preserved; Task 5 code waits for the new combined-base run.
 
+Published the approved Windows-read correction as b1d39b856a864f39136a8e7cd7dba49cb98119c2
+without local Rust verification; combined F1/Task-4 matrix:
+https://github.com/vhodges/manyhands/actions/runs/37887084202
+Inspect exact-source native results before Task 5 code.
+
+### Combined-base run 2: final F1 repository fixture — 2026-10-09
+
+Run 37887084202 passes both Linux and macOS jobs; Windows advances past item reads
+and has one repository fixture failure (26 pass/1 fail): unlisted ghost expected
+NotRepository but malformed native gitdir text made libgit2 identify '.', returning
+NotRepositoryRoot before owner-list checks. Worker
+`ses_ee0dc30b2ffeThSMruVrsCOBy6` changes only read_repository.rs test metadata
+encoding and parser/physical-directory attestation, preserving strict selected
+scope/empty-recovery classification, listed/primary/subdirectory controls and
+repository/Git/ghost snapshots. Production resolver unchanged.
+Spec `ses_ee0d69641ffeLpEAHWPapNAX2o` and quality
+`ses_ee0d5755bffewy14GHTyTi77VN` approve the bounded fixture diff conditionally on
+native CI. No local Rust command; new tests are source-written, unrun. Publish and
+inspect exact-source combined gate before Task 5 code.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy

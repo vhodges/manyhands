@@ -16,6 +16,12 @@ with an identical reviewed tree through non-force reconciliation. Integrated run
 https://github.com/vhodges/manyhands/actions/runs/37882898787
 Next inspect this exact-source F1/Task-4 union matrix before new Task 5 code.
 
+Integrated run 37882898787 passes Linux/Mac and reveals three F1 Windows read
+classification/diagnostic expectations. Bounded source-written fixes and read-only
+spec/quality reviews approve b1d39b8; no local Rust jobs. Current integrated run:
+https://github.com/vhodges/manyhands/actions/runs/37887084202
+Inspect this exact combined-base gate before Task 5 implementation.
+
 Accepted source: a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. Native run
 https://github.com/vhodges/manyhands/actions/runs/37877620596
 completed SUCCESS on all five targets (Linux x86-64/ARM64, Windows x86-64/ARM64,
