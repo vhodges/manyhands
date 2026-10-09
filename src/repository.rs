@@ -5158,10 +5158,24 @@ fn persist_context(
             }
         };
         let stored_path = path.and_then(|path| {
-            path.strip_prefix(&observed.context.worktree)
-                .ok()
-                .unwrap_or(path)
-                .to_str()
+            let relative = path
+                .strip_prefix(&observed.context.worktree)
+                .unwrap_or(path);
+            // Match canonical source collection: join native components,
+            // preserving literal Unix backslashes and invalid UTF-8 bytes.
+            let canonical = if relative.is_absolute() {
+                // An out-of-context absolute path is not a relative cache
+                // path. Preserve it for strict rejection by the reader.
+                relative.as_os_str().to_owned()
+            } else {
+                relative
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .join(std::ffi::OsStr::new("/"))
+            };
+            // Diagnostic paths are optional: an unrepresentable native
+            // path must not suppress the problem or readable contexts.
+            canonical.to_str().map(str::to_owned)
         });
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, stored_path, code, guidance, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;

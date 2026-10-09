@@ -1100,12 +1100,253 @@ fn no_mutation_invalid_source_observation_preserves_root_and_linked_worktree_sta
     symlink_file("missing.md", fixture.root.join("docs/inaccessible.md")).unwrap();
     let before = support::repository_and_worktree_snapshot(&fixture);
 
-    enabled
+    let operation_id = support::operation_id();
+    let RefreshOutcome::Refreshed { snapshot } = enabled
         .service
-        .refresh_repository(refresh_request!(&fixture.root))
-        .unwrap();
+        .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        .unwrap()
+    else {
+        panic!("expected stable diagnostic refresh")
+    };
+
+    let root = fixture.root.canonicalize().unwrap();
+    assert!(
+        snapshot
+            .problems
+            .iter()
+            .any(|problem| problem.code == "source"
+                && problem.context.as_deref() == Some(root.as_path())
+                && problem.path.as_deref() == Some(Path::new("docs/inaccessible.md")))
+    );
+    assert_stored_diagnostic(&enabled.service, &root, "source", "docs/inaccessible.md");
+    let rows_before = stored_diagnostics(&enabled.service);
+    assert_eq!(
+        enabled.service.repository_snapshot(&fixture.root).unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        enabled
+            .service
+            .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::IndexPending { root }
+    );
+    assert_eq!(
+        enabled.service.repository_snapshot(&fixture.root).unwrap(),
+        snapshot
+    );
+    assert_eq!(stored_diagnostics(&enabled.service), rows_before);
 
     assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+fn assert_stored_diagnostic(service: &RepositoryService, context: &Path, code: &str, path: &str) {
+    service
+        .with_registry_connection_for_testing(|connection| {
+            let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM problems JOIN contexts ON contexts.id = problems.context_id
+             WHERE contexts.worktree_path = ?1 AND problems.code = ?2 AND problems.path = ?3",
+            params![context.to_str().unwrap(), code, path], |row| row.get(0)).unwrap();
+            assert_eq!(count, 1);
+        })
+        .unwrap();
+}
+
+type StoredDiagnostic = (Option<String>, Option<String>, String, String, i64);
+
+fn stored_diagnostics(service: &RepositoryService) -> Vec<StoredDiagnostic> {
+    service.with_registry_connection_for_testing(|connection| {
+        connection.prepare("SELECT contexts.worktree_path, problems.path, problems.code, problems.guidance, problems.observed_at
+            FROM problems LEFT JOIN contexts ON contexts.id = problems.context_id ORDER BY problems.id").unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+    }).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_source_diagnostic_remains_visible_with_readable_root_and_context() {
+    use std::os::unix::ffi::OsStringExt;
+    let (fixture, enabled) = repository_with_primary_and_context_content();
+    let root = fixture.root.canonicalize().unwrap();
+    let primary_id = "01ARZ3NDEKTSV4RRFFQ69G5FC9"
+        .parse::<canonical::ItemId>()
+        .unwrap();
+    fs::write(
+        fixture.root.join("docs/primary.md"),
+        document_source_with(&primary_id, "Readable primary"),
+    )
+    .unwrap();
+    let name = std::ffi::OsString::from_vec(b"private-path-\xff.md".to_vec());
+    symlink_file("missing.md", fixture.root.join("docs").join(name)).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    for rebuild in [false, true] {
+        let operation_id = support::operation_id();
+        let outcome = if rebuild {
+            enabled
+                .service
+                .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+                .map(|snapshot| RefreshOutcome::Refreshed { snapshot })
+        } else {
+            enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+        };
+        let RefreshOutcome::Refreshed { snapshot } =
+            outcome.expect("unrepresentable diagnostic does not reject readable contexts")
+        else {
+            panic!("expected readable diagnostic snapshot");
+        };
+        assert!(!snapshot.refresh_required);
+        assert_eq!(snapshot.contexts.len(), 2);
+        assert_eq!(snapshot.items.len(), 2);
+        assert!(snapshot.items.iter().any(|item| item.id == primary_id
+            && item.context == root
+            && item.path == Path::new("docs/primary.md")
+            && item.title == "Readable primary"));
+        let active = context_worktree(&root, &support::document_id());
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .any(|item| item.id == support::document_id()
+                    && item.context == active
+                    && item.path == Path::new("docs/active.md"))
+        );
+        assert_eq!(snapshot.problems.len(), 1);
+        let problem = &snapshot.problems[0];
+        assert_eq!(problem.context.as_deref(), Some(root.as_path()));
+        assert_eq!(problem.path, None);
+        assert_eq!(problem.code, "source");
+        assert_eq!(problem.guidance, "symbolic links are not canonical sources");
+        assert_eq!(
+            stored_diagnostics(&enabled.service),
+            vec![(
+                Some(root.to_str().unwrap().to_owned()),
+                None,
+                problem.code.clone(),
+                problem.guidance.clone(),
+                problem.observed_at.unix_timestamp()
+            )]
+        );
+        assert!(!format!("{snapshot:?}").contains("private-path-"));
+        assert_eq!(
+            enabled.service.repository_snapshot(&fixture.root).unwrap(),
+            snapshot
+        );
+        let rows_before = stored_diagnostics(&enabled.service);
+        if !rebuild {
+            let replay = enabled
+                .service
+                .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                .unwrap();
+            assert_eq!(replay, RefreshOutcome::IndexPending { root: root.clone() });
+        }
+        assert_eq!(
+            enabled.service.repository_snapshot(&fixture.root).unwrap(),
+            snapshot
+        );
+        assert_eq!(stored_diagnostics(&enabled.service), rows_before);
+        assert!(
+            support::repository_and_worktree_snapshot(&fixture) == before,
+            "diagnostic observation or replay mutated canonical or Git state"
+        );
+        support::assert_operation_records_hold_no_content(enabled.data_directory.path());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn diagnostic_persistence_does_not_rewrite_literal_unix_backslashes() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    fs::create_dir_all(fixture.root.join("docs")).unwrap();
+    symlink_file("missing.md", fixture.root.join("docs/private\\name.md")).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let error = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::IndexUnavailable);
+    assert_eq!(
+        error.to_string(),
+        "repository operation RepositorySnapshot failed (IndexUnavailable): stored relative path is invalid"
+    );
+    assert!(std::error::Error::source(&error).is_none());
+    assert!(!format!("{error:?}").contains("private\\name"));
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+#[test]
+fn cached_diagnostic_paths_decode_strictly_without_mutating_or_repairing_rows() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let root = fixture.root.canonicalize().unwrap();
+    let absolute = root.join("private-path.md").to_str().unwrap().to_owned();
+    for (path, valid) in [
+        ("docs/private-path.md", true),
+        ("docs\\private-path.md", false),
+        (absolute.as_str(), false),
+        ("../private-path.md", false),
+        ("docs/../private-path.md", false),
+        ("docs/./private-path.md", false),
+    ] {
+        enabled.service.with_registry_connection_for_testing(|connection| {
+            connection.execute("DELETE FROM problems", []).unwrap();
+            for code in ["source", "context"] {
+                connection.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at)
+                    SELECT repository_id, id, ?1, ?2, 'fixed guidance', 1 FROM contexts WHERE worktree_path = ?3",
+                    params![path, code, root.to_str().unwrap()]).unwrap();
+            }
+        }).unwrap();
+        let connection =
+            Connection::open(enabled.data_directory.path().join("manyhands.sqlite3")).unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=DELETE")
+            .unwrap();
+        drop(connection);
+        let cache_before = available_state(&fixture, enabled.data_directory.path());
+        let git_before = support::repository_and_worktree_snapshot(&fixture);
+        for _ in 0..2 {
+            let result = enabled.service.repository_snapshot(&fixture.root);
+            if valid {
+                let snapshot = result.unwrap();
+                assert_eq!(snapshot.problems.len(), 2);
+                for problem in &snapshot.problems {
+                    assert_eq!(problem.context.as_deref(), Some(root.as_path()));
+                    assert_eq!(problem.path.as_deref(), Some(Path::new(path)));
+                    assert_eq!(problem.guidance, "fixed guidance");
+                }
+                assert_eq!(
+                    snapshot
+                        .problems
+                        .iter()
+                        .map(|p| p.code.as_str())
+                        .collect::<Vec<_>>(),
+                    ["context", "source"]
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, RepositoryErrorKind::IndexUnavailable);
+                assert_eq!(error.operation, RepositoryOperation::RepositorySnapshot);
+                assert_eq!(
+                    error.to_string(),
+                    "repository operation RepositorySnapshot failed (IndexUnavailable): stored relative path is invalid"
+                );
+                assert!(std::error::Error::source(&error).is_none());
+                assert!(!format!("{error:?}").contains("private-path"));
+            }
+        }
+        assert!(
+            available_state(&fixture, enabled.data_directory.path()) == cache_before,
+            "diagnostic read mutated cache files"
+        );
+        assert_eq!(
+            support::repository_and_worktree_snapshot(&fixture),
+            git_before
+        );
+    }
 }
 
 #[test]
@@ -3561,10 +3802,12 @@ fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
     )
     .unwrap();
 
+    let before = support::repository_and_worktree_snapshot(&shared.fixture);
+    let operation_id = support::operation_id();
     let RefreshOutcome::Refreshed { snapshot } = shared
         .enabled
         .service
-        .refresh_repository(refresh_request!(&shared.fixture.root))
+        .refresh_repository(refresh_request!(&shared.fixture.root, operation_id))
         .unwrap()
     else {
         panic!("expected stable refresh");
@@ -3580,5 +3823,45 @@ fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
             .any(|problem| problem.code == "context"),
         "{:?}",
         snapshot.problems
+    );
+    let path = format!(".manyhands/worktrees/{}", shared.first);
+    assert!(
+        snapshot
+            .problems
+            .iter()
+            .any(|problem| problem.code == "context"
+                && problem.context.as_deref() == Some(root.as_path())
+                && problem.path.as_deref() == Some(Path::new(&path)))
+    );
+    assert_stored_diagnostic(&shared.enabled.service, &root, "context", &path);
+    let rows_before = stored_diagnostics(&shared.enabled.service);
+    assert_eq!(
+        shared
+            .enabled
+            .service
+            .repository_snapshot(&shared.fixture.root)
+            .unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        shared
+            .enabled
+            .service
+            .refresh_repository(refresh_request!(&shared.fixture.root, operation_id))
+            .unwrap(),
+        RefreshOutcome::IndexPending { root }
+    );
+    assert_eq!(
+        shared
+            .enabled
+            .service
+            .repository_snapshot(&shared.fixture.root)
+            .unwrap(),
+        snapshot
+    );
+    assert_eq!(stored_diagnostics(&shared.enabled.service), rows_before);
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&shared.fixture),
+        before
     );
 }

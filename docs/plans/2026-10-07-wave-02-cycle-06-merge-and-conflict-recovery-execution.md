@@ -1409,3 +1409,35 @@ five-file test/helper diff. Before cleanup-only amendment, complete Devenv full
 verification passed 970 tests/cases including 194 SSH; final amended synchronization
 47 SSH cases and required static checks pass. No unaffected broad rerun or production
 workaround. Exact next native matrix must confirm these corrections; Task 4 pending.
+
+Published the reviewed test/helper corrections as
+7123adee42c6714ccdf2995c89fcf2fa60d0f090 through normal push; sixth full native run:
+https://github.com/vhodges/manyhands/actions/runs/37856496873
+Continue exact-source result inspection before Task 4 acceptance.
+
+### Native run 6: core and SSH controls pass; diagnostic persistence corrected
+
+Run 37856496873 passed both Linux jobs. Windows library/core and metadata fixtures
+now pass; discovery reaches 72 pass/2 fail because valid native diagnostic paths
+were stored with backslashes then rejected by strict snapshot decoding. macOS
+SSH synchronization passes all 47 cases and reaches five enablement fixture lookup/
+error-root representation failures. Logs: /tmp/opencode/cycle06-native-37856496873-failures.log.
+
+Worker `ses_ee22d9386ffeJTbaIjJMipr6D2` changes only repository.rs diagnostic path
+persistence plus discovery/enablement tests. Component-wise '/' joining fixes
+Windows paths without lossy text or rewriting literal Unix backslashes. Strict
+cached-path decoding is unchanged. Spec reviewer `ses_ee215eb43ffeR1nyFrGVmRsxCV`
+found an initial overreach rejecting unrepresentable diagnostic paths, blocking
+readable-context discovery. Restored nullable diagnostic semantics: path NULL,
+owning context/code/guidance/time retained. A regression first reproduced root
+persistence failure, then proves refresh/rebuild/snapshot/replay keep the diagnostic
+visible with readable primary and active items, without canonical/Git mutation.
+
+Mac fixture lookups use canonical existing roots, or canonical parent plus absent
+leaf for creation targets; requests remain aliased. Five symlink-parent scenarios
+exercise pending fields, rollback and registration/cleanup invariants. Decoder
+negatives for corrupt backslash/absolute/traversal rows still reject without repair.
+Spec re-review and quality `ses_ee2005613ffe5YKiGh50fx2mNI` approve the corrected
+three-file scope. Final focused headless/all-feature discovery 77/enablement 77,
+static gates, full Devenv suite (780 Rust-harness tests including docs plus 196 SSH)
+and CLI pass. Actual next native execution remains required; Task 4 unaccepted.
