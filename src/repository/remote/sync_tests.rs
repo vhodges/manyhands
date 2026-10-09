@@ -1762,6 +1762,21 @@ fn resolution_fixture_with_incoming_files(
     git2::Oid,
     git2::Oid,
 ) {
+    resolution_fixture_with_baseline_bytes(files, new_incoming, &[])
+}
+
+fn resolution_fixture_with_baseline_bytes(
+    files: &[(&str, &str, &str, &str)],
+    new_incoming: &[(&str, &str)],
+    baseline_bytes: &[(&str, &[u8])],
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    RepositoryService,
+    OperationId,
+    git2::Oid,
+    git2::Oid,
+) {
     let (root, data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     fs::write(
@@ -1773,6 +1788,11 @@ fn resolution_fixture_with_incoming_files(
         let path = root.path().join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, base).unwrap();
+    }
+    for (path, bytes) in baseline_bytes {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
     }
     let base = commit_all(&repo);
     for (path, _, local, _) in files {
@@ -2828,6 +2848,1184 @@ fn mixed_canonical_and_code_conflict_is_whole_merge_external_only_without_writes
     );
     assert_eq!(repository.head().unwrap().target(), Some(local));
     assert!(repository.index().unwrap().has_conflicts());
+}
+
+#[test]
+fn pending_conflict_restart_is_offline_and_preserves_git_evidence() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, local, _) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let before = local_binding_image(root.path());
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let metadata = fs::read(repository.path().join("MERGE_HEAD")).unwrap();
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    // This fixture has no transport remote. Reaching transport/configuration
+    // preflight rather than the owned local conflict is a regression.
+    for service in [service, RepositoryService::open_at(data.path()).unwrap()] {
+        assert!(matches!(
+            service.synchronize_remote(retry.clone(), &mut SessionCredentials::new(NoPrompt)),
+            Err(SynchronizationError::ConflictPending { operation_id, .. }) if operation_id == operation
+        ));
+        assert_eq!(local_binding_image(root.path()), before);
+        assert_eq!(repository.head().unwrap().target(), Some(local));
+        assert_eq!(
+            fs::read(repository.path().join("MERGE_HEAD")).unwrap(),
+            metadata
+        );
+        assert!(
+            service
+                .inspect_synchronization_recovery(root.path(), operation)
+                .is_ok()
+        );
+    }
+    fs::write(root.path().join("fixture.txt"), b"unrelated dirty\n").unwrap();
+    let before = local_binding_image(root.path());
+    assert!(matches!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(local_binding_image(root.path()), before);
+}
+
+#[test]
+fn new_local_reconciliation_fences_cancel_and_stale_service_owner() {
+    for cancel in [false, true] {
+        let (root, data, service, operation, _, _) =
+            resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("original owner")
+        };
+        let other = RepositoryService::open_at(data.path()).unwrap();
+        if cancel {
+            other
+                .cancel_remote_operation(root.path(), operation)
+                .unwrap();
+        } else {
+            assert!(matches!(
+                other.restart_remote_synchronization(root.path(), operation, &target).unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+        }
+        let before = local_binding_image(root.path());
+        let mut evidence = state::with_transaction(&other, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+        })
+        .unwrap();
+        let result = reconcile_pending_candidate(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &owner,
+            &mut evidence,
+        );
+        assert!(result.is_err());
+        assert_eq!(local_binding_image(root.path()), before);
+        assert!(
+            git2::Repository::open(root.path())
+                .unwrap()
+                .index()
+                .unwrap()
+                .has_conflicts()
+        );
+    }
+}
+
+#[test]
+fn unfinished_merge_observation_restart_records_the_installed_conflict_offline() {
+    let (root, data, service, operation, _, _) =
+        resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(
+        "UPDATE remote_integration_steps SET phase='applying',conflict_digest=NULL",
+        [],
+    )
+    .unwrap();
+    let before = local_binding_image(root.path());
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    assert!(matches!(
+        service.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    assert_eq!(local_binding_image(root.path()), before);
+    assert!(
+        service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .is_ok()
+    );
+    assert_eq!(
+        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "conflict_pending"
+    );
+}
+
+#[test]
+fn external_repair_exact_ordered_parent_clean_only() {
+    for variant in [
+        "exact",
+        "reversed",
+        "one_parent",
+        "unrelated",
+        "dirty",
+        "detached",
+        "invalid",
+        "invalid_new",
+        "partial_metadata",
+    ] {
+        let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+        let (root, data, service, operation, local, incoming) = resolution_fixture(&[
+            (
+                "docs/document.md",
+                base,
+                &base.replace("base", "local"),
+                &base.replace("base", "incoming"),
+            ),
+            ("src/foreign.rs", "base\n", "local\n", "incoming\n"),
+        ]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let tree = if matches!(variant, "invalid" | "invalid_new") {
+            let old = repository.find_commit(local).unwrap().tree().unwrap();
+            let mut index = git2::Index::new().unwrap();
+            index.read_tree(&old).unwrap();
+            let mut entry = index.get_path(Path::new("docs/document.md"), 0).unwrap();
+            let bytes: &[u8] = if variant == "invalid_new" {
+                entry.path = b"docs/new-invalid.md".to_vec();
+                b"---\nmanyhands_managed: true\nmanyhands_kind: document\ntitle: Missing identity\n---\n\ninvalid\n"
+            } else {
+                b"invalid canonical result\n"
+            };
+            entry.id = repository.blob(bytes).unwrap();
+            index.add(&entry).unwrap();
+            repository
+                .find_tree(index.write_tree_to(&repository).unwrap())
+                .unwrap()
+        } else {
+            repository.find_commit(local).unwrap().tree().unwrap()
+        };
+        let local_parent = repository.find_commit(local).unwrap();
+        let incoming_parent = repository.find_commit(incoming).unwrap();
+        let signature = repository.signature().unwrap();
+        let unrelated_parent = (variant == "unrelated").then(|| {
+            let oid = repository
+                .commit(None, &signature, &signature, "unrelated fixture", &tree, &[])
+                .unwrap();
+            repository.find_commit(oid).unwrap()
+        });
+        let parents = match variant {
+            "reversed" => vec![&incoming_parent, &local_parent],
+            "one_parent" => vec![&local_parent],
+            "unrelated" => vec![&local_parent, unrelated_parent.as_ref().unwrap()],
+            _ => vec![&local_parent, &incoming_parent],
+        };
+        let repaired = repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "external repair",
+                &tree,
+                &parents,
+            )
+            .unwrap();
+        repository.cleanup_state().unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        if variant == "dirty" {
+            fs::write(root.path().join("fixture.txt"), b"unrelated dirty\n").unwrap();
+        }
+        if variant == "detached" {
+            repository.set_head_detached(repaired).unwrap();
+        }
+        if variant == "partial_metadata" {
+            fs::write(repository.path().join("MERGE_MSG"), b"uncertain external remnant\n").unwrap();
+        }
+        let before = local_binding_image(root.path());
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let restarted = RepositoryService::open_at(data.path()).unwrap();
+        let RemoteReservationOutcome::Reserved(owner) = restarted
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("same-operation local reconciliation")
+        };
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+        })
+        .unwrap();
+        let result = reconcile_pending_candidate(
+            &restarted,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &owner,
+            &mut evidence,
+        );
+        if variant == "exact" {
+            assert_eq!(result.unwrap().unwrap().oid, repaired);
+            let step = state::with_transaction(&restarted, root.path(), |tx, id| {
+                state::integration_step(tx, state::read_operation(tx, id, operation)?.unwrap().id, 0)
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+            assert_eq!(step.result_oid, Some(repaired));
+            assert_eq!(step.intent.local_oid, local);
+            assert_eq!(step.intent.incoming_oid, incoming);
+        } else {
+            assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{variant}"
+            );
+        }
+        assert_eq!(local_binding_image(root.path()), before, "{variant}");
+    }
+}
+
+fn inspection_odb_inventory(repository: &git2::Repository) -> std::collections::BTreeSet<git2::Oid> {
+    let mut objects = std::collections::BTreeSet::new();
+    repository
+        .odb()
+        .unwrap()
+        .foreach(|oid| {
+            objects.insert(*oid);
+            true
+        })
+        .unwrap();
+    objects
+}
+
+fn inspection_git_image(root: &Path) -> [u8; 32] {
+    let repository = git2::Repository::open(root).unwrap();
+    let mut digest = blake3::Hasher::new();
+    digest.update(&local_binding_image(root));
+    for name in [
+        "logs/HEAD",
+        "logs/refs/heads/main",
+        "MERGE_HEAD",
+        "MERGE_MSG",
+        "MERGE_MODE",
+    ] {
+        match fs::read(repository.path().join(name)) {
+            Ok(bytes) => {
+                digest.update(&[1]);
+                digest.update(&bytes);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                digest.update(&[0]);
+            }
+            Err(error) => panic!("fixture metadata read category: {:?}", error.kind()),
+        }
+    }
+    *digest.finalize().as_bytes()
+}
+
+fn inspection_tree_insert(
+    repository: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    path: &str,
+    oid: git2::Oid,
+    mode: i32,
+) -> git2::Oid {
+    let mut builder = repository.treebuilder(Some(tree)).unwrap();
+    if let Some((directory, tail)) = path.split_once('/') {
+        let child = tree
+            .get_name(directory)
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .map(|entry| entry.id())
+            .unwrap_or_else(|| repository.treebuilder(None).unwrap().write().unwrap());
+        let child = repository.find_tree(child).unwrap();
+        let updated = inspection_tree_insert(repository, &child, tail, oid, mode);
+        builder.insert(directory, updated, 0o040000).unwrap();
+    } else {
+        builder.insert(path, oid, mode).unwrap();
+    }
+    builder.write().unwrap()
+}
+
+#[test]
+fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_baseline() {
+    let document = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let new_id = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let item_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let cases = [
+        ("docs/new.md".to_owned(), document.replace(item_id, new_id)),
+        (
+            format!(".manyhands/tickets/{new_id}/ticket.md"),
+            format!("---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"{new_id}\"\ntitle: New\ntype: task\nstatus: open\n---\n\nnew\n"),
+        ),
+        (
+            format!(".manyhands/comments/{item_id}/{new_id}.md"),
+            format!("---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"{new_id}\"\nitem_id: \"{item_id}\"\ncreated_at: 2026-09-30T12:00:00Z\n---\n\nnew\n"),
+        ),
+    ];
+    for (path, valid) in cases {
+        for shape in [
+            "invalid_utf8",
+            "symlink",
+            "tree",
+            "executable",
+            "valid_code_control",
+        ] {
+            let (root, data, service, operation, local, incoming) =
+                resolution_fixture_with_baseline_bytes(
+                    &[("src/foreign.rs", "base\n", "local\n", "incoming\n")],
+                    &[],
+                    &[
+                        ("docs/item.md", document.as_bytes()),
+                        ("docs/unchanged-invalid.md", b"\xff\xfe"),
+                        (
+                            "docs/unchanged-malformed.md",
+                            b"---\nmanyhands_managed: true\nmanyhands_kind: document\n---\n\nlegacy\n",
+                        ),
+                        (
+                            ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAX/ticket.md",
+                            b"\xff\xfe",
+                        ),
+                        (
+                            ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAY.md",
+                            b"\xff\xfe",
+                        ),
+                    ],
+                );
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let local_parent = repository.find_commit(local).unwrap();
+            let incoming_parent = repository.find_commit(incoming).unwrap();
+            let tree = local_parent.tree().unwrap();
+            let (entry_oid, mode) = match shape {
+                "invalid_utf8" => (repository.blob(b"\xff\xfe").unwrap(), 0o100644),
+                "tree" => (
+                    repository.treebuilder(None).unwrap().write().unwrap(),
+                    0o040000,
+                ),
+                "symlink" => (repository.blob(valid.as_bytes()).unwrap(), 0o120000),
+                "executable" => (repository.blob(valid.as_bytes()).unwrap(), 0o100755),
+                _ => (
+                    repository.blob(b"externally repaired code\n").unwrap(),
+                    0o100644,
+                ),
+            };
+            let inserted = if shape == "valid_code_control" {
+                "src/foreign.rs"
+            } else {
+                &path
+            };
+            let candidate_tree =
+                inspection_tree_insert(&repository, &tree, inserted, entry_oid, mode);
+            let tree = repository.find_tree(candidate_tree).unwrap();
+            let signature = repository.signature().unwrap();
+            let candidate = repository
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    "external repair",
+                    &tree,
+                    &[&local_parent, &incoming_parent],
+                )
+                .unwrap();
+            let step = state::with_transaction(&service, root.path(), |tx, id| {
+                let record = state::read_operation(tx, id, operation)?.unwrap();
+                state::integration_step(tx, record.id, 0)
+            })
+            .unwrap()
+            .unwrap();
+            let objects = inspection_odb_inventory(&repository);
+            let before = inspection_git_image(root.path());
+            assert_eq!(
+                RepositoryService::validates_external_integration(&repository, &step, candidate)
+                    .unwrap(),
+                shape == "valid_code_control",
+                "{shape}"
+            );
+            assert_eq!(inspection_odb_inventory(&repository), objects, "{shape}");
+            assert_eq!(inspection_git_image(root.path()), before, "{shape}");
+            // Regular invalid bytes and the positive control also exercise the
+            // adoption boundary without OS-dependent symlink checkout setup.
+            if matches!(shape, "invalid_utf8" | "valid_code_control") {
+                repository
+                    .reference("refs/heads/main", candidate, true, "fixture external repair")
+                    .unwrap();
+                repository.cleanup_state().unwrap();
+                repository
+                    .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .unwrap();
+                let before = inspection_git_image(root.path());
+                let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+                let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+                let RemoteReservationOutcome::Reserved(owner) = service
+                    .restart_remote_synchronization(root.path(), operation, &target)
+                    .unwrap()
+                else {
+                    panic!("fenced external inspection")
+                };
+                let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+                    Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+                })
+                .unwrap();
+                let result = reconcile_pending_candidate(
+                    &service,
+                    root.path(),
+                    "main",
+                    &SynchronizationTarget::Primary,
+                    &owner,
+                    &mut evidence,
+                );
+                if shape == "valid_code_control" {
+                    assert_eq!(result.unwrap().unwrap().oid, candidate);
+                } else {
+                    assert!(matches!(result, Err(SynchronizationError::RecoveryRequired)));
+                    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+                    assert_eq!(
+                        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| row
+                            .get::<_, String>(0))
+                            .unwrap(),
+                        "conflict_pending"
+                    );
+                }
+                assert_eq!(inspection_odb_inventory(&repository), objects, "{shape}");
+                assert_eq!(inspection_git_image(root.path()), before, "{shape}");
+            }
+        }
+    }
+}
+
+#[test]
+fn rejected_recorded_merge_inspection_never_imports_generated_clean_blobs() {
+    for phase in ["applying", "conflict_pending", "stale_owner", "index_mismatch"] {
+        let clean_base = "base first\nmiddle one\nmiddle two\nmiddle three\nbase last\n";
+        let clean_local = "local first\nmiddle one\nmiddle two\nmiddle three\nbase last\n";
+        let clean_incoming = "base first\nmiddle one\nmiddle two\nmiddle three\nincoming last\n";
+        let merged = b"local first\nmiddle one\nmiddle two\nmiddle three\nincoming last\n";
+        let (root, data, service, operation, local, incoming) = resolution_fixture(&[
+            ("src/foreign.rs", "base\n", "local\n", "incoming\n"),
+            ("clean.txt", clean_base, clean_local, clean_incoming),
+        ]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        // The fixture initially installed the real merge. Remove ONLY this
+        // generated loose test blob to model an interrupted pre-install pass
+        // with foreign merge metadata, before inventorying rejection effects.
+        let canary = git2::Oid::hash_object(git2::ObjectType::Blob, merged).unwrap();
+        assert!(repository.odb().unwrap().exists(canary));
+        let text = canary.to_string();
+        fs::remove_file(
+            repository
+                .commondir()
+                .join("objects")
+                .join(&text[..2])
+                .join(&text[2..]),
+        )
+        .unwrap();
+        assert!(!repository.odb().unwrap().exists(canary));
+        let other = repository.find_commit(local).unwrap().parent_id(0).unwrap();
+        fs::write(repository.path().join("MERGE_HEAD"), format!("{other}\n")).unwrap();
+        if phase == "index_mismatch" {
+            let mut index = repository.index().unwrap();
+            let mut entry = index.get_path(Path::new("fixture.txt"), 0).unwrap();
+            entry.id = repository.blob(b"unrelated staged fixture\n").unwrap();
+            index.add(&entry).unwrap();
+            index.write().unwrap();
+        }
+        if phase == "applying" {
+            let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute(
+                "UPDATE remote_integration_steps SET phase='applying',conflict_digest=NULL",
+                [],
+            )
+            .unwrap();
+        }
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("inspection owner")
+        };
+        if phase == "stale_owner" {
+            let other_service = RepositoryService::open_at(data.path()).unwrap();
+            assert!(matches!(
+                other_service.restart_remote_synchronization(root.path(), operation, &target).unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+        }
+        let objects = inspection_odb_inventory(&repository);
+        let before = inspection_git_image(root.path());
+        let step_before = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            state::integration_step(tx, record.id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+        })
+        .unwrap();
+        assert!(
+            reconcile_pending_candidate(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+                &owner,
+                &mut evidence,
+            )
+            .is_err()
+        );
+        assert!(!repository.odb().unwrap().exists(canary), "{phase}");
+        assert_eq!(inspection_odb_inventory(&repository), objects, "{phase}");
+        assert_eq!(inspection_git_image(root.path()), before, "{phase}");
+        let step_after = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            state::integration_step(tx, record.id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(step_after, step_before, "{phase}");
+        // The reusable read-only comparison must also keep its generated
+        // stage-zero blob solely in its private overlay, even on mismatch.
+        let expected = prepare_recorded_merge_index(&repository, local, incoming).unwrap();
+        assert_eq!(
+            expected.get_path(Path::new("clean.txt"), 0).unwrap().id,
+            canary
+        );
+        assert_eq!(
+            recorded_merge_index_matches(&repository, local, incoming).unwrap(),
+            phase != "index_mismatch"
+        );
+        assert!(!repository.odb().unwrap().exists(canary));
+        assert_eq!(inspection_odb_inventory(&repository), objects);
+    }
+}
+
+#[test]
+fn context_done_primary_pending_restart_is_local_only_without_stage_replay() {
+    let (root, data, service, operation, worktree, local, _, item_id) =
+        context_primary_conflict_fixture();
+    let before = local_binding_image(&worktree);
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let context_oid: String = db
+        .query_row(
+            "SELECT result_oid FROM remote_integration_steps WHERE stage='context'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.target = SynchronizationTarget::Context {
+        kind: crate::repository::AuthoringKind::Ticket,
+        item_id,
+    };
+    retry.restart = true;
+    assert!(matches!(
+        service.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::ConflictPending { stage: SynchronizationStage::Primary, .. })
+    ));
+    assert_eq!(local_binding_image(&worktree), before);
+    assert_eq!(
+        git2::Repository::open(&worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(local)
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT result_oid FROM remote_integration_steps WHERE stage='context'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        context_oid
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn conflict_tokens_bind_windows_without_rebinding_legacy_attempts() {
+    let (root, _data, service, operation, _, _) =
+        resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let original = inspection.paths[0].token.clone();
+    let mut later = original.clone();
+    later.observation.window_number = 1;
+    assert_ne!(original, later);
+    assert_ne!(
+        bind_conflict_digest(original.observation.fingerprint, 1, original.observation.ordinal),
+        original.observation.fingerprint
+    );
+    assert_ne!(
+        conflict_token_digest(&original),
+        conflict_token_digest(&later)
+    );
+    assert!(matches!(
+        service.read_synchronization_conflict(&later),
+        Err(SynchronizationError::ExternalChange)
+    ));
+}
+
+#[test]
+fn local_effect_restart_before_clean_preflight_and_transport() {
+    for fast_forwarded in [false, true] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        fs::write(
+            root.path().join(".manyhands/config.toml"),
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        let local = commit_all(&repository);
+        let incoming = if fast_forwarded {
+            child(&repository, local, b"incoming\n")
+        } else {
+            local
+        };
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), false)
+        })
+        .unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let operation = OperationId::new();
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .reserve_remote_operation(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("reservation")
+        };
+        let evidence = state::SynchronizationEvidence {
+            expected_oid: Some(local),
+            local_oid: Some(local),
+            primary_tracking_oid: Some(incoming),
+            tracking_oid: Some(incoming),
+            ..Default::default()
+        };
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::FetchPrepared,
+                &evidence,
+            )
+            .unwrap();
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observation =
+            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+        commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+        let tree = repository.find_commit(local).unwrap().tree_id();
+        service
+            .prepare_synchronization_integration(
+                root.path(),
+                &owner,
+                &state::IntegrationStepIntent {
+                    ordinal: 0,
+                    stage: merge::IntegrationStage::Primary,
+                    local_oid: local,
+                    incoming_oid: incoming,
+                    baseline_tree_oid: tree,
+                    baseline_index_digest: index_digest(tree),
+                },
+            )
+            .unwrap();
+        service
+            .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
+            .unwrap();
+        if fast_forwarded {
+            fast_forward(&repository, "refs/heads/main", local, incoming).unwrap();
+        }
+        let before = local_binding_image(root.path());
+        let mut retry = request(root.path());
+        retry.operation_id = operation;
+        retry.restart = true;
+        // Endpoint discovery will fail; it must happen after observing the
+        // already-completed local effect, without repeating checkout/ref/logs.
+        assert!(
+            RepositoryService::open_at(data.path())
+                .unwrap()
+                .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt))
+                .is_err()
+        );
+        let step = state::with_transaction(&service, root.path(), |tx, id| {
+            state::integration_step(tx, state::read_operation(tx, id, operation)?.unwrap().id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+        assert_eq!(step.result_oid, Some(incoming));
+        assert_eq!(local_binding_image(root.path()), before);
+    }
+}
+
+#[test]
+fn external_repair_refuses_marker_removal_and_staged_code_without_commit() {
+    let (root, _data, service, operation, _, _) =
+        resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+    let repository = git2::Repository::open(root.path()).unwrap();
+    fs::write(root.path().join("src/foreign.rs"), b"resolved\n").unwrap();
+    let mut index = repository.index().unwrap();
+    for stage in 1..=3 {
+        index.remove(Path::new("src/foreign.rs"), stage).unwrap();
+    }
+    index.add_path(Path::new("src/foreign.rs")).unwrap();
+    index.write().unwrap();
+    let before = local_binding_image(root.path());
+    let metadata = fs::read(repository.path().join("MERGE_HEAD")).unwrap();
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    assert!(matches!(
+        service.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(local_binding_image(root.path()), before);
+    assert_eq!(
+        fs::read(repository.path().join("MERGE_HEAD")).unwrap(),
+        metadata
+    );
+}
+
+#[test]
+fn released_checkpoint_then_normal_save_continuation_preserves_original_candidate() {
+    let (root, data, service, operation, worktree, _, _, ticket_id) =
+        context_primary_conflict_fixture();
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let result = service
+        .read_synchronization_conflict(&inspection.paths[0].token)
+        .unwrap()
+        .local
+        .unwrap();
+    let resolution = ResolveSynchronizationRequest::new(
+        root.path().into(),
+        operation,
+        OperationId::new(),
+        inspection.observation,
+        vec![(inspection.paths[0].token.clone(), result)],
+        None,
+    );
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete {
+        commit_oid: checkpoint,
+    } =
+        service.resolve_synchronization(resolution).unwrap()
+    else {
+        panic!("released checkpoint")
+    };
+    let ticket_path = worktree.join(format!(".manyhands/tickets/{ticket_id}/ticket.md"));
+    assert!(matches!(
+        service.save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: root.path().into(),
+                kind: AuthoringKind::Ticket,
+                item_id: ticket_id.clone(),
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            draft: TicketDraft {
+                title: "normal continuation".into(),
+                body: "later saved checkpoint".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+            },
+            expected_path: ExpectedPathObservation::from_bytes(&fs::read(ticket_path).unwrap()),
+        })
+        .unwrap(),
+        SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
+    ));
+    let repository = git2::Repository::open(&worktree).unwrap();
+    let descendant = repository.head().unwrap().target().unwrap();
+    assert!(
+        repository
+            .graph_descendant_of(descendant, checkpoint)
+            .unwrap()
+    );
+    let before = local_binding_image(&worktree);
+    let restarted = RepositoryService::open_at(data.path()).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        ticket_id.clone(),
+    )
+    .unwrap();
+    let RemoteReservationOutcome::Reserved(owner) = restarted
+        .restart_remote_synchronization(root.path(), operation, &target)
+        .unwrap()
+    else {
+        panic!("original operation")
+    };
+    let mut evidence = state::with_transaction(&restarted, root.path(), |tx, id| {
+        Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+    })
+    .unwrap();
+    let sync_target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ticket_id,
+    };
+    let observed = reconcile_pending_candidate(
+        &restarted,
+        root.path(),
+        "main",
+        &sync_target,
+        &owner,
+        &mut evidence,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(observed.oid, checkpoint);
+    assert_eq!(evidence.local_oid, Some(descendant));
+    let step = state::with_transaction(&restarted, root.path(), |tx, id| {
+        state::integration_step(tx, state::read_operation(tx, id, operation)?.unwrap().id, 1)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(step.candidate_oid, Some(checkpoint));
+    assert_eq!(step.result_oid, Some(checkpoint));
+    assert_eq!(local_binding_image(&worktree), before);
+}
+
+#[test]
+fn synchronization_handoff_refuses_unreleased_resolution_artifacts() {
+    let (root, data, service, resolution) = protocol_resolution_fixture();
+    let operation = resolution.synchronization_id;
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionBeforeMetadataRetirement);
+    assert!(service.resolve_synchronization(resolution).is_err());
+    let before = local_binding_image(root.path());
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let phase: String = db
+        .query_row("SELECT phase FROM remote_resolution_index_artifacts", [], |row| row.get(0))
+        .unwrap();
+    assert_ne!(phase, "released");
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    assert!(
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    assert_eq!(local_binding_image(root.path()), before);
+    assert_eq!(
+        db.query_row("SELECT phase FROM remote_resolution_index_artifacts", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        phase
+    );
+}
+
+#[test]
+fn recorded_candidate_fault_table_preserves_partial_checkout_and_observes_ref_once() {
+    for point in [
+        "before_checkout",
+        "after_checkout",
+        "after_ref",
+        "observation_fault",
+        "operator_lock",
+    ] {
+        let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+        let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
+            "docs/document.md",
+            base,
+            &base.replace("base", "local"),
+            &base.replace("base", "incoming"),
+        )]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        repository.cleanup_state().unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        let signature = repository.signature().unwrap();
+        let tree = repository.find_commit(incoming).unwrap().tree().unwrap();
+        let candidate = repository
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "recorded clean candidate",
+                &tree,
+                &[
+                    &repository.find_commit(local).unwrap(),
+                    &repository.find_commit(incoming).unwrap(),
+                ],
+            )
+            .unwrap();
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // Restore the durable applying seam without regenerating its intent.
+        db.execute(
+            "UPDATE remote_integration_steps SET phase='applying',candidate_oid=?1,conflict_digest=NULL",
+            [candidate.to_string()],
+        )
+        .unwrap();
+        match point {
+            "after_checkout" => repository
+                .checkout_tree(
+                    tree.as_object(),
+                    Some(git2::build::CheckoutBuilder::new().force()),
+                )
+                .unwrap(),
+            "after_ref" | "observation_fault" | "operator_lock" => {
+                fast_forward(&repository, "refs/heads/main", local, candidate).unwrap();
+            }
+            _ => {}
+        }
+        if point == "observation_fault" {
+            db.execute_batch("CREATE TRIGGER observation_fault BEFORE UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied' BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+        }
+        if point == "operator_lock" {
+            fs::write(repository.path().join("index.lock"), b"operator-owned lock\n").unwrap();
+        }
+        let before = local_binding_image(root.path());
+        let logs = || {
+            let mut digest = blake3::Hasher::new();
+            for name in ["logs/HEAD", "logs/refs/heads/main"] {
+                digest.update(&fs::read(repository.path().join(name)).unwrap());
+            }
+            *digest.finalize().as_bytes()
+        };
+        let before_logs = logs();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("fenced restart")
+        };
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+        })
+        .unwrap();
+        let reconcile = |evidence: &mut state::SynchronizationEvidence| {
+            reconcile_pending_candidate(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+                &owner,
+                evidence,
+            )
+        };
+        let result = reconcile(&mut evidence);
+        if matches!(point, "after_checkout" | "operator_lock") {
+            assert!(matches!(result, Err(SynchronizationError::RecoveryRequired)));
+            assert_eq!(
+                repository.head().unwrap().target(),
+                Some(if point == "after_checkout" { local } else { candidate })
+            );
+            assert_eq!(local_binding_image(root.path()), before);
+            assert_eq!(logs(), before_logs);
+            if point == "operator_lock" {
+                assert!(repository.path().join("index.lock").exists());
+            }
+        } else if point == "observation_fault" {
+            assert!(result.is_err());
+            assert_eq!(local_binding_image(root.path()), before);
+            assert_eq!(logs(), before_logs);
+            db.execute_batch("DROP TRIGGER observation_fault").unwrap();
+            assert_eq!(reconcile(&mut evidence).unwrap().unwrap().oid, candidate);
+            assert_eq!(logs(), before_logs);
+        } else {
+            assert_eq!(result.unwrap().unwrap().oid, candidate);
+            assert_eq!(repository.head().unwrap().target(), Some(candidate));
+            let completed_logs = logs();
+            assert_eq!(reconcile(&mut evidence).unwrap().unwrap().oid, candidate);
+            assert_eq!(logs(), completed_logs);
+            if point == "after_ref" {
+                assert_eq!(completed_logs, before_logs);
+                assert_eq!(local_binding_image(root.path()), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn new_refs_append_window_immutable_evidence() {
+    let (root, data, service) = fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    repository
+        .remote("origin", "ssh://example.invalid/fixture.git")
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)
+    })
+    .unwrap();
+    let local = repository.head().unwrap().target().unwrap();
+    let first = child(&repository, local, b"first pass\n");
+    let second = child(&repository, first, b"second pass\n");
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let operation = OperationId::new();
+    let RemoteReservationOutcome::Reserved(mut owner) = service
+        .reserve_remote_operation(root.path(), operation, &target)
+        .unwrap()
+    else {
+        panic!("reservation")
+    };
+    let mut evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        ..Default::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &evidence,
+        )
+        .unwrap();
+    let mut original = None;
+    for (number, incoming) in [(1, first), (2, second)] {
+        let pending = if number == 2 {
+            let RemoteReservationOutcome::Reserved(restarted) = service
+                .restart_remote_synchronization(root.path(), operation, &target)
+                .unwrap()
+            else {
+                panic!("new invocation")
+            };
+            owner = restarted;
+            reconcile_pending_candidate(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+                &owner,
+                &mut evidence,
+            )
+            .unwrap()
+        } else {
+            None
+        };
+        repository
+            .reference(plan.primary().tracking_ref(), incoming, true, "fixture observation")
+            .unwrap();
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &plan,
+            "refs/heads/main",
+            incoming,
+            Some(incoming),
+        )
+        .unwrap();
+        commit_observation_batch(
+            &service,
+            root.path(),
+            &owner,
+            &plan,
+            &[observation],
+            i64::from(number),
+        )
+        .unwrap();
+        evidence.primary_tracking_oid = Some(incoming);
+        evidence.tracking_oid = Some(incoming);
+        if let Some(pending) = pending {
+            finalize_reconciled_candidate(&service, root.path(), &owner, pending, &evidence).unwrap();
+        }
+        let batch = state::with_transaction(&service, root.path(), |tx, id| {
+            tx.query_row("SELECT id FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1", [id], |row| row.get::<_, i64>(0))
+                .map_err(|_| state::recovery_required())
+        })
+        .unwrap();
+        service
+            .prepare_synchronization_window(
+                root.path(),
+                &owner,
+                number,
+                &state::IntegrationWindowIntent {
+                    observation_batch_id: batch,
+                    local_oid: repository.head().unwrap().target().unwrap(),
+                    primary_oid: incoming,
+                    context_oid: None,
+                },
+            )
+            .unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        let req = request(root.path());
+        let merged = integrate_divergence(
+            &service,
+            DivergenceInputs {
+                root: root.path(),
+                primary_branch: "main",
+                target: &SynchronizationTarget::Primary,
+                request: &req,
+                owner: &owner,
+                plan: &plan,
+                configuration: &configuration,
+                selected: plan.primary(),
+                primary_tracking: Some(incoming),
+                selected_tracking: Some(incoming),
+                context: None,
+                primary: incoming,
+            },
+        )
+        .unwrap();
+        assert_eq!(merged, incoming);
+        evidence.local_oid = Some(merged);
+        service
+            .checkpoint_synchronization_merge_applied(root.path(), &owner, &evidence)
+            .unwrap();
+        let step = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            assert!(state::integration_step(tx, record.id, 0)?.is_none());
+            let old = state::integration_step_in_window(tx, record.id, 1, 0)?.unwrap();
+            if let Some(original) = &original {
+                assert_eq!(&old, original);
+            }
+            state::integration_step_in_window(tx, record.id, number, 0)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+        if number == 1 {
+            original = Some(step);
+        }
+    }
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(second));
+    assert!(repository.statuses(None).unwrap().is_empty());
 }
 
 #[test]
@@ -8327,6 +9525,7 @@ mod process_death {
         fn into_request(self, root: PathBuf) -> ResolveSynchronizationRequest {
             let operation = OperationId::parse(&self.operation).expect("fixture operation");
             let observation = merge::ConflictObservation {
+                window_number: 0,
                 operation_id: operation,
                 ordinal: self.ordinal,
                 fingerprint: self.fingerprint,

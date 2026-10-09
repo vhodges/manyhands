@@ -77,6 +77,7 @@ pub(super) fn classify_integration<E>(
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConflictObservation {
     pub(super) operation_id: OperationId,
+    pub(super) window_number: u32,
     pub(super) ordinal: u8,
     pub(super) fingerprint: [u8; 32],
     pub(super) head: Oid,
@@ -89,6 +90,7 @@ impl ConflictObservation {
     pub(super) fn for_testing(value: [u8; 32]) -> Self {
         Self {
             operation_id: OperationId::new(),
+            window_number: 0,
             ordinal: 0,
             fingerprint: value,
             head: Oid::zero(),

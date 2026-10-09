@@ -2264,6 +2264,79 @@ pub(super) fn integration_window(
     Ok(Some(IntegrationWindowEvidence { number, intent }))
 }
 
+/// Active orchestration reads only the newest pass and its two fixed slots.
+/// Historical compatibility lookups remain explicitly bound to window zero.
+pub(super) fn latest_integration_window(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+) -> Result<IntegrationWindowEvidence, RepositoryError> {
+    let number: i64 = connection
+        .query_row(
+            "SELECT max(number) FROM remote_integration_windows WHERE operation_record_id=?1",
+            [record.id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    integration_window(
+        connection,
+        record,
+        number.try_into().map_err(|_| recovery_required())?,
+    )?
+    .ok_or_else(recovery_required)
+}
+
+pub(super) fn integration_resolution_released(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    step: &IntegrationStepEvidence,
+) -> Result<bool, RepositoryError> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id JOIN remote_integration_steps step ON step.id=attempt.integration_step_id WHERE attempt.operation_record_id=?1 AND step.window_number=?2 AND step.ordinal=?3 AND attempt.phase='applied' AND artifact.phase='released' AND artifact.ref_phase='observed' AND attempt.candidate_oid=step.result_oid)",
+        params![record.id, i64::from(step.window_number), step.intent.ordinal],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())
+}
+
+pub(super) fn integration_has_resolution_attempt(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    step: &IntegrationStepEvidence,
+) -> Result<bool, RepositoryError> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_integration_steps step ON step.id=attempt.integration_step_id WHERE attempt.operation_record_id=?1 AND step.window_number=?2 AND step.ordinal=?3)",
+        params![record.id, i64::from(step.window_number), step.intent.ordinal],
+        |row| row.get(0),
+    ).map_err(|_| recovery_required())
+}
+
+/// The caller has proved a clean external merge with the exact ordered parents.
+/// An owned resolution attempt has its own protocol and must never be adopted
+/// by this observation-only route, including an unfinished native ref effect.
+pub(super) fn observe_external_integration(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    window_number: u32,
+    ordinal: u8,
+    candidate: Oid,
+    tree: Oid,
+) -> Result<(), RepositoryError> {
+    let step = integration_step_in_window(tx, record.id, window_number, ordinal)?
+        .ok_or_else(recovery_required)?;
+    let attempted = integration_has_resolution_attempt(tx, record, &step)?;
+    if step.phase != IntegrationStepPhase::ConflictPending
+        || step.candidate_oid.is_some()
+        || attempted
+        || latest_integration_window(tx, record)?.number != window_number
+    {
+        return Err(recovery_required());
+    }
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='applied',candidate_oid=?2,result_oid=?2,observed_tree_oid=?3 WHERE operation_record_id=?1 AND window_number=?4 AND ordinal=?5",
+        params![record.id, candidate.to_string(), tree.to_string(), i64::from(window_number), ordinal],
+    ).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
 fn validate_window_observation(
     connection: &Connection,
     record: &StoredRemoteOperation,

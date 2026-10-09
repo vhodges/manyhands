@@ -724,7 +724,6 @@ impl RepositoryService {
     /// Append-only pass evidence. Git identity, clean/continuation ancestry and
     /// the exact advertised/tracking pass must be observed by the caller; this
     /// transition only fences and persists that intent, never proves an effect.
-    #[allow(dead_code)] // Task 5 checkpoint: live orchestration remains window zero.
     pub(super) fn prepare_synchronization_window(
         &self,
         root: &Path,
@@ -775,21 +774,30 @@ impl RepositoryService {
             }
             // Prefer the latest stage. A locally completed resolution retains
             // its publication handoff until explicit restart observes Fetch.
+            let window = state::latest_integration_window(tx, &record)?;
             for ordinal in (0..=1).rev() {
-                if let Some(step) = state::integration_step(tx, record.id, ordinal)?
-                    && step.candidate_oid.is_some()
+                if let Some(step) =
+                    state::integration_step_in_window(tx, record.id, window.number, ordinal)?
                 {
-                    let released_resolution: bool = tx.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1 AND attempt.integration_step_id=(SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2 AND window_number=?3) AND attempt.phase='applied' AND artifact.phase='released' AND artifact.ref_phase='observed')",
-                        params![record.id, ordinal, i64::from(step.window_number)], |row| row.get(0),
-                    ).map_err(|_| state::recovery_required())?;
-                    if step.phase == state::IntegrationStepPhase::Applying
-                        || (step.phase == state::IntegrationStepPhase::Applied
-                            && step.result_oid != record.sync_evidence.local_oid
-                            && released_resolution)
+                    if step.phase == state::IntegrationStepPhase::Applied
+                        && state::integration_has_resolution_attempt(tx, &record, &step)?
+                        && !state::integration_resolution_released(tx, &record, &step)?
                     {
-                        return Ok(Some(step));
+                        return Err(state::recovery_required());
                     }
+                    if step.phase == state::IntegrationStepPhase::Applied
+                        && record.sync_evidence.push_oid.is_some()
+                    {
+                        if step.result_oid != record.sync_evidence.local_oid {
+                            return Err(state::recovery_required());
+                        }
+                        // Preserve the old Push-direction envelope; local
+                        // handoff cannot clear or rewrite publication intent.
+                        return Ok(None);
+                    }
+                    // Never fall back to an earlier applied context while the
+                    // primary has an unfinished effect or owned resolution.
+                    return Ok(Some(step));
                 }
             }
             Ok(None)
@@ -798,6 +806,7 @@ impl RepositoryService {
 
     /// Commit the already-observed child application into the legacy envelope.
     /// This is the only restart transition permitted for a pending candidate.
+    #[allow(dead_code)] // Window-zero compatibility, including retained callers.
     pub(super) fn reconcile_synchronization_candidate_applied(
         &self,
         root: &Path,
@@ -807,29 +816,111 @@ impl RepositoryService {
         tree: git2::Oid,
         evidence: &state::SynchronizationEvidence,
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.reconcile_synchronization_candidate_applied_in_window(
+            root, owner, 0, ordinal, candidate, tree, evidence,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reconcile_synchronization_candidate_applied_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             use state::SynchronizationCheckpoint as C;
-            let step = state::integration_step(tx, record.id, ordinal)?
+            let step = state::integration_step_in_window(tx, record.id, window_number, ordinal)?
                 .ok_or_else(state::recovery_required)?;
+            let continuation = evidence.local_oid != Some(candidate);
+            if continuation
+                && (evidence.local_oid.is_none()
+                    || step.intent.stage != super::merge::IntegrationStage::Primary
+                    || step.candidate_oid != Some(candidate)
+                    || !state::integration_resolution_released(tx, &record, &step)?)
+            {
+                return Err(state::recovery_required());
+            }
             if !is_sync(&record.target)
                 || !record.reconciliation_required
-                || record.sync_checkpoint != Some(C::FetchObserved)
+                || !matches!(
+                    record.sync_checkpoint,
+                    Some(C::FetchObserved | C::LocalFastForwarded)
+                )
+                || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
+                || record.sync_evidence.push_oid.is_some()
                 || step.phase != state::IntegrationStepPhase::Applied
-                || step.candidate_oid != Some(candidate)
+                || step.candidate_oid.is_some_and(|oid| oid != candidate)
+                || (state::integration_has_resolution_attempt(tx, &record, &step)?
+                    && !state::integration_resolution_released(tx, &record, &step)?)
                 || step.result_oid != Some(candidate)
                 || step.observed_tree_oid != Some(tree)
                 || evidence.expected_oid != record.sync_evidence.expected_oid
-                || evidence.local_oid != Some(candidate)
                 || evidence.primary_tracking_oid.is_none()
+                || state::latest_integration_window(tx, &record)?.number != window_number
             {
                 return Err(state::recovery_required());
             }
             tx.execute(
                 "UPDATE remote_operation_records SET phase='local_fast_forwarded', sync_checkpoint='local_fast_forwarded', reconciliation_required=0, local_oid=?2, tracking_oid=?3, primary_tracking_oid=?4, updated_at=max(updated_at,?5) WHERE id=?1",
-                params![record.id, candidate.to_string(), evidence.tracking_oid.map(|oid| oid.to_string()), evidence.primary_tracking_oid.map(|oid| oid.to_string()), now()],
+                params![record.id, evidence.local_oid.map(|oid| oid.to_string()), evidence.tracking_oid.map(|oid| oid.to_string()), evidence.primary_tracking_oid.map(|oid| oid.to_string()), now()],
             ).map_err(|_| state::recovery_required())?;
             Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    pub(super) fn observe_external_synchronization_integration(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if record.cancel_requested || record.yield_requested || !record.reconciliation_required {
+                return Err(state::recovery_required());
+            }
+            state::observe_external_integration(
+                tx,
+                &record,
+                step.window_number,
+                step.intent.ordinal,
+                candidate,
+                tree,
+            )
+        })
+    }
+
+    pub(super) fn release_inspected_synchronization_conflict(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if state::integration_step_in_window(
+                tx,
+                record.id,
+                step.window_number,
+                step.intent.ordinal,
+            )?
+            .as_ref()
+                != Some(step)
+                || step.phase != state::IntegrationStepPhase::ConflictPending
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome=NULL WHERE id=?1", [record.id])
+                .map_err(|_| state::recovery_required())?;
+            Ok(())
         })
     }
 
@@ -979,6 +1070,21 @@ impl RepositoryService {
         ordinal: u8,
         conflict_digest: [u8; 32],
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.reacquire_synchronization_conflict_in_window(
+            root, operation_id, target, 0, ordinal, conflict_digest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reacquire_synchronization_conflict_in_window(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        window_number: u32,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
@@ -993,7 +1099,7 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
-            let step = state::integration_step(tx, record.id, ordinal)?
+            let step = state::integration_step_in_window(tx, record.id, window_number, ordinal)?
                 .ok_or_else(state::recovery_required)?;
             if !matches!(
                 step.phase,
@@ -1088,9 +1194,20 @@ impl RepositoryService {
         intent: &state::ResolutionAttemptIntent,
         paths: &[state::ResolutionPathIntent],
     ) -> Result<(), RepositoryError> {
+        self.prepare_synchronization_resolution_attempt_in_window(root, owner, 0, intent, paths)
+    }
+
+    pub(super) fn prepare_synchronization_resolution_attempt_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        intent: &state::ResolutionAttemptIntent,
+        paths: &[state::ResolutionPathIntent],
+    ) -> Result<(), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            state::prepare_resolution_attempt(tx, &record, intent, paths)
+            state::prepare_resolution_attempt_in_window(tx, &record, window_number, intent, paths)
         })
     }
 
@@ -1267,14 +1384,20 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             use state::SynchronizationCheckpoint as C;
-            let applied: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND phase='applied')",
-                [record.id],
-                |row| row.get(0),
-            ).map_err(|_| state::recovery_required())?;
+            let window = state::latest_integration_window(tx, &record)?;
+            let ordinal = u8::from(record.target.context_ref().is_some());
+            let applied = state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+                .is_some_and(|step| {
+                    step.phase == state::IntegrationStepPhase::Applied
+                        && step.result_oid == evidence.local_oid
+                });
             if !is_sync(&record.target)
                 || record.reconciliation_required
-                || record.sync_checkpoint != Some(C::FetchObserved)
+                || !matches!(
+                    record.sync_checkpoint,
+                    Some(C::FetchObserved | C::LocalFastForwarded)
+                )
+                || record.sync_evidence.push_oid.is_some()
                 || !applied
                 || evidence.expected_oid != record.sync_evidence.expected_oid
                 || evidence.local_oid.is_none()
@@ -1400,7 +1523,11 @@ impl RepositoryService {
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
-            if state::has_pending_conflict(tx, id)? {
+            let foreign_conflict: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND operation.id!=?2 AND step.phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",
+                params![id, record.id], |row| row.get(0),
+            ).map_err(|_| state::recovery_required())?;
+            if foreign_conflict {
                 return Err(state::recovery_required());
             }
             crate::repository::recovery::require_no_pending_local(tx, id)?;
