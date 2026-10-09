@@ -25,6 +25,31 @@ After A Rejection", on that ticket's branch, hold the detail. The product
 owner asked for this ticket on 2026-10-08. F2's Part B depends on it; Part A
 does not.
 
+## Reproduction
+
+Reproduced on 2026-10-09 at main `6cf5d7f` by `tests/journal_rejection.rs`.
+Six of its seven tests fail with `RecoveryRequired` on the following
+operation; they are expected to fail until the fix lands.
+
+| Rejected call | Error returned | Next operation |
+|---|---|---|
+| `add_remote`, invalid name | `Git` | blocked |
+| `remove_remote`, invalid name | `Git` | blocked |
+| `enable`, branch not checked out | `WrongCheckedOutBranch` | blocked |
+| `create_and_enable`, target not empty | `InvalidPath` | blocked |
+| `save_document`, repository not enabled | `RepositoryNotEnabled` | blocked |
+| `save_document`, detached primary | `DetachedHead` | blocked |
+| `set_publication_remote`, invalid name | `DirtyConfigurationPath` | not blocked |
+
+The last row did not reach the Git error it was aimed at; the selection
+paths at `3275` and `3343` and `remove_registration` are still
+unreproduced.
+
+The Wave 02 Cycle 06 branch (`01K7F6H9J2N4Q6S8V0X2Z4B6DE`, in progress)
+adds further early returns after the row is begun, in `enable` and in the
+saves. A fix made return by return would miss them; see the F2 ticket
+discussion for the wrapper alternative.
+
 ## Where A Row Is Left
 
 Line numbers are in `src/repository.rs` at `6cf5d7f`.
