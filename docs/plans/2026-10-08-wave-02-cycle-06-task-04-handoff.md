@@ -78,6 +78,12 @@ Current source 600e0ff, eighth full native matrix:
 https://github.com/vhodges/manyhands/actions/runs/37868930176
 This is the current run to inspect before Task 4 acceptance; Tasks 5–7 not begun.
 
+Run 8 exposed legacy path/status fixture assumptions and one startup notification
+watchdog. Narrow independently reviewed test-only corrections and complete local
+gates pass. Current source 7b8949b, ninth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37872797196
+Inspect this exact-source gate before Task 4 acceptance; Tasks 5–7 not begun.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.
