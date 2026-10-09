@@ -1260,8 +1260,14 @@ fn a_directory_the_owner_does_not_list_as_a_worktree_is_not_a_repository() {
         path_string(&fixture.root)
     );
     for error in [
-        enabled.service.resolve_repository(&subdirectory).unwrap_err(),
-        enabled.service.inspect_repository(&subdirectory).unwrap_err(),
+        enabled
+            .service
+            .resolve_repository(&subdirectory)
+            .unwrap_err(),
+        enabled
+            .service
+            .inspect_repository(&subdirectory)
+            .unwrap_err(),
     ] {
         assert_eq!(error.code(), ResultCode::NotRepositoryRoot);
         assert_eq!(error.scope.repository, Some(path_string(&fixture.root)));

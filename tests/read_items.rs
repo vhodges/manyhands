@@ -2943,7 +2943,10 @@ fn a_path_with_a_nul_is_invalid_and_a_name_too_long_to_exist_is_not_found() {
                 .and_then(|code| u32::try_from(code).ok());
             assert!(
                 native_error.kind() == std::io::ErrorKind::NotFound
-                    || matches!(native_code, Some(ERROR_FILENAME_EXCED_RANGE | ERROR_INVALID_NAME)),
+                    || matches!(
+                        native_code,
+                        Some(ERROR_FILENAME_EXCED_RANGE | ERROR_INVALID_NAME)
+                    ),
                 "unexpected native name failure: {native_error:?}"
             );
         }

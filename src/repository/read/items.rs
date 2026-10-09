@@ -1259,7 +1259,9 @@ fn item_path_is_missing(error: &io::Error) -> bool {
         // component cannot exist names nothing. Other IO failures, including
         // access and sharing denials, retain their inaccessible classification.
         matches!(
-            error.raw_os_error().and_then(|code| u32::try_from(code).ok()),
+            error
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok()),
             Some(ERROR_FILENAME_EXCED_RANGE | ERROR_INVALID_NAME)
         )
     }

@@ -60,8 +60,7 @@ fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, Repositor
     assert!(matches!(
         service
             .enable(EnableRepositoryRequest {
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
-root: root.path().into(),
+                root: root.path().into(),
                 primary_branch: "main".into(),
                 identity: None,
                 operation_id: OperationId::new()
@@ -2916,13 +2915,17 @@ fn new_local_reconciliation_fences_cancel_and_stale_service_owner() {
                 .unwrap();
         } else {
             assert!(matches!(
-                other.restart_remote_synchronization(root.path(), operation, &target).unwrap(),
+                other
+                    .restart_remote_synchronization(root.path(), operation, &target)
+                    .unwrap(),
                 RemoteReservationOutcome::Reserved(_)
             ));
         }
         let before = local_binding_image(root.path());
         let mut evidence = state::with_transaction(&other, root.path(), |tx, id| {
-            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
         })
         .unwrap();
         let result = reconcile_pending_candidate(
@@ -2970,9 +2973,10 @@ fn unfinished_merge_observation_restart_records_the_installed_conflict_offline()
             .is_ok()
     );
     assert_eq!(
-        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| row
-            .get::<_, String>(0))
-            .unwrap(),
+        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
         "conflict_pending"
     );
 }
@@ -2994,12 +2998,7 @@ fn conflict_inspection_rejects_same_tree_head_movement_during_preparation() {
             db.query_row(
                 "SELECT phase,conflict_digest FROM remote_integration_steps",
                 [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<Vec<u8>>>(1)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
             )
             .unwrap()
         };
@@ -3042,7 +3041,10 @@ fn conflict_inspection_rejects_same_tree_head_movement_during_preparation() {
         let repository = git2::Repository::open(root.path()).unwrap();
         let head = repository.head().unwrap().target().unwrap();
         assert_ne!(head, local);
-        assert_eq!(repository.find_commit(head).unwrap().parent_id(0).unwrap(), local);
+        assert_eq!(
+            repository.find_commit(head).unwrap().parent_id(0).unwrap(),
+            local
+        );
         assert!(repository.index().unwrap().has_conflicts());
         assert!(repository.path().join("MERGE_HEAD").exists());
         // No conflict observation is recorded or released for a parent that
@@ -3099,7 +3101,14 @@ fn external_repair_exact_ordered_parent_clean_only() {
         let signature = repository.signature().unwrap();
         let unrelated_parent = (variant == "unrelated").then(|| {
             let oid = repository
-                .commit(None, &signature, &signature, "unrelated fixture", &tree, &[])
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    "unrelated fixture",
+                    &tree,
+                    &[],
+                )
                 .unwrap();
             repository.find_commit(oid).unwrap()
         });
@@ -3109,15 +3118,20 @@ fn external_repair_exact_ordered_parent_clean_only() {
             "unrelated" => vec![&local_parent, unrelated_parent.as_ref().unwrap()],
             _ => vec![&local_parent, &incoming_parent],
         };
+        // libgit2 refuses a HEAD update whose first parent is not the tip, so
+        // false repairs are installed as an external tool would leave them.
         let repaired = repository
             .commit(
-                Some("HEAD"),
+                None,
                 &signature,
                 &signature,
                 "external repair",
                 &tree,
                 &parents,
             )
+            .unwrap();
+        repository
+            .reference("refs/heads/main", repaired, true, "external repair")
             .unwrap();
         repository.cleanup_state().unwrap();
         repository
@@ -3130,7 +3144,11 @@ fn external_repair_exact_ordered_parent_clean_only() {
             repository.set_head_detached(repaired).unwrap();
         }
         if variant == "partial_metadata" {
-            fs::write(repository.path().join("MERGE_MSG"), b"uncertain external remnant\n").unwrap();
+            fs::write(
+                repository.path().join("MERGE_MSG"),
+                b"uncertain external remnant\n",
+            )
+            .unwrap();
         }
         let before = local_binding_image(root.path());
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
@@ -3143,7 +3161,9 @@ fn external_repair_exact_ordered_parent_clean_only() {
             panic!("same-operation local reconciliation")
         };
         let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
-            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
         })
         .unwrap();
         let result = reconcile_pending_candidate(
@@ -3157,7 +3177,11 @@ fn external_repair_exact_ordered_parent_clean_only() {
         if variant == "exact" {
             assert_eq!(result.unwrap().unwrap().oid, repaired);
             let step = state::with_transaction(&restarted, root.path(), |tx, id| {
-                state::integration_step(tx, state::read_operation(tx, id, operation)?.unwrap().id, 0)
+                state::integration_step(
+                    tx,
+                    state::read_operation(tx, id, operation)?.unwrap().id,
+                    0,
+                )
             })
             .unwrap()
             .unwrap();
@@ -3175,7 +3199,9 @@ fn external_repair_exact_ordered_parent_clean_only() {
     }
 }
 
-fn inspection_odb_inventory(repository: &git2::Repository) -> std::collections::BTreeSet<git2::Oid> {
+fn inspection_odb_inventory(
+    repository: &git2::Repository,
+) -> std::collections::BTreeSet<git2::Oid> {
     let mut objects = std::collections::BTreeSet::new();
     repository
         .odb()
@@ -3245,11 +3271,15 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
         ("docs/new.md".to_owned(), document.replace(item_id, new_id)),
         (
             format!(".manyhands/tickets/{new_id}/ticket.md"),
-            format!("---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"{new_id}\"\ntitle: New\ntype: task\nstatus: open\n---\n\nnew\n"),
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"{new_id}\"\ntitle: New\ntype: task\nstatus: open\n---\n\nnew\n"
+            ),
         ),
         (
             format!(".manyhands/comments/{item_id}/{new_id}.md"),
-            format!("---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"{new_id}\"\nitem_id: \"{item_id}\"\ncreated_at: 2026-09-30T12:00:00Z\n---\n\nnew\n"),
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"{new_id}\"\nitem_id: \"{item_id}\"\ncreated_at: 2026-09-30T12:00:00Z\n---\n\nnew\n"
+            ),
         ),
     ];
     for (path, valid) in cases {
@@ -3337,7 +3367,12 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
             // adoption boundary without OS-dependent symlink checkout setup.
             if matches!(shape, "invalid_utf8" | "valid_code_control") {
                 repository
-                    .reference("refs/heads/main", candidate, true, "fixture external repair")
+                    .reference(
+                        "refs/heads/main",
+                        candidate,
+                        true,
+                        "fixture external repair",
+                    )
                     .unwrap();
                 repository.cleanup_state().unwrap();
                 repository
@@ -3353,7 +3388,9 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
                     panic!("fenced external inspection")
                 };
                 let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
-                    Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+                    Ok(state::read_operation(tx, id, operation)?
+                        .unwrap()
+                        .sync_evidence)
                 })
                 .unwrap();
                 let result = reconcile_pending_candidate(
@@ -3367,12 +3404,16 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
                 if shape == "valid_code_control" {
                     assert_eq!(result.unwrap().unwrap().oid, candidate);
                 } else {
-                    assert!(matches!(result, Err(SynchronizationError::RecoveryRequired)));
+                    assert!(matches!(
+                        result,
+                        Err(SynchronizationError::RecoveryRequired)
+                    ));
                     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
                     assert_eq!(
-                        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| row
-                            .get::<_, String>(0))
-                            .unwrap(),
+                        db.query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+                            row.get::<_, String>(0)
+                        })
+                        .unwrap(),
                         "conflict_pending"
                     );
                 }
@@ -3385,7 +3426,12 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
 
 #[test]
 fn rejected_recorded_merge_inspection_never_imports_generated_clean_blobs() {
-    for phase in ["applying", "conflict_pending", "stale_owner", "index_mismatch"] {
+    for phase in [
+        "applying",
+        "conflict_pending",
+        "stale_owner",
+        "index_mismatch",
+    ] {
         let clean_base = "base first\nmiddle one\nmiddle two\nmiddle three\nbase last\n";
         let clean_local = "local first\nmiddle one\nmiddle two\nmiddle three\nbase last\n";
         let clean_incoming = "base first\nmiddle one\nmiddle two\nmiddle three\nincoming last\n";
@@ -3438,7 +3484,9 @@ fn rejected_recorded_merge_inspection_never_imports_generated_clean_blobs() {
         if phase == "stale_owner" {
             let other_service = RepositoryService::open_at(data.path()).unwrap();
             assert!(matches!(
-                other_service.restart_remote_synchronization(root.path(), operation, &target).unwrap(),
+                other_service
+                    .restart_remote_synchronization(root.path(), operation, &target)
+                    .unwrap(),
                 RemoteReservationOutcome::Reserved(_)
             ));
         }
@@ -3451,7 +3499,9 @@ fn rejected_recorded_merge_inspection_never_imports_generated_clean_blobs() {
         .unwrap()
         .unwrap();
         let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
-            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
         })
         .unwrap();
         assert!(
@@ -3513,7 +3563,10 @@ fn context_done_primary_pending_restart_is_local_only_without_stage_replay() {
     retry.restart = true;
     assert!(matches!(
         service.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
-        Err(SynchronizationError::ConflictPending { stage: SynchronizationStage::Primary, .. })
+        Err(SynchronizationError::ConflictPending {
+            stage: SynchronizationStage::Primary,
+            ..
+        })
     ));
     assert_eq!(local_binding_image(&worktree), before);
     assert_eq!(
@@ -3534,9 +3587,10 @@ fn context_done_primary_pending_restart_is_local_only_without_stage_replay() {
         context_oid
     );
     assert_eq!(
-        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| row
-            .get::<_, i64>(0))
-            .unwrap(),
+        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
         2
     );
 }
@@ -3553,7 +3607,11 @@ fn conflict_tokens_bind_windows_without_rebinding_legacy_attempts() {
     later.observation.window_number = 1;
     assert_ne!(original, later);
     assert_ne!(
-        bind_conflict_digest(original.observation.fingerprint, 1, original.observation.ordinal),
+        bind_conflict_digest(
+            original.observation.fingerprint,
+            1,
+            original.observation.ordinal
+        ),
         original.observation.fingerprint
     );
     assert_ne!(
@@ -3614,7 +3672,8 @@ fn local_effect_restart_before_clean_preflight_and_transport() {
             .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
             .unwrap();
         let observation =
-            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None)
+                .unwrap();
         commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
         let tree = repository.find_commit(local).unwrap().tree_id();
         service
@@ -3710,32 +3769,32 @@ fn released_checkpoint_then_normal_save_continuation_preserves_original_candidat
     );
     let ResolveSynchronizationOutcome::LocalCheckpointComplete {
         commit_oid: checkpoint,
-    } =
-        service.resolve_synchronization(resolution).unwrap()
+    } = service.resolve_synchronization(resolution).unwrap()
     else {
         panic!("released checkpoint")
     };
     let ticket_path = worktree.join(format!(".manyhands/tickets/{ticket_id}/ticket.md"));
     assert!(matches!(
-        service.save_ticket(SaveTicketRequest {
-            target: AuthoringTarget {
-                root: root.path().into(),
-                kind: AuthoringKind::Ticket,
-                item_id: ticket_id.clone(),
-                intent: ContextIntent::Edit,
-                operation_id: OperationId::new(),
-            },
-            draft: TicketDraft {
-                title: "normal continuation".into(),
-                body: "later saved checkpoint".into(),
-                ticket_type: "task".into(),
-                status: "open".into(),
-                project: None,
-                team: None,
-            },
-            expected_path: ExpectedPathObservation::from_bytes(&fs::read(ticket_path).unwrap()),
-        })
-        .unwrap(),
+        service
+            .save_ticket(SaveTicketRequest {
+                target: AuthoringTarget {
+                    root: root.path().into(),
+                    kind: AuthoringKind::Ticket,
+                    item_id: ticket_id.clone(),
+                    intent: ContextIntent::Edit,
+                    operation_id: OperationId::new(),
+                },
+                draft: TicketDraft {
+                    title: "normal continuation".into(),
+                    body: "later saved checkpoint".into(),
+                    ticket_type: "task".into(),
+                    status: "open".into(),
+                    project: None,
+                    team: None,
+                },
+                expected_path: ExpectedPathObservation::from_bytes(&fs::read(ticket_path).unwrap()),
+            })
+            .unwrap(),
         SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
     ));
     let repository = git2::Repository::open(&worktree).unwrap();
@@ -3745,6 +3804,14 @@ fn released_checkpoint_then_normal_save_continuation_preserves_original_candidat
             .graph_descendant_of(descendant, checkpoint)
             .unwrap()
     );
+    // A save commits its owned paths without rewriting the on-disk index.
+    // Continuation needs a clean target, so refresh it as the public
+    // synchronization fixtures do after authoring.
+    let mut index = repository.index().unwrap();
+    index
+        .read_tree(&repository.head().unwrap().peel_to_tree().unwrap())
+        .unwrap();
+    index.write().unwrap();
     let before = local_binding_image(&worktree);
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
@@ -3762,7 +3829,9 @@ fn released_checkpoint_then_normal_save_continuation_preserves_original_candidat
         panic!("original operation")
     };
     let mut evidence = state::with_transaction(&restarted, root.path(), |tx, id| {
-        Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+        Ok(state::read_operation(tx, id, operation)?
+            .unwrap()
+            .sync_evidence)
     })
     .unwrap();
     let sync_target = SynchronizationTarget::Context {
@@ -3800,7 +3869,11 @@ fn synchronization_handoff_refuses_unreleased_resolution_artifacts() {
     let before = local_binding_image(root.path());
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     let phase: String = db
-        .query_row("SELECT phase FROM remote_resolution_index_artifacts", [], |row| row.get(0))
+        .query_row(
+            "SELECT phase FROM remote_resolution_index_artifacts",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_ne!(phase, "released");
     let mut retry = request(root.path());
@@ -3814,9 +3887,12 @@ fn synchronization_handoff_refuses_unreleased_resolution_artifacts() {
     );
     assert_eq!(local_binding_image(root.path()), before);
     assert_eq!(
-        db.query_row("SELECT phase FROM remote_resolution_index_artifacts", [], |row| row
-            .get::<_, String>(0))
-            .unwrap(),
+        db.query_row(
+            "SELECT phase FROM remote_resolution_index_artifacts",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
         phase
     );
 }
@@ -3880,7 +3956,11 @@ fn recorded_candidate_fault_table_preserves_partial_checkout_and_observes_ref_on
             db.execute_batch("CREATE TRIGGER observation_fault BEFORE UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied' BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
         }
         if point == "operator_lock" {
-            fs::write(repository.path().join("index.lock"), b"operator-owned lock\n").unwrap();
+            fs::write(
+                repository.path().join("index.lock"),
+                b"operator-owned lock\n",
+            )
+            .unwrap();
         }
         let before = local_binding_image(root.path());
         let logs = || {
@@ -3900,7 +3980,9 @@ fn recorded_candidate_fault_table_preserves_partial_checkout_and_observes_ref_on
             panic!("fenced restart")
         };
         let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
-            Ok(state::read_operation(tx, id, operation)?.unwrap().sync_evidence)
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
         })
         .unwrap();
         let reconcile = |evidence: &mut state::SynchronizationEvidence| {
@@ -3915,10 +3997,17 @@ fn recorded_candidate_fault_table_preserves_partial_checkout_and_observes_ref_on
         };
         let result = reconcile(&mut evidence);
         if matches!(point, "after_checkout" | "operator_lock") {
-            assert!(matches!(result, Err(SynchronizationError::RecoveryRequired)));
+            assert!(matches!(
+                result,
+                Err(SynchronizationError::RecoveryRequired)
+            ));
             assert_eq!(
                 repository.head().unwrap().target(),
-                Some(if point == "after_checkout" { local } else { candidate })
+                Some(if point == "after_checkout" {
+                    local
+                } else {
+                    candidate
+                })
             );
             assert_eq!(local_binding_image(root.path()), before);
             assert_eq!(logs(), before_logs);
@@ -4005,7 +4094,12 @@ fn new_refs_append_window_immutable_evidence() {
             None
         };
         repository
-            .reference(plan.primary().tracking_ref(), incoming, true, "fixture observation")
+            .reference(
+                plan.primary().tracking_ref(),
+                incoming,
+                true,
+                "fixture observation",
+            )
             .unwrap();
         service
             .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
@@ -4029,11 +4123,16 @@ fn new_refs_append_window_immutable_evidence() {
         evidence.primary_tracking_oid = Some(incoming);
         evidence.tracking_oid = Some(incoming);
         if let Some(pending) = pending {
-            finalize_reconciled_candidate(&service, root.path(), &owner, pending, &evidence).unwrap();
+            finalize_reconciled_candidate(&service, root.path(), &owner, pending, &evidence)
+                .unwrap();
         }
         let batch = state::with_transaction(&service, root.path(), |tx, id| {
-            tx.query_row("SELECT id FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1", [id], |row| row.get::<_, i64>(0))
-                .map_err(|_| state::recovery_required())
+            tx.query_row(
+                "SELECT id FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| state::recovery_required())
         })
         .unwrap();
         service
@@ -4094,9 +4193,10 @@ fn new_refs_append_window_immutable_evidence() {
     }
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     assert_eq!(
-        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| row
-            .get::<_, i64>(0))
-            .unwrap(),
+        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
         2
     );
     assert_eq!(repository.head().unwrap().target(), Some(second));
@@ -7748,13 +7848,8 @@ fn comment_resolution_created_by_changes_fail_validation_before_effects() {
         );
         assert!(inspection.paths[0].token.path == path.as_bytes());
         let attempt = OperationId::new();
-        let request = resolution_request_for_bodies(
-            root.path(),
-            operation,
-            attempt,
-            &inspection,
-            &[&result],
-        );
+        let request =
+            resolution_request_for_bodies(root.path(), operation, attempt, &inspection, &[&result]);
         let repository = git2::Repository::open(root.path()).unwrap();
         let (token, bytes) = &request.resolutions[0];
         let replacements = std::collections::BTreeMap::from([(token.ordinal, (token, bytes))]);
@@ -7847,8 +7942,10 @@ fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies
             let incoming = resolution_creator_comment(creator, reply, "incoming");
             let result = resolution_creator_comment(creator, reply, "resolved\n\n  exact spacing")
                 .replace("---\n\n", "custom: [keep, unknown]\n---\n\n");
-            let path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md";
-            let parent_path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01BX5ZZKBKACTAV9WEVGEMMVRZ.md";
+            let path =
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md";
+            let parent_path =
+                ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01BX5ZZKBKACTAV9WEVGEMMVRZ.md";
             let parent = resolution_creator_comment(None, false, "parent")
                 .replace("01CRZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ");
             let (root, _data, service, operation, local_oid, incoming_oid) = resolution_fixture(&[
@@ -7888,7 +7985,14 @@ fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies
             assert!(fs::read(root.path().join(path)).unwrap() == result.as_bytes());
             assert!(fs::read(root.path().join(parent_path)).unwrap() == parent.as_bytes());
             let blob = repository
-                .find_blob(commit.tree().unwrap().get_path(Path::new(path)).unwrap().id())
+                .find_blob(
+                    commit
+                        .tree()
+                        .unwrap()
+                        .get_path(Path::new(path))
+                        .unwrap()
+                        .id(),
+                )
                 .unwrap();
             assert!(blob.content() == result.as_bytes());
             let canonical::CanonicalItem::Comment(comment) =

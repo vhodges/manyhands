@@ -794,7 +794,9 @@ fn window_intent_and_local_effect_boundaries_fence_stale_services_and_cancellati
         let record = state::read_operation(tx, id, owner.operation_id())?.unwrap();
         assert!(record.cancel_requested);
         assert_eq!(
-            state::integration_step_in_window(tx, record.id, 1, 0)?.unwrap().phase,
+            state::integration_step_in_window(tx, record.id, 1, 0)?
+                .unwrap()
+                .phase,
             state::IntegrationStepPhase::Prepared
         );
         assert!(state::integration_step(tx, record.id, 0)?.is_none());
@@ -891,6 +893,19 @@ fn candidate_reconciliation_advances_fetch_observed_once_after_child_observation
         record.sync_checkpoint,
         Some(state::SynchronizationCheckpoint::FetchObserved)
     );
+    // Finalization requires the restarted Fetch to have completed first.
+    service
+        .remote_safe_point(root.path(), &resumed, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &resumed,
+        &plan(),
+        &[observation()],
+        124,
+    )
+    .unwrap();
     let mut evidence = record.sync_evidence;
     evidence.local_oid = Some(candidate);
     evidence.primary_tracking_oid = Some(local);
@@ -978,11 +993,15 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
             .unwrap(),
         RemoteReservationOutcome::Busy
     ));
-    assert!(
-        service
-            .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
-            .is_err()
-    );
+    // The same operation may restart for offline inspection of its own
+    // conflict; that token is fenced again by explicit reacquisition.
+    let inspecting = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
     assert!(
         other
             .reacquire_synchronization_conflict(
@@ -1007,6 +1026,11 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
         RemoteReservationOutcome::Reserved(owner) => owner,
         other => panic!("{other:?}"),
     };
+    assert!(
+        service
+            .applying_synchronization_candidate(root.path(), &inspecting)
+            .is_err()
+    );
     assert!(
         service
             .begin_synchronization_integration_effect(root.path(), &owner, 0, None)

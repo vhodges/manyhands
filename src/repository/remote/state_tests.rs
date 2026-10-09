@@ -1259,7 +1259,9 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
         INSERT INTO remote_resolution_index_artifacts(attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,phase) VALUES(51,7,8,zeroblob(32),zeroblob(32),9,10,'intent');
         INSERT INTO remote_resolution_ref_log_artifacts VALUES(51,'baseline',11,12,zeroblob(32));").unwrap();
     let snapshot = |connection: &Connection, table: &str| {
-        let mut query = connection.prepare(&format!("SELECT * FROM {table} ORDER BY 1")).unwrap();
+        let mut query = connection
+            .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+            .unwrap();
         let columns = query.column_count();
         query
             .query_map([], |row| {
@@ -1306,11 +1308,21 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
             ("legacy".into(), None, None, None, None)
         );
         assert_eq!(
-            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(),
+            connection
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
             0
         );
         assert_eq!(
-            connection.query_row("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'", [], |row| row.get::<_, i64>(0)).unwrap(),
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
             0
         );
     }
@@ -1423,7 +1435,14 @@ fn absent_context_window_keeps_primary_at_slot_one_and_freezes_the_ref_pass() {
             "cannot append past a prepared effect"
         );
         begin_integration_effect_in_window(tx, &record, 1, 1, None)?;
-        observe_integration_effect_in_window(tx, &record, 1, 1, step.incoming_oid, step.baseline_tree_oid)?;
+        observe_integration_effect_in_window(
+            tx,
+            &record,
+            1,
+            1,
+            step.incoming_oid,
+            step.baseline_tree_oid,
+        )?;
         assert!(
             prepare_integration_window(
                 tx,
@@ -1455,7 +1474,9 @@ fn absent_context_window_keeps_primary_at_slot_one_and_freezes_the_ref_pass() {
             "legacy lookup must never select a later window"
         );
         assert_eq!(
-            integration_step_in_window(tx, record.id, 1, 1)?.unwrap().phase,
+            integration_step_in_window(tx, record.id, 1, 1)?
+                .unwrap()
+                .phase,
             IntegrationStepPhase::Applied
         );
         audit_merge_evidence(tx, &record)
@@ -1477,7 +1498,8 @@ fn new_window_requires_exact_batch_generation_and_tracking_oids() {
             tx.execute_batch("SAVEPOINT corrupt_batch").unwrap();
             tx.execute_batch(mutation).unwrap();
             assert!(prepare_integration_window(tx, &record, 1, &intent).is_err());
-            tx.execute_batch("ROLLBACK TO corrupt_batch; RELEASE corrupt_batch").unwrap();
+            tx.execute_batch("ROLLBACK TO corrupt_batch; RELEASE corrupt_batch")
+                .unwrap();
             Ok(())
         })
         .unwrap();
@@ -1607,7 +1629,13 @@ fn legacy_window_upgrade_refuses_orphans_without_discarding_old_evidence() {
     assert!(migrate(&tx).is_err());
     tx.rollback().unwrap();
     assert_eq!(
-        connection.query_row("SELECT integration_step_id FROM remote_resolution_attempts WHERE id=51", [], |row| row.get::<_, i64>(0)).unwrap(),
+        connection
+            .query_row(
+                "SELECT integration_step_id FROM remote_resolution_attempts WHERE id=51",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
         41
     );
     assert!(
@@ -1642,22 +1670,39 @@ fn legacy_window_upgrade_sql_fault_rolls_back_rebuilt_tables_and_temp_copies() {
         .unwrap();
     assert_eq!(restored, original);
     assert_eq!(
-        connection.query_row("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
         0
     );
     assert_eq!(
-        connection.query_row("SELECT count(*) FROM sqlite_master WHERE name='remote_integration_windows'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='remote_integration_windows'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
         0
     );
 }
 
 #[test]
 fn window_schema_loss_or_weakened_immutability_cannot_be_recreated_as_legacy() {
-    for mutation in ["DROP TABLE remote_integration_windows", "DROP TRIGGER remote_integration_window_immutable; CREATE TRIGGER remote_integration_window_immutable BEFORE UPDATE ON remote_integration_windows BEGIN SELECT 1; END;"] {
+    for mutation in [
+        "DROP TABLE remote_integration_windows",
+        "DROP TRIGGER remote_integration_window_immutable; CREATE TRIGGER remote_integration_window_immutable BEFORE UPDATE ON remote_integration_windows BEGIN SELECT 1; END;",
+    ] {
         let (data, _root, _service) = fixture();
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         db.execute_batch(mutation).unwrap();
-        assert!(matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired));
+        assert!(
+            matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        );
     }
 }
 
@@ -1673,7 +1718,10 @@ fn pinned_window_pass_survives_configuration_fencing_and_registration_cascade() 
         let generation = configure(tx, id, Some(&next_plan), false)?;
         // A retained old pass is not live endpoint history and must not cause
         // another generation bump when the new endpoint is first bound.
-        assert_eq!(configure_endpoints(tx, id, &next_plan, &[3; 32])?, generation);
+        assert_eq!(
+            configure_endpoints(tx, id, &next_plan, &[3; 32])?,
+            generation
+        );
         let record = read_operation(tx, id, operation)?.unwrap();
         assert_eq!(record.phase, RemoteOperationPhase::Interrupted);
         assert_eq!(
@@ -1710,13 +1758,24 @@ fn pinned_window_pass_survives_configuration_fencing_and_registration_cascade() 
         );
         // Exercise the FK cascade used by explicit registration removal, not a
         // Git cleanup. Retained pass evidence must not deadlock the root delete.
-        tx.execute("DELETE FROM repositories WHERE id=?1", [id]).unwrap();
+        tx.execute("DELETE FROM repositories WHERE id=?1", [id])
+            .unwrap();
         assert_eq!(
-            tx.query_row("SELECT count(*) FROM remote_integration_windows", [], |row| row.get::<_, i64>(0)).unwrap(),
+            tx.query_row(
+                "SELECT count(*) FROM remote_integration_windows",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
-            tx.query_row("SELECT count(*) FROM remote_observation_batches", [], |row| row.get::<_, i64>(0)).unwrap(),
+            tx.query_row(
+                "SELECT count(*) FROM remote_observation_batches",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
             0
         );
         Ok(())
@@ -1902,16 +1961,22 @@ fn assert_missing_initial_window_requires_recovery(populated: bool) {
             ),
         ] {
             assert_eq!(
-                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get::<_, i64>(0)).unwrap(),
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
                 expected
             );
         }
         assert_eq!(
-            db.execute("DELETE FROM remote_integration_windows WHERE number=0", []).unwrap(),
+            db.execute("DELETE FROM remote_integration_windows WHERE number=0", [])
+                .unwrap(),
             1
         );
         assert_eq!(
-            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(),
+            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
             0
         );
         validate_merge_evidence_schema(&db).unwrap();
@@ -1928,8 +1993,10 @@ fn assert_missing_initial_window_requires_recovery(populated: bool) {
             matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
         );
         assert!(
-            with_transaction(&service, root.path(), |tx, id| read_operation(tx, id, operation))
-                .is_err()
+            with_transaction(&service, root.path(), |tx, id| read_operation(
+                tx, id, operation
+            ))
+            .is_err()
         );
         assert!(
             matches!(service.reserve_remote_operation(root.path(), operation, &target), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
@@ -1999,7 +2066,10 @@ fn window_zero_requirement_excludes_non_sync_operations_and_removed_registration
         tx.execute("DELETE FROM repositories WHERE id=?1", [id])
             .unwrap();
         assert_eq!(
-            tx.query_row("SELECT count(*) FROM remote_operation_records", [], |row| row.get::<_, i64>(0)).unwrap(),
+            tx.query_row("SELECT count(*) FROM remote_operation_records", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
             0
         );
         Ok(())

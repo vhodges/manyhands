@@ -884,7 +884,8 @@ impl RepositoryService {
     ) -> Result<(), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            if record.cancel_requested || record.yield_requested || !record.reconciliation_required {
+            if record.cancel_requested || record.yield_requested || !record.reconciliation_required
+            {
                 return Err(state::recovery_required());
             }
             state::observe_external_integration(
@@ -918,8 +919,11 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
-            tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome=NULL WHERE id=?1", [record.id])
-                .map_err(|_| state::recovery_required())?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL WHERE id=?1",
+                [record.id],
+            )
+            .map_err(|_| state::recovery_required())?;
             Ok(())
         })
     }
@@ -999,7 +1003,13 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             if window_number == 0 {
-                state::observe_integration_effect(tx, &record, ordinal, result_oid, observed_tree_oid)
+                state::observe_integration_effect(
+                    tx,
+                    &record,
+                    ordinal,
+                    result_oid,
+                    observed_tree_oid,
+                )
             } else {
                 // Observation must remain durable even if cancellation arrived
                 // after the effect. The next mutation boundary handles it.
@@ -1071,7 +1081,12 @@ impl RepositoryService {
         conflict_digest: [u8; 32],
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         self.reacquire_synchronization_conflict_in_window(
-            root, operation_id, target, 0, ordinal, conflict_digest,
+            root,
+            operation_id,
+            target,
+            0,
+            ordinal,
+            conflict_digest,
         )
     }
 

@@ -486,7 +486,13 @@ fn migrate_integration_windows(tx: &Transaction<'_>) -> Result<(), RepositoryErr
         // invitation to recreate legacy rows on a later startup.
         return Ok(());
     }
-    let window_present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_integration_windows')", [], |row| row.get(0)).map_err(|_| recovery_required())?;
+    let window_present: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_integration_windows')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
     if window_present {
         return Err(recovery_required());
     }
@@ -2410,7 +2416,13 @@ pub(super) fn prepare_integration_window(
     }
     let previous = number.checked_sub(1).ok_or_else(recovery_required)?;
     let window = integration_window(tx, record, previous)?.ok_or_else(recovery_required)?;
-    let latest: i64 = tx.query_row("SELECT max(number) FROM remote_integration_windows WHERE operation_record_id=?1", [record.id], |row| row.get(0)).map_err(|_| recovery_required())?;
+    let latest: i64 = tx
+        .query_row(
+            "SELECT max(number) FROM remote_integration_windows WHERE operation_record_id=?1",
+            [record.id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
     let unfinished: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND phase!='applied')", [record.id], |row| row.get(0)).map_err(|_| recovery_required())?;
     let unfinished_resolution: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt LEFT JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1 AND (attempt.phase!='applied' OR artifact.phase IS NULL OR artifact.phase!='released' OR artifact.ref_phase!='observed'))", [record.id], |row| row.get(0)).map_err(|_| recovery_required())?;
     if latest != i64::from(window.number)
@@ -2467,14 +2479,21 @@ pub(super) fn prepare_integration_step_in_window(
     {
         return Err(recovery_required());
     }
-    if let Some(existing) = integration_step_in_window(tx, record.id, window_number, intent.ordinal)?
+    if let Some(existing) =
+        integration_step_in_window(tx, record.id, window_number, intent.ordinal)?
     {
         if existing.intent != *intent || existing.phase != IntegrationStepPhase::Prepared {
             return Err(recovery_required());
         }
         return Ok(existing);
     }
-    let latest: i64 = tx.query_row("SELECT max(number) FROM remote_integration_windows WHERE operation_record_id=?1", [record.id], |row| row.get(0)).map_err(|_| recovery_required())?;
+    let latest: i64 = tx
+        .query_row(
+            "SELECT max(number) FROM remote_integration_windows WHERE operation_record_id=?1",
+            [record.id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
     if latest != i64::from(window_number) {
         return Err(recovery_required());
     }
@@ -2605,6 +2624,7 @@ pub(super) fn record_integration_conflict_in_window(
     Ok(())
 }
 
+#[cfg(test)] // Window-zero form retained for legacy-evidence tests.
 pub(super) fn integration_step(
     connection: &Connection,
     operation_record_id: i64,
@@ -2686,7 +2706,8 @@ fn audit_merge_evidence(
             return Err(recovery_required());
         }
         let number = number.try_into().map_err(|_| recovery_required())?;
-        let window = integration_window(connection, record, number)?.ok_or_else(recovery_required)?;
+        let window =
+            integration_window(connection, record, number)?.ok_or_else(recovery_required)?;
         let first = i64::from(
             record.target.context_ref().is_some()
                 && window
@@ -2728,7 +2749,8 @@ fn audit_merge_evidence(
                         .filter(|step| step.phase == IntegrationStepPhase::Applied)
                         .and_then(|step| step.result_oid)
                 };
-                if incoming != Some(step.intent.incoming_oid) || local != Some(step.intent.local_oid)
+                if incoming != Some(step.intent.incoming_oid)
+                    || local != Some(step.intent.local_oid)
                 {
                     return Err(recovery_required());
                 }
@@ -2842,6 +2864,7 @@ pub(super) fn prepare_identity_confirmation(
     Ok(())
 }
 
+#[cfg(test)] // Window-zero form retained for legacy-evidence tests.
 pub(super) fn prepare_resolution_attempt(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,
@@ -2866,9 +2889,8 @@ pub(super) fn prepare_resolution_attempt_in_window(
     {
         return Err(recovery_required());
     }
-    let step =
-        integration_step_in_window(tx, record.id, window_number, intent.step_ordinal)?
-            .ok_or_else(recovery_required)?;
+    let step = integration_step_in_window(tx, record.id, window_number, intent.step_ordinal)?
+        .ok_or_else(recovery_required)?;
     if !matches!(
         step.phase,
         IntegrationStepPhase::ConflictPending

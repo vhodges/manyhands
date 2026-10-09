@@ -372,8 +372,8 @@ fn local_target(
 ) -> Result<git2::Repository, SynchronizationError> {
     let linked = materialized_target(root, primary, target)?;
     if let SynchronizationTarget::Context { kind, item_id } = target {
-        let repository = git2::Repository::open(root)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let repository =
+            git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
         let context = ItemContext {
             root: root.to_owned(),
             kind: *kind,
@@ -466,12 +466,12 @@ fn require_clean_target(
     ]
     .iter()
     .any(|name| {
-        [linked.path(), linked.commondir()]
-            .into_iter()
-            .any(|root| match std::fs::symlink_metadata(root.join(name)) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                _ => true,
-            })
+        [linked.path(), linked.commondir()].into_iter().any(|root| {
+            !matches!(
+                std::fs::symlink_metadata(root.join(name)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+        })
     });
     if foreign_state
         || linked.state() != git2::RepositoryState::Clean
@@ -3016,7 +3016,8 @@ fn reconcile_pending_candidate(
             // this conflict be recorded against the frozen local parent.
             if local_oid(&fresh)? != step.intent.local_oid
                 || !exact_resolution_merge_metadata(&mut fresh, step.intent.incoming_oid)?
-                || integration_conflict_digest(&mut fresh, step.window_number, step.intent.ordinal).ok()
+                || integration_conflict_digest(&mut fresh, step.window_number, step.intent.ordinal)
+                    .ok()
                     != expected_conflict
                 || !baseline_matches
                 || resolution_preflight(&fresh, &[])? != preflight
@@ -3060,8 +3061,7 @@ fn reconcile_pending_candidate(
         let fresh = materialized_target(root, primary_branch, target)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         refuse_local_reconciliation_locks(&fresh)?;
-        require_clean_target(&fresh, target)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        require_clean_target(&fresh, target).map_err(|_| SynchronizationError::RecoveryRequired)?;
         if local_oid(&fresh)? != head {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -3076,7 +3076,8 @@ fn reconcile_pending_candidate(
     }
     if matches!(
         step.phase,
-        state::IntegrationStepPhase::ResolutionPrepared | state::IntegrationStepPhase::CommitPrepared
+        state::IntegrationStepPhase::ResolutionPrepared
+            | state::IntegrationStepPhase::CommitPrepared
     ) {
         // Only the identical resolution request can resume its native artifacts.
         return Err(SynchronizationError::RecoveryRequired);
@@ -3125,7 +3126,11 @@ fn reconcile_pending_candidate(
             || !repository
                 .graph_descendant_of(observed_head, candidate)
                 .unwrap_or(false)
-            || !RepositoryService::validates_external_integration(&repository, &step, observed_head)?
+            || !RepositoryService::validates_external_integration(
+                &repository,
+                &step,
+                observed_head,
+            )?
         {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -3143,8 +3148,7 @@ fn reconcile_pending_candidate(
         service.synchronization_boundary(root, owner)?;
         let fresh = materialized_target(root, primary_branch, target)?;
         refuse_local_reconciliation_locks(&fresh)?;
-        require_clean_target(&fresh, target)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        require_clean_target(&fresh, target).map_err(|_| SynchronizationError::RecoveryRequired)?;
         if local_oid(&fresh)? != observed_head {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -3161,8 +3165,7 @@ fn reconcile_pending_candidate(
     let fresh = materialized_target(root, primary_branch, target)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
     refuse_local_reconciliation_locks(&fresh)?;
-    require_clean_target(&fresh, target)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    require_clean_target(&fresh, target).map_err(|_| SynchronizationError::RecoveryRequired)?;
     let head = local_oid(&fresh)?;
     let commit = repository
         .find_commit(candidate)
@@ -3241,15 +3244,17 @@ fn finalize_reconciled_candidate(
     candidate: ReconciledCandidate,
     evidence: &state::SynchronizationEvidence,
 ) -> Result<(), SynchronizationError> {
-    decision(service.reconcile_synchronization_candidate_applied_in_window(
-        root,
-        owner,
-        candidate.window_number,
-        candidate.ordinal,
-        candidate.oid,
-        candidate.tree,
-        evidence,
-    )?)
+    decision(
+        service.reconcile_synchronization_candidate_applied_in_window(
+            root,
+            owner,
+            candidate.window_number,
+            candidate.ordinal,
+            candidate.oid,
+            candidate.tree,
+            evidence,
+        )?,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -3352,8 +3357,7 @@ fn integrate_divergence(
                 // the last completed stage, not necessarily this earlier one.
                 continue;
             }
-            if step.phase != state::IntegrationStepPhase::Prepared
-                || step.intent.local_oid != local
+            if step.phase != state::IntegrationStepPhase::Prepared || step.intent.local_oid != local
             {
                 return Err(SynchronizationError::RecoveryRequired);
             }
@@ -3390,7 +3394,12 @@ fn integrate_divergence(
         drop(local_commit);
         // Persist the exact ordered parents before even preparing a candidate;
         // a restart must never synthesize another candidate for this stage.
-        service.prepare_synchronization_integration_in_window(root, owner, window.number, &intent)?;
+        service.prepare_synchronization_integration_in_window(
+            root,
+            owner,
+            window.number,
+            &intent,
+        )?;
         let prepared = if classification == merge::IntegrationDisposition::MergeRequired {
             Some(prepare_clean_merge(&path, local, incoming)?)
         } else {
@@ -3555,7 +3564,8 @@ fn integrate_divergence(
                         .merge(&[&annotated], None, Some(&mut checkout))
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
                     drop(annotated);
-                    let fingerprint = integration_conflict_digest(&mut repository, window.number, ordinal)?;
+                    let fingerprint =
+                        integration_conflict_digest(&mut repository, window.number, ordinal)?;
                     service.release_synchronization_conflict_in_window(
                         root,
                         owner,
@@ -3953,7 +3963,9 @@ impl RepositoryService {
             affected.insert(Self::canonical_item_id(&item));
             sources.insert(token.path.clone(), bytes.bytes().to_vec());
         }
-        Ok(Self::validates_context_sources(&baseline, &sources, affected))
+        Ok(Self::validates_context_sources(
+            &baseline, &sources, affected,
+        ))
     }
 
     fn validates_context_sources(
@@ -4139,9 +4151,11 @@ impl RepositoryService {
                 Ok(blob) => {
                     if canonical_path
                         || path_text.is_some_and(|path| {
-                            std::str::from_utf8(blob.content()).ok().is_some_and(|text| {
-                                Self::is_canonical_tree_source(Path::new(path), text)
-                            })
+                            std::str::from_utf8(blob.content())
+                                .ok()
+                                .is_some_and(|text| {
+                                    Self::is_canonical_tree_source(Path::new(path), text)
+                                })
                         })
                     {
                         entries.insert(path.clone(), (entry.id(), entry.filemode(), entry.kind()));
@@ -4258,7 +4272,8 @@ impl RepositoryService {
         let mut repository = Self::inspect_conflict_target(&root, &target)?;
         let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
         let head = local_oid(&repository)?;
-        let fingerprint = integration_conflict_digest(&mut repository, step.window_number, ordinal)?;
+        let fingerprint =
+            integration_conflict_digest(&mut repository, step.window_number, ordinal)?;
         if head != step.intent.local_oid
             || fingerprint
                 != step
@@ -5543,8 +5558,10 @@ impl RepositoryService {
             let has_child = state::with_transaction(self, &root, |tx, _| {
                 let window = state::latest_integration_window(tx, record)?;
                 Ok(window.intent.is_some()
-                    || state::integration_step_in_window(tx, record.id, window.number, 0)?.is_some()
-                    || state::integration_step_in_window(tx, record.id, window.number, 1)?.is_some())
+                    || state::integration_step_in_window(tx, record.id, window.number, 0)?
+                        .is_some()
+                    || state::integration_step_in_window(tx, record.id, window.number, 1)?
+                        .is_some())
             })?;
             if has_child {
                 let owner = match self.restart_remote_synchronization(
@@ -5692,8 +5709,12 @@ impl RepositoryService {
                 let window = state::latest_integration_window(tx, &record)?;
                 let first = state::integration_step_in_window(tx, record.id, window.number, 0)?;
                 let primary_ordinal = u8::from(record.target.context_ref().is_some());
-                let last =
-                    state::integration_step_in_window(tx, record.id, window.number, primary_ordinal)?;
+                let last = state::integration_step_in_window(
+                    tx,
+                    record.id,
+                    window.number,
+                    primary_ordinal,
+                )?;
                 let started = window.intent.is_some() || first.is_some() || last.is_some();
                 let unfinished = started
                     && last
@@ -5727,7 +5748,8 @@ impl RepositoryService {
                     .as_ref()
                     .map(|pass| pass.primary_oid)
                     .or(evidence.primary_tracking_oid);
-                let selected_tracking = if matches!(request.target, SynchronizationTarget::Primary) {
+                let selected_tracking = if matches!(request.target, SynchronizationTarget::Primary)
+                {
                     primary_tracking
                 } else {
                     frozen_context
@@ -5980,8 +6002,10 @@ impl RepositoryService {
             let window = state::latest_integration_window(tx, &record)?;
             Ok(record.sync_evidence.push_oid.is_none()
                 && (window.intent.is_some()
-                    || state::integration_step_in_window(tx, record.id, window.number, 0)?.is_some()
-                    || state::integration_step_in_window(tx, record.id, window.number, 1)?.is_some()))
+                    || state::integration_step_in_window(tx, record.id, window.number, 0)?
+                        .is_some()
+                    || state::integration_step_in_window(tx, record.id, window.number, 1)?
+                        .is_some()))
         })?;
         if divergence || ordered_continuation {
             let local =

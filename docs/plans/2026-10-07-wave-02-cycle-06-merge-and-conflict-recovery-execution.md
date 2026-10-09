@@ -1781,3 +1781,52 @@ no hook-key leak. Its two notes — one probable rustfmt reflow in the test and 
 misplaced comment — are applied. It also observed that the native workflow runs
 no fmt or clippy step, so those gates stay owed to Task 7's final local commands
 rather than being implied by a green matrix. Publish M2 for exact-source native CI.
+
+### Task 5 milestone 2: native run 1 and first local execution — 2026-10-09
+
+Run 37934205394 on `f223a03` failed the test build on all five targets (release
+builds passed). Cause was this session's own misapplied scripted edit, which put
+one closure line inside `fixture()` in `sync_tests.rs`; no M2 logic was involved.
+https://github.com/vhodges/manyhands/actions/runs/37934205394
+
+Owner clarification, 2026-10-09: targeted local testing of changed code is fine.
+The CI-first ruling came from platform-specific debugging, where duplicating the
+full suite locally and in CI cost time for little value; it was not meant to stop
+cheap local compile and targeted runs. M2 was therefore compiled and executed
+locally for the first time. `--lib repository::remote`: 243 passed, 4 failed:
+
+- `candidate_reconciliation_advances_fetch_observed_once_after_child_observation`
+  (pre-existing): M2 now requires the restarted Fetch to have completed
+  (`completed_step == AfterFetch`) before finalizing a candidate. The test skipped
+  that fetch; it now performs it. No production change.
+- `conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition`
+  (pre-existing): asserted that same-ID restart of a pending conflict fails. M2
+  deliberately allows it for offline inspection. The test now takes that token and
+  proves explicit reacquisition fences it. No production change.
+- `external_repair_exact_ordered_parent_clean_only` (M2): fixture committed to HEAD
+  with a first parent that is not the tip, which libgit2 refuses, so the false-
+  repair variants were never built. It now commits detached and moves the branch.
+- `released_checkpoint_then_normal_save_continuation_preserves_original_candidate`
+  (M2): a normal save commits its owned paths from an in-memory index and never
+  rewrites the on-disk index, so the worktree is not clean afterwards and
+  continuation correctly returns Recovery. The test now refreshes the index after
+  the save, as the Cycle 05 public fixtures already do.
+
+Recorded gap, not changed here: because saves leave the Git index stale for their
+owned paths, a synchronize directly after a save is refused as not clean unless
+something refreshes the index. This predates Cycle 06. Owner favours an inline,
+item-scoped refresh; proposed as a separate ticket (it changes Wave 01 save
+behaviour and `local_authoring` status expectations), pending owner confirmation.
+
+The native workflow has no fmt or clippy step and M1/M2 were hand-formatted, so
+both gates had drifted: `cargo fmt` reformatted nine files (remote state/
+reservation/sync and tests, `read/items.rs`, `tests/read_items.rs`,
+`tests/read_repository.rs`; formatting only). Strict clippy needed two test-only
+window-zero helpers gated `#[cfg(test)]` and one `matches!` rewrite in
+`require_clean_target`.
+
+Local evidence on the resulting tree (Linux x86_64, Devenv): fmt check and strict
+all-target/all-feature clippy pass; `--lib repository::remote` 247 passed;
+`discovery_rebuild` 78, `local_authoring` 124, `recovery_foundation_gate` 51,
+`repository_enablement` 78 passed. No full all-feature suite was run locally.
+Native evidence is pending the next exact-source run.
