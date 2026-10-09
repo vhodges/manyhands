@@ -6,8 +6,15 @@ use crate::repository::{
 use rusqlite::Connection;
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
-    let data = tempfile::tempdir().unwrap();
-    let root = tempfile::tempdir().unwrap();
+    fixture_in(&std::env::temp_dir())
+}
+
+fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    // Match canonical registry lookups, including Windows verbatim prefixes and
+    // macOS /var aliases, before creating either fixture directory.
+    let parent = parent.canonicalize().unwrap();
+    let data = tempfile::tempdir_in(&parent).unwrap();
+    let root = tempfile::tempdir_in(&parent).unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
         "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
@@ -51,6 +58,30 @@ fn publish(service: &RepositoryService, root: &Path, token: &RemoteReservation) 
         commit_observation_batch(service, root, token, &plan(), &[observation()], 123).unwrap(),
         RemoteSafePointOutcome::Continue
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn reservation_fixture_symlink_parent_reserves_and_reads_registered_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().canonicalize().unwrap();
+    let real = parent.join("real");
+    let alias = parent.join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let (data, root, service) = fixture_in(&alias);
+
+    let token = reserve(&service, root.path());
+    assert_eq!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap()
+            .operation_id(),
+        token.operation_id()
+    );
+    assert_eq!(data.path(), data.path().canonicalize().unwrap());
+    assert_eq!(root.path(), root.path().canonicalize().unwrap());
 }
 
 // Catches committing a partial observation/deletion batch on a per-ref SQL fault.
@@ -601,6 +632,73 @@ fn sync_owner(service: &RepositoryService, root: &Path) -> RemoteReservation {
         other => panic!("{other:?}"),
     }
 }
+#[test]
+fn integration_steps_require_context_then_primary_ordering() {
+    use super::super::merge::IntegrationStage;
+    use crate::repository::{AuthoringKind, SynchronizationTarget};
+
+    let (_data, root, service) = fixture();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    }
+    .operation_target(&plan());
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    let intent = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: IntegrationStage::Context,
+        local_oid: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        incoming_oid: git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap(),
+        baseline_tree_oid: git2::Oid::from_str("3333333333333333333333333333333333333333").unwrap(),
+        baseline_index_digest: [7; 32],
+    };
+    assert!(
+        service
+            .prepare_synchronization_integration(
+                root.path(),
+                &owner,
+                &state::IntegrationStepIntent {
+                    stage: IntegrationStage::Primary,
+                    ..intent.clone()
+                },
+            )
+            .is_err()
+    );
+    service
+        .prepare_synchronization_integration(root.path(), &owner, &intent)
+        .unwrap();
+    assert!(
+        service
+            .prepare_synchronization_integration(
+                root.path(),
+                &owner,
+                &state::IntegrationStepIntent {
+                    ordinal: 1,
+                    stage: IntegrationStage::Context,
+                    ..intent.clone()
+                },
+            )
+            .is_err()
+    );
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 1,
+                stage: IntegrationStage::Primary,
+                ..intent
+            },
+        )
+        .unwrap();
+}
+
 fn sync_evidence() -> state::SynchronizationEvidence {
     state::SynchronizationEvidence {
         expected_oid: Some(
@@ -631,6 +729,81 @@ fn sync_fetch(service: &RepositoryService, root: &Path, owner: &RemoteReservatio
         .unwrap();
     commit_observation_batch(service, root, owner, &plan(), &[observation()], 123).unwrap();
 }
+
+#[test]
+fn window_intent_and_local_effect_boundaries_fence_stale_services_and_cancellation() {
+    let (data, root, service) = fixture();
+    let old_owner = sync_owner(&service, root.path());
+    sync_fetch(&service, root.path(), &old_owner);
+    let primary = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let local = git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let intent = state::with_transaction(&service, root.path(), |tx, id| {
+        let record = state::read_operation(tx, id, old_owner.operation_id())?.unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &plan(),
+            "refs/heads/main",
+            primary,
+            Some(primary),
+        )
+        .unwrap();
+        let batch = state::complete_batch(tx, id, &plan(), record.generation, &[observation], 124)?;
+        Ok(state::IntegrationWindowIntent {
+            observation_batch_id: batch,
+            local_oid: local,
+            primary_oid: primary,
+            context_oid: None,
+        })
+    })
+    .unwrap();
+    let second = RepositoryService::open_at(data.path()).unwrap();
+    let owner = match second
+        .restart_remote_synchronization(root.path(), old_owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .prepare_synchronization_window(root.path(), &old_owner, 1, &intent)
+            .is_err()
+    );
+    second
+        .prepare_synchronization_window(root.path(), &owner, 1, &intent)
+        .unwrap();
+    let step = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: super::super::merge::IntegrationStage::Primary,
+        local_oid: local,
+        incoming_oid: primary,
+        baseline_tree_oid: local,
+        baseline_index_digest: [7; 32],
+    };
+    second
+        .prepare_synchronization_integration_in_window(root.path(), &owner, 1, &step)
+        .unwrap();
+    second
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert!(
+        second
+            .begin_synchronization_integration_effect_in_window(root.path(), &owner, 1, 0, None)
+            .is_err()
+    );
+    state::with_transaction(&second, root.path(), |tx, id| {
+        let record = state::read_operation(tx, id, owner.operation_id())?.unwrap();
+        assert!(record.cancel_requested);
+        assert_eq!(
+            state::integration_step_in_window(tx, record.id, 1, 0)?
+                .unwrap()
+                .phase,
+            state::IntegrationStepPhase::Prepared
+        );
+        assert!(state::integration_step(tx, record.id, 0)?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
 fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteReservation) {
     sync_fetch(service, root, owner);
     service
@@ -641,6 +814,700 @@ fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteRe
             &sync_evidence(),
         )
         .unwrap();
+}
+
+#[test]
+fn candidate_reconciliation_advances_fetch_observed_once_after_child_observation() {
+    use super::super::merge::IntegrationStage;
+    let (_data, root, service) = fixture();
+    let owner = sync_owner(&service, root.path());
+    let local = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let incoming = git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let fetch_evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &fetch_evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &owner,
+        &plan(),
+        &[observation()],
+        123,
+    )
+    .unwrap();
+    let candidate = git2::Oid::from_str("4444444444444444444444444444444444444444").unwrap();
+    let tree = git2::Oid::from_str("5555555555555555555555555555555555555555").unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: local,
+                baseline_index_digest: [0; 32],
+            },
+        )
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!(),
+    };
+    let step = service
+        .applying_synchronization_candidate(root.path(), &resumed)
+        .unwrap()
+        .unwrap();
+    service
+        .observe_synchronization_integration_effect(root.path(), &resumed, 0, candidate, tree)
+        .unwrap();
+    let record = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert!(record.reconciliation_required);
+    assert_eq!(
+        record.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::FetchObserved)
+    );
+    // Finalization requires the restarted Fetch to have completed first.
+    service
+        .remote_safe_point(root.path(), &resumed, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    commit_observation_batch(
+        &service,
+        root.path(),
+        &resumed,
+        &plan(),
+        &[observation()],
+        124,
+    )
+    .unwrap();
+    let mut evidence = record.sync_evidence;
+    evidence.local_oid = Some(candidate);
+    evidence.primary_tracking_oid = Some(local);
+    evidence.tracking_oid = Some(local);
+    assert_eq!(step.candidate_oid, Some(candidate));
+    service
+        .reconcile_synchronization_candidate_applied(
+            root.path(),
+            &resumed,
+            0,
+            candidate,
+            tree,
+            &evidence,
+        )
+        .unwrap();
+    let completed = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        completed.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+    assert!(!completed.reconciliation_required);
+    // A distinct candidate cannot be adopted after completion; the durable
+    // child evidence remains the exact recorded candidate.
+    let mismatched = git2::Oid::from_str("6666666666666666666666666666666666666666").unwrap();
+    assert!(
+        service
+            .reconcile_synchronization_candidate_applied(
+                root.path(),
+                &resumed,
+                0,
+                mismatched,
+                tree,
+                &evidence,
+            )
+            .is_err()
+    );
+    let unchanged = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        unchanged.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+}
+
+#[test]
+fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition() {
+    use super::super::merge::IntegrationStage;
+    let (data, root, service) = fixture();
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    let owner = sync_owner(&service, root.path());
+    let intent = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: IntegrationStage::Primary,
+        local_oid: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+        incoming_oid: git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap(),
+        baseline_tree_oid: git2::Oid::from_str("3333333333333333333333333333333333333333").unwrap(),
+        baseline_index_digest: [7; 32],
+    };
+    service
+        .prepare_synchronization_integration(root.path(), &owner, &intent)
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
+        .unwrap();
+    let conflict = [9; 32];
+    service
+        .release_synchronization_conflict(root.path(), &owner, 0, conflict)
+        .unwrap();
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        other
+            .reserve_remote_operation(root.path(), OperationId::new(), &sync_target())
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    // The same operation may restart for offline inspection of its own
+    // conflict; that token is fenced again by explicit reacquisition.
+    let inspecting = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        other
+            .reacquire_synchronization_conflict(
+                root.path(),
+                owner.operation_id(),
+                &sync_target(),
+                0,
+                [8; 32]
+            )
+            .is_err()
+    );
+    let reacquired = match other
+        .reacquire_synchronization_conflict(
+            root.path(),
+            owner.operation_id(),
+            &sync_target(),
+            0,
+            conflict,
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .applying_synchronization_candidate(root.path(), &inspecting)
+            .is_err()
+    );
+    assert!(
+        service
+            .begin_synchronization_integration_effect(root.path(), &owner, 0, None)
+            .is_err()
+    );
+    let confirmation = state::IdentityConfirmationIntent {
+        confirmation_id: OperationId::new(),
+        input_digest: [4; 32],
+        configuration_digest: [5; 32],
+    };
+    other
+        .prepare_synchronization_identity_confirmation(root.path(), &reacquired, &confirmation)
+        .unwrap();
+    let attempt = state::ResolutionAttemptIntent {
+        attempt_id: OperationId::new(),
+        step_ordinal: 0,
+        observation_digest: conflict,
+        input_digest: [3; 32],
+        preflight_digest: [6; 32],
+        identity_confirmation_id: Some(confirmation.confirmation_id),
+        commit_time: (1_700_000_000, 0),
+    };
+    let path = state::ResolutionPathIntent {
+        ordinal: 0,
+        path_digest: [1; 32],
+        expected_digest: [2; 32],
+        result_digest: [3; 32],
+        prewrite_digest: [4; 32],
+        base_blob_oid: None,
+        local_blob_oid: None,
+        incoming_blob_oid: None,
+        mode: 33188,
+    };
+    other
+        .prepare_synchronization_resolution_attempt(
+            root.path(),
+            &reacquired,
+            &attempt,
+            std::slice::from_ref(&path),
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_resolution_attempt(
+            root.path(),
+            &reacquired,
+            &attempt,
+            std::slice::from_ref(&path),
+        )
+        .unwrap();
+    let mismatched = state::ResolutionAttemptIntent {
+        input_digest: [4; 32],
+        ..attempt
+    };
+    assert!(
+        other
+            .prepare_synchronization_resolution_attempt(
+                root.path(),
+                &reacquired,
+                &mismatched,
+                std::slice::from_ref(&path)
+            )
+            .is_err()
+    );
+    let changed_confirmation = state::IdentityConfirmationIntent {
+        confirmation_id: OperationId::new(),
+        input_digest: [4; 32],
+        configuration_digest: [5; 32],
+    };
+    other
+        .prepare_synchronization_identity_confirmation(
+            root.path(),
+            &reacquired,
+            &changed_confirmation,
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_resolution_attempt(
+                root.path(),
+                &reacquired,
+                &state::ResolutionAttemptIntent {
+                    identity_confirmation_id: Some(changed_confirmation.confirmation_id),
+                    ..attempt.clone()
+                },
+                std::slice::from_ref(&path),
+            )
+            .is_err()
+    );
+    other
+        .begin_synchronization_identity_confirmation_effect(
+            root.path(),
+            &reacquired,
+            confirmation.confirmation_id,
+        )
+        .unwrap();
+    other
+        .observe_synchronization_identity_confirmation_effect(
+            root.path(),
+            &reacquired,
+            confirmation.confirmation_id,
+            [6; 32],
+        )
+        .unwrap();
+    other
+        .begin_synchronization_resolution_path_effects(root.path(), &reacquired, attempt.attempt_id)
+        .unwrap();
+    let artifact = state::ResolutionIndexArtifact {
+        device: 1,
+        inode: 2,
+        sentinel_digest: [7; 32],
+        baseline_digest: [8; 32],
+        baseline_identity: (1, 3),
+        metadata: [Some([9; 32]), None, Some([10; 32])],
+        output: None,
+        ref_phase: "not_started".into(),
+        phase: "intent".into(),
+    };
+    assert!(
+        service
+            .prepare_synchronization_index_artifact(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                &artifact
+            )
+            .is_err(),
+        "old owner is fenced"
+    );
+    other
+        .prepare_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            &artifact,
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            &artifact,
+        )
+        .unwrap();
+    let changed_artifact = state::ResolutionIndexArtifact {
+        inode: 4,
+        ..artifact.clone()
+    };
+    assert!(
+        other
+            .prepare_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                &changed_artifact
+            )
+            .is_err()
+    );
+    assert!(
+        other
+            .advance_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "release_intent"
+            )
+            .is_err()
+    );
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "published",
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_index_output(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                (1, 5, [11; 32])
+            )
+            .is_err(),
+        "candidate must precede install intent"
+    );
+    other
+        .observe_synchronization_resolution_path_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            0,
+        )
+        .unwrap();
+    let ref_artifact = state::ResolutionRefLogArtifact {
+        device: 1,
+        inode: 17,
+        digest: [13; 32],
+    };
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                "baseline",
+                &ref_artifact
+            )
+            .is_err(),
+        "stale owner cannot bind proof"
+    );
+    other
+        .prepare_synchronization_ref_log_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "baseline",
+            &ref_artifact,
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "transition",
+                &ref_artifact
+            )
+            .is_err(),
+        "candidate must precede result proof"
+    );
+    let checkpoint = git2::Oid::from_str("4444444444444444444444444444444444444444").unwrap();
+    let tree = git2::Oid::from_str("5555555555555555555555555555555555555555").unwrap();
+    other
+        .prepare_synchronization_resolution_candidate(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_index_output(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            (1, 5, [11; 32]),
+        )
+        .unwrap();
+    other
+        .prepare_synchronization_index_output(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            (1, 5, [11; 32]),
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_index_output(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                (1, 6, [11; 32])
+            )
+            .is_err()
+    );
+    assert!(
+        other
+            .advance_synchronization_resolution_ref_effect(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "intent"
+            )
+            .is_err(),
+        "result proof must precede invocation intent"
+    );
+    other
+        .prepare_synchronization_ref_log_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "transition",
+            &ref_artifact,
+        )
+        .unwrap();
+    assert!(
+        other
+            .prepare_synchronization_ref_log_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "transition",
+                &state::ResolutionRefLogArtifact {
+                    inode: 18,
+                    ..ref_artifact.clone()
+                }
+            )
+            .is_err()
+    );
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "intent",
+        )
+        .unwrap();
+    // Repeating the durable marker is not permission to repeat a native effect:
+    // the service additionally proves exact actual ref/log images under exclusion.
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "intent",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_resolution_ref_effect(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "observed",
+        )
+        .unwrap();
+    other
+        .observe_synchronization_resolution_checkpoint(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+            tree,
+        )
+        .unwrap();
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                checkpoint
+            )
+            .is_err(),
+        "metadata/sentinel retirement must precede release"
+    );
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "release_intent",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "released",
+        )
+        .unwrap();
+    other
+        .advance_synchronization_index_artifact(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            "released",
+        )
+        .unwrap();
+    assert!(
+        other
+            .advance_synchronization_index_artifact(
+                root.path(),
+                &reacquired,
+                attempt.attempt_id,
+                "published"
+            )
+            .is_err()
+    );
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "applied"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM remote_resolution_paths WHERE applied=1",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT phase FROM remote_identity_confirmations",
+                [],
+                |row| { row.get::<_, String>(0) }
+            )
+            .unwrap(),
+        "applied"
+    );
+    assert!(
+        connection
+            .query_row("SELECT refresh_required FROM repositories", [], |row| row
+                .get::<_, bool>(
+                0
+            ))
+            .unwrap()
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &owner,
+                attempt.attempt_id,
+                checkpoint
+            )
+            .is_err(),
+        "stale owner is fenced"
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(
+                root.path(),
+                &reacquired,
+                OperationId::new(),
+                checkpoint
+            )
+            .is_err(),
+        "only the bound attempt can release ownership"
+    );
+    assert!(
+        other
+            .finalize_synchronization_resolution(root.path(), &reacquired, attempt.attempt_id, tree)
+            .is_err(),
+        "only the exact checkpoint can release ownership"
+    );
+    let before = state::with_transaction(&other, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    other
+        .finalize_synchronization_resolution(
+            root.path(),
+            &reacquired,
+            attempt.attempt_id,
+            checkpoint,
+        )
+        .unwrap();
+    assert!(
+        other
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+    let after = state::with_transaction(&other, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(after.phase, RemoteOperationPhase::Interrupted);
+    assert!(after.reconciliation_required);
+    assert_eq!(after.sync_evidence, before.sync_evidence);
+    assert_eq!(after.sync_checkpoint, before.sync_checkpoint);
+    assert!(after.authority.is_none());
 }
 
 #[test]
@@ -1050,12 +1917,30 @@ fn sync_reconciled_ancestor_requires_explicit_restart_and_keeps_recorded_candida
 
 #[test]
 fn sync_owner_target_root_generation_and_active_index_are_fenced() {
+    sync_owner_target_root_generation_and_active_index_are_fenced_in(&std::env::temp_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_fencing_fixture_symlink_secondary_parent_preserves_root_fencing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = temporary.path().canonicalize().unwrap();
+    let real = parent.join("real");
+    let alias = parent.join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    sync_owner_target_root_generation_and_active_index_are_fenced_in(&alias);
+}
+
+fn sync_owner_target_root_generation_and_active_index_are_fenced_in(parent: &Path) {
     use state::SynchronizationCheckpoint as C;
-    let (data, root, service) = fixture();
+    let (data, root, service) = fixture_in(parent);
     let owner = sync_owner(&service, root.path());
     sync_push_prepared(&service, root.path(), &owner);
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    let second = tempfile::tempdir().unwrap();
+    // Like the primary fixture, register the canonical spelling of this root.
+    let second = tempfile::tempdir_in(parent.canonicalize().unwrap()).unwrap();
     connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[second.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, second.path(), |tx, id| {
         state::configure(tx, id, Some(&plan()), false)

@@ -127,6 +127,7 @@ fn synchronization_request_targets_derive_only_the_selected_operation() {
             operation_id: OperationId::new(),
             target: target.clone(),
             approval: None,
+            confirmed_identity: None,
             restart: false,
         };
         let derived = request.target.operation_target(&plan);

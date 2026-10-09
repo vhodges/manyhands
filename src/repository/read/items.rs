@@ -757,9 +757,9 @@ pub(super) fn stored_problems(
 /// stopped part of the way through, a directory that holds them.
 ///
 /// A refresh stores that as a `source` problem at the directory, relative
-/// to the context and written with the platform's separator, and
-/// completes, so the index still reads `current`. Paths are therefore
-/// compared by their components and never as text.
+/// to the context and written with canonical forward slashes, and
+/// completes, so the index still reads `current`. Paths are compared by
+/// their components and never as text.
 ///
 /// - Tickets are each in a directory of their own directly under
 ///   `.manyhands/tickets`, so only that directory, or `.manyhands` above
@@ -1197,28 +1197,78 @@ fn guarded_item_file(root: &Path, path: &Path) -> io::Result<GuardedFile> {
 //
 // The Unix reader opens each directory through the one before it without
 // following links and inspects the descriptor it opened. This one checks
-// the path and then uses the path: it looks at what is there, compares the
-// file's real location with the path, and only then reads. Something that
+// the path and then uses the path: it checks each component's type, compares
+// the file's real location with the path, and only then reads. Something that
 // replaces the file or a directory between those steps is read. It can
 // also wait on a file that is not a regular one if it is swapped in after
 // the check.
 #[cfg(not(unix))]
 fn guarded_item_file(root: &Path, path: &Path) -> io::Result<GuardedFile> {
-    let file = below(root, path);
-    let metadata = match fs::symlink_metadata(&file) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(GuardedFile::Missing),
-        Err(error) => return Err(error),
-    };
-    // The root is canonical, so a file reached through no link is where its
-    // path says.
-    if !metadata.file_type().is_file() || fs::canonicalize(&file)? != file {
-        return Ok(GuardedFile::NotAFile);
+    let mut file = root.to_owned();
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(component) = component else {
+            return Err(io::ErrorKind::InvalidInput.into());
+        };
+        file.push(component);
+        let metadata = match fs::symlink_metadata(&file) {
+            Ok(metadata) => metadata,
+            Err(error) if item_path_is_missing(&error) => return Ok(GuardedFile::Missing),
+            Err(error) => return Err(error),
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Ok(GuardedFile::NotAFile);
+            }
+        }
+        // Windows reports PATH_NOT_FOUND for a descendant of a regular
+        // file too. Check each ancestor before looking for its child.
+        if components.peek().is_some() {
+            if !metadata.file_type().is_dir() {
+                return Ok(GuardedFile::NotAFile);
+            }
+            continue;
+        }
+        // The root is canonical, so a file reached through no link is where
+        // its path says.
+        if !metadata.file_type().is_file() || fs::canonicalize(&file)? != file {
+            return Ok(GuardedFile::NotAFile);
+        }
+        return Ok(GuardedFile::Found {
+            bytes: fs::read(&file)?,
+            modified: metadata.modified().ok(),
+        });
     }
-    Ok(GuardedFile::Found {
-        bytes: fs::read(&file)?,
-        modified: metadata.modified().ok(),
-    })
+    Ok(GuardedFile::NotAFile)
+}
+
+#[cfg(not(unix))]
+fn item_path_is_missing(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::NotFound {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{ERROR_FILENAME_EXCED_RANGE, ERROR_INVALID_NAME};
+
+        // Like Unix ENAMETOOLONG, a syntactically valid item path whose
+        // component cannot exist names nothing. Other IO failures, including
+        // access and sharing denials, retain their inaccessible classification.
+        matches!(
+            error
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok()),
+            Some(ERROR_FILENAME_EXCED_RANGE | ERROR_INVALID_NAME)
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 impl ItemFile {

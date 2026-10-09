@@ -397,7 +397,24 @@ async fn relay(
             }
         }
     }
+    let audit_released = if receiving && receive_effect_proven(&shared, &commands, &status) {
+        let hold = shared.receive_audit_hold.lock().unwrap().take();
+        if let Some(hold) = hold {
+            let reached = hold.events.send(super::ReceiveAuditEvent::PublicationHeld);
+            reached.is_ok()
+                && tokio::select! {
+                    released = hold.release => released.is_ok(),
+                    _ = shutdown.changed() => false,
+                    _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                }
+        } else {
+            true
+        }
+    } else {
+        true
+    };
     let code = match status {
+        Some(Ok(_)) if !audit_released => 1,
         Some(Ok(status)) => status.code().unwrap_or(1) as u32,
         _ => {
             let _ = child.kill().await;
@@ -420,6 +437,7 @@ async fn relay(
                         == Some(update.new_oid);
                 update
             }));
+            shared.receive_updates_changed.notify_all();
         }
     }
     let _ = handle.exit_status_request(id, code).await;
@@ -583,22 +601,16 @@ pub(super) fn receiver_command_fragmentation() -> Result<(), FixtureError> {
 fn apply_receive_race(
     shared: &Shared,
     commands: &ReceiveCommands,
-    (expected, competing): (git2::Oid, git2::Oid),
+    (reference, expected, competing): (String, git2::Oid, git2::Oid),
 ) -> bool {
     if commands.updates.len() != 1
-        || commands.updates[0].reference != "refs/heads/main"
+        || commands.updates[0].reference != reference
         || commands.updates[0].old_oid != expected
     {
         return false;
     }
     git2::Repository::open_bare(&shared.repository).is_ok_and(|repo| {
-        repo.reference_matching(
-            "refs/heads/main",
-            competing,
-            true,
-            expected,
-            "owned receive race",
-        )
-        .is_ok()
+        repo.reference_matching(&reference, competing, true, expected, "owned receive race")
+            .is_ok()
     })
 }

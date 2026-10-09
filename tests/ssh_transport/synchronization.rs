@@ -7,6 +7,7 @@ use crate::{
 };
 use std::{cell::Cell, path::Path};
 pub const CASES: &[crate::ssh_harness::Case] = &[
+    ("synchronization_gitdir_encoding", gitdir_encoding),
     ("synchronization_primary_service", primary_service),
     (
         "synchronization_authoritative_replay_remote_removed",
@@ -174,6 +175,7 @@ fn request(case: &Case) -> SynchronizeRemoteRequest {
         operation_id: OperationId::new(),
         target: SynchronizationTarget::Primary,
         approval: case.request().approval,
+        confirmed_identity: None,
         restart: false,
     }
 }
@@ -534,9 +536,20 @@ fn context_identity_preservation() -> Result<(), FixtureError> {
     fixed(std::fs::write(alternate.join(".git"), b"fixture decoy"))?;
     fixed(std::fs::write(
         repo.commondir().join("worktrees").join(ITEM).join("gitdir"),
-        format!("{}\n", alternate.join(".git").display()),
+        registered_gitdir_text(
+            fixed(alternate.join(".git").to_str().ok_or(FixtureError))?,
+            cfg!(windows),
+        ),
     ))?;
-    assert_eq!(fixed(repo.find_worktree(ITEM))?.path(), alternate);
+    let registered = fixed(repo.find_worktree(ITEM))?;
+    assert!(
+        fixed(registered.path().canonicalize())? == fixed(alternate.canonicalize())?,
+        "registered metadata must name the actual decoy directory"
+    );
+    assert!(
+        fixed(registered.path().canonicalize())? != fixed(context.worktree.canonicalize())?,
+        "decoy registration must remain a different physical worktree"
+    );
     let before = target_state(&case.root, &context.worktree)?;
     assert!(matches!(
         case.service
@@ -549,6 +562,75 @@ fn context_identity_preservation() -> Result<(), FixtureError> {
         b"fixture decoy"
     );
     assert_eq!(case.fixture.accepted_keys().len(), effects);
+    Ok(())
+}
+fn registered_gitdir_text(gitdir: &str, windows: bool) -> String {
+    // This is Git metadata, not native path display: libgit2 reads the field
+    // verbatim and dirname scans only '/'. Preserve literal Unix backslashes.
+    if !windows {
+        return format!("{gitdir}\n");
+    }
+    let gitdir = if let Some(unc) = gitdir.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        gitdir.strip_prefix(r"\\?\").unwrap_or(gitdir).to_owned()
+    };
+    format!("{}\n", gitdir.replace('\\', "/"))
+}
+fn gitdir_encoding() -> Result<(), FixtureError> {
+    let directory = fixed(tempfile::tempdir())?;
+    let repository = fixed(git2::Repository::init(directory.path().join("root")))?;
+    let tree = fixed(repository.find_tree(fixed(fixed(repository.treebuilder(None))?.write())?))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    fixed(repository.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[]))?;
+    fixed(repository.worktree(ITEM, &directory.path().join("linked"), None))?;
+    let metadata = repository
+        .commondir()
+        .join("worktrees")
+        .join(ITEM)
+        .join("gitdir");
+    // Exercise the actual parser with Windows metadata even on a Unix runner.
+    for (input, expected) in [
+        (
+            r"C:\fixture\.manyhands/worktrees/registered-elsewhere\.git",
+            "C:/fixture/.manyhands/worktrees/registered-elsewhere",
+        ),
+        (
+            r"\\?\C:\fixture\registered-elsewhere\.git",
+            "C:/fixture/registered-elsewhere",
+        ),
+        (
+            r"\\server\share\fixture\registered-elsewhere\.git",
+            "//server/share/fixture/registered-elsewhere",
+        ),
+        (
+            r"\\?\UNC\server\share\fixture\registered-elsewhere\.git",
+            "//server/share/fixture/registered-elsewhere",
+        ),
+    ] {
+        fixed(std::fs::write(
+            &metadata,
+            registered_gitdir_text(input, true),
+        ))?;
+        assert!(
+            fixed(repository.find_worktree(ITEM))?.path() == Path::new(expected),
+            "Git metadata must name the exact intended directory"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let literal = directory.path().join(r"literal\backslash");
+        fixed(std::fs::create_dir(&literal))?;
+        let gitdir = literal.join(".git");
+        fixed(std::fs::write(
+            &metadata,
+            registered_gitdir_text(fixed(gitdir.to_str().ok_or(FixtureError))?, false),
+        ))?;
+        assert!(
+            fixed(repository.find_worktree(ITEM))?.path() == literal,
+            "Unix backslashes remain literal path characters"
+        );
+    }
     Ok(())
 }
 fn context_absence_boundaries() -> Result<(), FixtureError> {
@@ -643,10 +725,10 @@ fn missing_remote_primary() -> Result<(), FixtureError> {
     Ok(())
 }
 fn service_divergence_preservation() -> Result<(), FixtureError> {
-    // Remote-context divergence and virtual-primary divergence after a valid
-    // prospective context FF must both fail before any local branch update.
+    // Remote-context divergence and virtual-primary divergence compose ordered
+    // two-parent integrations and publish the resulting target ref.
     for virtual_primary in [false, true] {
-        let (case, context) = context_fixture()?;
+        let (case, _context) = context_fixture()?;
         let (mut session, _) = session(vec![]);
         fixed(
             case.service
@@ -662,23 +744,30 @@ fn service_divergence_preservation() -> Result<(), FixtureError> {
             b"remote context\n",
         )?;
         fixed(server.reference(CONTEXT_REF, remote, true, "fixture"))?;
-        if virtual_primary {
+        let primary = if virtual_primary {
             let primary = child_commit(&server, base, "primary-remote.txt", b"primary diverged\n")?;
             fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
-        }
-        let before = target_state(&case.root, &context.worktree)?;
-        assert!(matches!(
+            Some(primary)
+        } else {
+            None
+        };
+        fixed(
             case.service
                 .synchronize_remote(context_request(&case)?, &mut session),
-            Err(SynchronizationError::MergeRequired { .. })
-        ));
-        assert_eq!(target_state(&case.root, &context.worktree)?, before);
+        )?;
         let repo = fixed(git2::Repository::open(&case.root))?;
-        assert_eq!(fixed(repo.refname_to_id(CONTEXT_REF))?, local);
+        let merged = fixed(repo.refname_to_id(CONTEXT_REF))?;
+        let commit = fixed(repo.find_commit(merged))?;
+        assert_eq!(commit.parent_count(), 2);
         assert_eq!(
-            fixed(repo.refname_to_id(&format!("refs/remotes/origin/manyhands/ticket/{ITEM}")))?,
-            remote
+            [fixed(commit.parent_id(0))?, fixed(commit.parent_id(1))?],
+            if let Some(primary) = primary {
+                [remote, primary]
+            } else {
+                [local, remote]
+            }
         );
+        assert_eq!(fixed(server.refname_to_id(CONTEXT_REF))?, merged);
     }
     let case = prepare()?;
     publish_primary(&case)?;
@@ -690,15 +779,21 @@ fn service_divergence_preservation() -> Result<(), FixtureError> {
         Some(git2::build::CheckoutBuilder::new().safe()),
     ))?;
     fixed(repository.reference("refs/heads/main", local, true, "fixture"))?;
-    remote_advance(&case)?;
-    let before = target_state(&case.root, &case.root)?;
+    let remote = remote_advance(&case)?;
     let (mut session, _) = session(vec![]);
-    assert!(matches!(
+    fixed(
         case.service
             .synchronize_remote(request(&case), &mut session),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(target_state(&case.root, &case.root)?, before);
+    )?;
+    let merged = fixed(repository.refname_to_id("refs/heads/main"))?;
+    let commit = fixed(repository.find_commit(merged))?;
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(
+        [fixed(commit.parent_id(0))?, fixed(commit.parent_id(1))?],
+        [local, remote]
+    );
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, merged);
     Ok(())
 }
 fn cancel_after_fetch() -> Result<(), FixtureError> {
