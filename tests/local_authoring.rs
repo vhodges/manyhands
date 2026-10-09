@@ -41,6 +41,121 @@ fn repository_with_symlinked_parent() -> (tempfile::TempDir, support::TestReposi
 }
 
 #[test]
+fn fixture_repositories_declare_local_lf_checkout_policy() {
+    for fixture in [support::born_repository(), support::unborn_repository()] {
+        let local = Config::open(&fixture.repository.path().join("config")).unwrap();
+        assert!(!local.get_bool("core.autocrlf").unwrap());
+        assert!(
+            !fixture
+                .repository
+                .config()
+                .unwrap()
+                .get_bool("core.autocrlf")
+                .unwrap()
+        );
+    }
+    let fixture = support::born_repository();
+    assert_eq!(
+        support::commit_tree_path(
+            &fixture.repository,
+            support::head_commit(&fixture.repository).unwrap(),
+            "fixture.txt"
+        ),
+        Some(b"fixture\n".to_vec())
+    );
+    let linked = fixture.root.join("lf-checkout");
+    fixture
+        .repository
+        .worktree("lf-checkout", &linked, None)
+        .unwrap();
+    assert_eq!(fs::read(linked.join("fixture.txt")).unwrap(), b"fixture\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_worktree_helpers_compare_physical_paths_without_losing_names_or_count() {
+    let fixture = support::born_repository();
+    let worktree = fixture.root.join("registered");
+    fixture
+        .repository
+        .worktree("registered", &worktree, None)
+        .unwrap();
+    let alias = fixture.root.join("registered-alias");
+    std::os::unix::fs::symlink(&worktree, &alias).unwrap();
+    // Git metadata may name an existing filesystem alias rather than its canonical spelling.
+    fs::write(
+        fixture
+            .repository
+            .commondir()
+            .join("worktrees/registered/gitdir"),
+        format!("{}\n", alias.join(".git").display()),
+    )
+    .unwrap();
+    let raw = fixture
+        .repository
+        .find_worktree("registered")
+        .unwrap()
+        .path()
+        .to_owned();
+    assert_ne!(raw, worktree.canonicalize().unwrap());
+    assert_eq!(
+        raw.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![worktree.canonicalize().unwrap()]
+    );
+    assert_eq!(
+        registered_worktrees(&fixture.repository),
+        vec![("registered".to_owned(), worktree.canonicalize().unwrap())]
+    );
+    assert_eq!(
+        support::open_linked_worktree(&alias)
+            .worktree
+            .canonicalize()
+            .unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+    assert!(support::repository_and_worktree_snapshot(&fixture) == before);
+    assert!(support::repository_git_file_bytes(&fixture) == git_before);
+}
+
+#[test]
+fn registered_worktree_helpers_keep_missing_registrations_in_the_exact_set() {
+    let fixture = support::born_repository();
+    let existing = fixture.root.join("existing");
+    let missing = fixture.root.join("missing");
+    fixture
+        .repository
+        .worktree("existing", &existing, None)
+        .unwrap();
+    fixture
+        .repository
+        .worktree("missing", &missing, None)
+        .unwrap();
+    fs::remove_dir_all(&missing).unwrap();
+    let missing_git_path = fixture
+        .repository
+        .find_worktree("missing")
+        .unwrap()
+        .path()
+        .to_owned();
+    let mut expected_paths = vec![existing.canonicalize().unwrap(), missing_git_path.clone()];
+    expected_paths.sort();
+    assert_eq!(worktree_paths(&fixture.repository), expected_paths);
+    assert_eq!(
+        registered_worktrees(&fixture.repository),
+        vec![
+            ("existing".to_owned(), existing.canonicalize().unwrap()),
+            ("missing".to_owned(), missing_git_path),
+        ]
+    );
+}
+
+#[test]
 fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
@@ -81,7 +196,10 @@ fn assert_linked_worktree_snapshot(fixture: support::TestRepository) {
 
     let snapshot = support::open_linked_worktree(&worktree);
 
-    assert_eq!(snapshot.worktree, worktree.canonicalize().unwrap());
+    assert_eq!(
+        snapshot.worktree.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
     assert_eq!(snapshot.head_branch, "document-context");
     assert_eq!(
         Some(snapshot.head_commit),
@@ -254,6 +372,120 @@ fn context_edit_creates_a_worktree_from_the_primary_target() {
     assert_eq!(
         fs::read_to_string(context.worktree.join("docs/fixture.md")).unwrap(),
         support::document_source()
+    );
+}
+
+#[test]
+fn context_edit_with_local_autocrlf_true_observes_exact_crlf_and_preserves_document_body() {
+    let fixture = support::born_repository();
+    let mut local = Config::open(&fixture.repository.path().join("config")).unwrap();
+    local.set_bool("core.autocrlf", true).unwrap();
+    let lf = concat!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\n",
+        "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Fixture document\n",
+        "future_key: retained\n---\nExact body\nSecond line\n"
+    );
+    let crlf = concat!(
+        "---\r\nmanyhands_managed: true\r\nmanyhands_kind: document\r\n",
+        "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\r\ntitle: Fixture document\r\n",
+        "future_key: retained\r\n---\r\nExact body\r\nSecond line\r\n"
+    );
+    commit_source(&fixture, "docs/filtered.md", lf);
+    assert_eq!(
+        support::commit_tree_path(
+            &fixture.repository,
+            support::head_commit(&fixture.repository).unwrap(),
+            "docs/filtered.md"
+        ),
+        Some(lf.as_bytes().to_vec())
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("docs/filtered.md")).unwrap(),
+        lf.as_bytes()
+    );
+    assert_eq!(
+        fs::read(context.worktree.join("docs/filtered.md")).unwrap(),
+        crlf.as_bytes()
+    );
+    let observed =
+        expected_context_observation(&fixture.root, &support::document_id(), "docs/filtered.md");
+    assert_eq!(
+        observed,
+        ExpectedPathObservation::from_bytes(crlf.as_bytes())
+    );
+    assert_ne!(observed, ExpectedPathObservation::from_bytes(lf.as_bytes()));
+
+    let body = "Exact body\r\nSecond line\r\n";
+    let mut stale = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/filtered.md"),
+        "docs/filtered.md",
+        "Edited",
+        body,
+    );
+    stale.expected_source = Some(ExpectedPathObservation::from_bytes(lf.as_bytes()));
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let error = document_error(enabled.service.save_document(stale));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert!(support::repository_and_worktree_snapshot(&fixture) == before);
+    assert!(support::repository_git_file_bytes(&fixture) == git_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+
+    let (saved, commit) = saved_checkpoint(
+        enabled
+            .service
+            .save_document(document_request(
+                &fixture.root,
+                ContextIntent::Edit,
+                Some("docs/filtered.md"),
+                "docs/filtered.md",
+                "Edited",
+                body,
+            ))
+            .unwrap(),
+    );
+    assert_eq!(saved.worktree, context.worktree);
+    let edited = fs::read_to_string(saved.worktree.join("docs/filtered.md")).unwrap();
+    let manyhands::canonical::CanonicalItem::Document(document) =
+        manyhands::canonical::parse_item(std::path::Path::new("docs/filtered.md"), &edited)
+            .unwrap()
+    else {
+        panic!("expected document");
+    };
+    assert_eq!(document.body, body);
+    assert_eq!(document.title, "Edited");
+    assert_eq!(
+        document.unknown.get(serde_yaml::Value::from("future_key")),
+        Some(&serde_yaml::Value::from("retained"))
+    );
+    // Checkout applies Git filters; the owned-file checkpoint stores authored bytes exactly.
+    let committed =
+        support::commit_tree_path(&fixture.repository, commit, "docs/filtered.md").unwrap();
+    assert_eq!(committed, edited.as_bytes());
+    assert!(local.get_bool("core.autocrlf").unwrap());
+    assert!(
+        Repository::open(&saved.worktree)
+            .unwrap()
+            .config()
+            .unwrap()
+            .get_bool("core.autocrlf")
+            .unwrap()
     );
 }
 
@@ -575,7 +807,6 @@ fn document_edit_rejects_a_symlinked_reused_context_without_touching_external_re
         "Edited body\n",
     ));
 
-    fs::remove_file(&context.worktree).unwrap();
     let error = document_error(result);
     assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
     assert_context_state(&fixture, &enabled.service, None, &before);
@@ -586,6 +817,14 @@ fn document_edit_rejects_a_symlinked_reused_context_without_touching_external_re
         fs::read(external.root.join("fixture.txt")).unwrap(),
         external_fixture
     );
+    assert!(
+        fs::symlink_metadata(&context.worktree)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&context.worktree).unwrap(), external.root);
+    fs::remove_file(&context.worktree).unwrap();
 }
 
 #[test]
@@ -5447,7 +5686,7 @@ fn worktree_paths(repository: &Repository) -> Vec<std::path::PathBuf> {
         .unwrap()
         .iter()
         .flatten()
-        .map(|name| repository.find_worktree(name).unwrap().path().to_owned())
+        .map(|name| physical_worktree_path(repository.find_worktree(name).unwrap().path()))
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -5462,12 +5701,21 @@ fn registered_worktrees(repository: &Repository) -> Vec<(String, std::path::Path
         .map(|name| {
             (
                 name.to_owned(),
-                repository.find_worktree(name).unwrap().path().to_owned(),
+                physical_worktree_path(repository.find_worktree(name).unwrap().path()),
             )
         })
         .collect::<Vec<_>>();
     worktrees.sort();
     worktrees
+}
+
+fn physical_worktree_path(path: &std::path::Path) -> std::path::PathBuf {
+    match path.canonicalize() {
+        Ok(physical) => physical,
+        // Stale registrations remain in the exact set, with their Git spelling intact.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_owned(),
+        Err(error) => panic!("registered worktree path cannot be resolved: {error}"),
+    }
 }
 
 fn commit_count(repository: &Repository) -> usize {

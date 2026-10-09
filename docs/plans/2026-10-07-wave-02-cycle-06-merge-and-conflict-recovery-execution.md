@@ -1441,3 +1441,35 @@ Spec re-review and quality `ses_ee2005613ffe5YKiGh50fx2mNI` approve the correcte
 three-file scope. Final focused headless/all-feature discovery 77/enablement 77,
 static gates, full Devenv suite (780 Rust-harness tests including docs plus 196 SSH)
 and CLI pass. Actual next native execution remains required; Task 4 unaccepted.
+
+Published these approved corrections as bed07e47ee59d64c20b4d5c4da9d151ed9ed3fb9
+through normal push; seventh full native matrix is running:
+https://github.com/vhodges/manyhands/actions/runs/37863696730
+Inspect exact-source results before Task 4 acceptance.
+
+### Native run 7: later authoring fixture policies corrected — 2026-10-09
+
+Run 37863696730 passed both Linux jobs and prior Windows library/discovery gates,
+then exposed 19 local-authoring fixture assumptions: plain Git worktree paths versus
+verbatim canonical paths and inherited CRLF checkout versus expected LF bytes.
+macOS failed only the new invalid-byte diagnostic constructor (APFS EILSEQ).
+Logs: /tmp/opencode/cycle06-native-37863696730-failures.log.
+
+Worker `ses_ee1e897b0ffeI4PwHqlqSeSf5T` changes only local_authoring.rs,
+support/mod.rs and discovery_rebuild.rs. Existing actual/expected path comparisons
+use physical canonical locations; missing registrations remain visible, names and
+counts exact. Born/unborn fixture repositories set local autocrlf=false before
+staging, with explicit CRLF checkout/stale-LF/exact-CRLF save controls preserving
+unknown metadata and blobs. No production/global configuration change. Symlink
+preservation/type/target assertions precede cleanup.
+
+Exact macOS EILSEQ constructor rejection checks state nonmutation/readability,
+qualified as filesystem rejection; supported filesystems retain real invalid-name
+producer coverage. A separate portable SQL-NULL case proves decoding only, without
+pretending synthetic insertion exercises the producer. No ignored/removed cases.
+Spec `ses_ee1ca57c8ffeOIh4wk563qpY8i` and quality
+`ses_ee1c87b59ffeuwTmk9mXdsoElk` approve the bounded test-only changes. Headless/
+all-feature authoring 124 and discovery 78 pass, including isolated inherited
+autocrlf=true; static/CLI and one complete full run pass (981 tests/cases: 308
+library, 468 integration, 196 SSH, 9 docs). Native next-source confirmation remains
+required, Task 4 unaccepted.
