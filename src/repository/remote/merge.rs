@@ -1,9 +1,8 @@
-#![allow(dead_code)] // Consumers arrive in the ordered Task 2–4 implementation.
-//! Private contracts for ordered synchronization merges.
+//! Contracts for ordered synchronization merges and conflict resolution.
 //!
-//! This module deliberately contains no transport or branch mutation. It makes
-//! the graph and recovery boundary explicit before later tasks connect it to the
-//! reservation journal.
+//! This module contains no transport or branch mutation: it holds the pure
+//! graph classification, the conflict eligibility boundary and the public
+//! request, capability and outcome types the synchronization service uses.
 
 use std::fmt;
 
@@ -69,8 +68,6 @@ pub(super) fn classify_integration<E>(
     Ok(IntegrationDisposition::MergeRequired)
 }
 
-/// Opaque optimistic precondition returned by conflict inspection.  It is not a
-/// path or content capability and deliberately has redacted formatting.
 /// Opaque optimistic precondition for one observed synchronization conflict.
 /// Its private fields bind the operation, stage, target state and conflict set;
 /// formatting never exposes those details.
@@ -86,6 +83,14 @@ pub struct ConflictObservation {
 }
 
 impl ConflictObservation {
+    /// The configuration observation this inspection is bound to. A caller
+    /// confirming a commit identity for `resolve_synchronization` copies it
+    /// into `ConfirmedCommitIdentity::expected_configuration`. It is a digest,
+    /// never configuration text.
+    pub fn expected_configuration(&self) -> [u8; 32] {
+        self.configuration
+    }
+
     #[cfg(test)]
     pub(super) fn for_testing(value: [u8; 32]) -> Self {
         Self {
@@ -106,8 +111,8 @@ impl fmt::Debug for ConflictObservation {
     }
 }
 
-/// An inspection-issued path capability.  It has no caller-supplied path text.
-/// Opaque capability for exactly one conflict entry from an inspection.
+/// Opaque, inspection-issued capability for exactly one conflict entry. It
+/// carries no caller-supplied path text.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConflictPathToken {
     pub(super) observation: ConflictObservation,
@@ -133,14 +138,13 @@ pub enum ConflictEligibility {
     ExternalResolutionRequired,
 }
 
-/// Classification is deliberately structural rather than marker-text based.
-/// Task 3 derives these facts from the actual three index stages.
+/// Classification is deliberately structural rather than marker-text based:
+/// these facts are derived from the actual three index stages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConflictEntryKind {
     Document,
     Ticket,
     Comment,
-    Configuration,
     Noncanonical,
 }
 
@@ -152,7 +156,6 @@ pub(super) enum ConflictStructure {
     Symlink,
     Rename,
     Delete,
-    AddAdd,
     IdentityChanged,
 }
 
@@ -208,12 +211,22 @@ impl fmt::Debug for RedactedConflictBytes {
     }
 }
 
-/// Caller confirmation can only supplement a missing effective identity.  The
-/// configuration observation is a digest, never configuration text.
-#[allow(dead_code)] // The caller boundary is persisted by Task 2.
 /// Caller-confirmed identity is accepted only at a committing boundary when
-/// the effective Git configuration has no complete identity. Its configuration
-/// digest makes a confirmation stale when that boundary changes.
+/// the effective Git configuration has no complete identity; it never replaces
+/// an existing one.
+///
+/// `expected_configuration` is the observation the service returned at the
+/// identity-required boundary, so a confirmation goes stale when that
+/// boundary changes. It is a digest, never configuration text, and is copied
+/// from one of two places:
+///
+/// - `synchronize_remote`: the `expected_configuration` of the returned
+///   `SynchronizationError::IdentityRequired` (the observed Git identity
+///   configuration). A different value is refused as an external change.
+/// - `resolve_synchronization`: `ConflictObservation::expected_configuration`
+///   of the inspection the request is built from (the observed repository
+///   configuration). A different value is not accepted as a confirmation and
+///   the outcome stays `IdentityRequired`.
 #[derive(Clone)]
 pub struct ConfirmedCommitIdentity {
     pub confirmation_id: OperationId,
@@ -227,28 +240,10 @@ impl fmt::Debug for ConfirmedCommitIdentity {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CommitIdentityBoundary {
-    EffectiveIdentity,
-    ConfirmationRequired,
-}
-
-pub(super) fn commit_identity_boundary(
-    effective: Option<&CommitIdentity>,
-    confirmation: Option<&ConfirmedCommitIdentity>,
-) -> CommitIdentityBoundary {
-    if effective.is_some() || confirmation.is_some() {
-        CommitIdentityBoundary::EffectiveIdentity
-    } else {
-        CommitIdentityBoundary::ConfirmationRequired
-    }
-}
-
-/// The only mutation request shape available to the later owned-resolution
-/// writer.  Results remain opaque in diagnostics; no raw repository path, ref,
-/// OID, or force authority is caller input.
 /// Explicit, observation-bound canonical conflict resolution. Paths can only
-/// be supplied through tokens issued by `inspect_synchronization_recovery`.
+/// be supplied through tokens issued by `inspect_synchronization_recovery`;
+/// no raw repository path, ref, OID or force authority is caller input, and
+/// result bytes stay redacted in diagnostics.
 #[derive(Clone)]
 pub struct ResolveSynchronizationRequest {
     pub root: std::path::PathBuf,

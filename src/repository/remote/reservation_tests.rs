@@ -1051,6 +1051,7 @@ fn conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisit
         input_digest: [3; 32],
         preflight_digest: [6; 32],
         identity_confirmation_id: Some(confirmation.confirmation_id),
+        commit_time: (1_700_000_000, 0),
     };
     let path = state::ResolutionPathIntent {
         ordinal: 0,

@@ -278,6 +278,8 @@ const MERGE_EVIDENCE_SCHEMA: &str = r#"
             candidate_oid TEXT CHECK(length(candidate_oid)=40 AND candidate_oid NOT GLOB '*[^0-9a-f]*'),
             checkpoint_oid TEXT CHECK(length(checkpoint_oid)=40 AND checkpoint_oid NOT GLOB '*[^0-9a-f]*'),
             phase TEXT NOT NULL CHECK(phase IN ('prepared','paths_applying','candidate_prepared','applied','recovery_required')),
+            commit_time INTEGER NOT NULL CHECK(typeof(commit_time)='integer' AND commit_time > 0),
+            commit_offset_minutes INTEGER NOT NULL CHECK(typeof(commit_offset_minutes)='integer' AND commit_offset_minutes BETWEEN -1439 AND 1439),
             CHECK(phase NOT IN ('candidate_prepared','applied') OR candidate_oid IS NOT NULL),
             CHECK(phase!='applied' OR checkpoint_oid IS NOT NULL)
         );
@@ -331,7 +333,7 @@ const MERGE_EVIDENCE_SCHEMA: &str = r#"
         CREATE TRIGGER remote_integration_window_immutable BEFORE UPDATE ON remote_integration_windows BEGIN SELECT RAISE(ABORT,'immutable integration window'); END;
         CREATE TRIGGER remote_integration_step_immutable BEFORE UPDATE OF operation_record_id,configuration_generation,owner_epoch,window_number,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest ON remote_integration_steps BEGIN SELECT RAISE(ABORT,'immutable integration evidence'); END;
         CREATE TRIGGER remote_identity_confirmation_immutable BEFORE UPDATE OF confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest ON remote_identity_confirmations BEGIN SELECT RAISE(ABORT,'immutable identity evidence'); END;
-        CREATE TRIGGER remote_resolution_attempt_immutable BEFORE UPDATE OF attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id ON remote_resolution_attempts BEGIN SELECT RAISE(ABORT,'immutable resolution evidence'); END;
+        CREATE TRIGGER remote_resolution_attempt_immutable BEFORE UPDATE OF attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,commit_time,commit_offset_minutes ON remote_resolution_attempts BEGIN SELECT RAISE(ABORT,'immutable resolution evidence'); END;
         CREATE TRIGGER remote_resolution_path_immutable BEFORE UPDATE OF attempt_id,ordinal,path_digest,expected_digest,result_digest,prewrite_digest,base_blob_oid,local_blob_oid,incoming_blob_oid,mode ON remote_resolution_paths BEGIN SELECT RAISE(ABORT,'immutable resolution path evidence'); END;
 "#;
 
@@ -449,9 +451,10 @@ fn migrate_merge_evidence(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
                     .collect::<Result<Vec<_>, _>>()
             })
             .map_err(|_| recovery_required())?;
-        if !attempt_columns
+        // The recorded commit time was added later still, under the same rule.
+        if ["preflight_digest", "commit_time"]
             .iter()
-            .any(|column| column == "preflight_digest")
+            .any(|required| !attempt_columns.iter().any(|column| column == required))
         {
             let has_attempts: bool = tx
                 .query_row(
@@ -780,6 +783,8 @@ fn validate_merge_evidence_schema(connection: &Connection) -> Result<(), Reposit
                 "candidate_oid",
                 "checkpoint_oid",
                 "phase",
+                "commit_time",
+                "commit_offset_minutes",
             ],
         ),
         (
@@ -1804,7 +1809,6 @@ pub(super) struct IntegrationStepIntent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Task 3 supplies caller-confirmed identity before candidates.
 pub(super) struct IdentityConfirmationIntent {
     pub confirmation_id: crate::repository::OperationId,
     pub input_digest: [u8; 32],
@@ -1812,7 +1816,6 @@ pub(super) struct IdentityConfirmationIntent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Task 4 supplies actual conflict observations and paths.
 pub(super) struct ResolutionAttemptIntent {
     pub attempt_id: crate::repository::OperationId,
     pub step_ordinal: u8,
@@ -1821,10 +1824,13 @@ pub(super) struct ResolutionAttemptIntent {
     /// Immutable observation of every mutable local input before resolution.
     pub preflight_digest: [u8; 32],
     pub identity_confirmation_id: Option<crate::repository::OperationId>,
+    /// Time of the resolution commit, in seconds since the epoch and minutes
+    /// east of UTC. Recorded once when the attempt is first prepared; an
+    /// identical retry keeps the recorded value, so it is not replay input.
+    pub commit_time: (i64, i32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Task 4 supplies actual conflict observations and paths.
 pub(super) struct ResolutionPathIntent {
     pub ordinal: u32,
     pub path_digest: [u8; 32],
@@ -1875,7 +1881,7 @@ pub(super) struct IntegrationStepEvidence {
     pub conflict_digest: Option<[u8; 32]>,
 }
 
-#[allow(dead_code)] // Consumed by the reservation controller in Task 3.
+#[allow(dead_code)] // Mirrors the whole envelope row; some columns are read only by tests.
 #[derive(Clone, Debug)]
 pub(in super::super) struct StoredRemoteOperation {
     pub id: i64,
@@ -3517,16 +3523,18 @@ pub(super) fn prepare_resolution_attempt(
     intent: &ResolutionAttemptIntent,
     paths: &[ResolutionPathIntent],
 ) -> Result<(), RepositoryError> {
-    prepare_resolution_attempt_in_window(tx, record, 0, intent, paths)
+    prepare_resolution_attempt_in_window(tx, record, 0, intent, paths).map(|_| ())
 }
 
+/// Returns the attempt's recorded commit time: the intent's own on first
+/// preparation, the originally recorded one on an identical retry.
 pub(super) fn prepare_resolution_attempt_in_window(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,
     window_number: u32,
     intent: &ResolutionAttemptIntent,
     paths: &[ResolutionPathIntent],
-) -> Result<(), RepositoryError> {
+) -> Result<(i64, i32), RepositoryError> {
     synchronization_record(record)?;
     if paths.is_empty()
         || paths.iter().enumerate().any(|(index, path)| {
@@ -3586,7 +3594,13 @@ pub(super) fn prepare_resolution_attempt_in_window(
             && preflight.len() == 32
             && confirmation_id == identity_id
         {
-            return Ok(());
+            return tx
+                .query_row(
+                    "SELECT commit_time,commit_offset_minutes FROM remote_resolution_attempts WHERE attempt_ulid=?1",
+                    [&attempt],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| recovery_required());
         }
         return Err(recovery_required());
     }
@@ -3598,12 +3612,12 @@ pub(super) fn prepare_resolution_attempt_in_window(
             |row| row.get(0),
         )
         .map_err(|_| recovery_required())?;
-    tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'prepared')",params![attempt,record.id,step_id,record.generation,record.owner_epoch,intent.observation_digest.as_slice(),intent.input_digest.as_slice(),intent.preflight_digest.as_slice(),identity_id]).map_err(|_| recovery_required())?;
+    tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase,commit_time,commit_offset_minutes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'prepared',?10,?11)",params![attempt,record.id,step_id,record.generation,record.owner_epoch,intent.observation_digest.as_slice(),intent.input_digest.as_slice(),intent.preflight_digest.as_slice(),identity_id,intent.commit_time.0,intent.commit_time.1]).map_err(|_| recovery_required())?;
     let attempt_id = tx.last_insert_rowid();
     for path in paths {
         tx.execute("INSERT INTO remote_resolution_paths(attempt_id,ordinal,path_digest,expected_digest,result_digest,prewrite_digest,base_blob_oid,local_blob_oid,incoming_blob_oid,mode) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![attempt_id,i64::from(path.ordinal),path.path_digest.as_slice(),path.expected_digest.as_slice(),path.result_digest.as_slice(),path.prewrite_digest.as_slice(),path.base_blob_oid.map(|oid|oid.to_string()),path.local_blob_oid.map(|oid|oid.to_string()),path.incoming_blob_oid.map(|oid|oid.to_string()),i64::from(path.mode)]).map_err(|_| recovery_required())?;
     }
-    Ok(())
+    Ok(intent.commit_time)
 }
 
 type ResolutionCandidateAttempt = (

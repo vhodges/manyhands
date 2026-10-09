@@ -7,10 +7,10 @@ use std::{
 use git2::{Index, IndexEntry, IndexTime, Repository, Signature};
 
 use super::{
-    CommitIdentityBoundary, ConflictCandidate, ConflictEligibility, ConflictEntryKind,
-    ConflictObservation, ConflictStructure, IntegrationClassificationError, IntegrationDisposition,
-    IntegrationStage, RedactedConflictBytes, ResolveSynchronizationRequest, classify_integration,
-    commit_identity_boundary, conflict_eligibility, integration_stages,
+    ConflictCandidate, ConflictEligibility, ConflictEntryKind, ConflictObservation,
+    ConflictStructure, IntegrationClassificationError, IntegrationDisposition, IntegrationStage,
+    RedactedConflictBytes, ResolveSynchronizationRequest, classify_integration,
+    conflict_eligibility, integration_stages,
 };
 use crate::{
     canonical::ItemId,
@@ -107,10 +107,6 @@ fn eligibility_requires_the_entire_conflict_set_to_be_canonical_regular_utf8() {
     );
     for unsupported in [
         ConflictCandidate {
-            kind: ConflictEntryKind::Configuration,
-            structure: ConflictStructure::RegularUtf8SamePath,
-        },
-        ConflictCandidate {
             kind: ConflictEntryKind::Noncanonical,
             structure: ConflictStructure::RegularUtf8SamePath,
         },
@@ -133,10 +129,6 @@ fn eligibility_requires_the_entire_conflict_set_to_be_canonical_regular_utf8() {
         ConflictCandidate {
             kind: ConflictEntryKind::Document,
             structure: ConflictStructure::Delete,
-        },
-        ConflictCandidate {
-            kind: ConflictEntryKind::Document,
-            structure: ConflictStructure::AddAdd,
         },
         ConflictCandidate {
             kind: ConflictEntryKind::Document,
@@ -183,20 +175,6 @@ fn redacted_recovery_contracts_never_format_caller_bytes_or_identity() {
     let formatted = format!("{request:?}");
     assert!(!formatted.contains("private resolution body"));
     assert!(formatted.contains("redacted"));
-    assert_eq!(
-        commit_identity_boundary(None, None),
-        CommitIdentityBoundary::ConfirmationRequired
-    );
-    assert_eq!(
-        commit_identity_boundary(
-            Some(&crate::repository::CommitIdentity {
-                name: "Test".into(),
-                email: "test@example.invalid".into(),
-            }),
-            None,
-        ),
-        CommitIdentityBoundary::EffectiveIdentity
-    );
 }
 
 fn signature() -> Signature<'static> {

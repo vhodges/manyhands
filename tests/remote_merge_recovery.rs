@@ -51,6 +51,14 @@ const CASES: &[ssh_harness::Case] = &[
         two_clone_document_conflict_resolved_and_published,
     ),
     (
+        "confirmed_identity_completes_a_divergent_primary_merge",
+        confirmed_identity_completes_a_divergent_primary_merge,
+    ),
+    (
+        "confirmed_identity_completes_a_canonical_resolution",
+        confirmed_identity_completes_a_canonical_resolution,
+    ),
+    (
         "two_clone_ticket_conflict_stale_and_different_resolutions",
         two_clone_ticket_conflict_stale_and_different_resolutions,
     ),
@@ -1645,6 +1653,13 @@ fn two_clone_document_conflict_resolved_and_published() -> Result<(), FixtureErr
     );
     one_update(&p.server, n, DOCUMENT_REF, incoming, candidate);
     assert_eq!(merge_commits(&p.b.repo()?)?, 1);
+    // The published resolution commit is dated when it was resolved.
+    let now = fixed(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))?.as_secs();
+    let published_commit = p.bare()?;
+    let published_commit = fixed(published_commit.find_commit(candidate))?;
+    for when in [published_commit.author().when(), published_commit.time()] {
+        assert!((now as i64 - when.seconds()).abs() < 3600);
+    }
     let (title, _, head) = discovered(&p.b, DOCUMENT)?;
     assert_eq!((title.as_str(), head), ("Resolved title", Some(candidate)));
     // Authority replays without transport or another push.
@@ -1667,6 +1682,152 @@ fn two_clone_document_conflict_resolved_and_published() -> Result<(), FixtureErr
     assert!(fixed(std::fs::read(p.a.worktree(DOCUMENT).join(DOCUMENT_PATH)))? == results[0]);
     let (title, _, head) = discovered(&p.a, DOCUMENT)?;
     assert_eq!((title.as_str(), head), ("Resolved title", Some(candidate)));
+    Ok(())
+}
+
+/// Remove clone B's effective Git identity: empty repository-local values
+/// shadow any identity of the machine running the suite.
+fn without_identity(side: &Side) -> Result<(), FixtureError> {
+    let mut config = fixed(side.repo()?.config())?;
+    fixed(config.set_str("user.name", ""))?;
+    fixed(config.set_str("user.email", ""))?;
+    fixed(config.set_bool("user.useConfigOnly", true))?;
+    Ok(())
+}
+fn confirmed_identity(expected_configuration: [u8; 32]) -> ConfirmedCommitIdentity {
+    ConfirmedCommitIdentity {
+        confirmation_id: OperationId::new(),
+        identity: CommitIdentity {
+            name: "Confirmed".into(),
+            email: "confirmed@example.invalid".into(),
+        },
+        expected_configuration,
+    }
+}
+fn author(repo: &git2::Repository, oid: git2::Oid) -> Result<(String, String), FixtureError> {
+    let commit = fixed(repo.find_commit(oid))?;
+    let author = commit.author();
+    Ok((
+        author.name().unwrap_or_default().to_owned(),
+        author.email().unwrap_or_default().to_owned(),
+    ))
+}
+
+/// A divergent primary merge with no effective Git identity stops at the
+/// typed identity boundary before any candidate. The caller confirms an
+/// identity with the observation that boundary returned, restarts the same
+/// operation, and the merge is committed with it and published.
+fn confirmed_identity_completes_a_divergent_primary_merge() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let a_tip = advance(
+        &p.a.repo()?,
+        MAIN,
+        &[("alpha.txt", Some((b"alpha\n", REGULAR)))],
+    )?;
+    assert_eq!(published(fixed(p.sync(&p.a, p.primary(&p.a)))?)?, a_tip);
+    let b_repo = p.b.repo()?;
+    let b_tip = advance(&b_repo, MAIN, &[("beta.txt", Some((b"beta\n", REGULAR)))])?;
+    without_identity(&p.b)?;
+    let request = p.primary(&p.b);
+    let n = p.server.receive_updates().len();
+    let Err(SynchronizationError::IdentityRequired {
+        target,
+        expected_configuration,
+    }) = p.sync(&p.b, request.clone())
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(target, SynchronizationTarget::Primary);
+    assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, b_tip);
+    assert_eq!(merge_commits(&b_repo)?, 0);
+    assert_eq!(p.server.receive_updates().len(), n);
+    // Restarting without a confirmation stays at the same boundary.
+    assert!(matches!(
+        p.sync(&p.b, restart(&request)),
+        Err(SynchronizationError::IdentityRequired { expected_configuration: again, .. })
+            if again == expected_configuration
+    ));
+    let mut confirmed = restart(&request);
+    confirmed.confirmed_identity = Some(confirmed_identity(expected_configuration));
+    let merged = published(fixed(p.sync(&p.b, confirmed))?)?;
+    assert_eq!(parents(&b_repo, merged)?, [b_tip, a_tip]);
+    assert_eq!(merge_commits(&b_repo)?, 1);
+    assert_eq!(
+        author(&b_repo, merged)?,
+        ("Confirmed".into(), "confirmed@example.invalid".into())
+    );
+    assert_eq!(
+        fixed(b_repo.find_commit(merged))?.message(),
+        Some("Merge remote primary")
+    );
+    one_update(&p.server, n, MAIN, a_tip, merged);
+    assert!(fixed(b_repo.statuses(None))?.is_empty());
+    Ok(())
+}
+
+/// A canonical conflict resolved with no effective Git identity returns the
+/// typed identity outcome and changes nothing. The caller confirms an identity
+/// with the observation of its inspection; the resolution is committed with
+/// it and the original operation publishes it.
+fn confirmed_identity_completes_a_canonical_resolution() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let conflict = ticket_conflict(&p)?;
+    let operation = conflict.request.operation_id;
+    let worktree = p.b.worktree(TICKET);
+    without_identity(&p.b)?;
+    let inspection = p.inspect(&p.b, operation)?;
+    let results = p
+        .sides(&p.b, &inspection)?
+        .iter()
+        .map(|sides| resolution_of(sides.local.as_ref().unwrap(), BETA, "Resolved title"))
+        .collect::<Vec<_>>();
+    let mut request = resolution_request(
+        &p.b,
+        operation,
+        OperationId::new(),
+        &inspection,
+        results.clone(),
+    );
+    let pending = physical(&p.b.root, &worktree)?;
+    assert_eq!(
+        fixed(p.resolve(&p.b.service, request.clone()))?,
+        ResolveSynchronizationOutcome::IdentityRequired
+    );
+    assert!(physical(&p.b.root, &worktree)? == pending);
+    conflict_installed(&worktree, TICKET_REF, &conflict, &[TICKET_PATH])?;
+    request.identity = Some(confirmed_identity(
+        inspection.observation.expected_configuration(),
+    ));
+    let n = p.server.receive_updates().len();
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete {
+        commit_oid: candidate,
+    } = fixed(p.resolve(&p.b.service, request))?
+    else {
+        return Err(FixtureError);
+    };
+    resolved_locally(
+        &worktree,
+        TICKET_REF,
+        &conflict,
+        candidate,
+        &[(TICKET_PATH, &results[0])],
+    )?;
+    let linked = p.b.linked(TICKET)?;
+    assert_eq!(
+        author(&linked, candidate)?,
+        ("Confirmed".into(), "confirmed@example.invalid".into())
+    );
+    assert_eq!(
+        fixed(linked.find_commit(candidate))?.message(),
+        Some(format!("Resolve synchronization ticket {TICKET}").as_str())
+    );
+    outcome(
+        fixed(p.sync(&p.b, restart(&conflict.request)))?,
+        true,
+        ticket_target(),
+        candidate,
+    );
+    one_update(&p.server, n, TICKET_REF, conflict.incoming, candidate);
     Ok(())
 }
 

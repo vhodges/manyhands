@@ -826,7 +826,7 @@ impl RepositoryService {
     /// Child intent is durable before a merge/index effect. The owner epoch is
     /// captured in the immutable row; a later reacquisition receives a new
     /// token and cannot rewrite the earlier intent.
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn prepare_synchronization_integration(
         &self,
         root: &Path,
@@ -924,7 +924,7 @@ impl RepositoryService {
 
     /// Commit the already-observed child application into the legacy envelope.
     /// This is the only restart transition permitted for a pending candidate.
-    #[allow(dead_code)] // Window-zero compatibility, including retained callers.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn reconcile_synchronization_candidate_applied(
         &self,
         root: &Path,
@@ -1046,7 +1046,7 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn begin_synchronization_integration_effect(
         &self,
         root: &Path,
@@ -1090,7 +1090,7 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn observe_synchronization_integration_effect(
         &self,
         root: &Path,
@@ -1146,7 +1146,7 @@ impl RepositoryService {
     /// A conflict is observed after the Git effect and then releases only the
     /// active slot. The immutable operation/stage remains for explicit matching
     /// reconciliation; another synchronization cannot adopt it.
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn release_synchronization_conflict(
         &self,
         root: &Path,
@@ -1189,7 +1189,7 @@ impl RepositoryService {
 
     /// Reacquisition is deliberately separate from ordinary restart: it proves
     /// the exact durable operation, target, generation and conflict digest.
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn reacquire_synchronization_conflict(
         &self,
         root: &Path,
@@ -1298,15 +1298,17 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
+            // Like both conflict releases, completion consumes a cancellation
+            // requested while this owner ran: left set, the next restart would
+            // end the operation with its resolution commit unpublished.
             tx.execute(
-                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
                 params![record.id, now(), owner.epoch],
             ).map_err(|_| state::recovery_required())?;
             Ok(())
         })
     }
 
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
     pub(super) fn prepare_synchronization_identity_confirmation(
         &self,
         root: &Path,
@@ -1319,7 +1321,7 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Consumed by the ordered merge/resolution tasks.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
     pub(super) fn prepare_synchronization_resolution_attempt(
         &self,
         root: &Path,
@@ -1328,6 +1330,7 @@ impl RepositoryService {
         paths: &[state::ResolutionPathIntent],
     ) -> Result<(), RepositoryError> {
         self.prepare_synchronization_resolution_attempt_in_window(root, owner, 0, intent, paths)
+            .map(|_| ())
     }
 
     pub(super) fn prepare_synchronization_resolution_attempt_in_window(
@@ -1337,7 +1340,7 @@ impl RepositoryService {
         window_number: u32,
         intent: &state::ResolutionAttemptIntent,
         paths: &[state::ResolutionPathIntent],
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<(i64, i32), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             state::prepare_resolution_attempt_in_window(tx, &record, window_number, intent, paths)
@@ -1410,7 +1413,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 4 supplies observed owned-path writes.
     pub(super) fn begin_synchronization_resolution_path_effects(
         &self,
         root: &Path,
@@ -1423,7 +1425,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 4 observes each guarded path after its write.
     pub(super) fn observe_synchronization_resolution_path_effect(
         &self,
         root: &Path,
@@ -1437,7 +1438,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 4 records the detached two-parent candidate before ref movement.
     pub(super) fn prepare_synchronization_resolution_candidate(
         &self,
         root: &Path,
@@ -1451,7 +1451,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 4 writes completion only after re-observing ref/tree state.
     pub(super) fn observe_synchronization_resolution_checkpoint(
         &self,
         root: &Path,
@@ -1472,7 +1471,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 3 applies only caller-confirmed identity under the lease.
     pub(super) fn begin_synchronization_identity_confirmation_effect(
         &self,
         root: &Path,
@@ -1485,7 +1483,6 @@ impl RepositoryService {
         })
     }
 
-    #[allow(dead_code)] // Task 3 records the observed configuration result after its effect.
     pub(super) fn observe_synchronization_identity_confirmation_effect(
         &self,
         root: &Path,

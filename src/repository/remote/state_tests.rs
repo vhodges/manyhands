@@ -98,8 +98,25 @@ fn orphan_remote_rows_require_recovery_during_automatic_startup_audit() {
     assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
 }
 
-fn legacy_preflight_schema() -> String {
+/// The attempt shape before its commit time was recorded.
+fn legacy_commit_time_schema() -> String {
     legacy_window_fixture_schema()
+        .replace(
+            "            commit_time INTEGER NOT NULL CHECK(typeof(commit_time)='integer' AND commit_time > 0),\n",
+            "",
+        )
+        .replace(
+            "            commit_offset_minutes INTEGER NOT NULL CHECK(typeof(commit_offset_minutes)='integer' AND commit_offset_minutes BETWEEN -1439 AND 1439),\n",
+            "",
+        )
+        .replace(
+            "identity_confirmation_id,commit_time,commit_offset_minutes ON",
+            "identity_confirmation_id ON",
+        )
+}
+
+fn legacy_preflight_schema() -> String {
+    legacy_commit_time_schema()
         .replace(
             "            preflight_digest BLOB NOT NULL CHECK(typeof(preflight_digest)='blob' AND length(preflight_digest)=32),\n",
             "",
@@ -859,28 +876,49 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
 
 #[test]
 fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populated_attempts() {
+    let schema = legacy_preflight_schema();
+    assert!(!schema.contains("preflight_digest") && !schema.contains("commit_time"));
+    legacy_attempt_shape_upgrades_empty_attempts_and_rejects_populated_attempts(
+        &schema,
+        "INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,identity_confirmation_id,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),NULL,'prepared')",
+    );
+}
+
+#[test]
+fn legacy_commit_time_migration_upgrades_empty_attempts_and_rejects_populated_attempts() {
+    let schema = legacy_commit_time_schema();
+    assert!(schema.contains("preflight_digest") && !schema.contains("commit_time"));
+    legacy_attempt_shape_upgrades_empty_attempts_and_rejects_populated_attempts(
+        &schema,
+        "INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),zeroblob(32),NULL,'prepared')",
+    );
+}
+
+fn legacy_attempt_shape_upgrades_empty_attempts_and_rejects_populated_attempts(
+    schema: &str,
+    populated: &str,
+) {
     let (data, _root, _service) = fixture();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
         .execute_batch("DROP TABLE remote_publication_attempts; DROP TABLE remote_integration_merge_metadata; DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;")
         .unwrap();
-    connection
-        .execute_batch(&legacy_preflight_schema())
-        .unwrap();
+    connection.execute_batch(schema).unwrap();
     drop(connection);
     // Empty legacy evidence has no unobserved attempt to preserve, so it is
-    // rebuilt with the immutable preflight column.
+    // rebuilt with the immutable preflight and commit-time columns.
     let _reopened = RepositoryService::open_at(data.path()).unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    assert!(
-        connection
-            .prepare("PRAGMA table_info(remote_resolution_attempts)")
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(1))
-            .unwrap()
-            .map(Result::unwrap)
-            .any(|column| column == "preflight_digest")
-    );
+    let columns = connection
+        .prepare("PRAGMA table_info(remote_resolution_attempts)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    for added in ["preflight_digest", "commit_time", "commit_offset_minutes"] {
+        assert!(columns.iter().any(|column| column == added), "{added}");
+    }
 
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
@@ -908,20 +946,24 @@ fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populat
     connection
         .execute_batch("DROP TABLE remote_publication_attempts; DROP TABLE remote_integration_merge_metadata; DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;")
         .unwrap();
-    connection
-        .execute_batch(&legacy_preflight_schema())
-        .unwrap();
+    connection.execute_batch(schema).unwrap();
     connection.execute(
         "INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(?1,?2,0,0,'primary',?3,?4,?5,zeroblob(32),zeroblob(32),'conflict_pending')",
         params![operation_id,generation,ADVERTISED,TRACKING,ADVERTISED],
     ).unwrap();
-    connection.execute(
-        "INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,identity_confirmation_id,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),NULL,'prepared')",
-        params![crate::repository::OperationId::new().to_string(),operation_id,generation],
-    ).unwrap();
+    connection
+        .execute(
+            populated,
+            params![
+                crate::repository::OperationId::new().to_string(),
+                operation_id,
+                generation
+            ],
+        )
+        .unwrap();
     drop(connection);
-    // A populated old attempt has no authentic preflight observation and must
-    // fail closed rather than receive a manufactured digest.
+    // A populated old attempt has no authentic observation of the added
+    // evidence and must fail closed rather than receive a manufactured value.
     assert!(
         matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
     );
@@ -967,6 +1009,17 @@ fn weakened_complete_task2_evidence_schema_requires_recovery() {
                 "CREATE INDEX remote_resolution_attempts_operation ON remote_resolution_attempts(operation_record_id,integration_step_id);",
                 "",
             ),
+        ),
+        (
+            "recorded commit time immutability",
+            MERGE_EVIDENCE_SCHEMA.replace(
+                ",commit_time,commit_offset_minutes ON remote_resolution_attempts",
+                " ON remote_resolution_attempts",
+            ),
+        ),
+        (
+            "recorded commit time check",
+            MERGE_EVIDENCE_SCHEMA.replace(" AND commit_time > 0)", ")"),
         ),
         (
             "trigger behavior",
@@ -1106,7 +1159,7 @@ fn index_artifact_schema_migration_is_additive_and_rejects_weakened_provenance()
         .unwrap();
     connection.execute("INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(?1,?2,0,0,'primary',?3,?4,?5,zeroblob(32),zeroblob(32),'resolution_prepared')",params![parent,generation,ADVERTISED,TRACKING,ADVERTISED]).unwrap();
     let attempt = crate::repository::OperationId::new();
-    connection.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),zeroblob(32),'paths_applying')",params![attempt.to_string(),parent,generation]).unwrap();
+    connection.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase,commit_time,commit_offset_minutes) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),zeroblob(32),'paths_applying',1700000000,0)",params![attempt.to_string(),parent,generation]).unwrap();
     drop(connection);
     let _reopened = RepositoryService::open_at(data.path()).unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -1254,7 +1307,7 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
     connection.execute_batch("PRAGMA foreign_keys=ON;
         INSERT INTO remote_integration_steps(id,operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(41,1,1,0,0,'primary','1111111111111111111111111111111111111111','2222222222222222222222222222222222222222','3333333333333333333333333333333333333333',zeroblob(32),zeroblob(32),'resolution_prepared');
         INSERT INTO remote_identity_confirmations(id,confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest,phase) VALUES(61,'01ARZ3NDEKTSV4RRFFQ69G5FAY',1,1,0,zeroblob(32),zeroblob(32),'prepared');
-        INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',1,41,1,0,zeroblob(32),zeroblob(32),zeroblob(32),61,'paths_applying');
+        INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase,commit_time,commit_offset_minutes) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',1,41,1,0,zeroblob(32),zeroblob(32),zeroblob(32),61,'paths_applying',1700000000,0);
         INSERT INTO remote_resolution_paths VALUES(51,0,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,33188,1);
         INSERT INTO remote_resolution_index_artifacts(attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,phase) VALUES(51,7,8,zeroblob(32),zeroblob(32),9,10,'intent');
         INSERT INTO remote_resolution_ref_log_artifacts VALUES(51,'baseline',11,12,zeroblob(32));").unwrap();
@@ -1329,6 +1382,8 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
     for mutation in [
         "UPDATE remote_integration_steps SET window_number=1 WHERE id=41",
         "UPDATE remote_resolution_attempts SET integration_step_id=99 WHERE id=51",
+        "UPDATE remote_resolution_attempts SET commit_time=commit_time+1 WHERE id=51",
+        "UPDATE remote_resolution_attempts SET commit_offset_minutes=60 WHERE id=51",
         "UPDATE remote_resolution_index_artifacts SET inode=99 WHERE attempt_id=51",
         "UPDATE remote_resolution_ref_log_artifacts SET digest=randomblob(32) WHERE attempt_id=51",
     ] {
@@ -1540,7 +1595,7 @@ fn append_cannot_skip_applied_context_with_unprepared_primary_or_unreleased_reso
         )?;
         begin_integration_effect(tx, &record, 1, None)?;
         observe_integration_effect(tx, &record, 1, context, context)?;
-        tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,candidate_oid,checkpoint_oid,phase) VALUES(?1,?2,(SELECT id FROM remote_integration_steps WHERE operation_record_id=?2 AND window_number=0 AND ordinal=1),?3,0,zeroblob(32),zeroblob(32),zeroblob(32),?4,?4,'applied')", params![crate::repository::OperationId::new().to_string(), record.id, record.generation, context.to_string()]).unwrap();
+        tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,candidate_oid,checkpoint_oid,phase,commit_time,commit_offset_minutes) VALUES(?1,?2,(SELECT id FROM remote_integration_steps WHERE operation_record_id=?2 AND window_number=0 AND ordinal=1),?3,0,zeroblob(32),zeroblob(32),zeroblob(32),?4,?4,'applied',1700000000,0)", params![crate::repository::OperationId::new().to_string(), record.id, record.generation, context.to_string()]).unwrap();
         assert!(
             prepare_integration_window(tx, &record, 1, &intent).is_err(),
             "applied SQL without sentinel release is not completion"
@@ -1589,6 +1644,7 @@ fn resolution_candidate_follows_its_step_fk_across_repeated_window_ordinals() {
             input_digest: [9; 32],
             preflight_digest: [10; 32],
             identity_confirmation_id: None,
+            commit_time: (1_700_000_000, 0),
         };
         let path = ResolutionPathIntent {
             ordinal: 0,
@@ -1624,7 +1680,7 @@ fn legacy_window_upgrade_refuses_orphans_without_discarding_old_evidence() {
     let (data, _root, _service) = fixture();
     let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     replace_with_legacy_merge_schema(&connection);
-    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',999,41,0,0,zeroblob(32),zeroblob(32),zeroblob(32),'prepared'); PRAGMA foreign_keys=ON;").unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase,commit_time,commit_offset_minutes) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',999,41,0,0,zeroblob(32),zeroblob(32),zeroblob(32),'prepared',1700000000,0); PRAGMA foreign_keys=ON;").unwrap();
     let tx = connection.transaction().unwrap();
     assert!(migrate(&tx).is_err());
     tx.rollback().unwrap();
@@ -1981,6 +2037,7 @@ fn assert_missing_initial_window_requires_recovery(populated: bool) {
                         input_digest: [6; 32],
                         preflight_digest: [7; 32],
                         identity_confirmation_id: Some(confirmation),
+                        commit_time: (1_700_000_000, 0),
                     },
                     &[ResolutionPathIntent {
                         ordinal: 0,

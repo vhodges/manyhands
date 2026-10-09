@@ -4139,6 +4139,11 @@ type PassAttemptRow = (i64, String, Option<String>, String, String, Option<Strin
 /// MERGE_HEAD, MERGE_MSG and MERGE_MODE digests with the journal phase.
 type RecordedMergeMetadata = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>, String);
 
+/// The commit a fixture submodule entry names; never written to any ODB.
+const GITLINK_OID: [u8; 20] = [0x5a; 20];
+/// Seven lines, so edits of the first and the last merge without a conflict.
+const SHARED_LINES: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n";
+
 /// A reserved primary synchronization whose local branch holds one real
 /// commit (`local.txt` or a changed `fixture.txt`) above the shared base.
 struct PassFixture {
@@ -4155,19 +4160,50 @@ struct PassFixture {
 
 impl PassFixture {
     fn new(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false)
+        Self::build(local_file, local_bytes, false, false)
+    }
+
+    /// As `new`, in a repository whose base tree already holds a submodule
+    /// entry and a seven-line `shared.txt` both sides can change cleanly.
+    fn with_gitlink(local_file: &str, local_bytes: &[u8]) -> Self {
+        Self::build(local_file, local_bytes, false, true)
     }
 
     /// As `new`, with the publication remote also selected in the committed
     /// configuration and its endpoints bound, so the public entry point
     /// proceeds past local reconciliation to the transport boundary.
     fn published(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, true)
+        Self::build(local_file, local_bytes, true, false)
     }
 
-    fn build(local_file: &str, local_bytes: &[u8], published: bool) -> Self {
+    fn build(local_file: &str, local_bytes: &[u8], published: bool, gitlink: bool) -> Self {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
+        if gitlink {
+            // A gitlink names a commit of another repository: its object is
+            // never in this object database.
+            let mut index = repository.index().unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o160000,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 0,
+                    id: git2::Oid::from_bytes(&GITLINK_OID).unwrap(),
+                    flags: 0,
+                    flags_extended: 0,
+                    path: b"vendor".to_vec(),
+                })
+                .unwrap();
+            index.write().unwrap();
+            fs::create_dir(root.path().join("vendor")).unwrap();
+            fs::write(root.path().join("shared.txt"), SHARED_LINES).unwrap();
+            commit_all(&repository);
+        }
         repository
             .remote("origin", "ssh://example.invalid/fixture.git")
             .unwrap();
@@ -10322,6 +10358,7 @@ fn retained_candidate_cannot_bypass_all_side_closure_validation() {
                 preflight_digest: resolution_preflight(&repository, &request().resolutions)
                     .unwrap(),
                 identity_confirmation_id: None,
+                commit_time: (1_700_000_000, 0),
             },
             &[state::ResolutionPathIntent {
                 ordinal: token.ordinal,
@@ -11293,7 +11330,19 @@ fn ref_log_proof_policy_opaque_history_and_frozen_signer_are_private_and_exact()
         let candidate = git2::Oid::from_str(&candidate).unwrap();
         let commit = repository.find_commit(candidate).unwrap();
         assert!(commit.committer().name() == Some(SIGNER));
-        assert_eq!(commit.committer().when().seconds(), 0);
+        // The commit carries the real time recorded with its attempt; only
+        // the ref-log entry below keeps the frozen zero-time signer.
+        let recorded: (i64, i32) = connection
+            .query_row(
+                "SELECT commit_time,commit_offset_minutes FROM remote_resolution_attempts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(recorded.0 > 1_600_000_000);
+        for when in [commit.author().when(), commit.committer().when()] {
+            assert_eq!((when.seconds(), when.offset_minutes()), recorded);
+        }
         // A changed configured identity cannot regenerate the candidate or signer.
         config.set_str("user.name", "Changed Identity").unwrap();
         config
@@ -12147,6 +12196,94 @@ fn clean_merge_integration_fault_matrix_resumes_each_durable_transition_once() {
     }
 }
 
+/// A submodule entry names a commit that is absent from the superproject's
+/// object database. A divergent clean merge passes it through by OID, imports
+/// only the blob the merge itself created, and never reads the absent commit.
+#[test]
+fn clean_merge_passes_a_gitlink_through_and_imports_only_merged_blobs() {
+    let local_bytes = SHARED_LINES.replacen("one", "local", 1);
+    let incoming_bytes = SHARED_LINES.replacen("seven", "incoming", 1);
+    let fixture = PassFixture::with_gitlink("shared.txt", local_bytes.as_bytes());
+    let repository = fixture.repository();
+    let link = git2::Oid::from_bytes(&GITLINK_OID).unwrap();
+    assert!(!repository.odb().unwrap().exists(link));
+    let incoming = child_file(
+        &repository,
+        fixture.base,
+        "shared.txt",
+        incoming_bytes.as_bytes(),
+    );
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    let merged_bytes = local_bytes.replacen("seven", "incoming", 1);
+    let merged_blob =
+        git2::Oid::hash_object(git2::ObjectType::Blob, merged_bytes.as_bytes()).unwrap();
+    assert!(!repository.odb().unwrap().exists(merged_blob));
+    let merged = fixture.integrate(incoming).unwrap();
+    let commit = repository.find_commit(merged).unwrap();
+    assert_eq!(
+        commit.parent_ids().collect::<Vec<_>>(),
+        [fixture.local, incoming]
+    );
+    let tree = commit.tree().unwrap();
+    let entry = tree.get_name("vendor").unwrap();
+    assert_eq!((entry.filemode(), entry.id()), (0o160000, link));
+    assert_eq!(tree.get_name("shared.txt").unwrap().id(), merged_blob);
+    assert_eq!(repository.head().unwrap().target(), Some(merged));
+    assert_eq!(
+        fs::read(fixture.root.path().join("shared.txt")).unwrap(),
+        merged_bytes.as_bytes()
+    );
+    assert!(!repository.odb().unwrap().exists(link));
+    assert_eq!(
+        fixture.step(1).unwrap().phase,
+        state::IntegrationStepPhase::Applied
+    );
+}
+
+/// The conflict path installs a real Git merge and never reads entry objects
+/// itself: a submodule entry does not stop the conflict from being installed,
+/// inspected as external-only (non-canonical path) or reconciled on restart.
+#[test]
+fn conflicted_merge_is_installed_beside_a_gitlink() {
+    let local_bytes = SHARED_LINES.replacen("one", "local", 1);
+    let incoming_bytes = SHARED_LINES.replacen("one", "incoming", 1);
+    let mut fixture = PassFixture::with_gitlink("shared.txt", local_bytes.as_bytes());
+    let repository = fixture.repository();
+    let incoming = child_file(
+        &repository,
+        fixture.base,
+        "shared.txt",
+        incoming_bytes.as_bytes(),
+    );
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert!(matches!(
+        fixture.integrate(incoming),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    assert!(repository.index().unwrap().has_conflicts());
+    assert_eq!(
+        fixture.step(1).unwrap().phase,
+        state::IntegrationStepPhase::ConflictPending
+    );
+    let inspection = fixture
+        .service
+        .inspect_synchronization_recovery(fixture.root.path(), fixture.operation)
+        .unwrap();
+    assert_eq!(inspection.paths.len(), 1);
+    // External repair, then a deliberate restart observes the repaired merge.
+    let repaired = commit_external_repair(&repository, fixture.local, incoming, true);
+    fixture.restart_in_new_process();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        repaired
+    );
+    let tree = repository.find_commit(repaired).unwrap().tree().unwrap();
+    assert_eq!(tree.get_name("vendor").unwrap().filemode(), 0o160000);
+}
+
 /// A: the clean stage is applied and observed, but the write that carries it
 /// into the synchronization envelope (the merge-applied checkpoint) is not
 /// durable. A later process observes the applied stage, and after its Fetch
@@ -12161,6 +12298,10 @@ fn merge_applied_checkpoint_stop_is_reconciled_from_the_applied_stage() {
     fixture.fetch(incoming, 1);
     fixture.append_window(1, incoming).unwrap();
     let merged = fixture.integrate(incoming).unwrap();
+    assert_eq!(
+        repository.find_commit(merged).unwrap().message(),
+        Some("Merge remote primary")
+    );
     let applied = state::SynchronizationEvidence {
         expected_oid: Some(local),
         local_oid: Some(merged),
@@ -12450,6 +12591,22 @@ fn stop_between_context_and_primary_stages_resumes_only_the_primary_stage() {
         pass.parents(context_merge),
         [pass.local, pass.context_incoming]
     );
+    // The RFC subjects name the item, never the synchronization operation.
+    let SynchronizationTarget::Context { item_id, .. } = &pass.target else {
+        panic!("context target")
+    };
+    let subject = |oid| {
+        pass.repository
+            .find_commit(oid)
+            .unwrap()
+            .message()
+            .map(str::to_owned)
+    };
+    assert_ne!(item_id.to_string(), pass.operation.to_string());
+    assert_eq!(
+        subject(context_merge),
+        Some(format!("Merge remote context {item_id}"))
+    );
     let context_stage = pass.stage(0).unwrap();
     assert_eq!(context_stage.phase, state::IntegrationStepPhase::Applied);
     assert_eq!(context_stage.result_oid, Some(context_merge));
@@ -12476,6 +12633,10 @@ fn stop_between_context_and_primary_stages_resumes_only_the_primary_stage() {
         let head = pass.head();
         assert_eq!(*merged.get_or_insert(head), head);
         assert_eq!(pass.parents(head), [context_merge, pass.primary_incoming]);
+        assert_eq!(
+            subject(head),
+            Some(format!("Merge primary into ticket {item_id}"))
+        );
         assert_eq!(pass.stage(0).unwrap(), context_stage);
         let primary_stage = pass.stage(1).unwrap();
         assert_eq!(primary_stage.phase, state::IntegrationStepPhase::Applied);
@@ -13829,6 +13990,256 @@ fn cancellation_requested_during_the_first_conflicted_merge_keeps_it_reacquirabl
         fixture.step(1).unwrap().phase,
         state::IntegrationStepPhase::Applied
     );
+}
+
+/// The resolution commit is dated with the time recorded once with its
+/// attempt. A retry never reads the clock again: it reproduces the identical
+/// candidate from the recorded value, which SQLite refuses to change.
+#[test]
+fn resolution_commit_time_is_recorded_once_and_reused_by_every_retry() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = ResolveSynchronizationRequest::new(
+        root.path().to_owned(),
+        operation,
+        OperationId::new(),
+        inspection.observation.clone(),
+        vec![(
+            inspection.paths[0].token.clone(),
+            RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+        )],
+        None,
+    );
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterPathWrite);
+    assert!(service.resolve_synchronization(attempt.clone()).is_err());
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let recorded = || -> (i64, i32, Option<String>) {
+        db.query_row(
+            "SELECT commit_time,commit_offset_minutes,candidate_oid FROM remote_resolution_attempts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    };
+    let (first, offset, candidate) = recorded();
+    assert!((started..=started + 600).contains(&first));
+    assert_eq!(candidate, None);
+    // The recorded time is immutable evidence.
+    for change in [
+        "UPDATE remote_resolution_attempts SET commit_time=commit_time-1000",
+        "UPDATE remote_resolution_attempts SET commit_offset_minutes=commit_offset_minutes+1",
+    ] {
+        assert!(db.execute(change, []).is_err(), "{change}");
+    }
+    // Stand in for a retry at a later wall-clock time without waiting: with
+    // the trigger lifted and restored byte for byte, move the recorded time
+    // into the past. No clock reading can produce this value.
+    let trigger: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='remote_resolution_attempt_immutable'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    db.execute_batch(&format!(
+        "DROP TRIGGER remote_resolution_attempt_immutable; UPDATE remote_resolution_attempts SET commit_time=commit_time-1000; {trigger};"
+    ))
+    .unwrap();
+    let expected = (first - 1000, offset);
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterCandidatePrepared);
+    assert!(service.resolve_synchronization(attempt.clone()).is_err());
+    *service.failure_point.lock().unwrap() = None;
+    let (seconds, minutes, candidate) = recorded();
+    assert_eq!((seconds, minutes), expected);
+    let candidate = git2::Oid::from_str(&candidate.unwrap()).unwrap();
+    // A later process completes the interrupted attempt with the same commit.
+    let later = RepositoryService::open_at(data.path()).unwrap();
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+        later.resolve_synchronization(attempt.clone()).unwrap()
+    else {
+        panic!("completion")
+    };
+    assert_eq!(commit_oid, candidate);
+    let repository = git2::Repository::open(root.path()).unwrap();
+    let commit = repository.find_commit(commit_oid).unwrap();
+    assert_eq!(commit.parent_ids().collect::<Vec<_>>(), [local, incoming]);
+    for when in [commit.author().when(), commit.committer().when()] {
+        assert_eq!((when.seconds(), when.offset_minutes()), expected);
+        assert_ne!(when.seconds(), 0);
+    }
+    // Replaying the completed attempt returns that same commit again.
+    assert!(matches!(
+        later.resolve_synchronization(attempt).unwrap(),
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid: replay }
+            if replay == candidate
+    ));
+    let (seconds, minutes, _) = recorded();
+    assert_eq!((seconds, minutes), expected);
+}
+
+/// A cancellation requested while a resolution is completing is consumed by
+/// that completion, like both conflict releases: it does not survive as a
+/// latent request that would make the next restart end the operation with its
+/// resolution commit unpublished.
+#[test]
+fn cancellation_requested_during_a_completing_resolution_does_not_outlive_it() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // The request becomes durable with the checkpoint observation, after the
+    // last boundary of the resolution that could have honoured it.
+    db.execute_batch(
+        "CREATE TRIGGER injected_stop AFTER UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied' BEGIN UPDATE remote_operation_records SET cancel_requested=1; END;",
+    )
+    .unwrap();
+    let resolved = base.replace("base", "resolved");
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+        resolve_fixture(root.path(), &service, operation, &[resolved.as_str()])
+    else {
+        panic!("completion")
+    };
+    db.execute_batch(DROP_INJECTED_STOP).unwrap();
+    assert_eq!(
+        cancellation_state(&db, operation),
+        ("interrupted".into(), 0)
+    );
+    // A later deliberate restart continues towards publication instead of
+    // acknowledging a stale cancellation as a terminal outcome.
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    let restarted = RepositoryService::open_at(data.path())
+        .unwrap()
+        .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt));
+    assert!(!matches!(restarted, Err(SynchronizationError::Interrupted)));
+    assert_ne!(cancellation_state(&db, operation).0, "cancelled");
+    let repository = git2::Repository::open(root.path()).unwrap();
+    assert_eq!(repository.head().unwrap().target(), Some(commit_oid));
+    assert_eq!(
+        repository
+            .find_commit(commit_oid)
+            .unwrap()
+            .parent_ids()
+            .collect::<Vec<_>>(),
+        [local, incoming]
+    );
+}
+
+/// A resolution that failed midway leaves its stage `resolution_prepared` or
+/// `commit_prepared`. A cancellation requested then is a recoverable stop,
+/// exactly as for a pending conflict: the next restart consumes the request
+/// without ending the operation, and the identical attempt then completes.
+#[test]
+fn cancellation_after_an_interrupted_resolution_is_a_recoverable_stop() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    for (point, stage) in [
+        (
+            FailurePoint::ResolutionAfterPathWrite,
+            "resolution_prepared",
+        ),
+        (
+            FailurePoint::ResolutionAfterCandidatePrepared,
+            "commit_prepared",
+        ),
+    ] {
+        let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
+            "docs/document.md",
+            base,
+            &base.replace("base", "local"),
+            &base.replace("base", "incoming"),
+        )]);
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let inspection = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        let attempt = ResolveSynchronizationRequest::new(
+            root.path().to_owned(),
+            operation,
+            OperationId::new(),
+            inspection.observation.clone(),
+            vec![(
+                inspection.paths[0].token.clone(),
+                RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+            )],
+            None,
+        );
+        *service.failure_point.lock().unwrap() = Some(point);
+        assert!(
+            service.resolve_synchronization(attempt.clone()).is_err(),
+            "{stage}"
+        );
+        *service.failure_point.lock().unwrap() = None;
+        let step_phase = || {
+            db.query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(step_phase(), stage);
+        RepositoryService::open_at(data.path())
+            .unwrap()
+            .cancel_remote_operation(root.path(), operation)
+            .unwrap();
+        assert_eq!(cancellation_state(&db, operation).1, 1, "{stage}");
+        // The pending request fences the identical retry until a deliberate
+        // restart has acknowledged it.
+        assert!(
+            journal_stop(&service.resolve_synchronization(attempt.clone())),
+            "{stage}"
+        );
+        let later = RepositoryService::open_at(data.path()).unwrap();
+        let mut retry = request(root.path());
+        retry.operation_id = operation;
+        retry.restart = true;
+        assert!(
+            matches!(
+                later.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+                Err(SynchronizationError::Interrupted)
+            ),
+            "{stage}"
+        );
+        assert_eq!(
+            cancellation_state(&db, operation),
+            ("interrupted".into(), 0),
+            "{stage}"
+        );
+        assert_eq!(step_phase(), stage);
+        let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+            later.resolve_synchronization(attempt).unwrap()
+        else {
+            panic!("{stage}: completion after a cancelled owner")
+        };
+        let repository = git2::Repository::open(root.path()).unwrap();
+        assert_eq!(repository.head().unwrap().target(), Some(commit_oid));
+        assert_eq!(
+            repository
+                .find_commit(commit_oid)
+                .unwrap()
+                .parent_ids()
+                .collect::<Vec<_>>(),
+            [local, incoming],
+            "{stage}"
+        );
+        assert_eq!(step_phase(), "applied");
+        assert_eq!(repository.state(), git2::RepositoryState::Clean);
+    }
 }
 
 /// Cycle 05 cancellation is unchanged for an operation without a pending

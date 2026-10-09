@@ -318,9 +318,12 @@ pub enum SynchronizationError {
         stage: SynchronizationStage,
     },
     /// A divergent merge needs a committing identity; no candidate or merge
-    /// state was created.
+    /// state was created. An explicit restart may supply a
+    /// `ConfirmedCommitIdentity` carrying this `expected_configuration`, the
+    /// digest of the observed Git identity configuration.
     IdentityRequired {
         target: SynchronizationTarget,
+        expected_configuration: [u8; 32],
     },
     ExternalResolutionRequired {
         target: SynchronizationTarget,
@@ -595,10 +598,15 @@ fn target_ref(plan: &RemoteRefPlan, target: &SynchronizationTarget) -> RemoteRef
         SynchronizationTarget::Context { kind, item_id } => plan.context(*kind, item_id),
     }
 }
+/// Mode of a submodule entry: its OID names a commit of another repository.
+const GITLINK_MODE: u32 = 0o160000;
+
 struct PreparedMergeEntry {
     entry: git2::IndexEntry,
-    kind: git2::ObjectType,
-    bytes: Vec<u8>,
+    /// Kind and bytes of an object the in-memory merge created. `None` for an
+    /// object the repository already stores and for a submodule entry, whose
+    /// commit belongs to another repository.
+    generated: Option<(git2::ObjectType, Vec<u8>)>,
 }
 
 struct PreparedMerge {
@@ -629,8 +637,9 @@ fn index_digest(tree: git2::Oid) -> [u8; 32] {
 }
 
 /// Merge preparation is deliberately done through a separately opened handle
-/// with a high-priority memory ODB. The returned index has only regular stage-0
-/// entries; generated blob bytes are imported and verified only while applying.
+/// with a high-priority memory ODB, so preparation never writes the repository.
+/// The result holds the stage-0 entries; only the bytes of objects the merge
+/// itself created are retained, to be imported and verified while applying.
 fn prepare_clean_merge(
     path: &Path,
     local: git2::Oid,
@@ -656,38 +665,51 @@ fn prepare_clean_merge(
     if index.has_conflicts() {
         return Ok(MergePreparation::Conflict);
     }
+    // A handle without the memory backend tells stored objects from the ones
+    // this merge created.
+    let stored =
+        git2::Repository::open(path).map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let stored = stored
+        .odb()
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
     let entries = index
         .iter()
         .filter(|entry| entry.flags & 0x3000 == 0)
         .map(|entry| {
+            if entry.mode == GITLINK_MODE || stored.exists(entry.id) {
+                return Ok(PreparedMergeEntry {
+                    entry,
+                    generated: None,
+                });
+            }
             let object = odb
                 .read(entry.id)
                 .map_err(|_| SynchronizationError::RecoveryRequired)?;
             Ok(PreparedMergeEntry {
+                generated: Some((object.kind(), object.data().to_vec())),
                 entry,
-                kind: object.kind(),
-                bytes: object.data().to_vec(),
             })
         })
         .collect::<Result<Vec<_>, SynchronizationError>>()?;
     Ok(MergePreparation::Clean(PreparedMerge { entries }))
 }
 
+/// Import the objects the merge created and write its tree. An entry that was
+/// already stored is not rewritten; writing the tree fails if it has vanished.
 fn import_prepared_tree(
     repository: &git2::Repository,
-    path: &Path,
     prepared: &PreparedMerge,
 ) -> Result<git2::Oid, SynchronizationError> {
-    let _ = path; // The result bytes were captured while the worker mempack lived.
     let destination = repository
         .odb()
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
     let mut index = git2::Index::new().map_err(|_| SynchronizationError::RecoveryRequired)?;
     for prepared_entry in &prepared.entries {
-        if destination
-            .write(prepared_entry.kind, &prepared_entry.bytes)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?
-            != prepared_entry.entry.id
+        if let Some((kind, bytes)) = &prepared_entry.generated
+            && destination
+                .write(*kind, bytes)
+                .map_err(|_| SynchronizationError::RecoveryRequired)?
+                != prepared_entry.entry.id
         {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -1425,6 +1447,26 @@ impl RefLogSnapshot {
     }
 }
 
+/// The signer of the resolution's ref-log entry: the candidate's committer at
+/// the fixed zero time the ref-log proof predicts byte for byte. Only the
+/// commit object itself carries the attempt's recorded time.
+#[cfg(any(unix, windows))]
+fn resolution_ref_signature(
+    commit: &git2::Commit<'_>,
+) -> Result<git2::Signature<'static>, SynchronizationError> {
+    let committer = commit.committer();
+    git2::Signature::new(
+        committer
+            .name()
+            .ok_or(SynchronizationError::RecoveryRequired)?,
+        committer
+            .email()
+            .ok_or(SynchronizationError::RecoveryRequired)?,
+        &git2::Time::new(0, 0),
+    )
+    .map_err(|_| SynchronizationError::RecoveryRequired)
+}
+
 #[cfg(any(unix, windows))]
 fn resolution_signer_digest(
     signature: &git2::Signature<'_>,
@@ -1815,7 +1857,7 @@ fn apply_resolution_ref(
     let commit = repository
         .find_commit(candidate)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let signature = commit.committer();
+    let signature = resolution_ref_signature(&commit)?;
     if resolution_signer_digest(&signature)? != proof.signer_digest {
         return Err(SynchronizationError::RecoveryRequired);
     }
@@ -3120,11 +3162,12 @@ fn committing_identity(
     if let Some(identity) = effective_identity(repository)? {
         return Ok(identity);
     }
-    let confirmation = request.confirmed_identity.as_ref().ok_or_else(|| {
-        SynchronizationError::IdentityRequired {
+    let Some(confirmation) = request.confirmed_identity.as_ref() else {
+        return Err(SynchronizationError::IdentityRequired {
             target: request.target.clone(),
-        }
-    })?;
+            expected_configuration: configuration_identity_digest(repository)?,
+        });
+    };
     if confirmation.identity.name.is_empty()
         || confirmation.identity.email.is_empty()
         || confirmation.identity.name.contains('\0')
@@ -3759,7 +3802,7 @@ fn integrate_divergence(
                 }
                 if let Some(prepared) = prepared {
                     let identity = committing_identity(service, root, owner, &repository, request)?;
-                    let tree = import_prepared_tree(&repository, &path, &prepared)?;
+                    let tree = import_prepared_tree(&repository, &prepared)?;
                     let local_commit = repository
                         .find_commit(local)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -3772,20 +3815,21 @@ fn integrate_divergence(
                     let signature = git2::Signature::now(&identity.name, &identity.email)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
                     let subject = match stage {
-                        merge::IntegrationStage::Context => {
-                            format!("Merge remote context {}", request.operation_id)
-                        }
-                        merge::IntegrationStage::Primary
-                            if matches!(target, SynchronizationTarget::Primary) =>
-                        {
-                            "Merge remote primary".into()
-                        }
+                        merge::IntegrationStage::Context => match target {
+                            SynchronizationTarget::Context { item_id, .. } => {
+                                format!("Merge remote context {item_id}")
+                            }
+                            // A context stage exists only for a context target.
+                            SynchronizationTarget::Primary => {
+                                return Err(SynchronizationError::RecoveryRequired);
+                            }
+                        },
                         merge::IntegrationStage::Primary => match target {
+                            SynchronizationTarget::Primary => "Merge remote primary".into(),
                             SynchronizationTarget::Context { kind, item_id } => format!(
                                 "Merge primary into {} {item_id}",
                                 authoring_kind_segment(kind)
                             ),
-                            SynchronizationTarget::Primary => unreachable!(),
                         },
                     };
                     let candidate = repository
@@ -4884,7 +4928,7 @@ impl RepositoryService {
                 },
                 candidate,
                 &ref_snapshot,
-                &commit.committer(),
+                &resolution_ref_signature(&commit)?,
             )?
         };
         #[cfg(any(unix, windows))]
@@ -5328,10 +5372,15 @@ impl RepositoryService {
         else {
             return Ok(merge::ResolveSynchronizationOutcome::IdentityRequired);
         };
+        // The ref-log signer keeps the fixed zero time its proof predicts.
         let signature = git2::Signature::new(&identity.0, &identity.1, &git2::Time::new(0, 0))
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         #[cfg(any(unix, windows))]
         resolution_signer_digest(&signature)?;
+        // Captured once; a retry commits with the time its attempt recorded.
+        let now = git2::Signature::now(&identity.0, &identity.1)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?
+            .when();
         let mut input = blake3::Hasher::new();
         input.update(b"manyhands-resolution-v1\0");
         if let Some(identity) = confirmed_identity {
@@ -5398,20 +5447,28 @@ impl RepositoryService {
                 request.observation.configuration,
             )?;
         }
-        self.prepare_synchronization_resolution_attempt_in_window(
-            &root,
-            &owner,
-            request.observation.window_number,
-            &state::ResolutionAttemptIntent {
-                attempt_id: request.attempt_id,
-                step_ordinal: request.observation.ordinal,
-                observation_digest: request.observation.fingerprint,
-                input_digest: *input.finalize().as_bytes(),
-                preflight_digest,
-                identity_confirmation_id,
-            },
-            &path_intents,
-        )?;
+        let (commit_seconds, commit_offset) = self
+            .prepare_synchronization_resolution_attempt_in_window(
+                &root,
+                &owner,
+                request.observation.window_number,
+                &state::ResolutionAttemptIntent {
+                    attempt_id: request.attempt_id,
+                    step_ordinal: request.observation.ordinal,
+                    observation_digest: request.observation.fingerprint,
+                    input_digest: *input.finalize().as_bytes(),
+                    preflight_digest,
+                    identity_confirmation_id,
+                    commit_time: (now.seconds(), now.offset_minutes()),
+                },
+                &path_intents,
+            )?;
+        let commit_signature = git2::Signature::new(
+            &identity.0,
+            &identity.1,
+            &git2::Time::new(commit_seconds, commit_offset),
+        )
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
         self.begin_synchronization_resolution_path_effects(&root, &owner, request.attempt_id)?;
         let durable_paths = state::with_transaction(self, &root, |tx, id| {
             let record = state::read_operation(tx, id, request.synchronization_id)?
@@ -5550,12 +5607,12 @@ impl RepositoryService {
             .find_tree(tree_oid)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         // A recorded retry must recreate exactly the same detached candidate.
-        // The fixed timestamp is part of that durable candidate contract.
+        // The attempt's recorded time is part of that durable candidate contract.
         let candidate = repository
             .commit(
                 None,
-                &signature,
-                &signature,
+                &commit_signature,
+                &commit_signature,
                 &match &inspection.target {
                     SynchronizationTarget::Primary => "Resolve synchronization primary".to_owned(),
                     SynchronizationTarget::Context { kind, item_id } => format!(
