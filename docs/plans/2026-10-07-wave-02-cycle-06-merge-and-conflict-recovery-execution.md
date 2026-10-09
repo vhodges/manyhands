@@ -1982,3 +1982,11 @@ clippy pass; `--lib repository::remote` 270 passed; `discovery_rebuild` 78,
 `remote_reservation` 9; `remote_synchronization` 63 SSH cases. With the native run
 that follows, this is the Task 5 acceptance checkpoint (A3, A5–A7 at lib level and
 through the existing SSH suite); Task 6's two-clone acceptance and Task 7 remain.
+
+### Task 5 accepted — 2026-10-09
+
+Manual run 37966787473 completed SUCCESS on exact source
+6e2a80d36476f1696f76db7f1ac457846d58fff8 across all five native targets; results
+inspected with gh. https://github.com/vhodges/manyhands/actions/runs/37966787473
+With the four milestone reviews above, Task 5 is accepted with the recorded
+limits. Next: Task 6 (one writer, `tests/remote_merge_recovery.rs`).

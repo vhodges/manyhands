@@ -3,8 +3,8 @@ mod observation;
 mod refs;
 mod sync;
 pub use merge::{
-    ConfirmedCommitIdentity, ConflictObservation, ConflictPathToken, RedactedConflictBytes,
-    ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
+    ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
+    RedactedConflictBytes, ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
 pub use sync::{

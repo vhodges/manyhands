@@ -59,10 +59,10 @@ use recovery::{
     record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, ConfirmedCommitIdentity, ConflictObservation, ConflictPathToken,
-    EphemeralSynchronizationConflictSides, ObservePublicationRemoteRequest, PollingInterval,
-    PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    AutomaticBackoff, ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation,
+    ConflictPathToken, EphemeralSynchronizationConflictSides, ObservePublicationRemoteRequest,
+    PollingInterval, PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot,
+    RemoteContextState, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
     RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
     RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
