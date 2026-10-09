@@ -6,6 +6,11 @@ use crate::{
 
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("observe_complete_and_replay", complete_and_replay),
+    #[cfg(unix)]
+    (
+        "observe_alias_root_complete_and_replay",
+        alias_root_complete_and_replay,
+    ),
     ("observe_unlock_session", unlock_session),
     ("observe_host_and_key_failures", host_and_key_failures),
     ("observe_safe_points", safe_points),
@@ -36,11 +41,16 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
 
 fn setup(encrypted: bool) -> Result<Case, FixtureError> {
     let case = Case::new(encrypted)?;
+    setup_case(case)
+}
+fn setup_case(case: Case) -> Result<Case, FixtureError> {
     crate::failures::seed(&case)?;
     let db = fixed(rusqlite::Connection::open(
         case.directory.path().join("data").join(REGISTRY_FILE),
     ))?;
-    fixed(db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [case.root.to_str().unwrap()]))?;
+    // Registry rows use physical root identity; requests may retain an alias.
+    let registered_root = fixed(case.root.canonicalize())?;
+    fixed(db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [registered_root.to_str().unwrap()]))?;
     Ok(case)
 }
 fn request(case: &Case) -> ObservePublicationRemoteRequest {
@@ -55,7 +65,32 @@ fn request(case: &Case) -> ObservePublicationRemoteRequest {
 
 // Catches partial publication, unintended Git mutations, and replay re-advertising.
 fn complete_and_replay() -> Result<(), FixtureError> {
-    let case = setup(false)?;
+    let case = setup(false).inspect_err(|_| crate::ssh_harness::observation(&[612, 1]))?;
+    complete_case(&case).inspect_err(|_| crate::ssh_harness::observation(&[612, 2]))
+}
+
+#[cfg(unix)]
+fn alias_root_complete_and_replay() -> Result<(), FixtureError> {
+    let mut case = Case::new(false)?;
+    let alias = case.directory.path().join("repository-alias");
+    fixed(std::os::unix::fs::symlink(case.directory.path(), &alias))?;
+    case.root = alias.join("repo");
+    assert_ne!(case.root, fixed(case.root.canonicalize())?);
+    let case = setup_case(case)?;
+    complete_case(&case)?;
+    let registered: String = fixed(rusqlite::Connection::open(
+        case.directory.path().join("data").join(REGISTRY_FILE),
+    ))?
+    .query_row("SELECT root_path FROM repositories", [], |row| row.get(0))
+    .map_err(|_| FixtureError)?;
+    assert!(
+        std::path::Path::new(&registered) == fixed(case.root.canonicalize())?,
+        "fixture registry must use canonical root identity"
+    );
+    Ok(())
+}
+
+fn complete_case(case: &Case) -> Result<(), FixtureError> {
     let remote = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
     let oid = fixed(remote.refname_to_id("refs/heads/main"))?;
     fixed(remote.reference(
@@ -67,13 +102,34 @@ fn complete_and_replay() -> Result<(), FixtureError> {
     let local = fixed(git2::Repository::open(&case.root))?;
     let local_oid = fixed(local.head())?.target().unwrap();
     fixed(local.reference("refs/remotes/origin/main", local_oid, true, "fixture"))?;
-    let before = crate::failures::Preservation::capture(&case)?;
+    let before = crate::failures::Preservation::capture(case)?;
     let (mut session, requests) = session(vec![]);
-    let req = request(&case);
-    let result = fixed(
-        case.service
-            .observe_publication_remote(req.clone(), &mut session),
-    )?;
+    let req = request(case);
+    let observed = case
+        .service
+        .observe_publication_remote(req.clone(), &mut session);
+    if let Err(error) = &observed {
+        // Fixed categories only: no repository errors, paths, or captured bytes.
+        let category = match error {
+            RemoteObservationError::Repository(error)
+                if error.kind == RepositoryErrorKind::RepositoryNotRegistered =>
+            {
+                1
+            }
+            RemoteObservationError::Repository(_) => 2,
+            RemoteObservationError::Transport(_) => 3,
+            RemoteObservationError::Busy => 4,
+            RemoteObservationError::PollYielding => 5,
+            RemoteObservationError::Interrupted => 6,
+        };
+        crate::ssh_harness::observation(&[610, category]);
+        crate::ssh_harness::observation(&[
+            611,
+            u128::from(case.root == fixed(case.root.canonicalize())?),
+            case.fixture.helper_invocations() as u128,
+        ]);
+    }
+    let result = fixed(observed)?;
     assert_eq!(result.category(), RemoteOutcomeCategory::Completed);
     assert_eq!(result.snapshot().observations().len(), 2);
     let primary = result
@@ -96,7 +152,7 @@ fn complete_and_replay() -> Result<(), FixtureError> {
     let replay = fixed(case.service.observe_publication_remote(req, &mut session))?;
     assert_eq!(replay.snapshot(), result.snapshot());
     assert_eq!(case.fixture.helper_invocations(), helpers);
-    before.check(&case)
+    before.check(case)
 }
 
 // Catches prompting again on an automatic retry and persisting session locks as pause.
@@ -755,7 +811,8 @@ fn shared_block_across_repositories(invalid_config: bool) -> Result<(), FixtureE
     let db = fixed(rusqlite::Connection::open(
         case.directory.path().join("data").join(REGISTRY_FILE),
     ))?;
-    fixed(db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [other_root.to_str().unwrap()]))?;
+    let registered_root = fixed(other_root.canonicalize())?;
+    fixed(db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)", [registered_root.to_str().unwrap()]))?;
     let before = crate::failures::Preservation::capture(&case)?;
     let (mut session, requests) = session(vec![PassphraseResponse::Cancelled, secret(PASSWORD)]);
     assert!(

@@ -1447,6 +1447,38 @@ through normal push; seventh full native matrix is running:
 https://github.com/vhodges/manyhands/actions/runs/37863696730
 Inspect exact-source results before Task 4 acceptance.
 
+### Owner CI-first verification ruling — 2026-10-09
+
+Owner requested running fixes in CI rather than duplicating local and CI work:
+**"Only run them locally if you get a regression in the Linux CI run."** This is
+the explicit verification exception for continued Cycle work: use source review
+then authorized manual native CI, and launch local Rust verification/reproduction
+only when Linux CI regresses. Preserve all native coverage and factual evidence;
+do not repeat local suites just because Windows/macOS fixes changed a tree.
+The latest worker had completed its local commands before this steering arrived.
+No additional local verification will be launched for that unchanged correction.
+
+### Native run 9: final transport fixture preservation controls — 2026-10-09
+
+Run 37872797196 fully passed Linux x86_64/ARM64; Windows and macOS reached the
+last transport controls. Worker `ses_ee179f036ffeKnrpaJumd77eLq` reproduced the
+Windows context-identity check 540 before the second production call: raw native
+gitdir text again differed from Git-format metadata. Parser-correct encoding and
+physical decoy attestation retain mismatch, protected-state and no-auth predicates.
+The observation fixture's alias-root manual registry insert independently reproduced
+RepositoryNotRegistered and now uses canonical keys, retaining alias requests,
+complete/replay/snapshot/helper/prompt/private-key invariants. Exact macOS native
+failure was not exposed by its filtered child capture, so fixed numeric diagnostics
+were added; no claim that the local alias reproduction proves that native cause.
+
+The worker had completed selected regressions and local static/full verification
+before the CI-first steering arrived. Read-only spec
+`ses_ee16485e4ffeUkQNbfl1pbodWq` and quality
+`ses_ee163148fffehVG2r9qm3MGa3b` approve the two-file test-only correction. No
+further local Rust command is required without a Linux CI regression. Publish
+and inspect native results, including numeric-only diagnostics if the Mac case
+still fails. Native gate is not waived; Task 4 remains unaccepted.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy
@@ -1469,6 +1501,11 @@ Focused foundation 51/enablement 78, static gates, full long-budget Devenv suite
 and CLI pass. Independent spec `ses_ee19c5e78ffetygUsh6SL3c4N6` and quality
 `ses_ee19acde1ffe6QpiRuHVkMNU9d` approve the narrow diff. Next exact-source native
 verification remains required; Task 4 unaccepted.
+
+Published approved fixtures as 7b8949ba914774ac4398b5be53c043a1b04e48eb;
+ninth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37872797196
+Inspect exact-source results before Task 4 acceptance.
 
 ### Native run 7: later authoring fixture policies corrected — 2026-10-09
 

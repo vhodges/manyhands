@@ -7,6 +7,7 @@ use crate::{
 };
 use std::{cell::Cell, path::Path};
 pub const CASES: &[crate::ssh_harness::Case] = &[
+    ("synchronization_gitdir_encoding", gitdir_encoding),
     ("synchronization_primary_service", primary_service),
     (
         "synchronization_authoritative_replay_remote_removed",
@@ -535,9 +536,20 @@ fn context_identity_preservation() -> Result<(), FixtureError> {
     fixed(std::fs::write(alternate.join(".git"), b"fixture decoy"))?;
     fixed(std::fs::write(
         repo.commondir().join("worktrees").join(ITEM).join("gitdir"),
-        format!("{}\n", alternate.join(".git").display()),
+        registered_gitdir_text(
+            fixed(alternate.join(".git").to_str().ok_or(FixtureError))?,
+            cfg!(windows),
+        ),
     ))?;
-    assert_eq!(fixed(repo.find_worktree(ITEM))?.path(), alternate);
+    let registered = fixed(repo.find_worktree(ITEM))?;
+    assert!(
+        fixed(registered.path().canonicalize())? == fixed(alternate.canonicalize())?,
+        "registered metadata must name the actual decoy directory"
+    );
+    assert!(
+        fixed(registered.path().canonicalize())? != fixed(context.worktree.canonicalize())?,
+        "decoy registration must remain a different physical worktree"
+    );
     let before = target_state(&case.root, &context.worktree)?;
     assert!(matches!(
         case.service
@@ -550,6 +562,75 @@ fn context_identity_preservation() -> Result<(), FixtureError> {
         b"fixture decoy"
     );
     assert_eq!(case.fixture.accepted_keys().len(), effects);
+    Ok(())
+}
+fn registered_gitdir_text(gitdir: &str, windows: bool) -> String {
+    // This is Git metadata, not native path display: libgit2 reads the field
+    // verbatim and dirname scans only '/'. Preserve literal Unix backslashes.
+    if !windows {
+        return format!("{gitdir}\n");
+    }
+    let gitdir = if let Some(unc) = gitdir.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        gitdir.strip_prefix(r"\\?\").unwrap_or(gitdir).to_owned()
+    };
+    format!("{}\n", gitdir.replace('\\', "/"))
+}
+fn gitdir_encoding() -> Result<(), FixtureError> {
+    let directory = fixed(tempfile::tempdir())?;
+    let repository = fixed(git2::Repository::init(directory.path().join("root")))?;
+    let tree = fixed(repository.find_tree(fixed(fixed(repository.treebuilder(None))?.write())?))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    fixed(repository.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[]))?;
+    fixed(repository.worktree(ITEM, &directory.path().join("linked"), None))?;
+    let metadata = repository
+        .commondir()
+        .join("worktrees")
+        .join(ITEM)
+        .join("gitdir");
+    // Exercise the actual parser with Windows metadata even on a Unix runner.
+    for (input, expected) in [
+        (
+            r"C:\fixture\.manyhands/worktrees/registered-elsewhere\.git",
+            "C:/fixture/.manyhands/worktrees/registered-elsewhere",
+        ),
+        (
+            r"\\?\C:\fixture\registered-elsewhere\.git",
+            "C:/fixture/registered-elsewhere",
+        ),
+        (
+            r"\\server\share\fixture\registered-elsewhere\.git",
+            "//server/share/fixture/registered-elsewhere",
+        ),
+        (
+            r"\\?\UNC\server\share\fixture\registered-elsewhere\.git",
+            "//server/share/fixture/registered-elsewhere",
+        ),
+    ] {
+        fixed(std::fs::write(
+            &metadata,
+            registered_gitdir_text(input, true),
+        ))?;
+        assert!(
+            fixed(repository.find_worktree(ITEM))?.path() == Path::new(expected),
+            "Git metadata must name the exact intended directory"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let literal = directory.path().join(r"literal\backslash");
+        fixed(std::fs::create_dir(&literal))?;
+        let gitdir = literal.join(".git");
+        fixed(std::fs::write(
+            &metadata,
+            registered_gitdir_text(fixed(gitdir.to_str().ok_or(FixtureError))?, false),
+        ))?;
+        assert!(
+            fixed(repository.find_worktree(ITEM))?.path() == literal,
+            "Unix backslashes remain literal path characters"
+        );
+    }
     Ok(())
 }
 fn context_absence_boundaries() -> Result<(), FixtureError> {
