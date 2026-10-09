@@ -103,6 +103,15 @@ const CASES: &[ssh_harness::Case] = &[
         context_resolution_and_publication_seams_inventory,
     ),
     (
+        "context_candidate_race_continuation_stop",
+        context_candidate_race_continuation_stop,
+    ),
+    #[cfg(unix)]
+    (
+        "hostile_conflict_paths_are_redacted",
+        hostile_conflict_paths_are_redacted,
+    ),
+    (
         "cancelled_pending_conflict_stays_recoverable",
         cancelled_pending_conflict_stays_recoverable,
     ),
@@ -136,6 +145,10 @@ const ALPHA: &str = "alpha-private-body-canary";
 const BETA: &str = "beta-private-body-canary";
 const RESOLVED: &str = "resolved-private-body-canary";
 const SEED: &str = "seed-private-body-canary";
+const FETCH_SENTINEL: &[u8] = b"FETCH_HEAD-preservation-sentinel";
+const TICKET_TRACKING: &str = "refs/remotes/origin/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const DOCUMENT_TRACKING: &str = "refs/remotes/origin/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const MAIN_TRACKING: &str = "refs/remotes/origin/main";
 const REGULAR: u32 = 0o100644;
 const LINK: u32 = 0o120000;
 
@@ -350,6 +363,44 @@ fn refs(repo: &git2::Repository) -> Result<Vec<(String, Option<git2::Oid>)>, Fix
         .collect::<Result<Vec<_>, FixtureError>>()?;
     all.sort();
     Ok(all)
+}
+/// Plant a FETCH_HEAD sentinel and an unrelated tracking ref, then record
+/// every local ref.
+fn scope_before(repo: &git2::Repository) -> Result<Vec<(String, Option<git2::Oid>)>, FixtureError> {
+    fixed(std::fs::write(
+        repo.path().join("FETCH_HEAD"),
+        FETCH_SENTINEL,
+    ))?;
+    let head = fixed(repo.refname_to_id(MAIN))?;
+    fixed(repo.reference("refs/remotes/origin/unrelated", head, true, "fixture"))?;
+    refs(repo)
+}
+/// Exactly the named refs moved or appeared. FETCH_HEAD is untouched and none
+/// was written under a linked worktree's own gitdir.
+fn scope_after(
+    repo: &git2::Repository,
+    before: &[(String, Option<git2::Oid>)],
+    moved: &[(&str, git2::Oid)],
+    linked: Option<&git2::Repository>,
+) -> Result<(), FixtureError> {
+    let mut expected = before.to_vec();
+    for (name, oid) in moved {
+        match expected.iter_mut().find(|(known, _)| known == name) {
+            Some(entry) => entry.1 = Some(*oid),
+            None => expected.push(((*name).to_owned(), Some(*oid))),
+        }
+    }
+    expected.sort();
+    assert_eq!(refs(repo)?, expected);
+    assert_eq!(
+        fixed(std::fs::read(repo.path().join("FETCH_HEAD")))?,
+        FETCH_SENTINEL
+    );
+    if let Some(linked) = linked {
+        assert!(linked.path() != repo.path());
+        assert!(!linked.path().join("FETCH_HEAD").exists());
+    }
+    Ok(())
 }
 fn merge_heads(root: &Path) -> Result<Vec<git2::Oid>, FixtureError> {
     let mut repo = fixed(git2::Repository::open(root))?;
@@ -693,10 +744,19 @@ impl Pair {
     }
     /// Every recovery row of both clones, and each whole generated store.
     fn privacy(&self) -> Result<(), FixtureError> {
+        self.scanned_rows().map(|_| ())
+    }
+    /// The same scan, returning the scanned row count of every recovery
+    /// table of clone A and clone B.
+    fn scanned_rows(&self) -> Result<[std::collections::BTreeMap<String, usize>; 2], FixtureError> {
         self.save_probes()?;
+        let mut counts = [
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+        ];
         let probes = self.probes.borrow();
         let paths = self.paths.borrow();
-        for side in [&self.a, &self.b] {
+        for (side, counts) in [&self.a, &self.b].into_iter().zip(&mut counts) {
             let db = side.db()?;
             let tables = {
                 let mut statement = fixed(db.prepare(
@@ -721,6 +781,7 @@ impl Pair {
             }
             let mut scans = 0;
             for table in &tables {
+                let mut scanned = 0;
                 let mut statement = fixed(db.prepare(&format!("SELECT * FROM {table}")))?;
                 let columns = statement.column_count();
                 let mut rows = fixed(statement.query([]))?;
@@ -734,7 +795,9 @@ impl Pair {
                         }
                     }
                     scans += 1;
+                    scanned += 1;
                 }
+                counts.insert(table.clone(), scanned);
             }
             assert!(scans > 0, "privacy row inventory must be nonempty");
             // Whole stores may retain discovery worktree paths; the rows above
@@ -744,7 +807,7 @@ impl Pair {
                 path.file_name().is_some_and(|name| name == REGISTRY_FILE) && *bytes > 0
             }));
         }
-        Ok(())
+        Ok(counts)
     }
     fn request(&self, side: &Side, target: SynchronizationTarget) -> SynchronizeRemoteRequest {
         SynchronizeRemoteRequest {
@@ -1278,13 +1341,7 @@ fn two_clone_clean_ticket_divergence() -> Result<(), FixtureError> {
     assert_eq!(parents(&p.a.repo()?, a_tip)?, [base]);
     assert_eq!(parents(&b_repo, b_tip)?, [base]);
     assert!(b_repo.find_commit(a_tip).is_err());
-    let fetch_head = b_repo.path().join("FETCH_HEAD");
-    fixed(std::fs::write(
-        &fetch_head,
-        b"FETCH_HEAD-preservation-sentinel",
-    ))?;
-    fixed(b_repo.reference("refs/remotes/origin/unrelated", base, true, "fixture"))?;
-    let refs_before = refs(&b_repo)?;
+    let refs_before = scope_before(&b_repo)?;
     let primary_before = checkout(&p.b.root)?;
     let n = p.server.receive_updates().len();
     let merged = published(fixed(p.sync(&p.b, p.ticket(&p.b)))?)?;
@@ -1316,22 +1373,12 @@ fn two_clone_clean_ticket_divergence() -> Result<(), FixtureError> {
     );
     // Exact local ref scope: the context branch moved to the merge and its
     // tracking ref records what Fetch observed, never this clone's own push.
-    let mut expected = refs_before.clone();
-    for (name, target) in &mut expected {
-        if name == TICKET_REF {
-            *target = Some(merged);
-        }
-    }
-    expected.push((
-        format!("refs/remotes/origin/manyhands/ticket/{TICKET}"),
-        Some(a_tip),
-    ));
-    expected.sort();
-    assert_eq!(refs(&b_repo)?, expected);
-    assert_eq!(
-        fixed(std::fs::read(&fetch_head))?,
-        b"FETCH_HEAD-preservation-sentinel"
-    );
+    scope_after(
+        &b_repo,
+        &refs_before,
+        &[(TICKET_REF, merged), (TICKET_TRACKING, a_tip)],
+        Some(&linked),
+    )?;
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
     assert_eq!(merge_commits(&b_repo)?, 1);
     // The context ref moved; nothing of the primary checkout did.
@@ -1381,11 +1428,18 @@ fn two_clone_clean_document_divergence() -> Result<(), FixtureError> {
     let b_tip = p.save_document(&p.b, "Shared document", &document_body(BETA))?;
     let b_repo = p.b.repo()?;
     assert_eq!(parents(&b_repo, b_tip)?, [base]);
+    let refs_before = scope_before(&b_repo)?;
     let n = p.server.receive_updates().len();
     let merged = published(fixed(p.sync(&p.b, p.document(&p.b)))?)?;
     assert_eq!(parents(&b_repo, merged)?, [b_tip, a_tip]);
     assert_eq!(merge_commits(&b_repo)?, 1);
     one_update(&p.server, n, DOCUMENT_REF, a_tip, merged);
+    scope_after(
+        &b_repo,
+        &refs_before,
+        &[(DOCUMENT_REF, merged), (DOCUMENT_TRACKING, a_tip)],
+        Some(&p.b.linked(DOCUMENT)?),
+    )?;
     let expected = document_source("Alpha title", BETA);
     assert!(blob_at(&b_repo, merged, DOCUMENT_PATH)?.as_deref() == Some(expected.as_bytes()));
     assert!(
@@ -1432,11 +1486,7 @@ fn two_clone_primary_divergence() -> Result<(), FixtureError> {
     one_update(&p.server, n, MAIN, base, a_tip);
     let b_repo = p.b.repo()?;
     let b_tip = advance(&b_repo, MAIN, &[("beta.txt", Some((b"beta\n", REGULAR)))])?;
-    let fetch_head = b_repo.path().join("FETCH_HEAD");
-    fixed(std::fs::write(
-        &fetch_head,
-        b"FETCH_HEAD-preservation-sentinel",
-    ))?;
+    let refs_before = scope_before(&b_repo)?;
     let n = p.server.receive_updates().len();
     let merged = published(fixed(p.sync(&p.b, p.primary(&p.b)))?)?;
     assert_eq!(parents(&b_repo, merged)?, [b_tip, a_tip]);
@@ -1450,10 +1500,13 @@ fn two_clone_primary_divergence() -> Result<(), FixtureError> {
         assert_eq!(fixed(std::fs::read(p.b.root.join(name)))?, bytes);
     }
     assert!(fixed(b_repo.statuses(None))?.is_empty());
-    assert_eq!(
-        fixed(std::fs::read(&fetch_head))?,
-        b"FETCH_HEAD-preservation-sentinel"
-    );
+    // The primary branch moved to the merge; its tracking ref is A's tip.
+    scope_after(
+        &b_repo,
+        &refs_before,
+        &[(MAIN, merged), (MAIN_TRACKING, a_tip)],
+        None,
+    )?;
     let n = p.server.receive_updates().len();
     outcome(
         fixed(p.sync(&p.a, p.primary(&p.a)))?,
@@ -1483,6 +1536,7 @@ fn two_clone_context_then_primary_ordered_merges() -> Result<(), FixtureError> {
     assert_eq!(published(fixed(p.sync(&p.a, p.primary(&p.a)))?)?, a_primary);
     let b_tip = p.submit_comment(&p.b, BETA)?;
     let b_repo = p.b.repo()?;
+    let refs_before = scope_before(&b_repo)?;
     let n = p.server.receive_updates().len();
     let merged = published(fixed(p.sync(&p.b, p.ticket(&p.b)))?)?;
     let first = parents(&b_repo, merged)?;
@@ -1491,8 +1545,19 @@ fn two_clone_context_then_primary_ordered_merges() -> Result<(), FixtureError> {
     assert_eq!(parents(&b_repo, first[0])?, [b_tip, a_context]);
     assert_eq!(merge_commits(&b_repo)?, 2);
     one_update(&p.server, n, TICKET_REF, a_context, merged);
-    // The context target never moves the local primary branch.
+    // The context target never moves the local primary branch: the context
+    // branch moved, and both tracking refs record what Fetch observed.
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
+    scope_after(
+        &b_repo,
+        &refs_before,
+        &[
+            (TICKET_REF, merged),
+            (TICKET_TRACKING, a_context),
+            (MAIN_TRACKING, a_primary),
+        ],
+        Some(&p.b.linked(TICKET)?),
+    )?;
     assert!(!p.b.root.join("alpha.txt").exists());
     let worktree = p.b.worktree(TICKET);
     assert_eq!(
@@ -1864,7 +1929,8 @@ fn two_clone_comment_and_multi_path_conflicts() -> Result<(), FixtureError> {
         SynchronizationStage::Context,
         &set,
     )?;
-    // One path of a two-path set is never applied on its own.
+    // One path of a two-path set is never applied on its own. The set is
+    // current and eligible, so this is the count category, not external-only.
     let before = physical(&p.b.root, &worktree)?;
     let mut partial = inspection.clone();
     partial.paths.truncate(1);
@@ -2151,7 +2217,10 @@ fn external_round(
                 vec![ticket_source("Resolved title", RESOLVED).into_bytes(); plan.conflicts],
             ),
         ),
-        Ok(ResolveSynchronizationOutcome::StaleObservation)
+        Err(SynchronizationError::ExternalResolutionRequired {
+            target: SynchronizationTarget::Primary,
+            operation_id,
+        }) if operation_id == request.operation_id
     ));
     assert!(physical(&p.b.root, &p.b.root)? == before);
     assert_eq!(commit_inventory(&b)?, commits);
@@ -2402,7 +2471,20 @@ fn resolved_merge_ambiguous_acceptance_and_persistence() -> Result<(), FixtureEr
         } else {
             fixed(db.execute_batch("CREATE TRIGGER fail_verify BEFORE UPDATE ON remote_operation_records WHEN NEW.sync_checkpoint='push_verified' BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
         }
-        assert!(p.sync(&p.b, restart(&conflict.request)).is_err());
+        // A lost transport outcome, or a failed durable write: never a
+        // push rejection and never a success.
+        let lost = p.sync(&p.b, restart(&conflict.request));
+        assert!(if disconnect {
+            matches!(lost, Err(SynchronizationError::Transport(_)))
+        } else {
+            matches!(
+                lost,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RecoveryRequired,
+                    ..
+                }))
+            )
+        });
         if disconnect {
             assert!(p.server.receive_status_withheld());
             p.server.clear_fault();
@@ -2557,6 +2639,7 @@ fn endpoint_change_after_conflict_interaction_fences_restart() -> Result<(), Fix
     let before = physical(&p.b.root, &p.b.root)?;
     let n = p.server.receive_updates().len();
     let authenticated = other.accepted_keys().len();
+    let original = p.server.accepted_keys().len();
     for _ in 0..2 {
         // The generation fence itself: never a transport or push outcome.
         assert!(matches!(
@@ -2566,7 +2649,9 @@ fn endpoint_change_after_conflict_interaction_fences_restart() -> Result<(), Fix
                 ..
             }))
         ));
+        // Refused before any connection to either endpoint.
         assert_eq!(other.accepted_keys().len(), authenticated);
+        assert_eq!(p.server.accepted_keys().len(), original);
         let generations: (i64, i64) = fixed(p.b.db()?.query_row(
             "SELECT (SELECT configuration_generation FROM remote_operation_records WHERE operation_ulid=?1),(SELECT configuration_generation FROM remote_polling_state)",
             [conflict.request.operation_id.to_string()],
@@ -2596,11 +2681,12 @@ fn inventory(p: &Pair, reference: &str, since: usize) -> Result<Inventory, Fixtu
     ))
 }
 /// A5, A7. One resolved two-clone conflict is stopped at each durable seam in
-/// turn: the resolution checkpoint, the push intent, the returned push, the
-/// verified push, the classification and the discovery handoff. Every restart
-/// completes only what is missing: one resolution commit, one push, and
-/// finally an index-only replay with the transport disconnected. Run for the
-/// primary target and for the shared context branch.
+/// turn: the resolution checkpoint, then the `push_prepared`, `push_returned`,
+/// `push_verified` and `discovery_pending` checkpoints, then the completion
+/// of the discovery refresh. Every restart completes only what is missing:
+/// one resolution commit, one push, and finally an index-only replay with the
+/// transport disconnected. Run for the primary target and for the shared
+/// context branch.
 fn primary_resolution_and_publication_seams_inventory() -> Result<(), FixtureError> {
     seams_inventory(false)
 }
@@ -2760,6 +2846,276 @@ fn seams_inventory(context: bool) -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// number, candidate_oid, phase of every appended publication attempt.
+fn publication_attempts(p: &Pair) -> Result<Vec<(i64, Option<String>, String)>, FixtureError> {
+    let db = p.b.db()?;
+    let mut statement = fixed(db.prepare(
+        "SELECT number,candidate_oid,phase FROM remote_publication_attempts ORDER BY number",
+    ))?;
+    let rows = fixed(statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))?;
+    fixed(rows.collect::<Result<Vec<_>, _>>())
+}
+/// A5, A6. A context-target merge candidate is displaced by a competing
+/// write to the shared context branch. Its continuation is stopped when the
+/// appended publication attempt records the returned push; the next restart
+/// proves that one push and converges: one continuation merge, one accepted
+/// push, one attempt row.
+fn context_candidate_race_continuation_stop() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let a_tip = p.save_ticket(&p.a, "Alpha title", ALPHA)?;
+    assert_eq!(published(fixed(p.sync(&p.a, p.ticket(&p.a)))?)?, a_tip);
+    let b_tip = p.submit_comment(&p.b, BETA)?;
+    let server = p.bare()?;
+    let race = commit_object(
+        &server,
+        &[a_tip],
+        &[("race.txt", Some((b"race\n", REGULAR)))],
+    )?;
+    p.server.race_update(TICKET_REF, a_tip, race)?;
+    let n = p.server.receive_updates().len();
+    let request = p.ticket(&p.b);
+    assert!(matches!(
+        p.sync(&p.b, request.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let b = p.b.repo()?;
+    let merged = fixed(b.refname_to_id(TICKET_REF))?;
+    assert_eq!(parents(&b, merged)?, [b_tip, a_tip]);
+    let updates = p.server.receive_updates();
+    assert_eq!(updates.len(), n + 1);
+    assert_eq!(
+        updates[n],
+        ReceiveUpdate {
+            reference: TICKET_REF.into(),
+            old_oid: a_tip,
+            new_oid: merged,
+            accepted: false
+        }
+    );
+    assert_eq!(fixed(server.refname_to_id(TICKET_REF))?, race);
+    assert!(publication_attempts(&p)?.is_empty());
+    assert_eq!(merge_commits(&b)?, 1);
+
+    let db = p.b.db()?;
+    fixed(db.execute_batch("CREATE TRIGGER seam BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='returned' BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
+    assert!(matches!(
+        p.sync_with(&p.b.reopened()?, restart(&request)),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    fixed(db.execute_batch(DROP_SEAM))?;
+    // The continuation merge exists and was pushed once; only the record of
+    // the returned push is missing.
+    let continued = fixed(b.refname_to_id(TICKET_REF))?;
+    assert_eq!(parents(&b, continued)?, [merged, race]);
+    assert_eq!(merge_commits(&b)?, 2);
+    one_update(&p.server, n + 1, TICKET_REF, race, continued);
+    assert_eq!(
+        publication_attempts(&p)?,
+        [(1, Some(continued.to_string()), "prepared".to_owned())]
+    );
+    let worktree = p.b.worktree(TICKET);
+    let before = physical(&p.b.root, &worktree)?;
+    let commits = commit_inventory(&p.bare()?)?;
+    outcome(
+        fixed(p.sync_with(&p.b.reopened()?, restart(&request)))?,
+        true,
+        ticket_target(),
+        continued,
+    );
+    assert_eq!(p.server.receive_updates().len(), n + 2);
+    assert_eq!(commit_inventory(&p.bare()?)?, commits);
+    assert!(physical(&p.b.root, &worktree)? == before);
+    assert_eq!(merge_commits(&b)?, 2);
+    assert_eq!(
+        publication_attempts(&p)?,
+        [(1, Some(continued.to_string()), "verified".to_owned())]
+    );
+    assert_eq!(fixed(std::fs::read(worktree.join("race.txt")))?, b"race\n");
+    assert!(fixed(std::fs::read_to_string(worktree.join(TICKET_PATH)))?.contains(ALPHA));
+    assert!(fixed(std::fs::read_to_string(worktree.join(NEW_COMMENT_PATH)))?.contains(BETA));
+    assert!(fixed(p.b.linked(TICKET)?.statuses(None))?.is_empty());
+    let (_, _, head) = discovered(&p.b, TICKET)?;
+    assert_eq!(head, Some(continued));
+    Ok(())
+}
+
+/// One fixture commit that sets a single path given as raw bytes.
+#[cfg(unix)]
+fn commit_raw_path(
+    repo: &git2::Repository,
+    parents: &[git2::Oid],
+    path: &[u8],
+    bytes: &[u8],
+) -> Result<git2::Oid, FixtureError> {
+    let parents = parents
+        .iter()
+        .map(|oid| fixed(repo.find_commit(*oid)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut index = fixed(git2::Index::new())?;
+    fixed(index.read_tree(&fixed(parents[0].tree())?))?;
+    fixed(index.add(&git2::IndexEntry {
+        ctime: git2::IndexTime::new(0, 0),
+        mtime: git2::IndexTime::new(0, 0),
+        dev: 0,
+        ino: 0,
+        mode: REGULAR,
+        uid: 0,
+        gid: 0,
+        file_size: bytes.len() as u32,
+        id: fixed(repo.blob(bytes))?,
+        flags: 0,
+        flags_extended: 0,
+        path: path.to_vec(),
+    }))?;
+    let tree = fixed(repo.find_tree(fixed(index.write_tree_to(repo))?))?;
+    let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    fixed(repo.commit(
+        None,
+        &sig,
+        &sig,
+        "owned fixture commit",
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    ))
+}
+/// A4, A8. Conflicts on hostile document paths. A path with an escape
+/// sequence and a newline is still a valid canonical document path, so its
+/// conflict is eligible and is resolved in-process; on Linux a path that is
+/// not UTF-8 is external-only and is repaired as a whole merge that keeps
+/// the recorded local entry. Neither path reaches a recovery row or a
+/// rendered diagnostic.
+#[cfg(unix)]
+fn hostile_conflict_paths_are_redacted() -> Result<(), FixtureError> {
+    use std::os::unix::ffi::OsStrExt;
+    const FRAGMENT: &[u8] = b"hostile-control-canary-private";
+    let p = Pair::new()?;
+    let a = p.a.repo()?;
+    let b = p.b.repo()?;
+    let source = |body: &str| {
+        canonical::serialize_item(&canonical::CanonicalItem::Document(canonical::Document {
+            id: "01ERZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            title: "Hostile".into(),
+            body: format!("{body}\n"),
+            unknown: serde_yaml::Mapping::new(),
+        }))
+        .unwrap()
+        .into_bytes()
+    };
+    #[allow(unused_mut)]
+    let mut hostile = vec![(
+        [b"docs/esc\x1b[31m\n".as_slice(), FRAGMENT, b".md"].concat(),
+        ConflictEligibility::EligibleCanonical,
+    )];
+    // macOS filesystems refuse names that are not valid UTF-8.
+    #[cfg(target_os = "linux")]
+    hostile.push((
+        [b"docs/bytes\xff\xfe".as_slice(), FRAGMENT, b".md"].concat(),
+        ConflictEligibility::ExternalResolutionRequired,
+    ));
+    let mut attempts = 0;
+    for (path, eligibility) in hostile {
+        let external = eligibility == ConflictEligibility::ExternalResolutionRequired;
+        // Row and rendering probes: the whole path and its readable part.
+        // Discovery may legitimately index a document path elsewhere.
+        p.paths.borrow_mut().push(path.clone());
+        p.paths.borrow_mut().push(FRAGMENT.to_vec());
+        p.save_probes()?;
+        // A common base on both clones, then one edit on each.
+        let head = fixed(a.refname_to_id(MAIN))?;
+        let base = commit_raw_path(&a, &[head], &path, &source(SEED))?;
+        install(&a, MAIN, base)?;
+        push_peer(&a, &p.server, MAIN)?;
+        outcome(
+            fixed(p.sync(&p.b, p.primary(&p.b)))?,
+            false,
+            SynchronizationTarget::Primary,
+            base,
+        );
+        let incoming = commit_raw_path(&a, &[base], &path, &source(ALPHA))?;
+        install(&a, MAIN, incoming)?;
+        push_peer(&a, &p.server, MAIN)?;
+        let local = commit_raw_path(&b, &[base], &path, &source(BETA))?;
+        install(&b, MAIN, local)?;
+        let request = p.primary(&p.b);
+        conflict_pending(&p, &request, SynchronizationStage::Primary)?;
+        let inspection = p.inspect(&p.b, request.operation_id)?;
+        assert_eq!(inspection.paths.len(), 1);
+        assert!(inspection.paths[0].eligibility == eligibility);
+        // Reading the sides renders nothing of the path either way.
+        let read =
+            p.b.service
+                .read_synchronization_conflict(&inspection.paths[0].token);
+        p.redacted(&match &read {
+            Ok(sides) => format!("{sides:?}"),
+            Err(error) => format!("{error:?} {error}"),
+        })?;
+        let before = physical(&p.b.root, &p.b.root)?;
+        let mut resolved = source(RESOLVED);
+        let submitted = p.resolve(
+            &p.b.service,
+            resolution_request(
+                &p.b,
+                request.operation_id,
+                OperationId::new(),
+                &inspection,
+                vec![source(RESOLVED)],
+            ),
+        );
+        let merged = if external {
+            assert!(matches!(
+                submitted,
+                Err(SynchronizationError::ExternalResolutionRequired { operation_id, .. })
+                    if operation_id == request.operation_id
+            ));
+            assert!(physical(&p.b.root, &p.b.root)? == before);
+            // New bytes at a canonical-shaped path that is not UTF-8 are not
+            // an acceptable repair; keeping the recorded local entry is.
+            let rewritten = commit_raw_path(&b, &[local, incoming], &path, &source(RESOLVED))?;
+            install_repair(&b, rewritten, false)?;
+            let auth = p.server.accepted_keys().len();
+            assert!(matches!(
+                p.sync(&p.b, restart(&request)),
+                Err(SynchronizationError::RecoveryRequired)
+            ));
+            assert_eq!(p.server.accepted_keys().len(), auth);
+            resolved = source(BETA);
+            let repaired = commit_raw_path(&b, &[local, incoming], &path, &resolved)?;
+            install_repair(&b, repaired, false)?;
+            repaired
+        } else {
+            let Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid }) =
+                submitted
+            else {
+                return Err(FixtureError);
+            };
+            attempts += 1;
+            commit_oid
+        };
+        assert_eq!(parents(&b, merged)?, [local, incoming]);
+        let n = p.server.receive_updates().len();
+        outcome(
+            fixed(p.sync(&p.b, restart(&request)))?,
+            true,
+            SynchronizationTarget::Primary,
+            merged,
+        );
+        one_update(&p.server, n, MAIN, incoming, merged);
+        // The resolved bytes are at the hostile path itself, nowhere else.
+        let file = p.b.root.join(std::ffi::OsStr::from_bytes(&path));
+        assert!(fixed(std::fs::read(file))? == resolved);
+        assert!(fixed(b.statuses(None))?.is_empty());
+        assert_eq!(pull_peer(&a, &p.server)?, merged);
+    }
+    // The in-process resolution recorded its attempt and path by digest.
+    let [_, rows] = p.scanned_rows()?;
+    assert_eq!(rows.get("remote_resolution_attempts"), Some(&attempts));
+    assert_eq!(rows.get("remote_resolution_paths"), Some(&attempts));
+    Ok(())
+}
+
 fn cancellation_state(
     p: &Pair,
     operation: OperationId,
@@ -2782,9 +3138,19 @@ fn cancelled_pending_conflict_stays_recoverable() -> Result<(), FixtureError> {
     let recoverable = ("interrupted".to_owned(), 0, "conflict_pending".to_owned());
     // The request becomes durable while the first conflicted merge is being
     // installed, after the last boundary that could have honoured it.
-    fixed(db.execute_batch("CREATE TRIGGER seam AFTER UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applying' BEGIN UPDATE remote_operation_records SET cancel_requested=1; END"))?;
+    // Each trigger also leaves a marker row, so the case proves it fired.
+    fixed(db.execute_batch("CREATE TABLE fixture_marker(seam TEXT NOT NULL)"))?;
+    let fired = |seam: &str| -> Result<i64, FixtureError> {
+        fixed(db.query_row(
+            "SELECT count(*) FROM fixture_marker WHERE seam=?1",
+            [seam],
+            |row| row.get(0),
+        ))
+    };
+    fixed(db.execute_batch("CREATE TRIGGER seam AFTER UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applying' BEGIN INSERT INTO fixture_marker VALUES('merge'); UPDATE remote_operation_records SET cancel_requested=1; END"))?;
     conflict_pending(&p, &request, SynchronizationStage::Primary)?;
     fixed(db.execute_batch(DROP_SEAM))?;
+    assert_eq!(fired("merge")?, 1);
     assert_eq!(cancellation_state(&p, operation)?, recoverable);
     let conflict = Conflict {
         request,
@@ -2799,12 +3165,13 @@ fn cancelled_pending_conflict_stays_recoverable() -> Result<(), FixtureError> {
     assert_eq!(cancellation_state(&p, operation)?, recoverable);
     // A cancel that becomes durable while a deliberate restart owns the
     // operation is honoured at its next boundary as a non-terminal stop.
-    fixed(db.execute_batch("CREATE TRIGGER seam AFTER UPDATE OF owner_epoch ON remote_operation_records WHEN NEW.owner_epoch!=OLD.owner_epoch BEGIN UPDATE remote_operation_records SET cancel_requested=1 WHERE id=NEW.id; END"))?;
+    fixed(db.execute_batch("CREATE TRIGGER seam AFTER UPDATE OF owner_epoch ON remote_operation_records WHEN NEW.owner_epoch!=OLD.owner_epoch BEGIN INSERT INTO fixture_marker VALUES('restart'); UPDATE remote_operation_records SET cancel_requested=1 WHERE id=NEW.id; END"))?;
     assert!(matches!(
         p.sync(&p.b, restart(&conflict.request)),
         Err(SynchronizationError::Interrupted)
     ));
     fixed(db.execute_batch(DROP_SEAM))?;
+    assert_eq!(fired("restart")?, 1);
     assert_eq!(cancellation_state(&p, operation)?, recoverable);
     assert!(physical(&p.b.root, &p.b.root)? == before);
     // Not terminal: a later process restarts the same operation into the
@@ -2847,6 +3214,23 @@ fn recovery_privacy_canaries() -> Result<(), FixtureError> {
     let db = p.b.db()?;
     // Real synchronization writes with live WAL retention on this owned store.
     fixed(db.execute_batch("PRAGMA journal_mode=WAL;"))?;
+    // First a canonical conflict, its resolution, a displaced push and the
+    // continuation, so that every recovery table holds rows when scanned.
+    let conflict = primary_ticket_conflict(&p, &a, p.primary(&p.b))?;
+    let (candidate, _) = resolve_all(&p, &conflict)?;
+    let race = commit_object(
+        &p.bare()?,
+        &[conflict.incoming],
+        &[("race.txt", Some((b"race\n", REGULAR)))],
+    )?;
+    p.server.race_primary_update(conflict.incoming, race)?;
+    assert!(matches!(
+        p.sync(&p.b, restart(&conflict.request)),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let continued = published(fixed(p.sync(&p.b, restart(&conflict.request)))?)?;
+    assert_eq!(parents(&b, continued)?, [candidate, race]);
+    assert_eq!(pull_peer(&a, &p.server)?, continued);
     let plan = external_plan(&b, External::Mixed)?;
     let incoming = advance(&a, MAIN, &changes(&plan.alpha))?;
     push_peer(&a, &p.server, MAIN)?;
@@ -2880,7 +3264,8 @@ fn recovery_privacy_canaries() -> Result<(), FixtureError> {
                 vec![ticket_source("Resolved title", RESOLVED).into_bytes(); 2],
             ),
         ),
-        Ok(ResolveSynchronizationOutcome::StaleObservation)
+        Err(SynchronizationError::ExternalResolutionRequired { operation_id, .. })
+            if operation_id == request.operation_id
     ));
     // Read surfaces of the pending operation.
     p.redacted(&format!(
@@ -2947,7 +3332,24 @@ fn recovery_privacy_canaries() -> Result<(), FixtureError> {
             .iter()
             .any(|(path, bytes)| path == &backup && *bytes > 0)
     );
-    p.privacy()?;
+    // Every table the journey should have populated was scanned non-empty.
+    let [_, rows] = p.scanned_rows()?;
+    for table in [
+        "operation_records",
+        "remote_operation_records",
+        "remote_observation_batches",
+        "remote_ref_observations",
+        "remote_integration_windows",
+        "remote_integration_steps",
+        "remote_integration_merge_metadata",
+        "remote_resolution_attempts",
+        "remote_resolution_paths",
+        "remote_resolution_index_artifacts",
+        "remote_resolution_ref_log_artifacts",
+        "remote_publication_attempts",
+    ] {
+        assert!(rows.get(table).is_some_and(|scanned| *scanned > 0));
+    }
     fixed(diagnostic.execute_batch("ROLLBACK"))?;
     Ok(())
 }
@@ -2966,11 +3368,14 @@ const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[
 fn save_control_probes() -> Result<(), FixtureError> {
     ssh_privacy::save(&[b"runner-private-capture-control".to_vec()])
 }
-/// A real two-clone resolution whose caller bytes then leak to stdout.
+/// A real two-clone resolution whose caller bytes then leak to stdout. The
+/// conflict is on the primary branch: a nested child's temporary root is one
+/// isolation level deeper, and a context worktree below it would push the
+/// longest canonical path past the Windows path limit.
 fn probe_resolved_body_stdout() -> Result<(), FixtureError> {
     use std::io::Write;
     let p = Pair::new()?;
-    let conflict = ticket_conflict(&p)?;
+    let conflict = primary_ticket_conflict(&p, &p.a.repo()?, p.primary(&p.b))?;
     let (_, results) = resolve_all(&p, &conflict)?;
     fixed(std::io::stdout().write_all(&results[0]))
 }
@@ -2994,23 +3399,35 @@ fn probe_inventory_missing() -> Result<(), FixtureError> {
 /// A8. Captured fixture output is scanned against the case's own canaries and
 /// a missing canary inventory fails closed; failures name only a category.
 fn recovery_capture_fails_closed() -> Result<(), FixtureError> {
+    use ssh_harness::IsolationFailure as Failure;
     save_control_probes()?;
-    for case in [
-        "probe_resolved_body_stdout",
-        "probe_conflict_path_stderr_failure",
-    ] {
-        assert_eq!(
-            ssh_harness::run_isolated_with_output_privacy(case),
-            Err(ssh_harness::IsolationFailure::OutputPrivacy)
-        );
+    let mut mismatched = false;
+    for (control, (case, expected)) in [
+        ("probe_resolved_body_stdout", Failure::OutputPrivacy),
+        ("probe_conflict_path_stderr_failure", Failure::OutputPrivacy),
+        ("probe_clean_failure", Failure::Child),
+        ("probe_inventory_missing", Failure::ProbeInventory),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let actual = ssh_harness::run_isolated_with_output_privacy(case);
+        if actual != Err(expected) {
+            // Diagnosable without private bytes: which control (by position)
+            // and which category came back (0 is an unexpected success).
+            ssh_harness::observation(&[
+                control as u128,
+                match actual {
+                    Ok(()) => 0,
+                    Err(Failure::Fixture) => 1,
+                    Err(Failure::Child) => 2,
+                    Err(Failure::ProbeInventory) => 3,
+                    Err(Failure::OutputPrivacy) => 4,
+                },
+            ]);
+            mismatched = true;
+        }
     }
-    assert_eq!(
-        ssh_harness::run_isolated_with_output_privacy("probe_clean_failure"),
-        Err(ssh_harness::IsolationFailure::Child)
-    );
-    assert_eq!(
-        ssh_harness::run_isolated_with_output_privacy("probe_inventory_missing"),
-        Err(ssh_harness::IsolationFailure::ProbeInventory)
-    );
+    assert!(!mismatched);
     Ok(())
 }

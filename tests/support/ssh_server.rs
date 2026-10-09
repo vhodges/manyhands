@@ -601,22 +601,16 @@ pub(super) fn receiver_command_fragmentation() -> Result<(), FixtureError> {
 fn apply_receive_race(
     shared: &Shared,
     commands: &ReceiveCommands,
-    (expected, competing): (git2::Oid, git2::Oid),
+    (reference, expected, competing): (String, git2::Oid, git2::Oid),
 ) -> bool {
     if commands.updates.len() != 1
-        || commands.updates[0].reference != "refs/heads/main"
+        || commands.updates[0].reference != reference
         || commands.updates[0].old_oid != expected
     {
         return false;
     }
     git2::Repository::open_bare(&shared.repository).is_ok_and(|repo| {
-        repo.reference_matching(
-            "refs/heads/main",
-            competing,
-            true,
-            expected,
-            "owned receive race",
-        )
-        .is_ok()
+        repo.reference_matching(&reference, competing, true, expected, "owned receive race")
+            .is_ok()
     })
 }

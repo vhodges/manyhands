@@ -1990,3 +1990,62 @@ Manual run 37966787473 completed SUCCESS on exact source
 inspected with gh. https://github.com/vhodges/manyhands/actions/runs/37966787473
 With the four milestone reviews above, Task 5 is accepted with the recorded
 limits. Next: Task 6 (one writer, `tests/remote_merge_recovery.rs`).
+
+### Task 6: two-clone authenticated acceptance — 2026-10-09
+
+One sequential writer added `tests/remote_merge_recovery.rs` (harness-free, real
+SSH fixture, public API only), registered it in `Cargo.toml` and appended
+`--test remote_merge_recovery` to the native headless job (five targets,
+`workflow_dispatch` only). An independent read-only review found no P1; one fix
+pass closed its five P2s and small P3s. 23 cases:
+
+- A1/A6/A7 clean divergence across two clones of one shared branch: ticket,
+  document, primary, and context-then-primary ordered merges, each asserting
+  ordered parents, exact local ref scope and an untouched FETCH_HEAD sentinel.
+- A2/A3/A7 canonical conflict → inspect → observed resolution → explicit restart
+  → publication → discovery for document, ticket, comment and multi-path sets,
+  with stale, different-bytes and post-completion retries typed.
+- A2/A4/A5 context merged then primary conflicted; code, binary, delete, rename,
+  symlink and mixed conflicts externally repaired; marker-only, index-only,
+  one-parent, reversed and foreign-parent repairs refused without stickiness.
+- A5/A6/A8 after a resolution commit: receive race, ambiguous acceptance and
+  persistence failure, distinct Push remote, deleted context, endpoint-generation
+  fence, primary and context seam inventories through index-only replay, a
+  context-target continuation stop, cancellation with a pending conflict.
+- A8 privacy: body, credential, endpoint and hostile-path canaries scanned over
+  every `remote_%` row (non-zero rows asserted for twelve tables), live WAL, shm,
+  backup and journal, Debug/Display of every result, and captured child output,
+  with fail-closed controls.
+
+Production changes: `ConflictEligibility` (the type of a public field) is
+re-exported; `resolve_synchronization` now returns typed
+`ExternalResolutionRequired` for a current observation containing an ineligible
+path, before any write, instead of `StaleObservation` — the observation is not
+stale and a retry could never succeed. A stale observation is unchanged.
+
+Fixture shortcuts, judged by review not to undermine the claims: the Git index is
+refreshed after every save (ticket `01M4GD0KKXW684QBA49F6EX3WE`); shared items,
+comment edits and primary-branch edits are fixture git2 commits because no public
+authoring path exists; SQL triggers stand in for process stops; the fixture key
+uses one bcrypt round to keep the target near three and a half minutes.
+
+Left as is, for the owner to rule on if wanted: a wrong resolution count on a
+fresh all-eligible set is `StaleObservation` (the outcome enum has no partial
+variant); a UTF-8 path containing control characters under a canonical directory
+is canonical-eligible and resolvable in-process — its bytes never reach a
+recovery row or rendering; a non-UTF-8 path is external-only (Linux-only check).
+Not walked over SSH: clean-merge stage, conflict-installation and retirement
+seams (lib-level in Task 5) and external repair in a linked worktree.
+
+Native run 37973797724 on the pre-review checkpoint bd33e65: Linux x86_64/ARM64
+and macOS ARM64 SUCCESS; both Windows targets failed only
+`recovery_capture_fails_closed` (20 other new cases passed there). Probable cause,
+unconfirmed: the nested output-control child built a context worktree one
+isolation level deeper and crossed the 260-character path limit, so the child
+failed before leaking. The control now uses a primary-branch conflict and reports
+the control index and failure category on mismatch.
+https://github.com/vhodges/manyhands/actions/runs/37973797724
+
+Local evidence (Linux x86_64, Devenv): fmt check and strict clippy pass;
+`remote_merge_recovery` 23 SSH cases; `remote_synchronization` 63; `ssh_fixture`
+15, `ssh_transport` 31, `remote_observation` 105; `--lib repository::remote` 270.

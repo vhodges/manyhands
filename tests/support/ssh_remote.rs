@@ -135,7 +135,7 @@ pub(super) struct Shared {
     pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
-    pub receive_race: Mutex<Option<(git2::Oid, git2::Oid)>>,
+    pub receive_race: Mutex<Option<(String, git2::Oid, git2::Oid)>>,
     pub receive_updates: Mutex<Vec<ReceiveUpdate>>,
     pub receive_updates_changed: Condvar,
     pub receive_advertisements: AtomicUsize,
@@ -330,14 +330,23 @@ impl SshRemoteFixture {
         expected: git2::Oid,
         competing: git2::Oid,
     ) -> Result<(), FixtureError> {
+        self.race_update("refs/heads/main", expected, competing)
+    }
+    /// The same single competing write for any one owned branch.
+    pub fn race_update(
+        &self,
+        reference: &str,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
         let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
         fixed(repo.find_commit(competing))?;
-        if fixed(repo.refname_to_id("refs/heads/main"))? != expected
+        if fixed(repo.refname_to_id(reference))? != expected
             || self.shared.receive_race.lock().unwrap().is_some()
         {
             return Err(FixtureError);
         }
-        *self.shared.receive_race.lock().unwrap() = Some((expected, competing));
+        *self.shared.receive_race.lock().unwrap() = Some((reference.into(), expected, competing));
         Ok(())
     }
     pub fn receive_updates(&self) -> Vec<ReceiveUpdate> {

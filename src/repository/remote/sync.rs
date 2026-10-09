@@ -5211,13 +5211,25 @@ impl RepositoryService {
         }
         let inspection =
             self.inspect_synchronization_recovery(&root, request.synchronization_id)?;
-        if inspection.observation != request.observation
-            || inspection
-                .paths
-                .iter()
-                .any(|path| path.eligibility != merge::ConflictEligibility::EligibleCanonical)
-            || request.resolutions.len() != inspection.paths.len()
+        if inspection.observation != request.observation {
+            return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
+        }
+        // A current observation of a set with any unsupported entry can never
+        // be resolved here: say so, rather than a category that invites an
+        // identical retry. Still before any write or attempt row.
+        if inspection
+            .paths
+            .iter()
+            .any(|path| path.eligibility != merge::ConflictEligibility::EligibleCanonical)
         {
+            return Err(SynchronizationError::ExternalResolutionRequired {
+                target: inspection.target,
+                operation_id: request.synchronization_id,
+            });
+        }
+        // No dedicated partial-set outcome exists; an incomplete submission
+        // for a current, eligible set stays in the stale category.
+        if request.resolutions.len() != inspection.paths.len() {
             return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
         }
         let preflight_repository = Self::inspect_conflict_target(&root, &inspection.target)?;

@@ -2062,6 +2062,15 @@ fn resolve_fixture(
     operation: OperationId,
     results: &[&str],
 ) -> ResolveSynchronizationOutcome {
+    try_resolve_fixture(root, service, operation, results).unwrap()
+}
+
+fn try_resolve_fixture(
+    root: &Path,
+    service: &RepositoryService,
+    operation: OperationId,
+    results: &[&str],
+) -> Result<ResolveSynchronizationOutcome, SynchronizationError> {
     let inspection = service
         .inspect_synchronization_recovery(root, operation)
         .unwrap();
@@ -2091,7 +2100,7 @@ fn resolve_fixture(
         resolutions,
         None,
     );
-    service.resolve_synchronization(request).unwrap()
+    service.resolve_synchronization(request)
 }
 
 #[test]
@@ -2828,18 +2837,73 @@ fn mixed_canonical_and_code_conflict_is_whole_merge_external_only_without_writes
             .join("index"),
     )
     .unwrap();
-    let request = ResolveSynchronizationRequest::new(
-        root.path().to_owned(),
-        operation,
-        OperationId::new(),
-        inspection.observation,
-        Vec::new(),
-        None,
-    );
-    assert!(matches!(
-        service.resolve_synchronization(request).unwrap(),
-        ResolveSynchronizationOutcome::StaleObservation
-    ));
+    // A current observation of an ineligible set is typed external-only,
+    // whether no resolution or one resolution per path is supplied: the
+    // category does not depend on the submission count.
+    for complete in [false, true] {
+        let resolutions = if complete {
+            inspection
+                .paths
+                .iter()
+                .map(|path| {
+                    (
+                        path.token.clone(),
+                        RedactedConflictBytes::from_bytes(
+                            document_base.replace("base", "resolved").into_bytes(),
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let request = ResolveSynchronizationRequest::new(
+            root.path().to_owned(),
+            operation,
+            OperationId::new(),
+            inspection.observation.clone(),
+            resolutions,
+            None,
+        );
+        assert!(matches!(
+            service.resolve_synchronization(request),
+            Err(SynchronizationError::ExternalResolutionRequired {
+                target: SynchronizationTarget::Primary,
+                operation_id,
+            }) if operation_id == operation
+        ));
+    }
+    // The count branch alone, on a current all-eligible set, stays stale.
+    {
+        let (eligible_root, _eligible_data, eligible_service, eligible_operation, _, _) =
+            resolution_fixture(&[(
+                "docs/document.md",
+                document_base,
+                local_document.as_str(),
+                remote_document.as_str(),
+            )]);
+        let eligible = eligible_service
+            .inspect_synchronization_recovery(eligible_root.path(), eligible_operation)
+            .unwrap();
+        assert!(
+            eligible
+                .paths
+                .iter()
+                .all(|path| { path.eligibility == merge::ConflictEligibility::EligibleCanonical })
+        );
+        let request = ResolveSynchronizationRequest::new(
+            eligible_root.path().to_owned(),
+            eligible_operation,
+            OperationId::new(),
+            eligible.observation,
+            Vec::new(),
+            None,
+        );
+        assert!(matches!(
+            eligible_service.resolve_synchronization(request).unwrap(),
+            ResolveSynchronizationOutcome::StaleObservation
+        ));
+    }
     let repository = git2::Repository::open(root.path()).unwrap();
     assert_eq!(repository.head().unwrap().target(), before_head);
     assert_eq!(
@@ -9912,7 +9976,7 @@ fn all_recorded_comment_sides_constrain_immutable_fields_before_writes() {
             let repository = git2::Repository::open(root.path()).unwrap();
             let index = fs::read(repository.path().join("index")).unwrap();
             let bytes = fs::read(root.path().join(path)).unwrap();
-            let outcome = resolve_fixture(
+            let outcome = try_resolve_fixture(
                 root.path(),
                 &service,
                 operation,
@@ -9921,15 +9985,17 @@ fn all_recorded_comment_sides_constrain_immutable_fields_before_writes() {
             if field == "consistent" {
                 assert!(matches!(
                     outcome,
-                    ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+                    Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
                 ));
                 assert_eq!(fs::read(root.path().join(path)).unwrap(), result.as_bytes());
             } else {
+                // A changed result fails validation; sides that disagree on
+                // an immutable field make the set external-only.
                 assert!(
                     matches!(
                         outcome,
-                        ResolveSynchronizationOutcome::ValidationFailed
-                            | ResolveSynchronizationOutcome::StaleObservation
+                        Ok(ResolveSynchronizationOutcome::ValidationFailed)
+                            | Err(SynchronizationError::ExternalResolutionRequired { .. })
                     ),
                     "{field}/{changed_side}: {outcome:?}"
                 );
