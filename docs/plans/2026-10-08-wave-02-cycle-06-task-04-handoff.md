@@ -1,5 +1,20 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 4 accepted, Task 5 next — 2026-10-09
+
+Accepted source: a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. Native run
+https://github.com/vhodges/manyhands/actions/runs/37877620596
+completed SUCCESS on all five targets (Linux x86-64/ARM64, Windows x86-64/ARM64,
+macOS ARM64), with complete configured tests and release artifacts. Whole-task
+and subsequent bounded reviews approve the code. Earlier paused/pending sections
+below are historical; do not redispatch accepted Task 4.
+
+Next: approved Task 5 reconciliation/external-repair/remaining-work implementation
+and independent reviews, then Tasks 6/7. CI-first ruling: local Rust fixes/checks
+only when Linux CI regresses. Best-effort robustness ruling and backend operator
+exception remain in effect. Ticket stays open. Push/manual CI authorized; no PR,
+main merge, ticket closure or cleanup authorization. Ledger records full evidence.
+
 ## Resumed after owner pause — 2026-10-08
 
 Owner requested "Please continue". Fresh main remains `60b0324`; identified dirty
@@ -83,6 +98,13 @@ watchdog. Narrow independently reviewed test-only corrections and complete local
 gates pass. Current source 7b8949b, ninth full native matrix:
 https://github.com/vhodges/manyhands/actions/runs/37872797196
 Inspect this exact-source gate before Task 4 acceptance; Tasks 5–7 not begun.
+
+Owner now requires CI-first verification: local Rust commands only if Linux CI
+regresses. Reviewed final transport fixture corrections are published as a68eba7;
+current tenth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37877620596
+Inspect exact-source results. Mac diagnostics are numeric-only; its prior exact
+child failure remains qualified. Task 4 unaccepted, Tasks 5–7 not begun.
 
 ## Current pause — after shared Unix native writer, 2026-10-08
 

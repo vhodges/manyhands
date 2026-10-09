@@ -1479,6 +1479,35 @@ further local Rust command is required without a Linux CI regression. Publish
 and inspect native results, including numeric-only diagnostics if the Mac case
 still fails. Native gate is not waived; Task 4 remains unaccepted.
 
+Published approved test corrections as a68eba79a41c6d083a3a12cb9dd6babc6d7f291a
+through normal push without another local Rust run. Tenth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37877620596
+Use these exact-source results for the remaining gate, following CI-first ruling.
+
+### Task 4 accepted; Task 5 entry — 2026-10-09
+
+Native run 37877620596 completed SUCCESS on exact source
+a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. All five jobs built all-feature release
+binaries, verified both executables, passed the complete configured native headless
+library/integration/credential/SSH suites and uploaded artifacts: Linux x86_64 and
+ARM64, Windows x86_64 and ARM64 MSVC, macOS ARM64. Actual results inspected through
+gh; pending jobs and unrelated ticket runs were never counted as passes.
+https://github.com/vhodges/manyhands/actions/runs/37877620596
+
+Combined whole-Task-4 spec/quality approval and subsequent bounded CI-fix reviews,
+required completed local evidence before CI-first steering, and native success
+accept Task 4. Accepted implementation source checkpoint is a68eba7; final whole-
+Task-4 review base remains accepted Task 3 9c7253f. Best-effort robustness limits
+(power-loss/full-device-cache/packed-alternate storage ordering and qualified
+filesystem cases) remain documented, not claims of perfect durability.
+
+Proceed sequentially to approved Task 5 reconciliation/external-repair/remaining-
+work behavior under one writer and independent reviews. CI-first ruling remains:
+no local Rust verification unless Linux CI regresses. Task 6/7 remain pending;
+ticket remains open. Push/manual CI is authorized, PR/main merge/closure/cleanup
+is not. No additional unchanged-source broad test run is needed for acceptance
+bookkeeping. The accepted source is preserved and will not be redispatched.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy

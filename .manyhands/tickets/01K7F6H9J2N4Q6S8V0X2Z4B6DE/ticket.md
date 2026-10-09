@@ -141,6 +141,15 @@ comments for exact evidence; no whole-task acceptance.
 
 ## Entry Gate
 
+### Current implementation checkpoint — 2026-10-09
+
+Tasks 0–4 are accepted. Task 4 source is a68eba7, verified by successful manual
+native run [37877620596](https://github.com/vhodges/manyhands/actions/runs/37877620596)
+on all five targets after independent whole-task and CI-fix reviews. Proceed to
+Task 5; Tasks 6/7 remain pending. Owner directs best-effort robustness and CI-first
+verification, with local Rust work only for Linux CI regressions. Ticket remains
+open; no PR/main merge/closure/cleanup authority. See execution ledger for evidence.
+
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
 is approved and Wave 01 verification evidence is current.
 
