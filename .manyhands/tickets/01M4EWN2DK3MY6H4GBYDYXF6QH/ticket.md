@@ -47,8 +47,9 @@ unreproduced.
 
 The Wave 02 Cycle 06 branch (`01K7F6H9J2N4Q6S8V0X2Z4B6DE`, in progress)
 adds further early returns after the row is begun, in `enable` and in the
-saves. A fix made return by return would miss them; see the F2 ticket
-discussion for the wrapper alternative.
+saves. A fix made return by return would miss them. The alternative is one
+wrapper around each operation body that completes the row on any error
+unless the body recorded that it wrote; not yet decided.
 
 ## Where A Row Is Left
 
