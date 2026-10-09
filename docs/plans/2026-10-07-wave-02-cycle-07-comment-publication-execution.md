@@ -134,3 +134,43 @@ User decision: "The documents are approved, update the state and commit".
 - Documentation-only checkpoint: recheck links, canonical IDs, state consistency
   and staged `git diff --check` before committing. No Rust source, dependency,
   lockfile or workflow changes; no Rust/native tests claimed.
+
+## Rebase Onto Merged Cycle 06 And Plan Amendment — 2026-10-09T22:29:58Z
+
+Owner request: rebase this ticket onto current main and review the approved plan
+against the merged Cycle 06; then, "lets make the ammendments and push the branch
+to origin".
+
+- Fresh fetch observed origin/main at `5e4fad636fd7aad332b9221cf157a7558c32e375`
+  (merge of pull request 14, Wave 02 Cycle 06).
+- Before ticket HEAD `56ed280`; rebased without conflicts to `1de99c6`. The
+  diff against main was only this Cycle's planning files. A local backup ref
+  `backup/cycle07-pre-rebase-56ed280` was kept.
+- The origin ticket branch still held only the original checkpoint `92a3646`,
+  whose ticket content is identical to the rebased checkpoint commit. Publishing
+  therefore replaced that single commit with a lease-checked push.
+
+Review method: read the Cycle, design and plan in full and checked each
+dependency claim against the merged source (synchronization request and error
+types, conflict scope, cancellation, callers, schemas, registry rules, fixtures).
+No Rust command was run; this is a documentation change.
+
+| Finding against merged Cycle 06 | Classification | Resolution |
+| --- | --- | --- |
+| A comment checkpoint leaves the Git index stale and the immediate context synchronization then refuses the worktree as not clean; every Cycle 06 SSH fixture refreshes the index by hand | Blocker | New entry-gate prerequisite: ticket `01M4GD0KKXW684QBA49F6EX3WE` merged first; no workaround in production or fixtures |
+| A pending conflict in any context returns `Busy` to every other synchronization; no abandon path (ticket `01M4H33R34Z7C7EEKTY1ZCT950`) | Accepted limit | Stated in the Cycle; mapped to saved-local; one acceptance case added |
+| Cancellation with a pending conflict is a recoverable stop; cancel is a no-op on a child parked after a released conflict | Contract change | Design cancellation paragraph and Task 4 tests amended |
+| `SynchronizeRemoteRequest.confirmed_identity` and opaque `ExpectedConfiguration` on `IdentityRequired` | Ruling | Ruling: both compound requests forward an optional confirmation to the child only — keeps a later merge completable without resubmission — cost if wrong: one unused optional field |
+| New typed errors `ConflictPending`, `ExternalResolutionRequired`, continuing `PushRejected` | Settled | Mapped by name in design and Task 3, one test per category |
+| A terminally cancelled bound child cannot be reused | Ruling | Ruling: the comment stays saved-local and publishes through a later ordinary context synchronization — avoids allocating a second child for one receipt — cost if wrong: retry reports recovery where a fresh child could have published |
+| Resolution APIs are keyed by the synchronization operation ID | Settled | The receipt's bound child ID is that key; Task 5 resolves through it |
+| `submit_comment` has more callers; the read boundary and `operation.schema.json` name the action; `SyncDeferred` is in no schema | Settled | Design caller list updated; action name kept |
+| New table must follow Cycle 06 registry rules | Settled | Task 2 amended: all-or-nothing migration, startup validation, table inventory, uniqueness against remote records |
+| Windows path headroom of about 40 characters; comment files are the longest paths | Settled | Task 5 fixture guidance amended |
+| Planning-time statements that Cycle 06 is absent | Stale | Dated update notes added; originals kept as the planning record |
+
+The Cycle 06 dependency gate is met. Implementation remains unauthorized and is
+now gated on the index ticket. The two rulings above are internal mechanisms
+within the approved policy and are open to the owner's correction. Ticket stays
+open; no implementation, pull request, native CI dispatch, merge, closure or
+cleanup is authorized by this checkpoint.

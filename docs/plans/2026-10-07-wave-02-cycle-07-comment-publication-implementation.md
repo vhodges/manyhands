@@ -13,7 +13,9 @@ id: "01M4B2JBSQSBKQB0GJHMKK6W05"
 > The user approved the [Cycle](../Cycles/wave-02-cycle-07-comment-publication.md),
 > [design](2026-10-07-wave-02-cycle-07-comment-publication-design.md) and this plan
 > on 2026-10-07. Do not implement until explicit implementation authorization
-> exists and the Cycle 06 dependency gate passes.
+> exists and the dependency gates pass. Amended 2026-10-09 after Cycle 06 merged
+> (`5e4fad6`): that gate is met; ticket `01M4GD0KKXW684QBA49F6EX3WE` (save must
+> leave the Git index current) is now a prerequisite. Amendments are marked.
 > Then use `implementing-a-cycle`, repeat ticket preflight and work task by task
 > in this ticket's existing worktree. Proposed execution is direct, sequential
 > implementation with task checkpoints and code-review handoff; delegation is
@@ -63,6 +65,10 @@ evidence is claimed. Planning evidence and decision audit live in the
   expected-OID checks, explicit restart and Cycle 06 conflict handling.
 - Never hold the short lease across SSH, prompts or discovery. Inherit per-call
   transport budgets and safe-point cancellation; no total deadline or retry loop.
+- Amended 2026-10-09: add no Git-index refresh in production or fixtures; the
+  index ticket is a prerequisite and the acceptance tests prove save →
+  synchronize unaided. New recovery tables follow the Cycle 06 registry rules
+  (all-or-nothing migration, startup validation, table inventory test).
 - Every local/agent Rust command uses `devenv shell -- cargo ...`. A new test
   declaration does not require Cargo dependencies; no lockfile churn expected.
 
@@ -97,8 +103,16 @@ compound orchestration → replay/recovery → real integration → verification
   execution evidence. Inspect actual merged `synchronize_remote` and resolution
   contract. Record exact names, restart/cancel semantics and conflict fixture
   cases. If absent or contract-changing, stop before Rust edits.
+- [ ] Amended 2026-10-09: confirm ticket `01M4GD0KKXW684QBA49F6EX3WE` is merged
+  to the base and that a public save followed by `synchronize_remote` succeeds
+  with no index refresh; if not, stop before Rust edits. Record the merged
+  Cycle 06 contract from the design's "Update at base `5e4fad6`" section and
+  correct it against the code if it has moved again.
 - [ ] Re-scan all `submit_comment` callers, tests, remote-state migrations and
-  pending-local guards. Resolve name-only differences in the ledger; behavioral
+  pending-local guards. Known callers at `5e4fad6`: `tests/local_authoring.rs`,
+  `tests/recovery_foundation_gate.rs`, `tests/remote_merge_recovery.rs`,
+  `src/repository/remote/sync_tests.rs`; the Wave 03 read boundary and
+  `schemas/v1/operation.schema.json` name the `submit_comment` action. Resolve name-only differences in the ledger; behavioral
   changes require approval of affected artifacts.
 - [ ] Run baseline and record existing failures separately:
 
@@ -176,7 +190,10 @@ receipt persistence and safe commit-before-receipt reconciliation.
   Assert one timestamp, exact bytes, one original checkpoint and one child ID.
 - [ ] Run `devenv shell -- cargo test --locked --lib comment_publication` red.
 - [ ] Implement `comment_publication_bindings` as correlation/receipt metadata
-  in the existing registry. Keep the original submit ID for local recovery and
+  in the existing registry. Amended 2026-10-09: create it all-or-nothing
+  in the existing migration with startup validation, add it to the table
+  inventory in `tests/repository_enablement.rs`, and check child-ID uniqueness
+  against remote operation records as well as local ones. Keep the original submit ID for local recovery and
   a distinct generated child ID; atomically enforce uniqueness against existing
   identity tables. Do not store an independent remote phase machine.
 - [ ] Prove checkpoint from actual commit/tree/path/diff and ancestry relative
@@ -223,6 +240,15 @@ publication handoff for normal callers.
   Preserve `Published`/`AlreadyCurrent` authority and original checkpoint OID;
   catch post-checkpoint failures as saved/pending or saved/index-pending rather
   than resubmission errors.
+- [ ] Amended 2026-10-09: map each Cycle 06 typed recovery by name to
+  saved/pending — `Busy` (including another context's pending conflict),
+  `ConflictPending`, `ExternalResolutionRequired`, `IdentityRequired` with its
+  opaque `ExpectedConfiguration`, `PushRejected`, `RemoteContextDeleted`,
+  `ExternalChange`, `RecoveryRequired` — with one test per category. Forward
+  `confirmed_identity` to the child only; test that an identity removed after
+  the checkpoint yields saved/pending `IdentityRequired` and that a retry
+  carrying the returned value completes. Relay `Published` versus
+  `AlreadyCurrent` as the child reports it.
 - [ ] Use the same session/HostApproval as existing transport. Honor per-call
   budgets and existing child safe points; no retries inside the compound call.
 - [ ] Run library plus local-authoring/recovery regressions. Commit/comment
@@ -248,6 +274,12 @@ terminal/index-only replay and non-duplicating pending publication recovery.
   a reservation. Map parent cancellation to the existing child safe-point API;
   cancellation before child start has no remote effect and never undoes the
   checkpoint. Follow Cycle 06's exact cancelled/conflict restart contract.
+  Amended 2026-10-09, that contract is: a cancel with a pending conflict or
+  owned resolution leaves the child `interrupted` and restartable; a cancel
+  during a resolve does not outlive it; `cancel_remote_operation` has no effect
+  on a child parked after a released conflict; a terminally cancelled child
+  cannot be reused, so the comment stays saved-local and later publishes through
+  an ordinary context synchronization. Test each.
 - [ ] Test local index failure repair then sync, remote index failure then
   discovery-only retry, saved-local cache/receipt failure reporting, and retained
   conflict recovery. Assert original OID/comment/time remain fixed.
@@ -280,7 +312,16 @@ terminal/index-only replay and non-duplicating pending publication recovery.
 - [ ] Add tests that prior checkpointed context work publishes too while unsaved
   item text, unrelated worktree state, primary ref/worktree, unrelated tracking
   refs and `FETCH_HEAD` remain unchanged. Dirty sync reports saved/pending.
-- [ ] Add real two-clone nonconflicting divergence and conflicting history tests.
+- [ ] Amended 2026-10-09: model the target on `tests/remote_merge_recovery.rs`
+  (two clones, one-round bcrypt fixture key, `race_update`, output-control
+  children). Use no fixture index refresh after any save or submit. Keep fixture
+  directory names short and build no context worktree inside a nested
+  output-control child: Windows has about 40 characters of path headroom and
+  comment files are the longest canonical paths. Add one case where another
+  context holds a pending conflict and the submission is saved/pending `Busy`.
+- [ ] Add real two-clone nonconflicting divergence and conflicting history tests. Resolve through `resolve_synchronization`
+  keyed by the receipt's bound child ID, and separately by an exact external
+  two-parent repair.
   Invoke **Cycle 06's** explicit resolution/checkpoint boundary; retry publishes
   the same comment with permitted merge/resolution commits only, no additional
   `Checkpoint comment` commit or ID. Preserve both histories/context markers.
@@ -350,4 +391,5 @@ real SSH, merge/conflict integration, crash/privacy/native wiring to Task 5; and
 final evidence/review/lifecycle to Task 6. Task 0 gates the absent Cycle 06
 contract instead of inventing future APIs. The skill-based decision matrix and
 rulings are in the execution ledger. No unresolved product question was found;
-Cycle 06 and native execution are explicit evidence/dependency gaps.
+Cycle 06 and native execution were explicit evidence/dependency gaps; amended
+2026-10-09, Cycle 06 is merged and the index ticket is the remaining dependency.

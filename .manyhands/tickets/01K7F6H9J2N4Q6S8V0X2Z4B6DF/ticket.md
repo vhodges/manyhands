@@ -21,7 +21,9 @@ item-context synchronization action.
   and [detailed implementation plan](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-implementation.md).
 - [x] Record planning/rebase and skill-based self-review checkpoints as comments.
 - [x] User approval of Cycle, design, and implementation plan (2026-10-07).
-- [ ] Explicit implementation authorization after dependency gate passes.
+- [x] Rebase onto merged Cycle 06 and amend the plan against it (2026-10-09).
+- [ ] Ticket `01M4GD0KKXW684QBA49F6EX3WE` (save leaves the Git index current) merged to the base.
+- [ ] Explicit implementation authorization after dependency gates pass.
 
 The user approved the planning documents on 2026-10-07 and authorized the
 approval-state updates and local planning commit. Implementation remains
@@ -33,9 +35,10 @@ records the decision matrix, internal rulings and verification/lifecycle gates.
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
 is approved and Wave 01 verification evidence is current. Cycle 06's approved,
-reviewed merge/conflict implementation must also be present on the refreshed
-base; its documents and code are absent from main at this planning checkpoint.
-No Cycle 06 work will be duplicated here. Native evidence remains pending
+reviewed merge/conflict implementation is present on the base since 2026-10-09
+(main `5e4fad6`). The index ticket above must also be merged, because comment
+submission synchronizes directly after a checkpoint. No Cycle 06 work will be
+duplicated here. Native evidence remains pending
 separately authorized execution or explicit owner deferral.
 
 ## Exit Evidence

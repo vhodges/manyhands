@@ -50,13 +50,22 @@ authoritative publication/index-only replay. Cycle 06's Cycle/design/plan and
 merge/conflict implementation are **absent** from current main; no Cycle 06
 review or verification is claimed.
 
+**Update, 2026-10-09.** Cycle 06 merged to main as `5e4fad6` (pull request 14)
+and this ticket was rebased onto it; the paragraph above is the planning-time
+record. The Cycle 06 dependency gate is met. Reconciling this Cycle against the
+merged code produced the amendment section below and one new prerequisite.
+
 Implementation requires:
 
 - Approval of this Cycle, design, and plan, plus explicit implementation authority.
 - Repeat fresh fetch/rebase preflight at the implementation boundary.
-- Cycle 06's approved, reviewed merge/conflict operation present on that base;
-  reconcile its exact signatures and test names in Task 0. Do not copy another
-  worktree's unmerged implementation or implement its behavior in this Cycle.
+- Cycle 06's approved, reviewed merge/conflict operation present on that base
+  (met 2026-10-09); reconcile its exact signatures and test names in Task 0. Do
+  not reimplement its behavior in this Cycle.
+- Ticket `01M4GD0KKXW684QBA49F6EX3WE` (save must leave the Git index current for
+  the paths it commits) merged to the base. Without it the immediate context
+  synchronization refuses the worktree as not clean after every comment
+  checkpoint, so the compound action could never publish.
 - Wave 02 entry-gate authorities remain approved and consistent; rerun the
   required baseline, including Wave 01 regression evidence. Planning inspection
   is not a passing Rust or platform gate.
@@ -136,6 +145,54 @@ resubmission. Unsaved item buffers are never implicitly checkpointed.
    Cycle 03's accepted per-call transport limits (not a total submission timeout)
    and safe-point cancellation; no automatic retry loop or scheduling.
 
+## Amendment: Reconciliation With Merged Cycle 06 — 2026-10-09
+
+Made at the owner's direction after reviewing the approved plan against the
+merged Cycle 06 code. The contract above stands; these points refine it.
+
+1. **Index prerequisite.** A comment checkpoint commits from an in-memory index
+   and leaves the on-disk Git index stale; synchronization then reports the
+   worktree not clean. Every Cycle 06 SSH fixture refreshes the index after
+   `submit_comment`. This Cycle depends on ticket `01M4GD0KKXW684QBA49F6EX3WE`
+   and must not carry its own workaround; its acceptance tests prove the real
+   save → synchronize path with no fixture refresh.
+2. **Repository-wide conflict block.** A pending synchronization conflict in any
+   context makes every other synchronization in the repository return `Busy`,
+   and there is no abandon path yet (ticket `01M4H33R34Z7C7EEKTY1ZCT950`). A
+   comment submitted meanwhile is saved locally with publication pending for
+   every item, not only the conflicted one. This is accepted; contract point 6
+   already maps `Busy` to saved-local.
+3. **Cancellation.** Cancelling a synchronization child whose newest window
+   holds a pending conflict or owned resolution is a recoverable stop: the child
+   becomes `interrupted`, not `cancelled`, and stays restartable and
+   resolvable. `cancel_remote_operation` has no effect on a child parked after a
+   released conflict. Cancellation of a submission never undoes its checkpoint
+   and reports whichever of those states the child reached.
+4. **Identity at a merge.** `SynchronizeRemoteRequest` now takes an optional
+   `confirmed_identity`, and `SynchronizationError::IdentityRequired` carries an
+   opaque `ExpectedConfiguration`. Submission already requires a Git identity
+   before the first write, so this arises only if the identity is removed before
+   a later merge. The compound and retry requests pass an optional confirmation
+   through; an unanswered identity boundary is saved-local with that typed
+   recovery, never a failed submission.
+5. **Typed recoveries to map by name.** `ConflictPending`,
+   `ExternalResolutionRequired`, `PushRejected` (the merge is kept and a
+   deliberate retry continues through an appended publication attempt),
+   `RemoteContextDeleted`, `ExternalChange` and `RecoveryRequired` each map to
+   saved-local with that recovery. A verified publication whose remote later
+   rewound or diverged stays recovery-required.
+6. **Published versus current.** Cycle 06 reports `Published` only when the
+   operation itself recorded a push intent for that exact commit, otherwise
+   `AlreadyCurrent`. The receipt relays whichever the child reports; both
+   require the ancestry and blob proof of contract point 6.
+7. **Resolution uses the child ID.** Cycle 06 inspection, conflict reading and
+   `resolve_synchronization` are keyed by the synchronization operation ID. The
+   receipt's bound child ID is that key; this Cycle adds no resolution surface.
+8. **Windows path length.** Context-worktree fixtures have about 40 characters
+   of headroom under the 260-character limit and comment files are the longest
+   canonical paths. The new SSH target keeps fixture directory names short and
+   builds no context worktree inside a nested output-control child.
+
 ## Acceptance And Exit Evidence
 
 | Acceptance | Proof owner |
@@ -158,8 +215,9 @@ The decision audit in the [execution ledger](../plans/2026-10-07-wave-02-cycle-0
 covers scope/API compatibility, ID ownership, checkpoint/crash authority,
 index failure, trust/privacy, timeout/cancellation, fixture/platform fidelity,
 and review/closure. Internal rulings preserve existing RFC behavior; no open
-product question was identified. Cycle 06 availability is an explicit dependency
-blocker, not permission to expand scope.
+product question was identified. Cycle 06 availability was an explicit dependency
+blocker, met on 2026-10-09; the index ticket named in the entry gate is the
+remaining one. Neither is permission to expand scope.
 
 Record planning, each task, decisions/blockers, baseline/final verification,
 review findings and review-ready status on the ticket. It stays open through

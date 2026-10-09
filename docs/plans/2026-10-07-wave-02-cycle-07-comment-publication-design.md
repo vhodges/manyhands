@@ -58,6 +58,39 @@ At planning base `b666c1e1f0a708562ff4cc25b0dfb18dc99dd6a9`:
   Wiring a target is not execution evidence. Cycle 05's owner-approved native
   deferral is historical evidence, not new authorization to dispatch CI here.
 
+### Update at base `5e4fad6` — 2026-10-09
+
+The list above is the planning-time record. After rebasing onto merged Cycle 06:
+
+- Cycle 06 is present. `SynchronizeRemoteRequest` (now in
+  `src/repository/remote/state.rs`) is `{ root, operation_id, target, approval,
+  confirmed_identity, restart }`. `SynchronizationError` adds `ConflictPending`,
+  `IdentityRequired { target, expected_configuration }` and
+  `ExternalResolutionRequired`. `RepositoryService` adds
+  `inspect_synchronization_recovery`, `read_synchronization_conflict` and
+  `resolve_synchronization`, all keyed by the synchronization operation ID.
+- A continuation after an earlier push intent is journaled in
+  `remote_publication_attempts`; authority comes from the newest verified
+  attempt, and the operation's legacy phase stays frozen while one is in flight.
+  The binding table must not mirror any of that.
+- A pending conflict in any context returns `Busy` to every other
+  synchronization in the repository.
+- A comment checkpoint leaves the on-disk Git index stale and synchronization
+  then refuses the worktree as not clean (ticket `01M4GD0KKXW684QBA49F6EX3WE`).
+  That ticket is a prerequisite; this design adds no index handling of its own.
+- `submit_comment` callers are now `tests/local_authoring.rs`,
+  `tests/recovery_foundation_gate.rs`, `tests/remote_merge_recovery.rs` and
+  `src/repository/remote/sync_tests.rs`. The Wave 03 read boundary lists
+  `submit_comment` as an operation action (`src/repository/read/{dto,status}.rs`,
+  `schemas/v1/operation.schema.json`); the action name is kept. `SyncDeferred`
+  appears in no published schema, so retiring it changes no fixture.
+- New recovery tables follow the Cycle 06 registry rules: created all-or-nothing
+  inside the existing migration, validated at startup, and listed in the table
+  inventory in `tests/repository_enablement.rs`.
+- `tests/remote_merge_recovery.rs` is the closest fixture model: two clones over
+  the real SSH harness, a one-round bcrypt fixture key, output-control children,
+  and `race_update` for any reference.
+
 ## Public Interface And Compatibility
 
 Ruling: make normal `submit_comment` the compound action, extracting its current
@@ -76,11 +109,13 @@ Proposed types (names are internal rulings, finalized at Task 1):
 pub struct PublishCommentRequest {
     pub comment: SubmitCommentRequest,
     pub approval: Option<HostApproval>,
+    pub confirmed_identity: Option<ConfirmedCommitIdentity>, // amended 2026-10-09
 }
 pub struct RetryCommentPublicationRequest {
     pub root: PathBuf,
     pub operation_id: OperationId, // original submitted action, not a new ID
     pub approval: Option<HostApproval>,
+    pub confirmed_identity: Option<ConfirmedCommitIdentity>, // amended 2026-10-09
     pub restart: bool, // explicit resume of an interrupted remote child
 }
 
@@ -105,6 +140,16 @@ Publication state is independent of indexing:
 - `Published { oid }` or `AlreadyCurrent { oid }`: delegated verified authority.
 - `Pending { reason }`: `NoPublicationRemote`, `LocalRecoveryRequired`, or the
   fixed typed synchronization recovery (including busy/yield/cancel/conflict).
+
+Amended 2026-10-09: the fixed synchronization recoveries are Cycle 06's typed
+errors, mapped by name: `Busy` (including another context's pending conflict),
+`PollYielding`, `Interrupted`, `WorktreeNotClean`, `WorktreeConflicted`,
+`ConflictPending`, `ExternalResolutionRequired`, `IdentityRequired` (with its
+opaque `ExpectedConfiguration`, which the caller passes back unread in
+`confirmed_identity`), `PushRejected`, `RemoteContextDeleted`, `ExternalChange`,
+`RecoveryRequired` and transport categories. `confirmed_identity` is forwarded
+to the child only; it never changes the comment checkpoint's author. `Published`
+versus `AlreadyCurrent` is relayed as the child reports it.
 
 Indexing distinguishes current from pending local-checkpoint and/or remote
 stable-state handoffs. Reuse existing `IndexPending` evidence where suitable;
@@ -202,7 +247,8 @@ short lease. No new host trust, fallback key, remote URL or refspec input.
 | Receipt exists, local index handoff incomplete | Verify original commit and canonical identity, repair only local discovery; if it still fails return Saved/Pending with index recovery |
 | Local handoff done, remote child not started | No-remote pending, or start exactly the bound child using current configured remote |
 | Child busy/yielding or transport failed | Saved/Pending; explicit retry observes the recorded child and follows normal reservation/restart rules |
-| Merge conflict or unresolved push | Keep context/conflict/checkpoint; resolution/reconciliation is Cycle 06/05's explicit recovery before publication retry |
+| Merge conflict or unresolved push | Keep context/conflict/checkpoint; resolution/reconciliation is Cycle 06/05's explicit recovery before publication retry. The caller resolves through `resolve_synchronization` or an exact external two-parent repair using the bound child ID, then retries with `restart` |
+| Another context's conflict is pending | Child returns `Busy`; Saved/Pending for every item until that conflict is resolved (no abandon path yet) |
 | Server accepted push, acknowledgement/persistence lost | Delegate fresh Push-direction observation, never blind repeat push |
 | Published/current with index pending | Return known authority; exact child replay repairs only discovery, no checkpoint/fetch/merge/push |
 | Completed action, later branch/remote edits | Return historical receipt/authority, not a claim about current remote; a new ordinary sync is a separate action |
@@ -239,7 +285,15 @@ index scan is not labelled a current discoverable snapshot.
 
 Cancellation uses the existing child's cancellation API/safe points through the
 binding. Before child creation there is no remote cancellation effect; local
-atomic write/commit is not interrupted mid-transition. An interrupted child is
+atomic write/commit is not interrupted mid-transition. Amended 2026-10-09 to
+Cycle 06's contract: a cancel honoured while the child's newest window holds a
+pending conflict or owned resolution leaves the child `interrupted` and
+restartable, not `cancelled`; a cancel requested during a resolve does not
+outlive it; and `cancel_remote_operation` has no effect on a child parked after
+a released conflict, so the mapping reports "nothing to cancel" there rather
+than a cancelled publication. A terminally cancelled child without a pending
+conflict keeps the comment saved-local; publishing it afterwards is a new
+ordinary context synchronization, since the bound child cannot be reused. An interrupted child is
 explicitly resumed only where the existing contract allows it. The composition
 introduces no automatic restart, conflict resolution, republish permission,
 retry scheduler or total timeout. Accepted transport limits remain 10,000 ms
