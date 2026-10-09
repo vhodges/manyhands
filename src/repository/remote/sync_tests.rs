@@ -8961,7 +8961,7 @@ fn confirmed_identity_post_ref_retry_requires_the_exact_confirmation() {
             name: "Confirmed".into(),
             email: "confirmed@example.invalid".into(),
         },
-        expected_configuration: inspection.observation.configuration,
+        expected_configuration: inspection.observation.expected_configuration(),
     };
     let request = |identity| {
         ResolveSynchronizationRequest::new(
@@ -8980,6 +8980,41 @@ fn confirmed_identity_post_ref_retry_requires_the_exact_confirmation() {
         service.resolve_synchronization(request(None)).unwrap(),
         ResolveSynchronizationOutcome::IdentityRequired
     ));
+    // A confirmation bound to any other observation is not a confirmation of
+    // this boundary: the identity is still required and nothing is recorded.
+    let foreign = ConfirmedCommitIdentity {
+        expected_configuration: merge::ExpectedConfiguration([0x5a; 32]),
+        ..confirmation.clone()
+    };
+    assert!(foreign.expected_configuration != confirmation.expected_configuration);
+    assert!(matches!(
+        service
+            .resolve_synchronization(request(Some(foreign)))
+            .unwrap(),
+        ResolveSynchronizationOutcome::IdentityRequired
+    ));
+    let registry = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    for table in [
+        "remote_resolution_attempts",
+        "remote_identity_confirmations",
+    ] {
+        assert_eq!(
+            registry
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table}"
+        );
+    }
+    drop(registry);
+    assert!(
+        git2::Repository::open(root.path())
+            .unwrap()
+            .index()
+            .unwrap()
+            .has_conflicts()
+    );
     *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterRefTransition);
     assert!(matches!(
         service.resolve_synchronization(request(Some(confirmation.clone()))),
@@ -9078,7 +9113,7 @@ fn effective_repository_identity_ignores_caller_confirmation_and_retry() {
             name: "Ignored caller".into(),
             email: "ignored@example.invalid".into(),
         },
-        expected_configuration: inspection.observation.configuration,
+        expected_configuration: inspection.observation.expected_configuration(),
     };
     let request = |identity| {
         ResolveSynchronizationRequest::new(
@@ -14128,8 +14163,14 @@ fn cancellation_requested_during_a_completing_resolution_does_not_outlive_it() {
     let restarted = RepositoryService::open_at(data.path())
         .unwrap()
         .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt));
-    assert!(!matches!(restarted, Err(SynchronizationError::Interrupted)));
-    assert_ne!(cancellation_state(&db, operation).0, "cancelled");
+    // This fixture has no Git remote behind its publication remote, so the
+    // restart stops exactly where an operation that was never cancelled
+    // stops: a typed recovery before transport, with the operation retained.
+    assert!(journal_stop(&restarted));
+    assert_eq!(
+        cancellation_state(&db, operation),
+        ("interrupted".into(), 0)
+    );
     let repository = git2::Repository::open(root.path()).unwrap();
     assert_eq!(repository.head().unwrap().target(), Some(commit_oid));
     assert_eq!(

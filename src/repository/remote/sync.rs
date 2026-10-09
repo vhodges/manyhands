@@ -323,7 +323,7 @@ pub enum SynchronizationError {
     /// digest of the observed Git identity configuration.
     IdentityRequired {
         target: SynchronizationTarget,
-        expected_configuration: [u8; 32],
+        expected_configuration: merge::ExpectedConfiguration,
     },
     ExternalResolutionRequired {
         target: SynchronizationTarget,
@@ -3165,14 +3165,16 @@ fn committing_identity(
     let Some(confirmation) = request.confirmed_identity.as_ref() else {
         return Err(SynchronizationError::IdentityRequired {
             target: request.target.clone(),
-            expected_configuration: configuration_identity_digest(repository)?,
+            expected_configuration: merge::ExpectedConfiguration(configuration_identity_digest(
+                repository,
+            )?),
         });
     };
     if confirmation.identity.name.is_empty()
         || confirmation.identity.email.is_empty()
         || confirmation.identity.name.contains('\0')
         || confirmation.identity.email.contains('\0')
-        || configuration_identity_digest(repository)? != confirmation.expected_configuration
+        || configuration_identity_digest(repository)? != confirmation.expected_configuration.0
     {
         return Err(SynchronizationError::ExternalChange);
     }
@@ -3187,7 +3189,7 @@ fn committing_identity(
         &state::IdentityConfirmationIntent {
             confirmation_id: confirmation.confirmation_id,
             input_digest: *input.finalize().as_bytes(),
-            configuration_digest: confirmation.expected_configuration,
+            configuration_digest: confirmation.expected_configuration.0,
         },
     )?;
     service.begin_synchronization_identity_confirmation_effect(
@@ -3801,19 +3803,7 @@ fn integrate_divergence(
                     return Err(SynchronizationError::ExternalChange);
                 }
                 if let Some(prepared) = prepared {
-                    let identity = committing_identity(service, root, owner, &repository, request)?;
-                    let tree = import_prepared_tree(&repository, &prepared)?;
-                    let local_commit = repository
-                        .find_commit(local)
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                    let incoming_commit = repository
-                        .find_commit(incoming)
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                    let tree = repository
-                        .find_tree(tree)
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                    let signature = git2::Signature::now(&identity.name, &identity.email)
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+                    // Decided before any identity or object effect.
                     let subject = match stage {
                         merge::IntegrationStage::Context => match target {
                             SynchronizationTarget::Context { item_id, .. } => {
@@ -3832,6 +3822,19 @@ fn integrate_divergence(
                             ),
                         },
                     };
+                    let identity = committing_identity(service, root, owner, &repository, request)?;
+                    let tree = import_prepared_tree(&repository, &prepared)?;
+                    let local_commit = repository
+                        .find_commit(local)
+                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+                    let incoming_commit = repository
+                        .find_commit(incoming)
+                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+                    let tree = repository
+                        .find_tree(tree)
+                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+                    let signature = git2::Signature::now(&identity.name, &identity.email)
+                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
                     let candidate = repository
                         .commit(
                             None,
@@ -5356,7 +5359,7 @@ impl RepositoryService {
             .is_none()
             .then(|| {
                 request.identity.as_ref().filter(|identity| {
-                    identity.expected_configuration == request.observation.configuration
+                    identity.expected_configuration.0 == request.observation.configuration
                 })
             })
             .flatten();

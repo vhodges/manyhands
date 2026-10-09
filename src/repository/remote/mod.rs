@@ -4,7 +4,8 @@ mod refs;
 mod sync;
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
-    RedactedConflictBytes, ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
+    ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,
+    ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
 pub use sync::{

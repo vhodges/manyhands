@@ -1694,7 +1694,7 @@ fn without_identity(side: &Side) -> Result<(), FixtureError> {
     fixed(config.set_bool("user.useConfigOnly", true))?;
     Ok(())
 }
-fn confirmed_identity(expected_configuration: [u8; 32]) -> ConfirmedCommitIdentity {
+fn confirmed_identity(expected_configuration: ExpectedConfiguration) -> ConfirmedCommitIdentity {
     ConfirmedCommitIdentity {
         confirmation_id: OperationId::new(),
         identity: CommitIdentity {
@@ -1747,8 +1747,41 @@ fn confirmed_identity_completes_a_divergent_primary_merge() -> Result<(), Fixtur
         Err(SynchronizationError::IdentityRequired { expected_configuration: again, .. })
             if again == expected_configuration
     ));
+    // The identity configuration changes after that boundary was issued (still
+    // incomplete): a confirmation carrying the earlier observation is stale.
+    // It is refused as an external change and nothing is written.
+    fixed(fixed(b_repo.config())?.set_str("user.name", "Half"))?;
+    let mut stale = restart(&request);
+    stale.confirmed_identity = Some(confirmed_identity(expected_configuration));
+    assert!(matches!(
+        p.sync(&p.b, stale),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    let config = fixed(fixed(b_repo.config())?.snapshot())?;
+    assert_eq!(fixed(config.get_string("user.name"))?, "Half");
+    assert_eq!(fixed(config.get_string("user.email"))?, "");
+    assert_eq!(
+        fixed(p.b.db()?.query_row(
+            "SELECT count(*) FROM remote_identity_confirmations",
+            [],
+            |row| row.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, b_tip);
+    assert_eq!(merge_commits(&b_repo)?, 0);
+    assert_eq!(p.server.receive_updates().len(), n);
+    // The boundary reports its current observation, which is then accepted.
+    let Err(SynchronizationError::IdentityRequired {
+        expected_configuration: current,
+        ..
+    }) = p.sync(&p.b, restart(&request))
+    else {
+        return Err(FixtureError);
+    };
+    assert!(current != expected_configuration);
     let mut confirmed = restart(&request);
-    confirmed.confirmed_identity = Some(confirmed_identity(expected_configuration));
+    confirmed.confirmed_identity = Some(confirmed_identity(current));
     let merged = published(fixed(p.sync(&p.b, confirmed))?)?;
     assert_eq!(parents(&b_repo, merged)?, [b_tip, a_tip]);
     assert_eq!(merge_commits(&b_repo)?, 1);

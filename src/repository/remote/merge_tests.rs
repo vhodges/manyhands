@@ -598,3 +598,37 @@ fn safe_checkout_does_not_replace_symlink_or_file_directory_collisions() {
         b"keep"
     );
 }
+
+/// The identity-required boundary hands the caller a digest derived from
+/// configuration values. No diagnostic rendering may expose its bytes.
+#[test]
+fn expected_configuration_is_never_rendered_in_diagnostics() {
+    let expected = super::ExpectedConfiguration([0xab; 32]);
+    let error = crate::repository::SynchronizationError::IdentityRequired {
+        target: SynchronizationTarget::Primary,
+        expected_configuration: expected,
+    };
+    let confirmation = super::ConfirmedCommitIdentity {
+        confirmation_id: OperationId::new(),
+        identity: crate::repository::CommitIdentity {
+            name: "Test".into(),
+            email: "test@example.invalid".into(),
+        },
+        expected_configuration: expected,
+    };
+    let observation = ConflictObservation::for_testing([0xab; 32]);
+    for rendered in [
+        format!("{error:?} {error:#?} {error}"),
+        format!("{confirmation:?} {confirmation:#?}"),
+        format!("{expected:?} {expected:#?}"),
+        format!("{observation:?} {:?}", observation.expected_configuration()),
+    ] {
+        let lower = rendered.to_lowercase();
+        // Decimal, hex and array renderings of the 0xab bytes.
+        for leak in ["171", "abab", "0xab", "ab, ab", "["] {
+            assert!(!lower.contains(leak), "{leak}");
+        }
+        assert!(rendered.contains("<redacted>"));
+    }
+    assert!(format!("{error:?}").contains("IdentityRequired"));
+}

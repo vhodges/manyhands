@@ -87,8 +87,8 @@ impl ConflictObservation {
     /// confirming a commit identity for `resolve_synchronization` copies it
     /// into `ConfirmedCommitIdentity::expected_configuration`. It is a digest,
     /// never configuration text.
-    pub fn expected_configuration(&self) -> [u8; 32] {
-        self.configuration
+    pub fn expected_configuration(&self) -> ExpectedConfiguration {
+        ExpectedConfiguration(self.configuration)
     }
 
     #[cfg(test)]
@@ -211,6 +211,19 @@ impl fmt::Debug for RedactedConflictBytes {
     }
 }
 
+/// Opaque configuration observation issued at an identity-required boundary.
+/// A caller copies it unchanged into `ConfirmedCommitIdentity`; its digest is
+/// derived from configuration values, so it has no accessor and its
+/// formatting is redacted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedConfiguration(pub(super) [u8; 32]);
+
+impl fmt::Debug for ExpectedConfiguration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ExpectedConfiguration(<redacted>)")
+    }
+}
+
 /// Caller-confirmed identity is accepted only at a committing boundary when
 /// the effective Git configuration has no complete identity; it never replaces
 /// an existing one.
@@ -231,7 +244,7 @@ impl fmt::Debug for RedactedConflictBytes {
 pub struct ConfirmedCommitIdentity {
     pub confirmation_id: OperationId,
     pub identity: CommitIdentity,
-    pub expected_configuration: [u8; 32],
+    pub expected_configuration: ExpectedConfiguration,
 }
 
 impl fmt::Debug for ConfirmedCommitIdentity {
