@@ -71,6 +71,13 @@ complete local gates pass. Published current bed07e4, seventh full native matrix
 https://github.com/vhodges/manyhands/actions/runs/37863696730
 This is the current exact-source run to inspect before Task 4 acceptance.
 
+Run 7 exposed remaining authoring fixture path/EOL policy and APFS constructor
+assumptions. Independently reviewed test-only corrections preserve missing records,
+exact bytes and nonmutation; complete local verification passes 981 tests/cases.
+Current source 600e0ff, eighth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37868930176
+This is the current run to inspect before Task 4 acceptance; Tasks 5–7 not begun.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.

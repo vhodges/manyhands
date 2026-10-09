@@ -10,7 +10,12 @@ use manyhands::{
     },
 };
 use rusqlite::{Connection, OptionalExtension};
-use std::{process::Command, sync::mpsc, thread, time::Duration};
+use std::{
+    process::Command,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 mod support;
 
@@ -867,8 +872,48 @@ fn registry_migration_is_idempotent() {
 
 #[test]
 fn registry_open_waits_for_a_brief_database_lock() {
-    const PHASE_TIMEOUT: Duration = Duration::from_secs(1);
+    assert_registry_open_waits_for_a_brief_database_lock(|_| {});
+}
+
+#[test]
+fn registry_open_waits_for_a_gated_slow_wal_phase_after_lock_release() {
+    let (paused_sent, paused_received) = mpsc::channel();
+    let (release_sent, release_received) = mpsc::channel();
+    let gate_thread = thread::spawn(move || {
+        let paused = paused_received.recv_timeout(Duration::from_secs(10));
+        // Hold the observer gate beyond the former one-second phase budget.
+        // This is an intentional absence probe, not a startup scheduling sleep.
+        let still_paused = paused_received.recv_timeout(Duration::from_millis(1_100));
+        let released = release_sent.send(());
+        paused.unwrap();
+        assert!(matches!(still_paused, Err(mpsc::RecvTimeoutError::Timeout)));
+        released.unwrap();
+    });
+
+    assert_registry_open_waits_for_a_brief_database_lock(move |phase| {
+        if phase == RegistryConnectionPhase::AfterWal {
+            paused_sent.send(()).unwrap();
+            release_received
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+        }
+    });
+    gate_thread.join().unwrap();
+}
+
+fn assert_registry_open_waits_for_a_brief_database_lock(
+    mut observer: impl FnMut(RegistryConnectionPhase) + Send + 'static,
+) {
+    // One watchdog covers SQLite's five-second busy budget plus startup work;
+    // phase notifications describe ordering, not a one-second latency promise.
+    const OPEN_WATCHDOG: Duration = Duration::from_secs(10);
     const LOCKED_WINDOW: Duration = Duration::from_millis(25);
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum OpenEvent {
+        Phase(RegistryConnectionPhase),
+        Completed(Result<(), RepositoryErrorKind>),
+    }
 
     let data = tempfile::tempdir().unwrap();
     RepositoryService::open_at(data.path()).unwrap();
@@ -878,35 +923,49 @@ fn registry_open_waits_for_a_brief_database_lock() {
         .pragma_update(None, "journal_mode", "DELETE")
         .unwrap();
     lock_connection.execute_batch("BEGIN EXCLUSIVE").unwrap();
-    let (phases_sent, phases_received) = mpsc::channel();
-    let (result_sent, result_received) = mpsc::sync_channel(1);
+    let (events_sent, events_received) = mpsc::channel();
     let worker_data_directory = data.path().to_path_buf();
+    let deadline = Instant::now() + OPEN_WATCHDOG;
 
     let open_thread = thread::spawn(move || {
         let result = RepositoryService::open_at_with_registry_phase_observer(
             &worker_data_directory,
             |phase| {
-                let _ = phases_sent.send(phase);
+                observer(phase);
+                let _ = events_sent.send(OpenEvent::Phase(phase));
             },
         );
-        let _ = result_sent.send(result);
+        let _ = events_sent.send(OpenEvent::Completed(
+            result.map(|_| ()).map_err(|error| error.kind),
+        ));
     });
 
-    let before_wal = phases_received.recv_timeout(PHASE_TIMEOUT);
-    let while_locked = phases_received.recv_timeout(LOCKED_WINDOW);
+    let before_wal =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let while_locked = events_received.recv_timeout(LOCKED_WINDOW);
     let lock_released = lock_connection.execute_batch("COMMIT");
+    // Close the connection even if COMMIT failed, releasing its lock before any
+    // assertion or worker join (including a missing BeforeWal notification).
     drop(lock_connection);
 
-    let after_wal = phases_received.recv_timeout(PHASE_TIMEOUT);
-    let worker_result = result_received.recv_timeout(PHASE_TIMEOUT);
+    let after_wal =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let worker_result =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     let worker_joined = open_thread.join();
 
     lock_released.unwrap();
-    assert_eq!(before_wal.unwrap(), RegistryConnectionPhase::BeforeWal);
+    assert_eq!(
+        before_wal.unwrap(),
+        OpenEvent::Phase(RegistryConnectionPhase::BeforeWal)
+    );
     assert!(matches!(while_locked, Err(mpsc::RecvTimeoutError::Timeout)));
-    assert_eq!(after_wal.unwrap(), RegistryConnectionPhase::AfterWal);
+    assert_eq!(
+        after_wal.unwrap(),
+        OpenEvent::Phase(RegistryConnectionPhase::AfterWal)
+    );
     worker_joined.unwrap();
-    worker_result.unwrap().unwrap();
+    assert_eq!(worker_result.unwrap(), OpenEvent::Completed(Ok(())));
 }
 
 #[test]
