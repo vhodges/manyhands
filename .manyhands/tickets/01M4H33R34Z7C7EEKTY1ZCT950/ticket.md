@@ -3,7 +3,7 @@ manyhands_managed: true
 manyhands_kind: ticket
 id: "01M4H33R34Z7C7EEKTY1ZCT950"
 title: "Let the user abandon a pending synchronization conflict"
-type: "enhancement"
+type: "task"
 status: "open"
 project: "manyhands"
 team: "core"
