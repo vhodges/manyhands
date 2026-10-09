@@ -110,6 +110,48 @@ pub enum RemoteSafePointOutcome {
     Cancelled,
 }
 
+/// How one fresh Push-direction advertisement relates to a recorded immutable
+/// push intent. The caller computes it from actual commit ancestry; a Fetch
+/// advertisement is never an input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PushIntentRelation {
+    Equal,
+    /// The advertised commit is a strict ancestor of the intent.
+    Behind,
+    /// The advertised commit is a strict descendant of the intent.
+    Ahead,
+    Diverged,
+    Absent,
+}
+
+/// The newest publication intent of a synchronization, read under ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PublicationIntent {
+    None,
+    /// The immutable `push_oid` of the legacy envelope; no attempt follows it.
+    Legacy(git2::Oid),
+    /// The candidate of the newest prepared or returned publication attempt.
+    Attempt(git2::Oid),
+    /// The earlier intent is reconciled and no new push intent exists yet.
+    Open,
+    /// The newest attempt is verified; only classification remains.
+    Verified(git2::Oid),
+}
+
+/// Freshly proved inputs for reconciling the newest publication intent.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PublicationSettlement {
+    pub intent: PublicationIntent,
+    /// Clean, validated HEAD of the target.
+    pub local_oid: git2::Oid,
+    /// The caller validated `local_oid` as a clean descendant of a released
+    /// local checkpoint rather than the recorded intent itself.
+    pub continuation: bool,
+    pub advertised_oid: Option<git2::Oid>,
+    /// None only for an already open attempt, which needs no observation.
+    pub relation: Option<PushIntentRelation>,
+}
+
 fn mismatch() -> RepositoryError {
     RepositoryError::new(
         RepositoryOperation::RepositorySnapshot,
@@ -187,6 +229,29 @@ pub(super) fn owned(
     }
     crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
     Ok(record)
+}
+
+fn publication_intent(
+    tx: &Transaction<'_>,
+    record: &state::StoredRemoteOperation,
+) -> Result<PublicationIntent, RepositoryError> {
+    Ok(match state::latest_publication_attempt(tx, record)? {
+        Some(attempt) => match (attempt.phase, attempt.candidate_oid) {
+            (state::PublicationPhase::Open, None) => PublicationIntent::Open,
+            (state::PublicationPhase::Verified, Some(candidate)) => {
+                PublicationIntent::Verified(candidate)
+            }
+            (
+                state::PublicationPhase::Prepared | state::PublicationPhase::Returned,
+                Some(candidate),
+            ) => PublicationIntent::Attempt(candidate),
+            _ => return Err(state::recovery_required()),
+        },
+        None => record
+            .sync_evidence
+            .push_oid
+            .map_or(PublicationIntent::None, PublicationIntent::Legacy),
+    })
 }
 
 fn is_sync(target: &RemoteOperationTarget) -> bool {
@@ -554,7 +619,32 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             if is_sync(&record.target) {
-                validate_sync_point(&record, point)?;
+                if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
+                    // The legacy push checkpoint is frozen behind this attempt
+                    // and is never replayed; push boundaries follow the
+                    // attempt's own forward-only phase instead.
+                    use RemoteOperationSafePoint as P;
+                    use state::PublicationPhase as A;
+                    let valid = match point {
+                        P::BeforeFetch => record.phase == RemoteOperationPhase::Reconciling,
+                        P::AfterFetch => record.completed_step == Some(P::AfterFetch),
+                        P::BeforePush => {
+                            !record.reconciliation_required && attempt.phase == A::Prepared
+                        }
+                        P::AfterPushReturn => {
+                            !record.reconciliation_required && attempt.phase == A::Returned
+                        }
+                        P::AfterPushVerification => {
+                            !record.reconciliation_required && attempt.phase == A::Verified
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(state::recovery_required());
+                    }
+                } else {
+                    validate_sync_point(&record, point)?;
+                }
             } else if matches!(
                 point,
                 RemoteOperationSafePoint::BeforeFetch
@@ -787,14 +877,17 @@ impl RepositoryService {
                     }
                     if step.phase == state::IntegrationStepPhase::Applied
                         && record.sync_evidence.push_oid.is_some()
+                        && state::latest_publication_attempt(tx, &record)?.is_none()
+                        && step.result_oid != record.sync_evidence.local_oid
                     {
-                        if step.result_oid != record.sync_evidence.local_oid {
-                            return Err(state::recovery_required());
-                        }
-                        // Preserve the old Push-direction envelope; local
-                        // handoff cannot clear or rewrite publication intent.
-                        return Ok(None);
+                        // The frozen legacy envelope must still describe this
+                        // stage. Once an append-only publication attempt
+                        // exists, the newest window is the local authority.
+                        return Err(state::recovery_required());
                     }
+                    // A recorded Push intent is never cleared or rewritten by
+                    // this local observation; the caller routes it to
+                    // publication reconciliation instead of local handoff.
                     // Never fall back to an earlier applied context while the
                     // primary has an unfinished effect or owned resolution.
                     return Ok(Some(step));
@@ -1406,6 +1499,32 @@ impl RepositoryService {
                     step.phase == state::IntegrationStepPhase::Applied
                         && step.result_oid == evidence.local_oid
                 });
+            if state::latest_publication_attempt(tx, &record)?
+                .is_some_and(|attempt| attempt.phase == state::PublicationPhase::Open)
+            {
+                // The legacy checkpoint and local OID stay frozen behind the
+                // old Push intent. The applied child stage is the durable
+                // record; binding the publication candidate rechecks it.
+                if !is_sync(&record.target)
+                    || record.reconciliation_required
+                    || record.authority.is_some()
+                    || !applied
+                    || evidence.expected_oid != record.sync_evidence.expected_oid
+                {
+                    return Err(state::recovery_required());
+                }
+                return Ok(if record.cancel_requested || record.yield_requested {
+                    acknowledge(
+                        tx,
+                        &record,
+                        record
+                            .completed_step
+                            .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+                    )?
+                } else {
+                    RemoteSafePointOutcome::Continue
+                });
+            }
             if !is_sync(&record.target)
                 || record.reconciliation_required
                 || !matches!(
@@ -1437,9 +1556,12 @@ impl RepositoryService {
         use state::SynchronizationCheckpoint as C;
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
+            // Once a publication attempt exists the legacy envelope is frozen:
+            // no legacy checkpoint may move it, even with unchanged evidence.
             if !is_sync(&record.target)
                 || record.authority.is_some()
                 || record.reconciliation_required
+                || state::latest_publication_attempt(tx, &record)?.is_some()
             {
                 return Err(state::recovery_required());
             }
@@ -1603,6 +1725,9 @@ impl RepositoryService {
                 || record.phase != RemoteOperationPhase::Reconciling
                 || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
                 || local_oid != worktree_oid
+                // A frozen legacy envelope is reconciled only through its
+                // append-only publication attempts.
+                || state::latest_publication_attempt(tx, &record)?.is_some()
             {
                 return Err(state::recovery_required());
             }
@@ -1666,6 +1791,307 @@ impl RepositoryService {
         })
     }
 
+    /// Read the newest publication intent under ownership. The legacy Push
+    /// intent and every earlier attempt are immutable history.
+    pub(crate) fn synchronization_publication_intent(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<PublicationIntent, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            publication_intent(tx, &record)
+        })
+    }
+
+    /// Reconcile the newest immutable push intent against fresh, independent
+    /// Push-direction evidence and leave restart reconciliation.
+    ///
+    /// The caller must have completed Fetch, proved the target clean at
+    /// `local_oid`, and computed `relation` from a receive-pack advertisement
+    /// and actual ancestry. An intent that is equal-and-current stays on the
+    /// legacy route; everything else appends one open publication attempt that
+    /// records the fixed disposition. Nothing here rewrites `push_oid`, an
+    /// earlier attempt, the legacy checkpoint or the legacy local OID, and
+    /// nothing authorizes a push: the new attempt has no candidate yet.
+    pub(crate) fn settle_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        settlement: &PublicationSettlement,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::PublicationDisposition as D;
+        use state::SynchronizationCheckpoint as C;
+        enum Action {
+            Resume,
+            Verify,
+            Open(git2::Oid, D),
+        }
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            let Some(checkpoint) = record.sync_checkpoint else {
+                return Err(state::recovery_required());
+            };
+            if !is_sync(&record.target)
+                || !record.reconciliation_required
+                || record.phase != RemoteOperationPhase::Reconciling
+                || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
+                || record.authority.is_some()
+                || record.sync_evidence.push_oid.is_none()
+                || !matches!(
+                    checkpoint,
+                    C::PushPrepared | C::PushReturned | C::PushVerified
+                )
+                || publication_intent(tx, &record)? != settlement.intent
+            {
+                return Err(state::recovery_required());
+            }
+            let window = state::latest_integration_window(tx, &record)?;
+            let ordinal = u8::from(record.target.context_ref().is_some());
+            let last = state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+                .filter(|step| step.phase == state::IntegrationStepPhase::Applied);
+            let last_result = last.as_ref().and_then(|step| step.result_oid);
+            let released = match &last {
+                Some(step) => state::integration_resolution_released(tx, &record, step)?,
+                None => false,
+            };
+            let local = settlement.local_oid;
+            let action = match settlement.intent {
+                PublicationIntent::None => return Err(state::recovery_required()),
+                PublicationIntent::Open => {
+                    let attempt = state::latest_publication_attempt(tx, &record)?
+                        .ok_or_else(state::recovery_required)?;
+                    if settlement.relation.is_some()
+                        || !(last_result == Some(local)
+                            || (attempt.local_oid == local && !settlement.continuation)
+                            || (settlement.continuation && released))
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    Action::Resume
+                }
+                PublicationIntent::Verified(candidate) => {
+                    if local != candidate
+                        || settlement.relation != Some(PushIntentRelation::Equal)
+                        || settlement.advertised_oid != Some(candidate)
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    Action::Resume
+                }
+                PublicationIntent::Legacy(intent) | PublicationIntent::Attempt(intent) => {
+                    let legacy = matches!(settlement.intent, PublicationIntent::Legacy(_));
+                    let current = local == intent;
+                    let relation = settlement.relation.ok_or_else(state::recovery_required)?;
+                    if (current && settlement.continuation)
+                        || (!current
+                            && !(settlement.continuation
+                                && released
+                                && last_result == Some(intent)))
+                        || (relation == PushIntentRelation::Absent)
+                            != settlement.advertised_oid.is_none()
+                        || (relation == PushIntentRelation::Equal)
+                            != (settlement.advertised_oid == Some(intent))
+                        || (legacy && checkpoint == C::PushVerified)
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    match relation {
+                        // An equal, behind or never-advertised intent that is
+                        // still HEAD stays on the unchanged legacy route.
+                        PushIntentRelation::Equal if current && legacy => {
+                            return Err(state::recovery_required());
+                        }
+                        PushIntentRelation::Equal if current => Action::Verify,
+                        PushIntentRelation::Equal => Action::Open(intent, D::Accepted),
+                        PushIntentRelation::Behind if current && legacy => {
+                            return Err(state::recovery_required());
+                        }
+                        PushIntentRelation::Behind => Action::Open(intent, D::NotAccepted),
+                        PushIntentRelation::Ahead => Action::Open(intent, D::Contained),
+                        PushIntentRelation::Diverged => Action::Open(intent, D::Displaced),
+                        PushIntentRelation::Absent => {
+                            // Absence after any recorded advertisement is
+                            // remote deletion and is never recreated here.
+                            if (current && legacy)
+                                || state::publication_advertisement_recorded(tx, &record)?
+                            {
+                                return Err(state::recovery_required());
+                            }
+                            Action::Open(intent, D::NotAccepted)
+                        }
+                    }
+                }
+            };
+            let decision = acknowledge(tx, &record, RemoteOperationSafePoint::AfterFetch)?;
+            if decision != RemoteSafePointOutcome::Continue {
+                return Ok(decision);
+            }
+            match action {
+                Action::Resume => {}
+                Action::Verify => {
+                    state::advance_publication_attempt(
+                        tx,
+                        &record,
+                        state::PublicationPhase::Verified,
+                        settlement.advertised_oid,
+                    )?;
+                }
+                Action::Open(previous, disposition) => {
+                    state::open_publication_attempt(
+                        tx,
+                        &record,
+                        previous,
+                        settlement.advertised_oid,
+                        disposition,
+                        local,
+                    )?;
+                }
+            }
+            // Leave reconciliation without moving the frozen legacy checkpoint,
+            // push intent or local OID.
+            tx.execute(
+                "UPDATE remote_operation_records SET phase=?2,reconciliation_required=0,updated_at=max(updated_at,?3) WHERE id=?1",
+                params![record.id, checkpoint.name(), now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Durable push intent of the open attempt, written BEFORE any push effect.
+    /// With `verified`, the fresh Push advertisement already equals the
+    /// candidate and no push will follow.
+    pub(crate) fn prepare_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        candidate: git2::Oid,
+        advertised_oid: Option<git2::Oid>,
+        verified: bool,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            // An endpoint that advertised this target before and now advertises
+            // nothing was deleted remotely; publication never recreates it.
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || (advertised_oid.is_none()
+                    && state::publication_advertisement_recorded(tx, &record)?)
+            {
+                return Err(state::recovery_required());
+            }
+            if let Some(point) = record.completed_step {
+                let decision = acknowledge(tx, &record, point)?;
+                if decision != RemoteSafePointOutcome::Continue {
+                    return Ok(decision);
+                }
+            } else if record.cancel_requested || record.yield_requested {
+                return acknowledge(tx, &record, RemoteOperationSafePoint::BeforeFetch);
+            }
+            state::bind_publication_candidate(tx, &record, candidate, advertised_oid, verified)?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Published or AlreadyCurrent for the verified newest attempt, derived
+    /// only from stored evidence so it is identical before and after a restart.
+    pub(crate) fn synchronization_publication_authority(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<state::SynchronizationAuthority, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            state::publication_authority(tx, &record)
+        })
+    }
+
+    /// Forward-only observation of the newest attempt's own push.
+    pub(crate) fn advance_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        phase: state::PublicationPhase,
+        advertised_oid: Option<git2::Oid>,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || (phase == state::PublicationPhase::Returned
+                    && record.completed_step != Some(RemoteOperationSafePoint::BeforePush))
+            {
+                return Err(state::recovery_required());
+            }
+            if let Some(point) = record.completed_step {
+                let decision = acknowledge(tx, &record, point)?;
+                if decision != RemoteSafePointOutcome::Continue {
+                    return Ok(decision);
+                }
+            }
+            state::advance_publication_attempt(tx, &record, phase, advertised_oid)?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Record this operation's own merge metadata digests in the same fenced
+    /// step that just produced them. Later retirement accepts nothing else.
+    pub(super) fn record_synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        digests: [Option<[u8; 32]>; 3],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::record_integration_merge_metadata(tx, &record, window_number, ordinal, digests)
+        })
+    }
+
+    pub(super) fn synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+    ) -> Result<Option<state::MergeMetadataEvidence>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::integration_merge_metadata(tx, &record, step.window_number, step.intent.ordinal)
+        })
+    }
+
+    pub(super) fn advance_synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+        phase: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if record.cancel_requested || record.yield_requested || !record.reconciliation_required
+            {
+                return Err(state::recovery_required());
+            }
+            state::advance_integration_merge_metadata(
+                tx,
+                &record,
+                step.window_number,
+                step.intent.ordinal,
+                phase,
+            )
+        })
+    }
+
     /// Persist authority and index-only handoff together before discovery. This
     /// releases the remote slot; exact-ID replay returns inspection, not ownership.
     pub(crate) fn classify_synchronization(
@@ -1676,7 +2102,18 @@ impl RepositoryService {
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            if !is_sync(&record.target)
+            if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
+                // Authority comes from the newest verified attempt alone. The
+                // legacy push columns keep describing the superseded intent.
+                if !is_sync(&record.target)
+                    || record.reconciliation_required
+                    || attempt.phase != state::PublicationPhase::Verified
+                    || attempt.candidate_oid != Some(authority.oid())
+                    || attempt.advertised_oid != Some(authority.oid())
+                {
+                    return Err(state::recovery_required());
+                }
+            } else if !is_sync(&record.target)
                 || record.reconciliation_required
                 || record.sync_checkpoint != Some(state::SynchronizationCheckpoint::PushVerified)
                 || record.sync_evidence.local_oid != Some(authority.oid())

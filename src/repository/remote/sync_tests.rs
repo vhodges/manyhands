@@ -4035,6 +4035,2095 @@ fn recorded_candidate_fault_table_preserves_partial_checkout_and_observes_ref_on
     }
 }
 
+fn child_file(repo: &git2::Repository, parent: git2::Oid, name: &str, bytes: &[u8]) -> git2::Oid {
+    let parent = repo.find_commit(parent).unwrap();
+    let mut builder = repo.treebuilder(Some(&parent.tree().unwrap())).unwrap();
+    builder
+        .insert(name, repo.blob(bytes).unwrap(), 0o100644)
+        .unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    repo.commit(None, &sig, &sig, "fixture", &tree, &[&parent])
+        .unwrap()
+}
+
+/// number, previous intent, previous advertisement, disposition, phase, candidate.
+type PassAttemptRow = (i64, String, Option<String>, String, String, Option<String>);
+/// MERGE_HEAD, MERGE_MSG and MERGE_MODE digests with the journal phase.
+type RecordedMergeMetadata = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>, String);
+
+/// A reserved primary synchronization whose local branch holds one real
+/// commit (`local.txt` or a changed `fixture.txt`) above the shared base.
+struct PassFixture {
+    root: tempfile::TempDir,
+    data: tempfile::TempDir,
+    service: RepositoryService,
+    plan: RemoteRefPlan,
+    target: RemoteOperationTarget,
+    operation: OperationId,
+    owner: RemoteReservation,
+    base: git2::Oid,
+    local: git2::Oid,
+}
+
+impl PassFixture {
+    fn new(local_file: &str, local_bytes: &[u8]) -> Self {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), false)
+        })
+        .unwrap();
+        let base = repository.head().unwrap().target().unwrap();
+        fs::write(root.path().join(local_file), local_bytes).unwrap();
+        let local = commit_all(&repository);
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let operation = OperationId::new();
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .reserve_remote_operation(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("reservation")
+        };
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::FetchPrepared,
+                &state::SynchronizationEvidence {
+                    expected_oid: Some(local),
+                    local_oid: Some(local),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        Self {
+            root,
+            data,
+            service,
+            plan,
+            target,
+            operation,
+            owner,
+            base,
+            local,
+        }
+    }
+
+    fn repository(&self) -> git2::Repository {
+        git2::Repository::open(self.root.path()).unwrap()
+    }
+
+    fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.data.path().join(REGISTRY_FILE)).unwrap()
+    }
+
+    fn record(&self) -> state::StoredRemoteOperation {
+        state::with_transaction(&self.service, self.root.path(), |tx, id| {
+            state::read_operation(tx, id, self.operation)
+        })
+        .unwrap()
+        .unwrap()
+    }
+
+    fn restart(&mut self) {
+        let RemoteReservationOutcome::Reserved(owner) = self
+            .service
+            .restart_remote_synchronization(self.root.path(), self.operation, &self.target)
+            .unwrap()
+        else {
+            panic!("explicit restart")
+        };
+        self.owner = owner;
+    }
+
+    /// Restart and hand back the fenced token of the previous owner epoch.
+    fn restart_superseding(&mut self) -> RemoteReservation {
+        let RemoteReservationOutcome::Reserved(owner) = self
+            .service
+            .restart_remote_synchronization(self.root.path(), self.operation, &self.target)
+            .unwrap()
+        else {
+            panic!("explicit restart")
+        };
+        std::mem::replace(&mut self.owner, owner)
+    }
+
+    fn intent(&self) -> PublicationIntent {
+        self.service
+            .synchronization_publication_intent(self.root.path(), &self.owner)
+            .unwrap()
+    }
+
+    fn settle(
+        &self,
+        settlement: &PublicationSettlement,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.service
+            .settle_synchronization_publication(self.root.path(), &self.owner, settlement)
+    }
+
+    fn point(&self, point: RemoteOperationSafePoint) {
+        self.service
+            .remote_safe_point(self.root.path(), &self.owner, point)
+            .unwrap();
+    }
+
+    fn prepare(
+        &self,
+        candidate: git2::Oid,
+        advertised: Option<git2::Oid>,
+        verified: bool,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.service.prepare_synchronization_publication(
+            self.root.path(),
+            &self.owner,
+            candidate,
+            advertised,
+            verified,
+        )
+    }
+
+    fn advance(
+        &self,
+        phase: state::PublicationPhase,
+        advertised: Option<git2::Oid>,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.service.advance_synchronization_publication(
+            self.root.path(),
+            &self.owner,
+            phase,
+            advertised,
+        )
+    }
+
+    fn authority(&self) -> state::SynchronizationAuthority {
+        self.service
+            .synchronization_publication_authority(self.root.path(), &self.owner)
+            .unwrap()
+    }
+
+    /// One completed Fetch whose exact tracking ref equals the advertisement.
+    fn fetch(&self, incoming: git2::Oid, observed_at: i64) {
+        self.repository()
+            .reference(
+                self.plan.primary().tracking_ref(),
+                incoming,
+                true,
+                "fixture observation",
+            )
+            .unwrap();
+        self.service
+            .remote_safe_point(
+                self.root.path(),
+                &self.owner,
+                RemoteOperationSafePoint::BeforeFetch,
+            )
+            .unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &self.plan,
+            "refs/heads/main",
+            incoming,
+            Some(incoming),
+        )
+        .unwrap();
+        commit_observation_batch(
+            &self.service,
+            self.root.path(),
+            &self.owner,
+            &self.plan,
+            &[observation],
+            observed_at,
+        )
+        .unwrap();
+    }
+
+    fn append_window(
+        &self,
+        number: u32,
+        incoming: git2::Oid,
+    ) -> Result<state::IntegrationWindowEvidence, RepositoryError> {
+        let batch = state::with_transaction(&self.service, self.root.path(), |tx, id| {
+            tx.query_row(
+                "SELECT id FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| state::recovery_required())
+        })
+        .unwrap();
+        self.service.prepare_synchronization_window(
+            self.root.path(),
+            &self.owner,
+            number,
+            &state::IntegrationWindowIntent {
+                observation_batch_id: batch,
+                local_oid: self.repository().head().unwrap().target().unwrap(),
+                primary_oid: incoming,
+                context_oid: None,
+            },
+        )
+    }
+
+    /// The production ordered-integration pass for the newest window.
+    fn integrate(&self, incoming: git2::Oid) -> Result<git2::Oid, SynchronizationError> {
+        let configuration = self
+            .service
+            .observation_configuration(self.root.path(), &self.plan)
+            .unwrap();
+        let mut req = request(self.root.path());
+        req.operation_id = self.operation;
+        integrate_divergence(
+            &self.service,
+            DivergenceInputs {
+                root: self.root.path(),
+                primary_branch: "main",
+                target: &SynchronizationTarget::Primary,
+                request: &req,
+                owner: &self.owner,
+                plan: &self.plan,
+                configuration: &configuration,
+                selected: self.plan.primary(),
+                primary_tracking: Some(incoming),
+                selected_tracking: Some(incoming),
+                context: None,
+                primary: incoming,
+            },
+        )
+    }
+
+    fn reconcile(
+        &self,
+        evidence: &mut state::SynchronizationEvidence,
+    ) -> Result<Option<ReconciledCandidate>, SynchronizationError> {
+        reconcile_pending_candidate(
+            &self.service,
+            self.root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &self.owner,
+            evidence,
+        )
+    }
+
+    fn attempts(&self) -> Vec<PassAttemptRow> {
+        let db = self.db();
+        let mut statement = db
+            .prepare("SELECT number,previous_oid,previous_advertised_oid,previous_disposition,phase,candidate_oid FROM remote_publication_attempts ORDER BY number")
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    /// The legacy envelope's push-direction columns, which later publication
+    /// attempts must never rewrite.
+    fn legacy_push(&self) -> (String, Option<String>, Option<String>, Option<String>) {
+        self.db()
+            .query_row(
+                "SELECT sync_checkpoint,local_oid,push_oid,push_advertised_oid FROM remote_operation_records WHERE operation_ulid=?1",
+                [self.operation.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap()
+    }
+}
+
+fn reflog_image(repository: &git2::Repository) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    for name in ["logs/HEAD", "logs/refs/heads/main"] {
+        digest.update(&fs::read(repository.path().join(name)).unwrap());
+    }
+    *digest.finalize().as_bytes()
+}
+
+/// D: a production conflict records this operation's own merge metadata. An
+/// external whole-merge commit that leaves exactly that metadata behind is
+/// accepted and the remnant retired; anything altered, unrecorded, foreign,
+/// linked or locked is preserved byte-for-byte and stays Recovery.
+#[test]
+fn external_repair_retires_only_own_recorded_merge_metadata() {
+    for variant in [
+        "own_all",
+        "own_after_partial_retirement",
+        "altered_message",
+        "unrecorded",
+        "foreign_state",
+        "operator_lock",
+        "wrong_parents",
+        "linked_member",
+        "recreated_after_retirement",
+        "hard_linked_member",
+        "retire_intent_all_present",
+        "retire_intent_none_present",
+        "altered_before_lease",
+    ] {
+        let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+        let repository = fixture.repository();
+        let local = fixture.local;
+        let incoming = child(&repository, fixture.base, b"incoming\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        // The real ordered integration installs the conflict and, under the
+        // same lease, records the digests of the metadata it just wrote.
+        assert!(matches!(
+            fixture.integrate(incoming),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let gitdir = repository.path().to_owned();
+        let recorded: RecordedMergeMetadata = fixture
+            .db()
+            .query_row(
+                "SELECT merge_head_digest,merge_msg_digest,merge_mode_digest,phase FROM remote_integration_merge_metadata",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(recorded.3, "recorded", "{variant}");
+        assert_eq!(
+            recorded.0,
+            blake3::hash(&fs::read(gitdir.join("MERGE_HEAD")).unwrap()).as_bytes()
+        );
+        assert_eq!(
+            recorded.1.as_deref(),
+            Some(
+                blake3::hash(&fs::read(gitdir.join("MERGE_MSG")).unwrap())
+                    .as_bytes()
+                    .as_slice()
+            )
+        );
+        // An external tool commits the whole merge with the exact ordered
+        // parents and a clean index/worktree, but never cleans up merge state.
+        let signature = repository.signature().unwrap();
+        let local_parent = repository.find_commit(local).unwrap();
+        let incoming_parent = repository.find_commit(incoming).unwrap();
+        let parents = if variant == "wrong_parents" {
+            vec![&incoming_parent, &local_parent]
+        } else {
+            vec![&local_parent, &incoming_parent]
+        };
+        let repaired = repository
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "external repair",
+                &local_parent.tree().unwrap(),
+                &parents,
+            )
+            .unwrap();
+        repository
+            .reference("refs/heads/main", repaired, true, "external repair")
+            .unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        for member in RESOLUTION_MERGE_MEMBERS {
+            assert!(gitdir.join(member).exists(), "{variant} {member}");
+        }
+        match variant {
+            "own_after_partial_retirement" => {
+                // A process that died between unlinks: absence is completion.
+                fs::remove_file(gitdir.join("MERGE_HEAD")).unwrap();
+            }
+            "altered_message" => {
+                fs::write(gitdir.join("MERGE_MSG"), b"edited by another tool\n").unwrap();
+            }
+            "unrecorded" => {
+                // A conflict installed before this evidence existed.
+                fixture
+                    .db()
+                    .execute("DELETE FROM remote_integration_merge_metadata", [])
+                    .unwrap();
+            }
+            "foreign_state" => {
+                fs::write(gitdir.join("CHERRY_PICK_HEAD"), format!("{incoming}\n")).unwrap();
+            }
+            "operator_lock" => {
+                fs::write(gitdir.join("index.lock"), b"operator-owned lock\n").unwrap();
+            }
+            "linked_member" => {
+                #[cfg(unix)]
+                {
+                    let bytes = fs::read(gitdir.join("MERGE_MSG")).unwrap();
+                    let elsewhere = fixture.data.path().join("same-bytes-elsewhere");
+                    fs::write(&elsewhere, bytes).unwrap();
+                    fs::remove_file(gitdir.join("MERGE_MSG")).unwrap();
+                    std::os::unix::fs::symlink(&elsewhere, gitdir.join("MERGE_MSG")).unwrap();
+                }
+                #[cfg(not(unix))]
+                fs::write(gitdir.join("MERGE_MSG"), b"edited by another tool\n").unwrap();
+            }
+            "recreated_after_retirement" => {
+                fixture
+                    .db()
+                    .execute(
+                        "UPDATE remote_integration_merge_metadata SET phase='retired'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            "hard_linked_member" => {
+                // Same inode reachable through a name this operation never
+                // wrote: not owned, even though the bytes match.
+                #[cfg(unix)]
+                fs::hard_link(
+                    gitdir.join("MERGE_MSG"),
+                    fixture.data.path().join("second-link"),
+                )
+                .unwrap();
+                #[cfg(not(unix))]
+                fs::write(gitdir.join("MERGE_MSG"), b"edited by another tool\n").unwrap();
+            }
+            "retire_intent_all_present" | "retire_intent_none_present" => {
+                // A holder that journaled its intent and died before, or
+                // after, every unlink.
+                fixture
+                    .db()
+                    .execute(
+                        "UPDATE remote_integration_merge_metadata SET phase='retire_intent'",
+                        [],
+                    )
+                    .unwrap();
+                if variant == "retire_intent_none_present" {
+                    for member in RESOLUTION_MERGE_MEMBERS {
+                        fs::remove_file(gitdir.join(member)).unwrap();
+                    }
+                }
+            }
+            _ => {}
+        }
+        let members = || {
+            RESOLUTION_MERGE_MEMBERS
+                .iter()
+                .chain(["CHERRY_PICK_HEAD", "index.lock"].iter())
+                .map(|member| {
+                    fs::symlink_metadata(gitdir.join(member))
+                        .ok()
+                        .map(|metadata| {
+                            (
+                                metadata.file_type().is_symlink(),
+                                fs::read(gitdir.join(member)).unwrap(),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut before_members = members();
+        let before = local_binding_image(fixture.root.path());
+        let before_logs = reflog_image(&repository);
+        let before_objects = inspection_odb_inventory(&repository);
+        if variant == "altered_before_lease" {
+            // Changed after the outside observation accepted the remnant and
+            // before the lease: ownership is decided again under the lease.
+            let member = gitdir.join("MERGE_MSG");
+            set_merge_metadata_observed_hook(fixture.root.path().to_path_buf(), move || {
+                fs::write(member, b"edited during validation\n").unwrap();
+            });
+            before_members[1] = Some((false, b"edited during validation\n".to_vec()));
+        }
+        fixture.restart();
+        let mut evidence = fixture.record().sync_evidence;
+        let result = fixture.reconcile(&mut evidence);
+        let step = state::with_transaction(&fixture.service, fixture.root.path(), |tx, id| {
+            state::integration_step_in_window(
+                tx,
+                state::read_operation(tx, id, fixture.operation)?
+                    .unwrap()
+                    .id,
+                1,
+                0,
+            )
+        })
+        .unwrap()
+        .unwrap();
+        let phase = fixture
+            .db()
+            .query_row(
+                "SELECT phase FROM remote_integration_merge_metadata",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+        // Never a ref, ref-log, index, worktree or object effect either way.
+        assert_eq!(
+            local_binding_image(fixture.root.path()),
+            before,
+            "{variant}"
+        );
+        assert_eq!(reflog_image(&repository), before_logs, "{variant}");
+        assert_eq!(
+            inspection_odb_inventory(&repository),
+            before_objects,
+            "{variant}"
+        );
+        assert_eq!(repository.head().unwrap().target(), Some(repaired));
+        if matches!(
+            variant,
+            "own_all"
+                | "own_after_partial_retirement"
+                | "retire_intent_all_present"
+                | "retire_intent_none_present"
+        ) {
+            assert_eq!(result.unwrap().unwrap().oid, repaired, "{variant}");
+            for member in RESOLUTION_MERGE_MEMBERS {
+                assert!(
+                    fs::symlink_metadata(gitdir.join(member)).is_err(),
+                    "{variant} {member}"
+                );
+            }
+            assert_eq!(phase.as_deref(), Some("retired"), "{variant}");
+            assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+            assert_eq!(step.result_oid, Some(repaired));
+            assert_eq!(step.intent.local_oid, local);
+            assert_eq!(step.intent.incoming_oid, incoming);
+            assert_eq!(
+                git2::Repository::open(fixture.root.path()).unwrap().state(),
+                git2::RepositoryState::Clean
+            );
+            // The journal itself refuses moving a retirement backwards.
+            for earlier in ["recorded", "retire_intent"] {
+                assert!(
+                    fixture
+                        .db()
+                        .execute(
+                            "UPDATE remote_integration_merge_metadata SET phase=?1",
+                            [earlier]
+                        )
+                        .is_err(),
+                    "{variant} {earlier}"
+                );
+            }
+            // Observation is idempotent: no second retirement or ref effect.
+            assert_eq!(
+                fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+                repaired
+            );
+            assert_eq!(reflog_image(&repository), before_logs);
+        } else {
+            assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{variant}"
+            );
+            assert_eq!(members(), before_members, "{variant}");
+            assert_eq!(
+                step.phase,
+                state::IntegrationStepPhase::ConflictPending,
+                "{variant}"
+            );
+            assert_eq!(step.result_oid, None, "{variant}");
+            assert_eq!(
+                phase.as_deref(),
+                match variant {
+                    "unrecorded" => None,
+                    "recreated_after_retirement" => Some("retired"),
+                    _ => Some("recorded"),
+                },
+                "{variant}"
+            );
+        }
+    }
+}
+
+/// E: a merge candidate whose Push intent lost a remote race. The old intent
+/// is reconciled first from Push-direction evidence and stays immutable; the
+/// continuation integrates one new window and publishes through an appended
+/// attempt without overwriting `push_oid` or replaying the legacy checkpoints.
+#[test]
+fn displaced_push_intent_continues_through_an_appended_publication_attempt() {
+    let mut fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let first = child_file(&repository, fixture.base, "remote-one.txt", b"one\n");
+    fixture.fetch(first, 1);
+    fixture.append_window(1, first).unwrap();
+    let merged = fixture.integrate(first).unwrap();
+    let merge = repository.find_commit(merged).unwrap();
+    assert_eq!(
+        [merge.parent_id(0).unwrap(), merge.parent_id(1).unwrap()],
+        [fixture.local, first]
+    );
+    let mut evidence = state::SynchronizationEvidence {
+        expected_oid: Some(fixture.local),
+        local_oid: Some(merged),
+        tracking_oid: Some(first),
+        primary_tracking_oid: Some(first),
+        ..Default::default()
+    };
+    fixture
+        .service
+        .checkpoint_synchronization_merge_applied(fixture.root.path(), &fixture.owner, &evidence)
+        .unwrap();
+    // The original durable Push intent for the merge candidate.
+    evidence.push_oid = Some(merged);
+    evidence.push_advertised_oid = Some(first);
+    fixture
+        .service
+        .checkpoint_synchronization(
+            fixture.root.path(),
+            &fixture.owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &evidence,
+        )
+        .unwrap();
+    fixture
+        .service
+        .remote_safe_point(
+            fixture.root.path(),
+            &fixture.owner,
+            RemoteOperationSafePoint::BeforePush,
+        )
+        .unwrap();
+    let legacy = fixture.legacy_push();
+    assert_eq!(
+        legacy,
+        (
+            "push_prepared".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(first.to_string())
+        )
+    );
+    // The receiver rejected that push: another writer advanced the remote.
+    let second = child_file(&repository, first, "remote-two.txt", b"two\n");
+    fixture.restart();
+    let mut restarted = fixture.record().sync_evidence;
+    let observed = fixture.reconcile(&mut restarted).unwrap().unwrap();
+    assert_eq!(observed.oid, merged);
+    fixture.fetch(second, 2);
+    // Local handoff can never clear the recorded intent, and no new pass may
+    // start before the old push is reconciled.
+    assert!(
+        finalize_reconciled_candidate(
+            &fixture.service,
+            fixture.root.path(),
+            &fixture.owner,
+            observed,
+            &restarted
+        )
+        .is_err()
+    );
+    assert!(fixture.append_window(2, second).is_err());
+    assert_eq!(
+        fixture
+            .service
+            .synchronization_publication_intent(fixture.root.path(), &fixture.owner)
+            .unwrap(),
+        PublicationIntent::Legacy(merged)
+    );
+    let relation = push_intent_relation(&repository, merged, Some(second)).unwrap();
+    assert_eq!(relation, PushIntentRelation::Diverged);
+    let settlement = PublicationSettlement {
+        intent: PublicationIntent::Legacy(merged),
+        local_oid: merged,
+        continuation: false,
+        advertised_oid: Some(second),
+        relation: Some(relation),
+    };
+    // A stale intent, an unproved continuation or a mismatched relation is refused.
+    for refused in [
+        PublicationSettlement {
+            intent: PublicationIntent::Legacy(first),
+            ..settlement
+        },
+        PublicationSettlement {
+            continuation: true,
+            ..settlement
+        },
+        PublicationSettlement {
+            local_oid: second,
+            ..settlement
+        },
+        PublicationSettlement {
+            relation: Some(PushIntentRelation::Absent),
+            ..settlement
+        },
+        PublicationSettlement {
+            relation: Some(PushIntentRelation::Equal),
+            ..settlement
+        },
+    ] {
+        assert!(
+            fixture
+                .service
+                .settle_synchronization_publication(fixture.root.path(), &fixture.owner, &refused)
+                .is_err()
+        );
+        assert!(fixture.attempts().is_empty());
+    }
+    assert_eq!(
+        fixture
+            .service
+            .settle_synchronization_publication(fixture.root.path(), &fixture.owner, &settlement)
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(fixture.legacy_push(), legacy);
+    assert_eq!(
+        fixture.attempts(),
+        vec![(
+            1,
+            merged.to_string(),
+            Some(second.to_string()),
+            "displaced".into(),
+            "open".into(),
+            None
+        )]
+    );
+    let record = fixture.record();
+    assert_eq!(record.phase, RemoteOperationPhase::PushPrepared);
+    assert!(!record.reconciliation_required);
+    // No push boundary and no legacy checkpoint is available to an open attempt.
+    assert!(
+        fixture
+            .service
+            .remote_safe_point(
+                fixture.root.path(),
+                &fixture.owner,
+                RemoteOperationSafePoint::BeforePush
+            )
+            .is_err()
+    );
+    let mut overwritten = record.sync_evidence.clone();
+    overwritten.push_oid = Some(second);
+    overwritten.local_oid = Some(second);
+    for checkpoint in [
+        state::SynchronizationCheckpoint::LocalPrepared,
+        state::SynchronizationCheckpoint::PushPrepared,
+        state::SynchronizationCheckpoint::PushVerified,
+    ] {
+        assert!(
+            fixture
+                .service
+                .checkpoint_synchronization(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    checkpoint,
+                    &overwritten
+                )
+                .is_err()
+        );
+    }
+    // Freeze: even the UNCHANGED recorded evidence, or the old intent now
+    // observed as advertised, can no longer move a legacy checkpoint.
+    let frozen = record.sync_evidence.clone();
+    let mut reverified = frozen.clone();
+    reverified.push_advertised_oid = reverified.push_oid;
+    for (checkpoint, evidence) in [
+        (state::SynchronizationCheckpoint::PushPrepared, &frozen),
+        (state::SynchronizationCheckpoint::PushReturned, &frozen),
+        (state::SynchronizationCheckpoint::PushVerified, &frozen),
+        (state::SynchronizationCheckpoint::PushVerified, &reverified),
+    ] {
+        assert!(
+            fixture
+                .service
+                .checkpoint_synchronization(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    checkpoint,
+                    evidence
+                )
+                .is_err()
+        );
+    }
+    assert!(
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                merged,
+                merged,
+                Some(second),
+                false
+            )
+            .is_err()
+    );
+    assert_eq!(fixture.legacy_push(), legacy);
+    // One new window: the earlier merge is the first parent, never regenerated.
+    fixture.append_window(2, second).unwrap();
+    let continued = fixture.integrate(second).unwrap();
+    let continuation = repository.find_commit(continued).unwrap();
+    assert_eq!(
+        [
+            continuation.parent_id(0).unwrap(),
+            continuation.parent_id(1).unwrap()
+        ],
+        [merged, second]
+    );
+    let mut working = fixture.record().sync_evidence;
+    working.local_oid = Some(continued);
+    assert_eq!(
+        fixture
+            .service
+            .checkpoint_synchronization_merge_applied(fixture.root.path(), &fixture.owner, &working)
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(fixture.legacy_push(), legacy);
+    // The candidate must be the newest applied window, and a verified claim
+    // needs an equal advertisement.
+    for (candidate, advertised, verified) in [
+        (merged, Some(second), false),
+        (continued, Some(second), true),
+        (continued, Some(continued), false),
+    ] {
+        assert!(
+            fixture
+                .service
+                .prepare_synchronization_publication(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    candidate,
+                    advertised,
+                    verified
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(
+        fixture
+            .service
+            .prepare_synchronization_publication(
+                fixture.root.path(),
+                &fixture.owner,
+                continued,
+                Some(second),
+                false
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    // Verification cannot skip the returned push or name another OID.
+    assert!(
+        fixture
+            .service
+            .advance_synchronization_publication(
+                fixture.root.path(),
+                &fixture.owner,
+                state::PublicationPhase::Returned,
+                None
+            )
+            .is_err()
+    );
+    fixture
+        .service
+        .remote_safe_point(
+            fixture.root.path(),
+            &fixture.owner,
+            RemoteOperationSafePoint::BeforePush,
+        )
+        .unwrap();
+    fixture
+        .service
+        .advance_synchronization_publication(
+            fixture.root.path(),
+            &fixture.owner,
+            state::PublicationPhase::Returned,
+            None,
+        )
+        .unwrap();
+    fixture
+        .service
+        .remote_safe_point(
+            fixture.root.path(),
+            &fixture.owner,
+            RemoteOperationSafePoint::AfterPushReturn,
+        )
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .advance_synchronization_publication(
+                fixture.root.path(),
+                &fixture.owner,
+                state::PublicationPhase::Verified,
+                Some(second)
+            )
+            .is_err()
+    );
+    assert!(
+        fixture
+            .service
+            .classify_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                state::SynchronizationAuthority::Published(continued)
+            )
+            .is_err()
+    );
+    fixture
+        .service
+        .advance_synchronization_publication(
+            fixture.root.path(),
+            &fixture.owner,
+            state::PublicationPhase::Verified,
+            Some(continued),
+        )
+        .unwrap();
+    fixture
+        .service
+        .remote_safe_point(
+            fixture.root.path(),
+            &fixture.owner,
+            RemoteOperationSafePoint::AfterPushVerification,
+        )
+        .unwrap();
+    // The superseded legacy intent can never become the authority.
+    assert!(
+        fixture
+            .service
+            .classify_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                state::SynchronizationAuthority::Published(merged)
+            )
+            .is_err()
+    );
+    fixture
+        .service
+        .classify_synchronization(
+            fixture.root.path(),
+            &fixture.owner,
+            state::SynchronizationAuthority::Published(continued),
+        )
+        .unwrap();
+    let record = fixture.record();
+    assert_eq!(
+        record.authority,
+        Some(state::SynchronizationAuthority::Published(continued))
+    );
+    assert_eq!(record.sync_evidence.push_oid, Some(merged));
+    assert_eq!(record.sync_evidence.push_advertised_oid, Some(first));
+    assert_eq!(record.sync_evidence.local_oid, Some(merged));
+    assert_eq!(
+        fixture.attempts(),
+        vec![(
+            1,
+            merged.to_string(),
+            Some(second.to_string()),
+            "displaced".into(),
+            "verified".into(),
+            Some(continued.to_string())
+        )]
+    );
+    // Append-only: SQLite itself refuses rewriting an intent or moving back.
+    let db = fixture.db();
+    for statement in [
+        "UPDATE remote_publication_attempts SET candidate_oid=previous_oid",
+        "UPDATE remote_publication_attempts SET previous_oid=candidate_oid",
+        "UPDATE remote_publication_attempts SET previous_disposition='accepted'",
+        "UPDATE remote_publication_attempts SET phase='returned',advertised_oid=NULL",
+        "UPDATE remote_publication_attempts SET window_number=1",
+    ] {
+        assert!(db.execute(statement, []).is_err(), "{statement}");
+    }
+    // Losing the attempt leaves an authority the frozen legacy columns cannot
+    // prove: the envelope fails closed instead of being reinterpreted.
+    db.execute("DELETE FROM remote_publication_attempts", [])
+        .unwrap();
+    assert!(
+        state::with_transaction(&fixture.service, fixture.root.path(), |tx, id| {
+            state::read_operation(tx, id, fixture.operation)
+        })
+        .is_err()
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(continued));
+    assert!(repository.statuses(None).unwrap().is_empty());
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        2
+    );
+}
+
+/// E: a released local checkpoint already has a Push intent, and a clean
+/// descendant was committed on top of it afterwards. The old intent is
+/// reconciled as accepted from Push-direction evidence and kept verbatim; the
+/// descendant publishes through an appended attempt bound to a new window,
+/// while the original checkpoint candidate is never changed or replayed.
+#[test]
+fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_attempt() {
+    let (root, data, service, operation, worktree, _, incoming, ticket_id) =
+        context_primary_conflict_fixture();
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let result = service
+        .read_synchronization_conflict(&inspection.paths[0].token)
+        .unwrap()
+        .local
+        .unwrap();
+    let ResolveSynchronizationOutcome::LocalCheckpointComplete {
+        commit_oid: checkpoint,
+    } = service
+        .resolve_synchronization(ResolveSynchronizationRequest::new(
+            root.path().into(),
+            operation,
+            OperationId::new(),
+            inspection.observation,
+            vec![(inspection.paths[0].token.clone(), result)],
+            None,
+        ))
+        .unwrap()
+    else {
+        panic!("released checkpoint")
+    };
+    let repository = git2::Repository::open(&worktree).unwrap();
+    git2::Repository::open(root.path())
+        .unwrap()
+        .remote("origin", "ssh://example.invalid/fixture.git")
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    repository
+        .reference(plan.primary().tracking_ref(), incoming, true, "fixture")
+        .unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        ticket_id.clone(),
+    )
+    .unwrap();
+    let sync_target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ticket_id,
+    };
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let restart = || {
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("original operation")
+        };
+        owner
+    };
+    let record = || {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::read_operation(tx, id, operation)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let fetch = |owner: &RemoteReservation, observed_at: i64| {
+        service
+            .remote_safe_point(root.path(), owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &plan,
+            "refs/heads/main",
+            incoming,
+            Some(incoming),
+        )
+        .unwrap();
+        commit_observation_batch(
+            &service,
+            root.path(),
+            owner,
+            &plan,
+            &[observation],
+            observed_at,
+        )
+        .unwrap();
+    };
+    let reconcile = |owner: &RemoteReservation, evidence: &mut state::SynchronizationEvidence| {
+        reconcile_pending_candidate(&service, root.path(), "main", &sync_target, owner, evidence)
+    };
+    // First deliberate invocation: hand off the released checkpoint and
+    // durably record its Push intent, whose outcome is then unknown.
+    let owner = restart();
+    let mut evidence = record().sync_evidence;
+    let observed = reconcile(&owner, &mut evidence).unwrap().unwrap();
+    assert_eq!(observed.oid, checkpoint);
+    fetch(&owner, 2);
+    evidence.primary_tracking_oid = Some(incoming);
+    evidence.tracking_oid = None;
+    finalize_reconciled_candidate(&service, root.path(), &owner, observed, &evidence).unwrap();
+    evidence.push_oid = Some(checkpoint);
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+        .unwrap();
+    let legacy = |db: &rusqlite::Connection| {
+        db.query_row(
+            "SELECT sync_checkpoint,local_oid,push_oid,push_advertised_oid FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let frozen = legacy(&db);
+    assert_eq!(
+        frozen,
+        (
+            "push_prepared".into(),
+            Some(checkpoint.to_string()),
+            Some(checkpoint.to_string()),
+            None
+        )
+    );
+    // A later clean commit continues from the released checkpoint.
+    fs::write(worktree.join("notes.txt"), b"later ordinary work\n").unwrap();
+    let descendant = commit_all(&repository);
+    assert!(
+        repository
+            .graph_descendant_of(descendant, checkpoint)
+            .unwrap()
+    );
+    let before = local_binding_image(&worktree);
+    // Second deliberate invocation.
+    let owner = restart();
+    let mut evidence = record().sync_evidence;
+    let observed = reconcile(&owner, &mut evidence).unwrap().unwrap();
+    assert_eq!(observed.oid, checkpoint);
+    assert_eq!(evidence.local_oid, Some(descendant));
+    fetch(&owner, 3);
+    assert!(
+        finalize_reconciled_candidate(&service, root.path(), &owner, observed, &evidence).is_err()
+    );
+    assert_eq!(
+        service
+            .synchronization_publication_intent(root.path(), &owner)
+            .unwrap(),
+        PublicationIntent::Legacy(checkpoint)
+    );
+    // The receiver had accepted the checkpoint: fresh Push evidence equals it.
+    let settlement = PublicationSettlement {
+        intent: PublicationIntent::Legacy(checkpoint),
+        local_oid: descendant,
+        continuation: true,
+        advertised_oid: Some(checkpoint),
+        relation: Some(push_intent_relation(&repository, checkpoint, Some(checkpoint)).unwrap()),
+    };
+    // A moved HEAD without the validated released-descendant proof is refused.
+    assert!(
+        service
+            .settle_synchronization_publication(
+                root.path(),
+                &owner,
+                &PublicationSettlement {
+                    continuation: false,
+                    ..settlement
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .settle_synchronization_publication(root.path(), &owner, &settlement)
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(legacy(&db), frozen);
+    let attempt = || {
+        db.query_row(
+            "SELECT number,previous_oid,previous_advertised_oid,previous_disposition,local_oid,window_number,candidate_oid,phase FROM remote_publication_attempts",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        attempt(),
+        (
+            1,
+            checkpoint.to_string(),
+            Some(checkpoint.to_string()),
+            "accepted".into(),
+            descendant.to_string(),
+            None,
+            None,
+            "open".into()
+        )
+    );
+    // One new window starts at the descendant; the released stage is untouched.
+    let batch = state::with_transaction(&service, root.path(), |tx, id| {
+        tx.query_row(
+            "SELECT id FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1",
+            [id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| state::recovery_required())
+    })
+    .unwrap();
+    service
+        .prepare_synchronization_window(
+            root.path(),
+            &owner,
+            1,
+            &state::IntegrationWindowIntent {
+                observation_batch_id: batch,
+                local_oid: descendant,
+                primary_oid: incoming,
+                context_oid: None,
+            },
+        )
+        .unwrap();
+    let configuration = service
+        .observation_configuration(root.path(), &plan)
+        .unwrap();
+    let mut req = request(root.path());
+    req.operation_id = operation;
+    req.target = sync_target.clone();
+    let selected = target_ref(&plan, &sync_target);
+    let integrated = integrate_divergence(
+        &service,
+        DivergenceInputs {
+            root: root.path(),
+            primary_branch: "main",
+            target: &sync_target,
+            request: &req,
+            owner: &owner,
+            plan: &plan,
+            configuration: &configuration,
+            selected: &selected,
+            primary_tracking: Some(incoming),
+            selected_tracking: None,
+            context: None,
+            primary: incoming,
+        },
+    )
+    .unwrap();
+    assert_eq!(integrated, descendant);
+    let mut working = record().sync_evidence;
+    working.local_oid = Some(descendant);
+    service
+        .checkpoint_synchronization_merge_applied(root.path(), &owner, &working)
+        .unwrap();
+    // The superseded checkpoint itself can no longer be bound as a candidate.
+    assert!(
+        service
+            .prepare_synchronization_publication(
+                root.path(),
+                &owner,
+                checkpoint,
+                Some(checkpoint),
+                true
+            )
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .prepare_synchronization_publication(
+                root.path(),
+                &owner,
+                descendant,
+                Some(checkpoint),
+                false
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(
+        attempt(),
+        (
+            1,
+            checkpoint.to_string(),
+            Some(checkpoint.to_string()),
+            "accepted".into(),
+            descendant.to_string(),
+            Some(1),
+            Some(descendant.to_string()),
+            "prepared".into()
+        )
+    );
+    assert_eq!(legacy(&db), frozen);
+    let (released, continued) = state::with_transaction(&service, root.path(), |tx, id| {
+        let record = state::read_operation(tx, id, operation)?.unwrap();
+        Ok((
+            state::integration_step_in_window(tx, record.id, 0, 1)?.unwrap(),
+            state::integration_step_in_window(tx, record.id, 1, 1)?.unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(released.candidate_oid, Some(checkpoint));
+    assert_eq!(released.result_oid, Some(checkpoint));
+    assert_eq!(continued.intent.local_oid, descendant);
+    assert_eq!(continued.result_oid, Some(descendant));
+    assert_eq!(continued.candidate_oid, None);
+    assert_eq!(local_binding_image(&worktree), before);
+    assert_eq!(repository.head().unwrap().target(), Some(descendant));
+    // F: while the newest attempt is unverified, an absent remote context is
+    // ambiguous; once it is verified, absence is deletion, exactly as after a
+    // legacy PushVerified checkpoint.
+    let boundary = || {
+        service
+            .synchronization_push_absence_boundary(root.path(), &owner, true)
+            .unwrap()
+    };
+    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
+        .unwrap();
+    service
+        .advance_synchronization_publication(
+            root.path(),
+            &owner,
+            state::PublicationPhase::Returned,
+            None,
+        )
+        .unwrap();
+    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    service
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::AfterPushReturn,
+        )
+        .unwrap();
+    service
+        .advance_synchronization_publication(
+            root.path(),
+            &owner,
+            state::PublicationPhase::Verified,
+            Some(descendant),
+        )
+        .unwrap();
+    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Deleted)));
+    assert!(matches!(
+        boundary().unwrap().error(),
+        SynchronizationError::RemoteContextDeleted
+    ));
+    assert_eq!(
+        service
+            .synchronization_publication_authority(root.path(), &owner)
+            .unwrap(),
+        state::SynchronizationAuthority::Published(descendant)
+    );
+    assert_eq!(legacy(&db), frozen);
+}
+
+/// D: a context target's own gitdir is the linked worktree's. Merge metadata
+/// in the shared common directory belongs to another worktree and is never
+/// tolerated, retired or adopted, even beside this operation's own remnant.
+#[test]
+fn external_repair_in_linked_worktree_never_claims_commondir_merge_metadata() {
+    for foreign_commondir_merge in [false, true] {
+        let (root, data, service, operation, worktree, local, incoming, ticket_id) =
+            context_primary_conflict_fixture();
+        let repository = git2::Repository::open(&worktree).unwrap();
+        let gitdir = repository.path().to_owned();
+        let commondir = repository.commondir().to_owned();
+        assert_ne!(gitdir, commondir);
+        // The shared fixture installs its conflict without the production
+        // pass, so journal the digests of the metadata that merge wrote.
+        let digest = |member: &str| {
+            fs::read(gitdir.join(member))
+                .ok()
+                .map(|bytes| blake3::hash(&bytes).as_bytes().to_vec())
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "INSERT INTO remote_integration_merge_metadata(integration_step_id,merge_head_digest,merge_msg_digest,merge_mode_digest,phase) SELECT id,?1,?2,?3,'recorded' FROM remote_integration_steps WHERE stage='primary'",
+            rusqlite::params![
+                digest("MERGE_HEAD").unwrap(),
+                digest("MERGE_MSG"),
+                digest("MERGE_MODE")
+            ],
+        )
+        .unwrap();
+        let signature = repository.signature().unwrap();
+        let local_parent = repository.find_commit(local).unwrap();
+        let repaired = repository
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "external repair",
+                &local_parent.tree().unwrap(),
+                &[&local_parent, &repository.find_commit(incoming).unwrap()],
+            )
+            .unwrap();
+        let branch = repository
+            .find_reference("HEAD")
+            .unwrap()
+            .symbolic_target()
+            .unwrap()
+            .to_owned();
+        repository
+            .reference(&branch, repaired, true, "external repair")
+            .unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        assert!(gitdir.join("MERGE_HEAD").exists());
+        if foreign_commondir_merge {
+            // Byte-identical to this operation's own MERGE_HEAD, but it lives
+            // in the primary worktree's gitdir.
+            fs::copy(gitdir.join("MERGE_HEAD"), commondir.join("MERGE_HEAD")).unwrap();
+        }
+        let images = || {
+            [&gitdir, &commondir].map(|directory| {
+                RESOLUTION_MERGE_MEMBERS.map(|member| fs::read(directory.join(member)).ok())
+            })
+        };
+        let before_members = images();
+        let before = local_binding_image(&worktree);
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket_id.clone(),
+        )
+        .unwrap();
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("original operation")
+        };
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
+        })
+        .unwrap();
+        let result = reconcile_pending_candidate(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: ticket_id,
+            },
+            &owner,
+            &mut evidence,
+        );
+        let phase: String = db
+            .query_row(
+                "SELECT phase FROM remote_integration_merge_metadata",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(local_binding_image(&worktree), before);
+        if foreign_commondir_merge {
+            assert!(matches!(
+                result,
+                Err(SynchronizationError::RecoveryRequired)
+            ));
+            assert_eq!(images(), before_members);
+            assert_eq!(phase, "recorded");
+        } else {
+            assert_eq!(result.unwrap().unwrap().oid, repaired);
+            assert_eq!(images(), [[None, None, None], [None, None, None]]);
+            assert_eq!(phase, "retired");
+        }
+    }
+}
+
+/// An open publication attempt whose newest window is applied, ready to bind
+/// `candidate`. With `advertised`, it is reached through the real settlement
+/// of a displaced legacy intent and `tip` is the Push/Fetch tip merged into
+/// the candidate. Without, the legacy intent was never advertised anywhere.
+fn open_attempt_fixture(advertised: bool) -> (PassFixture, git2::Oid, git2::Oid) {
+    let mut fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let (base, local) = (fixture.base, fixture.local);
+    fixture.fetch(base, 1);
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(base),
+        primary_tracking_oid: Some(base),
+        push_oid: Some(local),
+        push_advertised_oid: advertised.then_some(base),
+    };
+    fixture
+        .service
+        .checkpoint_synchronization(
+            fixture.root.path(),
+            &fixture.owner,
+            state::SynchronizationCheckpoint::PushPrepared,
+            &evidence,
+        )
+        .unwrap();
+    fixture.restart();
+    let tip = if advertised {
+        let tip = child_file(&repository, base, "remote-other.txt", b"other\n");
+        fixture.fetch(tip, 2);
+        fixture
+            .settle(&PublicationSettlement {
+                intent: PublicationIntent::Legacy(local),
+                local_oid: local,
+                continuation: false,
+                advertised_oid: Some(tip),
+                relation: Some(PushIntentRelation::Diverged),
+            })
+            .unwrap();
+        tip
+    } else {
+        fixture.fetch(base, 2);
+        // No reservation transition opens an attempt for a never-advertised
+        // intent that is still HEAD (that stays on the exact-retry route; only
+        // a validated released descendant gets here). Journal that state
+        // directly: not accepted, with no advertisement anywhere.
+        state::with_transaction(&fixture.service, fixture.root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, fixture.operation)?.unwrap();
+            state::open_publication_attempt(
+                tx,
+                &record,
+                local,
+                None,
+                state::PublicationDisposition::NotAccepted,
+                local,
+            )?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='push_prepared',reconciliation_required=0 WHERE id=?1",
+                [record.id],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+        .unwrap();
+        base
+    };
+    fixture.append_window(1, tip).unwrap();
+    let candidate = fixture.integrate(tip).unwrap();
+    let mut working = fixture.record().sync_evidence;
+    working.local_oid = Some(candidate);
+    fixture
+        .service
+        .checkpoint_synchronization_merge_applied(fixture.root.path(), &fixture.owner, &working)
+        .unwrap();
+    assert_eq!(fixture.intent(), PublicationIntent::Open);
+    (fixture, candidate, tip)
+}
+
+/// E/F: reconciliation of an intent that already lives in a publication
+/// attempt, and of a verified attempt interrupted before classification.
+#[test]
+fn attempt_intent_reconciliation_table() {
+    for variant in [
+        "equal_verifies_same_attempt",
+        "behind_reopens_then_publishes",
+        "verified_restart_before_classification",
+        "absent_after_recorded_advertisement",
+        "absent_never_advertised",
+    ] {
+        let advertised = variant != "absent_never_advertised";
+        let (mut fixture, candidate, tip) = open_attempt_fixture(advertised);
+        let repository = fixture.repository();
+        let legacy = fixture.legacy_push();
+        let directly_verified = variant == "verified_restart_before_classification";
+        if directly_verified {
+            // The endpoint already advertised the candidate: no push intent.
+            assert_eq!(
+                fixture.prepare(candidate, Some(candidate), true).unwrap(),
+                RemoteSafePointOutcome::Continue
+            );
+            assert_eq!(
+                fixture.authority(),
+                state::SynchronizationAuthority::AlreadyCurrent(candidate)
+            );
+        } else {
+            let before_push = advertised.then_some(tip);
+            assert_eq!(
+                fixture.prepare(candidate, before_push, false).unwrap(),
+                RemoteSafePointOutcome::Continue
+            );
+            // SQLite itself refuses a verified row without an advertisement.
+            assert!(
+                fixture
+                    .db()
+                    .execute(
+                        "UPDATE remote_publication_attempts SET phase='verified',advertised_oid=NULL",
+                        []
+                    )
+                    .is_err()
+            );
+            fixture.point(RemoteOperationSafePoint::BeforePush);
+            if variant == "equal_verifies_same_attempt" {
+                fixture
+                    .advance(state::PublicationPhase::Returned, None)
+                    .unwrap();
+            }
+        }
+        let rows = fixture.attempts();
+        assert_eq!(rows.len(), 1, "{variant}");
+        let before = local_binding_image(fixture.root.path());
+        // The process stops here; a later deliberate invocation restarts.
+        fixture.restart();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(
+            fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+            candidate
+        );
+        fixture.fetch(tip, 3);
+        let stored = if directly_verified {
+            PublicationIntent::Verified(candidate)
+        } else {
+            PublicationIntent::Attempt(candidate)
+        };
+        assert_eq!(fixture.intent(), stored, "{variant}");
+        let settlement = |advertised_oid: Option<git2::Oid>| PublicationSettlement {
+            intent: stored,
+            local_oid: candidate,
+            continuation: false,
+            advertised_oid,
+            relation: Some(push_intent_relation(&repository, candidate, advertised_oid).unwrap()),
+        };
+        match variant {
+            "equal_verifies_same_attempt" => {
+                // The receiver had accepted the push whose status was lost.
+                assert_eq!(
+                    fixture.settle(&settlement(Some(candidate))).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                let after = fixture.attempts();
+                assert_eq!(after.len(), 1);
+                assert_eq!(after[0].4, "verified");
+                assert_eq!(after[0].5, Some(candidate.to_string()));
+                assert_eq!(fixture.intent(), PublicationIntent::Verified(candidate));
+                assert_eq!(
+                    fixture.authority(),
+                    state::SynchronizationAuthority::Published(candidate)
+                );
+            }
+            "behind_reopens_then_publishes" => {
+                assert_eq!(
+                    push_intent_relation(&repository, candidate, Some(tip)).unwrap(),
+                    PushIntentRelation::Behind
+                );
+                assert_eq!(
+                    fixture.settle(&settlement(Some(tip))).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                let after = fixture.attempts();
+                assert_eq!(after[0], rows[0]);
+                assert_eq!(
+                    after[1],
+                    (
+                        2,
+                        candidate.to_string(),
+                        Some(tip.to_string()),
+                        "not_accepted".into(),
+                        "open".into(),
+                        None
+                    )
+                );
+                // The endpoint advertised this target before; if it now
+                // advertises nothing it was deleted, and is not recreated.
+                assert!(fixture.prepare(candidate, None, false).is_err());
+                assert_eq!(fixture.attempts(), after);
+                assert_eq!(
+                    fixture.prepare(candidate, Some(tip), false).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                fixture.point(RemoteOperationSafePoint::BeforePush);
+                fixture
+                    .advance(state::PublicationPhase::Returned, None)
+                    .unwrap();
+                fixture.point(RemoteOperationSafePoint::AfterPushReturn);
+                fixture
+                    .advance(state::PublicationPhase::Verified, Some(candidate))
+                    .unwrap();
+                assert_eq!(
+                    fixture.authority(),
+                    state::SynchronizationAuthority::Published(candidate)
+                );
+                assert_eq!(fixture.attempts()[0], rows[0]);
+            }
+            "verified_restart_before_classification" => {
+                // A proven attempt whose endpoint later moved, rewound or
+                // vanished is permanent Recovery; nothing is appended.
+                let ahead = child_file(&repository, candidate, "remote-ahead.txt", b"ahead\n");
+                let diverged = child_file(&repository, fixture.base, "remote-third.txt", b"x\n");
+                for moved in [Some(tip), Some(ahead), Some(diverged), None] {
+                    assert!(fixture.settle(&settlement(moved)).is_err(), "{moved:?}");
+                    assert_eq!(fixture.attempts(), rows);
+                }
+                assert_eq!(
+                    fixture.settle(&settlement(Some(candidate))).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                assert_eq!(fixture.attempts(), rows);
+                // The reported kind does not depend on where the crash fell.
+                assert_eq!(
+                    fixture.authority(),
+                    state::SynchronizationAuthority::AlreadyCurrent(candidate)
+                );
+            }
+            "absent_after_recorded_advertisement" => {
+                assert!(fixture.settle(&settlement(None)).is_err());
+                assert_eq!(fixture.attempts(), rows);
+                assert_eq!(fixture.intent(), stored);
+            }
+            _ => {
+                // Nothing was ever advertised for this operation, so absence
+                // is "not created yet": the same candidate may be retried.
+                assert_eq!(
+                    fixture.settle(&settlement(None)).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                let after = fixture.attempts();
+                assert_eq!(after[0], rows[0]);
+                assert_eq!(
+                    after[1],
+                    (
+                        2,
+                        candidate.to_string(),
+                        None,
+                        "not_accepted".into(),
+                        "open".into(),
+                        None
+                    )
+                );
+                assert_eq!(
+                    fixture.prepare(candidate, None, false).unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+            }
+        }
+        assert_eq!(fixture.legacy_push(), legacy, "{variant}");
+        assert_eq!(
+            local_binding_image(fixture.root.path()),
+            before,
+            "{variant}"
+        );
+        if fixture.intent() == PublicationIntent::Verified(candidate) {
+            let authority = fixture.authority();
+            fixture.point(RemoteOperationSafePoint::AfterPushVerification);
+            fixture
+                .service
+                .classify_synchronization(fixture.root.path(), &fixture.owner, authority)
+                .unwrap();
+            let record = fixture.record();
+            assert_eq!(record.authority, Some(authority), "{variant}");
+            assert_eq!(record.sync_evidence.push_oid, Some(fixture.local));
+        }
+    }
+}
+
+/// E/F: every Push-direction relation of an old intent that is still HEAD.
+/// Equal and strictly-behind evidence stay on the unchanged exact-retry route;
+/// contained and displaced intents open an attempt; deletion after any
+/// recorded advertisement, cancellation and stale owners write nothing.
+#[test]
+fn publication_settlement_table_preserves_the_old_push_intent() {
+    for variant in [
+        "equal",
+        "behind",
+        "ahead",
+        "diverged",
+        "deleted",
+        "never_advertised",
+        "cancelled",
+        "stale_owner",
+        "foreign_service",
+        "verified_then_moved",
+    ] {
+        let mut fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let base = fixture.base;
+        let local = fixture.local;
+        fixture.fetch(base, 1);
+        let mut evidence = state::SynchronizationEvidence {
+            expected_oid: Some(local),
+            local_oid: Some(local),
+            tracking_oid: Some(base),
+            primary_tracking_oid: Some(base),
+            push_oid: Some(local),
+            push_advertised_oid: (variant != "never_advertised").then_some(base),
+        };
+        fixture
+            .service
+            .checkpoint_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &evidence,
+            )
+            .unwrap();
+        if variant == "verified_then_moved" {
+            evidence.push_advertised_oid = Some(local);
+            fixture
+                .service
+                .checkpoint_synchronization(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    state::SynchronizationCheckpoint::PushVerified,
+                    &evidence,
+                )
+                .unwrap();
+        }
+        let legacy = fixture.legacy_push();
+        let before = local_binding_image(fixture.root.path());
+        let ahead = child_file(&repository, local, "remote-ahead.txt", b"ahead\n");
+        let diverged = child_file(&repository, base, "remote-other.txt", b"other\n");
+        let advertised = match variant {
+            "equal" => Some(local),
+            "behind" | "cancelled" | "stale_owner" | "foreign_service" => Some(base),
+            "ahead" => Some(ahead),
+            "diverged" | "verified_then_moved" => Some(diverged),
+            _ => None,
+        };
+        fixture.restart();
+        fixture.fetch(base, 2);
+        let relation = push_intent_relation(&repository, local, advertised).unwrap();
+        assert_eq!(
+            relation,
+            match variant {
+                "equal" => PushIntentRelation::Equal,
+                "behind" | "cancelled" | "stale_owner" | "foreign_service" => {
+                    PushIntentRelation::Behind
+                }
+                "ahead" => PushIntentRelation::Ahead,
+                "diverged" | "verified_then_moved" => PushIntentRelation::Diverged,
+                _ => PushIntentRelation::Absent,
+            },
+            "{variant}"
+        );
+        let mut settlement = PublicationSettlement {
+            intent: PublicationIntent::Legacy(local),
+            local_oid: local,
+            continuation: false,
+            advertised_oid: advertised,
+            relation: Some(relation),
+        };
+        let stale = RepositoryService::open_at(fixture.data.path()).unwrap();
+        let result = match variant {
+            "cancelled" => {
+                // Force the envelope route, then honor the durable request.
+                settlement.advertised_oid = Some(diverged);
+                settlement.relation = Some(PushIntentRelation::Diverged);
+                fixture
+                    .service
+                    .cancel_remote_operation(fixture.root.path(), fixture.operation)
+                    .unwrap();
+                fixture.service.settle_synchronization_publication(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    &settlement,
+                )
+            }
+            "stale_owner" => {
+                settlement.advertised_oid = Some(diverged);
+                settlement.relation = Some(PushIntentRelation::Diverged);
+                // A later explicit restart fenced this token's owner epoch.
+                // The new owner stands at the identical boundary, so only
+                // the epoch distinguishes the refused call.
+                let superseded = fixture.restart_superseding();
+                fixture.fetch(base, 3);
+                fixture.service.settle_synchronization_publication(
+                    fixture.root.path(),
+                    &superseded,
+                    &settlement,
+                )
+            }
+            "foreign_service" => {
+                settlement.advertised_oid = Some(diverged);
+                settlement.relation = Some(PushIntentRelation::Diverged);
+                // Another service instance never inherits this owner's token.
+                stale.settle_synchronization_publication(
+                    fixture.root.path(),
+                    &fixture.owner,
+                    &settlement,
+                )
+            }
+            _ => fixture.service.settle_synchronization_publication(
+                fixture.root.path(),
+                &fixture.owner,
+                &settlement,
+            ),
+        };
+        assert_eq!(fixture.legacy_push(), legacy, "{variant}");
+        assert_eq!(
+            local_binding_image(fixture.root.path()),
+            before,
+            "{variant}"
+        );
+        match variant {
+            "ahead" | "diverged" => {
+                assert_eq!(
+                    result.unwrap(),
+                    RemoteSafePointOutcome::Continue,
+                    "{variant}"
+                );
+                assert_eq!(
+                    fixture.attempts(),
+                    vec![(
+                        1,
+                        local.to_string(),
+                        advertised.map(|oid| oid.to_string()),
+                        if variant == "ahead" {
+                            "contained"
+                        } else {
+                            "displaced"
+                        }
+                        .into(),
+                        "open".into(),
+                        None
+                    )],
+                    "{variant}"
+                );
+                assert_eq!(
+                    fixture
+                        .service
+                        .synchronization_publication_intent(fixture.root.path(), &fixture.owner)
+                        .unwrap(),
+                    PublicationIntent::Open
+                );
+                // A second settlement of the same intent cannot append again.
+                assert!(
+                    fixture
+                        .service
+                        .settle_synchronization_publication(
+                            fixture.root.path(),
+                            &fixture.owner,
+                            &settlement
+                        )
+                        .is_err()
+                );
+                assert_eq!(fixture.attempts().len(), 1);
+                // A later invocation resumes the open attempt offline; it
+                // neither needs nor accepts another disposition.
+                fixture.restart();
+                fixture.fetch(base, 3);
+                // The frozen legacy envelope is no longer reconciled by the
+                // legacy transition, even from evidence it would accept.
+                assert!(
+                    fixture
+                        .service
+                        .reconcile_synchronization(
+                            fixture.root.path(),
+                            &fixture.owner,
+                            local,
+                            local,
+                            Some(base),
+                            true
+                        )
+                        .is_err(),
+                    "{variant}"
+                );
+                assert_eq!(fixture.legacy_push(), legacy, "{variant}");
+                assert!(
+                    fixture
+                        .service
+                        .settle_synchronization_publication(
+                            fixture.root.path(),
+                            &fixture.owner,
+                            &PublicationSettlement {
+                                intent: PublicationIntent::Open,
+                                ..settlement
+                            }
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    fixture
+                        .service
+                        .settle_synchronization_publication(
+                            fixture.root.path(),
+                            &fixture.owner,
+                            &PublicationSettlement {
+                                intent: PublicationIntent::Open,
+                                advertised_oid: None,
+                                relation: None,
+                                ..settlement
+                            }
+                        )
+                        .unwrap(),
+                    RemoteSafePointOutcome::Continue
+                );
+                assert_eq!(fixture.attempts().len(), 1);
+                assert_eq!(fixture.legacy_push(), legacy, "{variant}");
+            }
+            "cancelled" => {
+                assert_eq!(result.unwrap(), RemoteSafePointOutcome::Cancelled);
+                assert!(fixture.attempts().is_empty());
+            }
+            _ => {
+                // Equal and behind belong to the unchanged exact-retry route;
+                // deletion, a moved verified intent and a stale owner are
+                // typed Recovery with no appended evidence.
+                assert!(result.is_err(), "{variant}");
+                assert!(fixture.attempts().is_empty(), "{variant}");
+            }
+        }
+        if variant == "stale_owner" {
+            // The identical settlement under the current epoch is accepted.
+            assert_eq!(
+                fixture.settle(&settlement).unwrap(),
+                RemoteSafePointOutcome::Continue
+            );
+            assert_eq!(fixture.attempts().len(), 1);
+            assert_eq!(fixture.legacy_push(), legacy);
+        }
+        if matches!(variant, "equal" | "behind" | "never_advertised") {
+            let actual = repository.head().unwrap().target().unwrap();
+            assert_eq!(
+                fixture
+                    .service
+                    .reconcile_synchronization(
+                        fixture.root.path(),
+                        &fixture.owner,
+                        actual,
+                        actual,
+                        advertised,
+                        variant == "behind"
+                    )
+                    .unwrap(),
+                RemoteSafePointOutcome::Continue
+            );
+            assert_eq!(
+                fixture.record().sync_checkpoint,
+                Some(if variant == "equal" {
+                    state::SynchronizationCheckpoint::PushVerified
+                } else {
+                    state::SynchronizationCheckpoint::PushPrepared
+                })
+            );
+            assert!(fixture.attempts().is_empty());
+        }
+    }
+}
+
 #[test]
 fn new_refs_append_window_immutable_evidence() {
     let (root, data, service) = fixture();

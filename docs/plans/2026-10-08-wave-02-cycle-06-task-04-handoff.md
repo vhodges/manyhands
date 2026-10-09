@@ -1,5 +1,19 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 milestone 3 reviewed; native CI then M4 — 2026-10-09
+
+M3 = remainder D/E/F (owned merge-metadata retirement after external repair;
+append-only `remote_publication_attempts` continuation after an old Push intent;
+post-merge race/deletion/ambiguity/endpoint composition) is implemented, spec- and
+correctness-reviewed with no P1, fixed, and locally green (fmt, strict clippy,
+remote lib 254, four targeted suites, 54 SSH cases). The Windows retirement code
+was uncompiled before the native run; check that run first. Owner rulings and
+accepted known limits are in the ledger's M3 section. Next one writer: M4 =
+A/B/C/G coverage (fault matrix incl. the new publication/retirement transitions,
+native ref/log partial effects, offline-retry composition, safe-point observers
+and index replay), then the Task 5 acceptance checkpoint. Ticket open; Tasks 6/7
+pending. Sections below are historical.
+
 ## Current: Task 5 milestone 2 verified; M3 next — 2026-10-09
 
 M2 source b9bd929 passed all five native targets in

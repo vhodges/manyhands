@@ -1849,3 +1849,69 @@ continuation after an old Push intent) and F (post-merge ambiguity/deletion/
 endpoint-generation and typed-Recovery race composition), each with regressions
 run locally before review. M4 then closes fault-matrix, safe-point and index-
 replay coverage (A, B, C, G). Targeted local tests precede each native dispatch.
+
+### Task 5 milestone 3: metadata retirement, publication continuation, post-merge races — 2026-10-09
+
+One sequential writer implemented remainder D, E and F on ad9570b; two independent
+read-only reviews (spec, correctness) found no P1; one fix pass closed their P2s
+and selected P3s.
+
+- **E.** Two additive tables created all-or-nothing inside the existing migration:
+  `remote_publication_attempts` (one row per push intent that follows an earlier,
+  already reconciled intent; previous intent OID, Push advertisement, fixed
+  disposition `accepted`/`not_accepted`/`contained`/`displaced`, window, candidate,
+  forward-only phase `open`→`prepared`→`returned`→`verified`, immutable
+  `intent_recorded`) and `remote_integration_merge_metadata`. Columns hold only
+  IDs, OIDs, digests and fixed categories. Once an attempt exists the legacy
+  envelope's `sync_checkpoint`, `local_oid`, `push_oid` and `push_advertised_oid`
+  are frozen: `checkpoint_synchronization` and `reconcile_synchronization` refuse.
+  Restart classifies the newest intent against one fresh Push observation by real
+  ancestry; equal/behind/never-advertised with the intent still HEAD keeps the
+  unchanged Cycle 05 route, everything else settles and appends one `open`
+  attempt. At most one window append and one push per invocation. Authority comes
+  only from the newest verified attempt; lost attempt rows fail closed.
+- **F.** A race after a local merge returns typed `PushRejected` with the merge
+  intact and a later deliberate retry continues. Absence after any recorded
+  advertisement never binds a candidate; deletion after a verified attempt is
+  `RemoteContextDeleted`; an endpoint change fences continuation by generation;
+  HEAD moving between stage validation and settlement is `ExternalChange`.
+- **D.** Directly after the operation's own conflicted merge, under the lease, it
+  records blake3 digests of MERGE_HEAD/MERGE_MSG/MERGE_MODE (only when MERGE_HEAD
+  is the recorded incoming OID). After an exact external repair it retires only
+  members in the target's own gitdir whose bytes match, under the lease, journaled
+  `retire_intent` → unlink → `retired`. Altered bytes, no record, foreign state,
+  `index.lock`, symlinked or hard-linked members, and same-named commondir files
+  are preserved as Recovery. Ref logs are untouched.
+
+Owner rulings (2026-10-09): a verified intent whose remote later rewound or
+diverged stays permanent Recovery; the outcome is `Published` only if this
+operation recorded an intent for that exact OID, otherwise `AlreadyCurrent`;
+status keeps showing the frozen legacy phase during a continuation, with no new
+read surface.
+
+Known limits, accepted under "best efforts": a conflict recorded by the M2
+crash-restart route has no digests, so its remnant stays Recovery; with split
+fetch/push endpoints, a contained intent whose Push endpoint alone moved ahead
+reports `PushRejected` on restart until Fetch shows the descendant (commented in
+`publish_synchronization_attempt`); verified-then-ahead before classification is
+Recovery as in Cycle 05; neither new table has a DELETE trigger, matching the
+existing evidence tables; the Windows retirement path has no link-count check.
+
+Regressions: lib `external_repair_retires_only_own_recorded_merge_metadata`,
+`external_repair_in_linked_worktree_never_claims_commondir_merge_metadata`,
+`displaced_push_intent_continues_through_an_appended_publication_attempt`,
+`released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_attempt`,
+`publication_settlement_table_preserves_the_old_push_intent`,
+`attempt_intent_reconciliation_table`,
+`publication_schema_migration_is_additive_and_fails_closed_on_partial_loss`; seven
+SSH cases `merge_candidate_*` in `tests/remote_synchronization.rs`, kept there as
+M3 regressions. Eight mutation checks each failed the intended test and were
+restored byte-identically.
+
+Local evidence (Linux x86_64, Devenv) on the committed tree: fmt check and strict
+clippy pass; `--lib repository::remote` 254 passed; `discovery_rebuild` 78,
+`recovery_foundation_gate` 51, `repository_enablement` 78, `local_authoring` 124;
+`remote_synchronization` 54 SSH cases. The Windows half of D was first compiled
+by the native run that follows. Task 5 is not accepted: remainder A, B, C and G
+(M4), including fault injection at the new publication and retirement
+transitions, stands.
