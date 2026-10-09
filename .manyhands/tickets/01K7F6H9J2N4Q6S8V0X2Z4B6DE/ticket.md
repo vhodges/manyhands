@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DE"
 title: "Wave 02 Cycle 06: Merge And Conflict Recovery"
 type: "cycle"
-status: "open"
+status: "closed"
+closed_at: "2026-10-09T22:14:55Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -25,13 +27,14 @@ preserve conflicts for explicit resolution.
 - [x] Owner approves the Cycle, design and implementation plan: 2026-10-07.
 - [x] Obtain explicit implementation authorization and execution method: 2026-10-07; sequential subagent-driven execution with local checkpoint commits.
 - [x] Implement, verify, review and record per-task checkpoints: 2026-10-09; source 8bb76f6, native run 37991013144.
-- [ ] Obtain code-review/PR approval and separate delivery/closure authority.
+- [x] Closure and pull request authorized by the product owner on 2026-10-09: the ticket is closed on its branch so that it merges closed. Merge and worktree cleanup remain the product owner's.
 
 Cycle, design and implementation plan approved by the owner on 2026-10-07.
 Implementation authorization followed in the present session: execute Tasks 0–7
 sequentially in this existing worktree with subagent-driven development and local
-checkpoint commits. Ticket remains open. Push/PR, CI dispatch, merge, closure
-and cleanup remain separately unauthorized.
+checkpoint commits. Push and manual CI dispatch were authorized later; on
+2026-10-09 the owner authorized closing the ticket on its branch and opening a
+pull request. Merge and cleanup remain separately unauthorized.
 
 ## Planning Evidence And Decision
 
@@ -147,8 +150,8 @@ Tasks 0–4 are accepted (Task 4 source a68eba7, native run
 [37877620596](https://github.com/vhodges/manyhands/actions/runs/37877620596)).
 Tasks 5–7 are complete: final source 8bb76f6 passes the full local gates and all
 five native targets (run 37991013144). The change is review-ready. Owner directs best-effort robustness; targeted local
-tests of changed code precede each native dispatch. Ticket remains
-open; no PR/main merge/closure/cleanup authority. See execution ledger for evidence.
+tests of changed code precede each native dispatch. Closed on its branch
+2026-10-09 with a pull request open; no main merge or cleanup authority. See execution ledger for evidence.
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
 is approved and Wave 01 verification evidence is current.

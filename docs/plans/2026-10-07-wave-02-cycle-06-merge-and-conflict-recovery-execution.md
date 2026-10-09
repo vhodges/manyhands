@@ -2183,3 +2183,9 @@ A9 is met: the native gate is satisfied at the final source with no deferral.
 **Status.** Implementation is complete and review-ready. The ticket stays open.
 Not authorized and not done: pull request, merge to main, ticket closure,
 worktree or branch cleanup.
+
+### Closure and publication — 2026-10-09
+
+The product owner authorized marking this ticket done on its branch, pushing, and
+opening a pull request. The ticket is closed here so that it merges closed. Merge
+to main and worktree or branch cleanup remain the product owner's.
