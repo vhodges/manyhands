@@ -1,5 +1,15 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 window foundation verified; orchestration next
+
+Source 0fefeb5204f3b62bcaf5b2116a26979ff8ff984c passed all five native targets in
+https://github.com/vhodges/manyhands/actions/runs/37899976043
+The source-review and CI gate for milestone 1 is satisfied. Preserve that work;
+continue local-first restart, external repair, live window/remaining-stage routing,
+continuation/publication and discovery composition. Task 5 is still incomplete.
+Owner reaffirmed CI-first: local Rust runs only for Linux CI regression.
+Earlier pending sections below are historical. Ticket stays open.
+
 ## Current: Task 5 window foundation source-reviewed, CI next
 
 Baseline 8f32144 is all-five-target green with F1 integrated (run 37889668738).
@@ -10,6 +20,10 @@ tests are UNRUN, no local Rust command under CI-first. Live orchestration remain
 window zero; Task 5 is incomplete. Next publish/verify this foundation, then continue
 restart/external-repair/window continuation/publication/discovery composition.
 Tasks 0–4 accepted, Tasks 6/7 pending, ticket open. Ledger records exact workers.
+
+First-mile verification checkpoint published as 0fefeb5; current native run:
+https://github.com/vhodges/manyhands/actions/runs/37899976043
+Inspect exact-source result. This milestone does not complete Task 5.
 
 ## Current: Task 4 accepted, Task 5 next — 2026-10-09
 

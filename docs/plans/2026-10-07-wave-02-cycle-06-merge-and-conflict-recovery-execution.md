@@ -1643,6 +1643,22 @@ window selection/remaining-stage orchestration, clean descendant continuation,
 publication/cancellation and discovery replay composition remain. Publish this
 foundation for native verification, then continue one sequential writer.
 
+Published Task 5 window-foundation verification checkpoint
+0fefeb5204f3b62bcaf5b2116a26979ff8ff984c through normal push; manual native run:
+https://github.com/vhodges/manyhands/actions/runs/37899976043
+This verifies only the bounded first milestone, not full Task 5. CI-first remains;
+local Rust work is permitted only for an actual Linux CI regression.
+
+### Task 5 milestone 1 verified — resume checkpoint
+
+Manual run 37899976043 completed SUCCESS on exact source
+0fefeb5204f3b62bcaf5b2116a26979ff8ff984c on all five native targets. Each release
+build, binary verification, configured library/integration test step and artifact
+upload passed. Results were inspected with gh; no local Rust runs were needed.
+The window-journal/migration milestone satisfies its conditional spec/quality
+reviews. Preserve it and continue Task 5's remaining orchestration; this is not
+full Task 5 acceptance. Owner reaffirmed CI-first verification and asked to resume.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy
