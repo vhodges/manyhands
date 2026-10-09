@@ -24,7 +24,7 @@ preserve conflicts for explicit resolution.
   [planning/execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-06-merge-and-conflict-recovery-execution.md).
 - [x] Owner approves the Cycle, design and implementation plan: 2026-10-07.
 - [x] Obtain explicit implementation authorization and execution method: 2026-10-07; sequential subagent-driven execution with local checkpoint commits.
-- [ ] Implement, verify, review and record per-task checkpoints.
+- [x] Implement, verify, review and record per-task checkpoints: 2026-10-09; source 8bb76f6, native run 37991013144.
 - [ ] Obtain code-review/PR approval and separate delivery/closure authority.
 
 Cycle, design and implementation plan approved by the owner on 2026-10-07.
@@ -145,9 +145,8 @@ comments for exact evidence; no whole-task acceptance.
 
 Tasks 0–4 are accepted (Task 4 source a68eba7, native run
 [37877620596](https://github.com/vhodges/manyhands/actions/runs/37877620596)).
-Task 5 is implemented and independently reviewed in four milestones; its
-acceptance rests on the exact-source native run recorded in the execution ledger.
-Tasks 6/7 remain pending. Owner directs best-effort robustness; targeted local
+Tasks 5–7 are complete: final source 8bb76f6 passes the full local gates and all
+five native targets (run 37991013144). The change is review-ready. Owner directs best-effort robustness; targeted local
 tests of changed code precede each native dispatch. Ticket remains
 open; no PR/main merge/closure/cleanup authority. See execution ledger for evidence.
 

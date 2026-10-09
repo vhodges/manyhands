@@ -2048,4 +2048,138 @@ https://github.com/vhodges/manyhands/actions/runs/37973797724
 
 Local evidence (Linux x86_64, Devenv): fmt check and strict clippy pass;
 `remote_merge_recovery` 23 SSH cases; `remote_synchronization` 63; `ssh_fixture`
-15, `ssh_transport` 31, `remote_observation` 105; `--lib repository::remote` 270.
+31, `ssh_transport` 105, `remote_observation` 15; `--lib repository::remote` 270.
+
+### Task 6 verified — 2026-10-09
+
+Manual run 37979509614 completed SUCCESS on exact source
+50d7de3a974733d5bc97c2828ba5d52a247ea990 across all five native targets; the
+Windows `recovery_capture_fails_closed` failure did not recur.
+https://github.com/vhodges/manyhands/actions/runs/37979509614
+
+### Task 7: final verification, whole-change review and handoff — 2026-10-09
+
+**Whole-change review.** An independent read-only review of `origin/main...50d7de3`
+found no data-loss or wrong-publication path. It was explicitly partial: it did
+not read `native_resolution/*`, `remote/windows_resolution.rs`, the index-lock,
+ref-log and manifest machinery in `sync.rs`, the canonical validators, or most
+test bodies. Its findings were verified against the code by one writer and fixed
+in 6dcf1e9; an independent re-review of that commit found no P1 and one P2,
+fixed in 8bb76f6.
+
+Fixed:
+- Identity confirmation was unusable through the public API (no way to obtain
+  the expected value; no public-API test). `ConflictObservation::
+  expected_configuration()` now supplies it for resolve and `IdentityRequired`
+  carries it for synchronize, as the opaque `ExpectedConfiguration` whose Debug is
+  redacted (the synchronize value is an unsalted digest of Git name and email).
+  A stale confirmation on synchronize is `ExternalChange`; a foreign one on
+  resolve is `IdentityRequired`; neither writes.
+- Resolution commits were dated 1970-01-01. `remote_resolution_attempts` gains
+  immutable `commit_time` and `commit_offset_minutes`, captured once at first
+  preparation and reused by every retry, so the candidate OID stays reproducible.
+  An intermediate-branch registry with a populated older attempt table fails
+  closed; a registry from main has no such table and upgrades directly.
+- Clean-merge preparation read every tree entry and failed on a gitlink. It now
+  passes gitlinks through and imports only objects the merge created; preparation
+  still writes nothing to the destination object database.
+- The context merge subject named the operation; it now names the item per the
+  RFC, and all five subjects are asserted exactly.
+- A cancel requested during a resolve no longer outlives it
+  (`finalize_synchronization_resolution` clears the request).
+- Stale `dead_code` allows and the dead code they hid are removed; seven
+  window-zero wrappers are test-only.
+
+Owner rulings (2026-10-09): fix the resolution timestamps; the local ref-log entry
+for a resolution commit keeps its zero time because the ref-log proof predicts
+that entry byte for byte; a cancel requested after a resolve failed midway keeps
+fencing the identical retry until one deliberate restart acknowledges it (now a
+recoverable stop); a path with control characters under a canonical directory
+stays canonical-eligible; a wrong resolution count stays `StaleObservation`; no
+upgrade path is needed for intermediate-branch registries because no instance is
+running anywhere; abandoning a pending conflict is separate ticket
+`01M4H33R34Z7C7EEKTY1ZCT950`.
+
+**A1–A9 map.** SSH = real authenticated fixture; `rmr` is
+`tests/remote_merge_recovery.rs`, `rs` is `tests/remote_synchronization.rs`, lib
+is `src/repository/remote/*_tests.rs`.
+
+| ID | Evidence | Status |
+| --- | --- | --- |
+| A1 | SSH rmr `two_clone_clean_ticket_divergence`, `two_clone_clean_document_divergence`, `two_clone_primary_divergence`, `two_clone_context_then_primary_ordered_merges`, `confirmed_identity_completes_a_divergent_primary_merge`; lib subject assertions in `stop_between_context_and_primary_stages_resumes_only_the_primary_stage`, `merge_applied_checkpoint_stop_is_reconciled_from_the_applied_stage`; `clean_merge_passes_a_gitlink_through_and_imports_only_merged_blobs` | Proven |
+| A2 | SSH rmr `two_clone_document_conflict_resolved_and_published`, `two_clone_context_merged_then_primary_conflicted`, `cancelled_pending_conflict_stays_recoverable`; lib `conflict_inspection_rejects_same_tree_head_movement_during_preparation`, `conflicted_merge_is_installed_beside_a_gitlink` | Proven |
+| A3 | SSH rmr `two_clone_ticket_conflict_stale_and_different_resolutions`, `two_clone_comment_and_multi_path_conflicts`, `confirmed_identity_completes_a_canonical_resolution`; lib Task 4 resolution tests, `confirmed_identity_post_ref_retry_requires_the_exact_confirmation`, `resolution_commit_time_is_recorded_once_and_reused_by_every_retry` | Proven; stale HEAD/bytes, thread/closure and unrelated-work cases are lib-only |
+| A4 | SSH rmr `code_conflict_false_repairs_then_external_repair`, `binary_delete_and_rename_conflicts_externally_repaired`, `symlink_and_mixed_conflicts_externally_repaired`; lib `external_repair_exact_ordered_parent_clean_only`, `external_repair_retires_only_own_recorded_merge_metadata`, `external_repair_in_linked_worktree_never_claims_commondir_merge_metadata`, `mixed_canonical_and_code_conflict_is_whole_merge_external_only_without_writes` | Proven; linked-worktree external repair is lib-only |
+| A5 | SSH rmr `primary_resolution_and_publication_seams_inventory`, `context_resolution_and_publication_seams_inventory`, `context_candidate_race_continuation_stop`, `resolved_merge_receive_race_keeps_one_candidate`; SSH rs `merge_candidate_publication_stop_at_*` (seven); lib `clean_merge_integration_fault_matrix_resumes_each_durable_transition_once`, `merge_metadata_retirement_fault_matrix_converges_once_without_loss`, `generic_candidate_restart_preserves_partial_ref_and_log_effects`, `offline_public_restarts_reach_a_fixed_point_in_each_recorded_local_state`, Task 4 `FailurePoint::Resolution*` and Linux `process_death` | Proven with injected stops; real process death only for the Task 4 resolution flow; clean-merge, conflict-installation and retirement seams are lib-only |
+| A6 | SSH rmr `resolved_merge_ambiguous_acceptance_and_persistence`, `resolved_merge_distinct_push_remote`, `resolved_context_merge_deleted_context_is_not_recreated`, `endpoint_change_after_conflict_interaction_fences_restart`; SSH rs 63 cases including the Cycle 05 regressions and sixteen `merge_candidate_*` | Proven |
+| A7 | SSH rmr discovery after publish in the resolved cases and the seam inventories through index-only replay; lib `pending_conflict_survives_refresh_and_rebuild_and_stays_inspectable_without_the_index`, `continuation_authority_index_pending_replays_refresh_only_across_rebuild` | Proven; inspection while indexing fails is lib-only |
+| A8 | SSH rmr `recovery_privacy_canaries`, `hostile_conflict_paths_are_redacted`, `recovery_capture_fails_closed`; lib `publication_transitions_fence_stale_owner_foreign_service_and_cancellation`, `merge_metadata_retirement_fences_a_superseding_service_and_cancellation`, `local_safe_points_fence_takeover_and_cancellation`, `local_reconciliation_validates_outside_the_lease_and_retires_under_it`, `cancellation_with_a_pending_conflict_is_a_recoverable_stop`, `cancellation_requested_during_a_completing_resolution_does_not_outlive_it`, `expected_configuration_is_never_rendered_in_diagnostics` | Proven; yield is not covered (only Poll priority can yield; synchronization is Manual) |
+| A9 | This section: local gates and native runs at the exact final source, reviews, recorded limits | See below |
+
+**Public surface added by the Cycle** (`src/repository.rs` re-exports; `src/lib.rs`
+unchanged; no CLI grammar, no desktop feature, library independent of GPUI):
+`ConfirmedCommitIdentity`, `ExpectedConfiguration`, `ConflictEligibility`,
+`ConflictObservation`, `ConflictPathToken`, `RedactedConflictBytes`,
+`ResolveSynchronizationOutcome`, `ResolveSynchronizationRequest`,
+`EphemeralSynchronizationConflictSides`, `SynchronizationConflictInspection`,
+`SynchronizationConflictPath`, `SynchronizationStage`; `SynchronizationError`
+gains `ConflictPending`, `IdentityRequired { target, expected_configuration }` and
+`ExternalResolutionRequired`; `SynchronizeRemoteRequest` gains
+`confirmed_identity`; `RepositoryService` gains
+`inspect_synchronization_recovery`, `read_synchronization_conflict` and
+`resolve_synchronization`.
+
+**Recorded limits for code review** (beyond those in the Task 5 and Task 6
+sections):
+- A pending conflict blocks every synchronization in the repository and has no
+  abandon path; after `git merge --abort` the only exit is redoing the exact
+  two-parent merge (ticket `01M4H33R34Z7C7EEKTY1ZCT950`).
+- Recovery has three shapes: `SynchronizationError::RecoveryRequired`,
+  `Repository(RecoveryRequired)` and the untested
+  `ResolveSynchronizationOutcome::RecoveryRequired`; some refusals are `Ok`
+  outcomes and others `Err`. `SynchronizationError::MergeRequired` looks
+  unreachable from the public entry.
+- Inspection is opaque: `ConflictPathToken` exposes no path, kind or item ID;
+  `eligibility` is the whole-set value on every path;
+  `EphemeralSynchronizationConflictSides.current` is always `None`; a pending
+  conflict is listed as `interrupted` with `Resume`.
+- A stop between recording the conflict effect intent and `repository.merge`, or
+  after a fast-forward checkout and before its ref update, ends in Recovery
+  although completion would be provable.
+- Inspection during an owned resolution returns `ExternalChange`.
+- A `StaleObservation` returned after the resolution index lock is taken leaves
+  the owned sentinel; only the identical request continues.
+- The same `ExpectedConfiguration` type carries two different values (Git
+  identity on synchronize, `.manyhands/config.toml` on resolve); reusing one on
+  the other entry point is refused, not explained.
+- Seven `FailurePoint::Resolution*` variants and one `_for_testing` hook are
+  compiled into release builds, following the existing hidden-seam pattern.
+- Fixtures refresh the Git index after every save (ticket
+  `01M4GD0KKXW684QBA49F6EX3WE`), so no test proves save → synchronize unaided.
+- Windows context-worktree cases have about 40 characters of path headroom.
+
+**Final local gates** on exact source 8bb76f6da79310a8d06af37ae51d79720ef6357b
+(Linux x86_64, Devenv), all exit 0: `cargo check --all-features --locked`;
+`cargo fmt --check`; `cargo clippy --all-targets --all-features --locked -- -D
+warnings`; `cargo test --all-features --locked` — lib 467, canonical_foundation
+43, discovery_rebuild 78, editor_feasibility 9, key_material 39, key_storage 2,
+local_authoring 124, read_boundary 18, read_comments 20, read_contract 64,
+read_credentials 25, read_items 67, read_relationships 17, read_repository 32,
+read_status 23, recovery_foundation_gate 51, remote_merge_recovery 25 SSH cases,
+remote_observation 15, remote_reservation 9, remote_synchronization 63,
+repository_enablement 78, session_credentials 11, shared_key_registry 39,
+ssh_fixture 31, ssh_transport 105, doctests 9; `cargo run --locked --bin
+manyhands-cli`. Desktop startup smoke not run.
+
+**Native evidence.** Run 37986883714 SUCCESS on all five targets at 6dcf1e9
+(https://github.com/vhodges/manyhands/actions/runs/37986883714).
+Run 37991013144 SUCCESS on all five targets (Linux x86_64/ARM64, Windows
+x86_64/ARM64 MSVC, macOS ARM64) at the exact final source
+8bb76f6da79310a8d06af37ae51d79720ef6357b, including `remote_merge_recovery`;
+results inspected with gh.
+https://github.com/vhodges/manyhands/actions/runs/37991013144
+A9 is met: the native gate is satisfied at the final source with no deferral.
+
+**Status.** Implementation is complete and review-ready. The ticket stays open.
+Not authorized and not done: pull request, merge to main, ticket closure,
+worktree or branch cleanup.

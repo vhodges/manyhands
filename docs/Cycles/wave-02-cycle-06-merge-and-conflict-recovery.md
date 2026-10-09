@@ -33,8 +33,8 @@ The user approved this Cycle, the
 and the [implementation plan](../plans/2026-10-07-wave-02-cycle-06-merge-and-conflict-recovery-implementation.md)
 together on 2026-10-07 and authorized committing the planning artifacts.
 The [planning/execution ledger](../plans/2026-10-07-wave-02-cycle-06-merge-and-conflict-recovery-execution.md)
-records rulings, approval and later evidence. Implementation has not begun;
-explicit implementation authorization remains a separate gate.
+records rulings, approval and later evidence. Implementation was authorized on
+2026-10-07 and is complete pending code review; the ledger holds the evidence.
 
 ## Entry Evidence And Dependencies
 
@@ -263,7 +263,8 @@ external merge is recovery-required, never authority for blind replay/rollback.
 
 ## Acceptance And Exit Evidence
 
-All evidence below is planned, not collected for Cycle 06.
+The proof column below is the plan. Collected evidence, mapped to concrete tests
+and native runs, is in the execution ledger's Task 7 section.
 
 | ID | Acceptance contract | Required proof / plan owner |
 | --- | --- | --- |

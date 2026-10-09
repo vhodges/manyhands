@@ -1,5 +1,17 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: implementation complete and review-ready — 2026-10-09
+
+Tasks 0–7 are done. Final source 8bb76f6 passes the full local gates and all five
+native targets (run 37991013144). The ledger's Task 7 section holds the A1–A9
+map, the public surface added, owner rulings and the recorded limits for code
+review. Follow-up tickets on their own branches: `01M4GD0KKXW684QBA49F6EX3WE`
+(save leaves the Git index stale) and `01M4H33R34Z7C7EEKTY1ZCT950` (abandon a
+pending conflict). Next step is the owner's: authorize a pull request / code
+review. Nothing below is authorized yet: PR, merge to main, ticket closure,
+worktree or branch cleanup; no force push. Close the ticket only in the final
+pre-merge checkpoint after review approval. Sections below are historical.
+
 ## Current: Task 5 complete pending native run; Task 6 next — 2026-10-09
 
 M3 (2195445) passed all five targets (run 37955537929). M4 adds the A/B/C/G
