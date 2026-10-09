@@ -170,7 +170,8 @@ No Rust command was run; this is a documentation change.
 | Planning-time statements that Cycle 06 is absent | Stale | Dated update notes added; originals kept as the planning record |
 
 The Cycle 06 dependency gate is met. Implementation remains unauthorized and is
-now gated on the index ticket. The two rulings above are internal mechanisms
-within the approved policy and are open to the owner's correction. Ticket stays
+now gated on the index ticket. The owner approved both rulings above on 2026-10-09 ("I approve those two
+choices"): forwarding an optional identity confirmation, and not reusing a
+terminally cancelled child. Ticket stays
 open; no implementation, pull request, native CI dispatch, merge, closure or
 cleanup is authorized by this checkpoint.
