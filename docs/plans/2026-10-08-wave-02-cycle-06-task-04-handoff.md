@@ -57,6 +57,13 @@ Published current source 7b897cf; fifth native matrix:
 https://github.com/vhodges/manyhands/actions/runs/37846555078
 Inspect this current exact-source gate before Task 4 acceptance or Task 5.
 
+Run 5 resolves original Windows core cases and advances Mac to one confirmed
+fixture receipt race. Remaining metadata-fixture/receipt/concurrency/worker-cleanup
+corrections have independent review and local verification; published 7123ade.
+Current sixth native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37856496873
+Inspect this run before accepting Task 4. Tasks 5–7 still have not begun.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.
