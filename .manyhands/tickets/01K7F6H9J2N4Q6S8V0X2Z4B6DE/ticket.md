@@ -143,11 +143,12 @@ comments for exact evidence; no whole-task acceptance.
 
 ### Current implementation checkpoint — 2026-10-09
 
-Tasks 0–4 are accepted. Task 4 source is a68eba7, verified by successful manual
-native run [37877620596](https://github.com/vhodges/manyhands/actions/runs/37877620596)
-on all five targets after independent whole-task and CI-fix reviews. Proceed to
-Task 5; Tasks 6/7 remain pending. Owner directs best-effort robustness and CI-first
-verification, with local Rust work only for Linux CI regressions. Ticket remains
+Tasks 0–4 are accepted (Task 4 source a68eba7, native run
+[37877620596](https://github.com/vhodges/manyhands/actions/runs/37877620596)).
+Task 5 is implemented and independently reviewed in four milestones; its
+acceptance rests on the exact-source native run recorded in the execution ledger.
+Tasks 6/7 remain pending. Owner directs best-effort robustness; targeted local
+tests of changed code precede each native dispatch. Ticket remains
 open; no PR/main merge/closure/cleanup authority. See execution ledger for evidence.
 
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite

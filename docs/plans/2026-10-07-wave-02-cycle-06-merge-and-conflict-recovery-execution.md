@@ -1915,3 +1915,70 @@ clippy pass; `--lib repository::remote` 254 passed; `discovery_rebuild` 78,
 by the native run that follows. Task 5 is not accepted: remainder A, B, C and G
 (M4), including fault injection at the new publication and retirement
 transitions, stands.
+
+### Task 5 milestone 3 verified — 2026-10-09
+
+Manual run 37955537929 completed SUCCESS on exact source
+21954455f89b4cc700f82d4c3c3c2e6f79b76e0f across all five native targets, including
+the first compile and run of the Windows metadata-retirement path.
+https://github.com/vhodges/manyhands/actions/runs/37955537929
+
+### Task 5 milestone 4: fault, partial-effect, offline and fencing coverage; cancellation fix — 2026-10-09
+
+One sequential writer added the coverage remainder A, B, C and G on 2195445; an
+independent read-only review found one P1 in existing behaviour and coverage gaps;
+one fix pass closed them.
+
+**P1 fixed — cancellation with a pending conflict wedged the root.** A cancel
+honoured at a synchronization boundary made the operation terminal while its step
+stayed `conflict_pending` and MERGE_* stayed on disk: same-ID retry replayed
+Interrupted, reacquisition refused, and a fresh operation was refused as not clean
+and then Busy. A cancel landing during the first conflicted merge was left as a
+stale request with the same end. Per the design ("Cancellation preserves the
+current recoverable transition"), `acknowledge` now stops such an operation
+non-terminally (`interrupted`, request cleared) when its newest window holds a
+`conflict_pending`, `resolution_prepared` or `commit_prepared` step, both conflict
+release transitions clear the request, and the public restart reports
+`Interrupted`. Cancelling an operation without such a step is terminal as before.
+No schema change.
+
+Coverage added (lib unless noted): clean-merge stops at stage intent, effect
+intent and effect observation; stop between context and primary stages resumed
+through the public entry; retirement stops at record, `retire_intent`, each
+unlink, `retired` and stage observation; merge-applied checkpoint stop; ten
+generic-path ref/log/lock partial-effect variants; three-restart offline fixed
+points in five recorded states; stale-owner, foreign-service and cancel fencing
+at nine publication transitions, at retirement, and at the inspection,
+candidate-observation and between-stage boundaries; lease observers proving
+validation runs outside the lease and retirement under it; pending-conflict and
+continuation composition with index refresh and rebuild; nine SSH cases —
+continuation stops at settlement, stage observation, window append, prepared,
+returned, verified and classification, cancel before push, and takeover after
+push return. Injected SQL aborts and unwinding panics stand in for process death
+at the M3 transitions. Fifteen mutation checks each failed the intended test and
+were restored byte-identically.
+
+Characterised and accepted, no code change:
+- The generic integration path accepts a ref already at the recorded candidate
+  (exact parents, clean index and worktree) without a ref-log entry and never
+  writes logs; it captures no log pre-image, and demanding one would turn disabled
+  or expired reflogs into false Recovery. Logs-without-ref and every lock role
+  stay Recovery.
+- An interrupted index refresh fences restart of a pending conflict until that
+  refresh is resumed; inspection keeps working. A rebuild is refused while a
+  continuation's index-pending handoff is outstanding.
+- A cancel honoured while a step is still `applying` with an installed but
+  unrecorded conflict (crash-restart route) stays terminal; MERGE_* remain for the
+  user to abort.
+- A superseded holder finishes the unlinks it already journaled; the new owner
+  converges.
+- Not covered by design: real SIGKILL at the M3 transitions and yield (only Poll
+  priority can yield; synchronization is Manual). Context-target publication
+  stops over SSH belong to Task 6.
+
+Local evidence (Linux x86_64, Devenv) on the committed tree: fmt check and strict
+clippy pass; `--lib repository::remote` 270 passed; `discovery_rebuild` 78,
+`recovery_foundation_gate` 51, `repository_enablement` 78, `local_authoring` 124,
+`remote_reservation` 9; `remote_synchronization` 63 SSH cases. With the native run
+that follows, this is the Task 5 acceptance checkpoint (A3, A5–A7 at lib level and
+through the existing SSH suite); Task 6's two-clone acceptance and Task 7 remain.

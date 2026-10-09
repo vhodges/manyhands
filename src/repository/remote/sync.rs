@@ -47,6 +47,12 @@ static LOCAL_RECONCILIATION_PREPARED_HOOK: std::sync::OnceLock<ResolutionIndexLo
 #[cfg(test)]
 static MERGE_METADATA_OBSERVED_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
     std::sync::OnceLock::new();
+#[cfg(test)]
+static CANDIDATE_RECONCILIATION_OBSERVED_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
+    std::sync::OnceLock::new();
+#[cfg(test)]
+static MERGE_METADATA_UNLINKED_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 fn resolution_hook_root(root: &Path) -> PathBuf {
@@ -134,6 +140,28 @@ fn set_merge_metadata_observed_hook(root: PathBuf, hook: impl FnOnce() + Send + 
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("merge metadata observed hook")
+        .push((resolution_hook_root(&root), Box::new(hook)));
+}
+
+/// Runs once the generic candidate path has finished its checks outside the
+/// lease, directly before it takes the lease to observe the recorded effect.
+#[cfg(test)]
+fn set_candidate_reconciliation_observed_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+    CANDIDATE_RECONCILIATION_OBSERVED_HOOK
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .expect("candidate reconciliation observed hook")
+        .push((resolution_hook_root(&root), Box::new(hook)));
+}
+
+/// Runs after one owned merge-metadata member was unlinked. Callbacks
+/// registered for a root are consumed in order, one per unlink.
+#[cfg(test)]
+fn set_merge_metadata_unlinked_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+    MERGE_METADATA_UNLINKED_HOOK
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .expect("merge metadata unlinked hook")
         .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
@@ -3287,6 +3315,8 @@ fn reconcile_pending_candidate(
                         member,
                         expected.ok_or(SynchronizationError::RecoveryRequired)?,
                     )?;
+                    #[cfg(test)]
+                    run_resolution_index_hook(&MERGE_METADATA_UNLINKED_HOOK, root);
                 }
             }
             fresh = materialized_target(root, primary_branch, target)
@@ -3401,6 +3431,8 @@ fn reconcile_pending_candidate(
             tree,
         }));
     }
+    #[cfg(test)]
+    run_resolution_index_hook(&CANDIDATE_RECONCILIATION_OBSERVED_HOOK, root);
     let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
     service.synchronization_boundary(root, owner)?;
     let fresh = materialized_target(root, primary_branch, target)
@@ -5852,8 +5884,13 @@ impl RepositoryService {
                 )? {
                     RemoteReservationOutcome::Reserved(owner) => owner,
                     RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
+                    // A cancellation acknowledged by this restart: terminal, or
+                    // a non-terminal stop that preserves a pending conflict.
                     RemoteReservationOutcome::Replay(record)
-                        if record.phase() == RemoteOperationPhase::Cancelled =>
+                        if matches!(
+                            record.phase(),
+                            RemoteOperationPhase::Cancelled | RemoteOperationPhase::Interrupted
+                        ) =>
                     {
                         return Err(SynchronizationError::Interrupted);
                     }

@@ -357,11 +357,36 @@ fn point_order(point: RemoteOperationSafePoint) -> u8 {
     }
 }
 
+/// Whether the operation's newest recorded pass holds an installed conflict or
+/// an owned resolution that only this same operation can finish.
+fn pending_recovery_stage(
+    tx: &Transaction<'_>,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND window_number=(SELECT max(window_number) FROM remote_integration_steps WHERE operation_record_id=?1) AND phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",
+        [record.id],
+        |row| row.get(0),
+    )
+    .map_err(|_| state::recovery_required())
+}
+
 fn acknowledge(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
     point: RemoteOperationSafePoint,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    // A pending conflict or owned resolution is the recoverable transition a
+    // cancellation must preserve: stop this owner without ending the
+    // operation, so restart, reacquisition and external repair stay possible.
+    if record.cancel_requested && is_sync(&record.target) && pending_recovery_stage(tx, record)? {
+        tx.execute(
+            "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",
+            params![record.id, now()],
+        )
+        .map_err(|_| state::recovery_required())?;
+        return Ok(RemoteSafePointOutcome::Cancelled);
+    }
     let (phase, outcome, result) = if record.cancel_requested {
         (
             "cancelled",
@@ -1013,7 +1038,7 @@ impl RepositoryService {
                 return Err(state::recovery_required());
             }
             tx.execute(
-                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL WHERE id=?1",
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0 WHERE id=?1",
                 [record.id],
             )
             .map_err(|_| state::recovery_required())?;
@@ -1154,7 +1179,7 @@ impl RepositoryService {
                 )?;
             }
             tx.execute(
-                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
                 params![record.id, now(), owner.epoch],
             )
             .map_err(|_| state::recovery_required())?;

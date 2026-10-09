@@ -1,5 +1,18 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 complete pending native run; Task 6 next — 2026-10-09
+
+M3 (2195445) passed all five targets (run 37955537929). M4 adds the A/B/C/G
+coverage and fixes one P1 it exposed: cancelling an operation with a pending
+conflict wedged the root; cancellation is now a non-terminal stop when the newest
+window holds a conflict or owned resolution. Local gates green (fmt, strict
+clippy, remote lib 270, five targeted suites, 63 SSH cases). Check the exact-source
+native run on the M4 commit first; if green, Task 5 is accepted. Then Task 6: new
+`tests/remote_merge_recovery.rs` two-clone acceptance (`harness = false`, added to
+the workflow test command) and Task 7 final gates and review handoff. Accepted
+limits and owner rulings are in the ledger's M3/M4 sections. Ticket open; no PR/
+merge/closure authority. Sections below are historical.
+
 ## Current: Task 5 milestone 3 reviewed; native CI then M4 — 2026-10-09
 
 M3 = remainder D/E/F (owned merge-metadata retirement after external repair;

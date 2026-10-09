@@ -2936,7 +2936,17 @@ fn new_local_reconciliation_fences_cancel_and_stale_service_owner() {
             &owner,
             &mut evidence,
         );
-        assert!(result.is_err());
+        if cancel {
+            assert!(matches!(result, Err(SynchronizationError::Interrupted)));
+        } else {
+            assert!(matches!(
+                result,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RecoveryRequired,
+                    ..
+                }))
+            ));
+        }
         assert_eq!(local_binding_image(root.path()), before);
         assert!(
             git2::Repository::open(root.path())
@@ -2945,6 +2955,19 @@ fn new_local_reconciliation_fences_cancel_and_stale_service_owner() {
                 .unwrap()
                 .has_conflicts()
         );
+        if cancel {
+            // The cancellation stopped that owner without ending the
+            // operation: its pending conflict is still restartable.
+            let mut retry = request(root.path());
+            retry.operation_id = operation;
+            retry.restart = true;
+            assert!(matches!(
+                other.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+                Err(SynchronizationError::ConflictPending { operation_id, .. })
+                    if operation_id == operation
+            ));
+            assert_eq!(local_binding_image(root.path()), before);
+        }
     }
 }
 
@@ -4068,6 +4091,17 @@ struct PassFixture {
 
 impl PassFixture {
     fn new(local_file: &str, local_bytes: &[u8]) -> Self {
+        Self::build(local_file, local_bytes, false)
+    }
+
+    /// As `new`, with the publication remote also selected in the committed
+    /// configuration and its endpoints bound, so the public entry point
+    /// proceeds past local reconciliation to the transport boundary.
+    fn published(local_file: &str, local_bytes: &[u8]) -> Self {
+        Self::build(local_file, local_bytes, true)
+    }
+
+    fn build(local_file: &str, local_bytes: &[u8], published: bool) -> Self {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         repository
@@ -4078,6 +4112,21 @@ impl PassFixture {
             state::configure(tx, id, Some(&plan), false)
         })
         .unwrap();
+        if published {
+            fs::write(
+                root.path().join(".manyhands/config.toml"),
+                "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+            )
+            .unwrap();
+            commit_all(&repository);
+            let configuration = service
+                .observation_configuration(root.path(), &plan)
+                .unwrap();
+            state::with_transaction(&service, root.path(), |tx, id| {
+                state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
+            })
+            .unwrap();
+        }
         let base = repository.head().unwrap().target().unwrap();
         fs::write(root.path().join(local_file), local_bytes).unwrap();
         let local = commit_all(&repository);
@@ -11730,6 +11779,2354 @@ fn ref_log_proof_old_operator_restoration_after_failed_checkpoint_keeps_progress
             .unwrap(),
         "observed"
     );
+}
+
+// Task 5 remainder A, B, C and G: injected stops at the durable transitions of
+// integration, metadata retirement and publication; partial ref/log effects on
+// the generic path; composition of offline restarts; and observers at the
+// safe points added with publication attempts and metadata retirement.
+
+/// phase, completed step, checkpoint, authority, index-pending flag, epoch.
+type EnvelopeRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+    i64,
+);
+
+impl PassFixture {
+    /// A later process: a new service instance explicitly restarts the same
+    /// operation, so nothing in memory survives the stop.
+    fn restart_in_new_process(&mut self) {
+        self.service = RepositoryService::open_at(self.data.path()).unwrap();
+        self.restart();
+    }
+
+    fn step(&self, window: u32) -> Option<state::IntegrationStepEvidence> {
+        state::with_transaction(&self.service, self.root.path(), |tx, id| {
+            state::integration_step_in_window(
+                tx,
+                state::read_operation(tx, id, self.operation)?.unwrap().id,
+                window,
+                0,
+            )
+        })
+        .unwrap()
+    }
+
+    fn step_count(&self) -> i64 {
+        self.db()
+            .query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn merge_metadata_phases(&self) -> Vec<String> {
+        let db = self.db();
+        let mut statement = db
+            .prepare(
+                "SELECT phase FROM remote_integration_merge_metadata ORDER BY integration_step_id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn envelope(&self) -> EnvelopeRow {
+        self.db()
+            .query_row(
+                "SELECT phase,completed_step,sync_checkpoint,authoritative_oid,index_pending,owner_epoch FROM remote_operation_records WHERE operation_ulid=?1",
+                [self.operation.to_string()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap()
+    }
+}
+
+/// Bytes of each merge-metadata member of one gitdir, None when absent.
+fn merge_member_images(gitdir: &Path) -> Vec<Option<Vec<u8>>> {
+    RESOLUTION_MERGE_MEMBERS
+        .iter()
+        .map(|member| match fs::read(gitdir.join(member)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("fixture metadata read category: {:?}", error.kind()),
+        })
+        .collect()
+}
+
+/// HEAD and primary-branch ref logs, in that order.
+fn ref_log_bytes(repository: &git2::Repository) -> [Vec<u8>; 2] {
+    ["logs/HEAD", "logs/refs/heads/main"]
+        .map(|name| fs::read(repository.path().join(name)).unwrap())
+}
+
+fn ref_log_lines(log: &[u8]) -> usize {
+    log.iter().filter(|byte| **byte == b'\n').count()
+}
+
+fn reachable_merge_commits(repository: &git2::Repository) -> usize {
+    let mut walk = repository.revwalk().unwrap();
+    walk.push_head().unwrap();
+    walk.filter(|oid| {
+        repository
+            .find_commit(*oid.as_ref().unwrap())
+            .unwrap()
+            .parent_count()
+            == 2
+    })
+    .count()
+}
+
+/// An external tool commits the whole merge with the exact ordered parents and
+/// a clean index and worktree, but never cleans up merge state. With `logged`
+/// its ref update also appended ref logs, as stock Git does.
+fn commit_external_repair(
+    repository: &git2::Repository,
+    local: git2::Oid,
+    incoming: git2::Oid,
+    logged: bool,
+) -> git2::Oid {
+    let signature = repository.signature().unwrap();
+    let local_parent = repository.find_commit(local).unwrap();
+    let incoming_parent = repository.find_commit(incoming).unwrap();
+    let repaired = repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "external repair",
+            &local_parent.tree().unwrap(),
+            &[&local_parent, &incoming_parent],
+        )
+        .unwrap();
+    if logged {
+        repository
+            .reference("refs/heads/main", repaired, true, "external repair")
+            .unwrap();
+    } else {
+        fs::write(
+            repository.path().join("refs/heads/main"),
+            format!("{repaired}\n"),
+        )
+        .unwrap();
+    }
+    repository
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    repaired
+}
+
+/// Every durable synchronization evidence row. Only the ownership epoch and
+/// the update timestamp, which each explicit restart advances, are left out.
+fn durable_evidence(db: &rusqlite::Connection) -> Vec<String> {
+    let mut rows = Vec::new();
+    for table in [
+        "remote_operation_records",
+        "remote_integration_windows",
+        "remote_integration_steps",
+        "remote_integration_merge_metadata",
+        "remote_publication_attempts",
+        "remote_observation_batches",
+        "remote_ref_observations",
+    ] {
+        let mut statement = db
+            .prepare(&format!("SELECT * FROM {table} ORDER BY 1,2"))
+            .unwrap();
+        let names = statement
+            .column_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut query = statement.query([]).unwrap();
+        while let Some(row) = query.next().unwrap() {
+            let mut line = table.to_owned();
+            for (column, name) in names.iter().enumerate() {
+                if table == "remote_operation_records"
+                    && matches!(name.as_str(), "owner_epoch" | "updated_at")
+                {
+                    continue;
+                }
+                line.push_str(&format!(" {name}={:?}", row.get_ref(column).unwrap()));
+            }
+            rows.push(line);
+        }
+    }
+    rows
+}
+
+const DROP_INJECTED_STOP: &str = "DROP TRIGGER IF EXISTS injected_stop";
+
+fn stop_before(db: &rusqlite::Connection, event: &str) {
+    db.execute_batch(&format!(
+        "CREATE TRIGGER injected_stop BEFORE {event} BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+    ))
+    .unwrap();
+}
+
+/// A: the clean-merge stage of the real ordered integration, stopped at each
+/// of its durable writes (stage intent, effect intent after the candidate
+/// object exists, effect observation after the ref moved). A later process
+/// resumes the frozen stage and the branch moves exactly once to one merge of
+/// the exact recorded parents; nothing is regenerated behind a moved ref.
+#[test]
+fn clean_merge_integration_fault_matrix_resumes_each_durable_transition_once() {
+    for point in ["stage_intent", "effect_intent", "effect_observation"] {
+        let mut fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let local = fixture.local;
+        let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        let before = local_binding_image(fixture.root.path());
+        let before_logs = ref_log_bytes(&repository);
+        let db = fixture.db();
+        stop_before(
+            &db,
+            match point {
+                "stage_intent" => "INSERT ON remote_integration_steps",
+                "effect_intent" => {
+                    "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applying'"
+                }
+                _ => "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'",
+            },
+        );
+        assert!(journal_stop(&fixture.integrate(incoming)), "{point}");
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        let stopped_head = repository.head().unwrap().target().unwrap();
+        let stopped_logs = ref_log_bytes(&repository);
+        let stopped = fixture.step(1);
+        if point == "effect_observation" {
+            // The ref effect happened; only its observation was lost.
+            let stopped = stopped.unwrap();
+            assert_eq!(stopped.phase, state::IntegrationStepPhase::Applying);
+            assert_eq!(stopped.candidate_oid, Some(stopped_head));
+            assert_eq!(stopped.result_oid, None);
+            assert_ne!(stopped_head, local);
+        } else {
+            assert_eq!(stopped_head, local, "{point}");
+            assert_eq!(local_binding_image(fixture.root.path()), before, "{point}");
+            assert_eq!(stopped_logs, before_logs, "{point}");
+            assert_eq!(
+                stopped.map(|step| (step.phase, step.candidate_oid)),
+                (point == "effect_intent").then_some((state::IntegrationStepPhase::Prepared, None)),
+                "{point}"
+            );
+        }
+        fixture.restart_in_new_process();
+        let mut evidence = fixture.record().sync_evidence;
+        let merged = match fixture.reconcile(&mut evidence).unwrap() {
+            Some(observed) => {
+                // Observation only: no second checkout, ref move or log line.
+                assert_eq!(point, "effect_observation");
+                assert_eq!(ref_log_bytes(&repository), stopped_logs);
+                observed.oid
+            }
+            None => {
+                // No effect was proven, so the frozen stage itself resumes.
+                assert_ne!(point, "effect_observation");
+                fixture.integrate(incoming).unwrap()
+            }
+        };
+        assert_eq!(repository.head().unwrap().target(), Some(merged), "{point}");
+        let merge = repository.find_commit(merged).unwrap();
+        assert_eq!(
+            merge.parent_ids().collect::<Vec<_>>(),
+            [local, incoming],
+            "{point}"
+        );
+        assert_eq!(reachable_merge_commits(&repository), 1, "{point}");
+        assert!(repository.statuses(None).unwrap().is_empty(), "{point}");
+        let step = fixture.step(1).unwrap();
+        assert_eq!(step.phase, state::IntegrationStepPhase::Applied, "{point}");
+        assert_eq!(step.candidate_oid, Some(merged), "{point}");
+        assert_eq!(step.result_oid, Some(merged), "{point}");
+        assert_eq!(
+            (step.intent.local_oid, step.intent.incoming_oid),
+            (local, incoming)
+        );
+        assert_eq!(fixture.step_count(), 1, "{point}");
+        // Exactly one ref transition in total, appended to both logs.
+        let logs = ref_log_bytes(&repository);
+        for (log, original) in logs.iter().zip(&before_logs) {
+            assert!(log.starts_with(original), "{point}");
+            assert_eq!(ref_log_lines(log), ref_log_lines(original) + 1, "{point}");
+        }
+        // A further restart only observes the completed stage.
+        let completed = local_binding_image(fixture.root.path());
+        fixture.restart_in_new_process();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(
+            fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+            merged
+        );
+        assert_eq!(ref_log_bytes(&repository), logs, "{point}");
+        assert_eq!(local_binding_image(fixture.root.path()), completed);
+        assert_eq!(fixture.step_count(), 1, "{point}");
+    }
+}
+
+/// A: the clean stage is applied and observed, but the write that carries it
+/// into the synchronization envelope (the merge-applied checkpoint) is not
+/// durable. A later process observes the applied stage, and after its Fetch
+/// commits that one candidate into the envelope without another merge, ref
+/// move or stage row.
+#[test]
+fn merge_applied_checkpoint_stop_is_reconciled_from_the_applied_stage() {
+    let mut fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let local = fixture.local;
+    let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    let merged = fixture.integrate(incoming).unwrap();
+    let applied = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(merged),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..Default::default()
+    };
+    let db = fixture.db();
+    stop_before(
+        &db,
+        "UPDATE OF sync_checkpoint ON remote_operation_records WHEN NEW.sync_checkpoint='local_fast_forwarded'",
+    );
+    assert!(matches!(
+        fixture.service.checkpoint_synchronization_merge_applied(
+            fixture.root.path(),
+            &fixture.owner,
+            &applied
+        ),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        })
+    ));
+    db.execute_batch(DROP_INJECTED_STOP).unwrap();
+    let stopped = fixture.record();
+    assert_eq!(
+        stopped.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::FetchObserved)
+    );
+    assert_eq!(stopped.sync_evidence.local_oid, Some(local));
+    let image = inspection_git_image(fixture.root.path());
+    fixture.restart_in_new_process();
+    let mut evidence = fixture.record().sync_evidence;
+    let observed = fixture.reconcile(&mut evidence).unwrap().unwrap();
+    assert_eq!(observed.oid, merged);
+    assert_eq!(evidence.local_oid, Some(merged));
+    fixture.fetch(incoming, 2);
+    evidence.tracking_oid = Some(incoming);
+    evidence.primary_tracking_oid = Some(incoming);
+    finalize_reconciled_candidate(
+        &fixture.service,
+        fixture.root.path(),
+        &fixture.owner,
+        observed,
+        &evidence,
+    )
+    .unwrap();
+    let record = fixture.record();
+    assert_eq!(
+        record.sync_checkpoint,
+        Some(state::SynchronizationCheckpoint::LocalFastForwarded)
+    );
+    assert_eq!(record.sync_evidence.local_oid, Some(merged));
+    assert_eq!(record.sync_evidence.push_oid, None);
+    assert!(!record.reconciliation_required);
+    assert_eq!(inspection_git_image(fixture.root.path()), image);
+    assert_eq!(repository.head().unwrap().target(), Some(merged));
+    assert_eq!(reachable_merge_commits(&repository), 1);
+    assert_eq!(fixture.step_count(), 1);
+}
+
+/// The typed failure of a durable journal write that could not commit.
+fn journal_stop<T>(result: &Result<T, SynchronizationError>) -> bool {
+    matches!(
+        result,
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    )
+}
+
+/// A reserved context synchronization whose remote context and remote primary
+/// each gained one commit that merges cleanly into the local context branch.
+/// One pinned window is recorded and no stage has started. The publication
+/// remote is configured, so the public entry point reaches transport.
+struct ContextPass {
+    root: tempfile::TempDir,
+    data: tempfile::TempDir,
+    service: RepositoryService,
+    plan: RemoteRefPlan,
+    target: SynchronizationTarget,
+    operation_target: RemoteOperationTarget,
+    operation: OperationId,
+    owner: RemoteReservation,
+    /// The context worktree.
+    repository: git2::Repository,
+    selected: RemoteRefTarget,
+    main: git2::Oid,
+    local: git2::Oid,
+    context_incoming: git2::Oid,
+    primary_incoming: git2::Oid,
+}
+
+impl ContextPass {
+    fn new() -> Self {
+        let (root, data, service) = fixture();
+        let primary_repository = git2::Repository::open(root.path()).unwrap();
+        primary_repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        fs::write(
+            root.path().join(".manyhands/config.toml"),
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        let main = commit_all(&primary_repository);
+        let target = materialize_local_context(&service, root.path());
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), false)?;
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
+        })
+        .unwrap();
+        let repository = materialized_target(root.path(), "main", &target).unwrap();
+        let local = repository.head().unwrap().target().unwrap();
+        let context_incoming = child_file(&repository, main, "remote-context.txt", b"context\n");
+        let primary_incoming = child_file(&repository, main, "remote-primary.txt", b"primary\n");
+        let selected = target_ref(&plan, &target);
+        for (reference, oid) in [
+            (plan.primary().tracking_ref(), primary_incoming),
+            (selected.tracking_ref(), context_incoming),
+        ] {
+            repository
+                .reference(reference, oid, true, "fixture observation")
+                .unwrap();
+        }
+        let operation_target = target.operation_target(&plan);
+        let operation = OperationId::new();
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .reserve_remote_operation(root.path(), operation, &operation_target)
+            .unwrap()
+        else {
+            panic!("reservation")
+        };
+        service
+            .checkpoint_synchronization(
+                root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::FetchPrepared,
+                &state::SynchronizationEvidence {
+                    expected_oid: Some(local),
+                    local_oid: Some(local),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        service
+            .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observations = [
+            RemoteRefObservation::from_advertisement(
+                &plan,
+                "refs/heads/main",
+                primary_incoming,
+                Some(primary_incoming),
+            )
+            .unwrap(),
+            RemoteRefObservation::from_advertisement(
+                &plan,
+                selected.remote_ref(),
+                context_incoming,
+                Some(context_incoming),
+            )
+            .unwrap(),
+        ];
+        commit_observation_batch(&service, root.path(), &owner, &plan, &observations, 1).unwrap();
+        let pass = Self {
+            root,
+            data,
+            service,
+            plan,
+            target,
+            operation_target,
+            operation,
+            owner,
+            repository,
+            selected,
+            main,
+            local,
+            context_incoming,
+            primary_incoming,
+        };
+        let batch = pass
+            .db()
+            .query_row(
+                "SELECT id FROM remote_observation_batches WHERE is_current=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        pass.service
+            .prepare_synchronization_window(
+                pass.root.path(),
+                &pass.owner,
+                1,
+                &state::IntegrationWindowIntent {
+                    observation_batch_id: batch,
+                    local_oid: local,
+                    primary_oid: primary_incoming,
+                    context_oid: Some(context_incoming),
+                },
+            )
+            .unwrap();
+        pass
+    }
+
+    fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.data.path().join(REGISTRY_FILE)).unwrap()
+    }
+
+    /// The production ordered pass: fetched context first, then primary.
+    fn integrate(&self) -> Result<git2::Oid, SynchronizationError> {
+        let configuration = self
+            .service
+            .observation_configuration(self.root.path(), &self.plan)
+            .unwrap();
+        let mut req = request(self.root.path());
+        req.operation_id = self.operation;
+        req.target = self.target.clone();
+        integrate_divergence(
+            &self.service,
+            DivergenceInputs {
+                root: self.root.path(),
+                primary_branch: "main",
+                target: &self.target,
+                request: &req,
+                owner: &self.owner,
+                plan: &self.plan,
+                configuration: &configuration,
+                selected: &self.selected,
+                primary_tracking: Some(self.primary_incoming),
+                selected_tracking: Some(self.context_incoming),
+                context: Some(self.context_incoming),
+                primary: self.primary_incoming,
+            },
+        )
+    }
+
+    fn stage(&self, ordinal: u8) -> Option<state::IntegrationStepEvidence> {
+        state::with_transaction(&self.service, self.root.path(), |tx, id| {
+            state::integration_step_in_window(
+                tx,
+                state::read_operation(tx, id, self.operation)?.unwrap().id,
+                1,
+                ordinal,
+            )
+        })
+        .unwrap()
+    }
+
+    fn head(&self) -> git2::Oid {
+        self.repository.head().unwrap().target().unwrap()
+    }
+
+    fn parents(&self, oid: git2::Oid) -> Vec<git2::Oid> {
+        self.repository
+            .find_commit(oid)
+            .unwrap()
+            .parent_ids()
+            .collect()
+    }
+
+    fn head_log(&self) -> Vec<u8> {
+        fs::read(self.repository.path().join("logs/HEAD")).unwrap()
+    }
+}
+
+/// A: a context synchronization stopped between its ordered stages, after the
+/// fetched context was merged and before the primary stage has any durable
+/// intent. Deliberate restarts through the public entry point, with no
+/// transport, keep that context merge exactly as recorded, resume only the
+/// primary stage on top of it once, and then change nothing further.
+#[test]
+fn stop_between_context_and_primary_stages_resumes_only_the_primary_stage() {
+    let pass = ContextPass::new();
+    let db = pass.db();
+    let original_log = pass.head_log();
+    stop_before(&db, "INSERT ON remote_integration_steps WHEN NEW.ordinal=1");
+    assert!(journal_stop(&pass.integrate()));
+    db.execute_batch(DROP_INJECTED_STOP).unwrap();
+    let context_merge = pass.head();
+    assert_eq!(
+        pass.parents(context_merge),
+        [pass.local, pass.context_incoming]
+    );
+    let context_stage = pass.stage(0).unwrap();
+    assert_eq!(context_stage.phase, state::IntegrationStepPhase::Applied);
+    assert_eq!(context_stage.result_oid, Some(context_merge));
+    assert!(pass.stage(1).is_none());
+    let stopped_log = pass.head_log();
+    assert_eq!(
+        ref_log_lines(&stopped_log),
+        ref_log_lines(&original_log) + 1
+    );
+    let mut retry = request(pass.root.path());
+    retry.operation_id = pass.operation;
+    retry.target = pass.target.clone();
+    retry.restart = true;
+    let mut merged = None;
+    for _ in 0..2 {
+        // A later process: the applied context stage is only observed and the
+        // frozen pass resumes at the primary stage before any transport.
+        assert!(matches!(
+            RepositoryService::open_at(pass.data.path())
+                .unwrap()
+                .synchronize_remote(retry.clone(), &mut SessionCredentials::new(NoPrompt)),
+            Err(SynchronizationError::Transport(_))
+        ));
+        let head = pass.head();
+        assert_eq!(*merged.get_or_insert(head), head);
+        assert_eq!(pass.parents(head), [context_merge, pass.primary_incoming]);
+        assert_eq!(pass.stage(0).unwrap(), context_stage);
+        let primary_stage = pass.stage(1).unwrap();
+        assert_eq!(primary_stage.phase, state::IntegrationStepPhase::Applied);
+        assert_eq!(primary_stage.result_oid, Some(head));
+        assert_eq!(
+            (
+                primary_stage.intent.local_oid,
+                primary_stage.intent.incoming_oid
+            ),
+            (context_merge, pass.primary_incoming)
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            2
+        );
+        assert_eq!(reachable_merge_commits(&pass.repository), 2);
+        let log = pass.head_log();
+        assert!(log.starts_with(&stopped_log));
+        assert_eq!(ref_log_lines(&log), ref_log_lines(&stopped_log) + 1);
+        assert!(pass.repository.statuses(None).unwrap().is_empty());
+    }
+    // Only the context branch moved; the primary checkout is untouched.
+    assert_eq!(
+        git2::Repository::open(pass.root.path())
+            .unwrap()
+            .refname_to_id("refs/heads/main")
+            .unwrap(),
+        pass.main
+    );
+}
+
+/// A: one injected stop at every durable transition of owned merge-metadata
+/// retirement: the digest record, `retire_intent`, each unlink, `retired` and
+/// the stage observation that follows. The stop loses nothing (no ref, log,
+/// index, worktree or object effect; members not yet unlinked keep their
+/// bytes) and a later process converges on exactly one retirement and one
+/// observed stage. A conflict whose digest record was lost stays typed
+/// Recovery after external repair, with its remnant preserved (accepted limit).
+#[test]
+fn merge_metadata_retirement_fault_matrix_converges_once_without_loss() {
+    for point in [
+        "record",
+        "retire_intent",
+        "unlink_1",
+        "unlink_2",
+        "unlink_3",
+        "retired",
+        "observation",
+    ] {
+        let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+        let repository = fixture.repository();
+        let gitdir = repository.path().to_owned();
+        let root = fixture.root.path().to_owned();
+        let local = fixture.local;
+        let incoming = child(&repository, fixture.base, b"incoming\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        let db = fixture.db();
+        if point == "record" {
+            stop_before(&db, "INSERT ON remote_integration_merge_metadata");
+            // The conflict is installed, but the process stops before its
+            // metadata digests and its conflict observation are durable.
+            assert!(matches!(
+                fixture.integrate(incoming),
+                Err(error) if !matches!(error, SynchronizationError::ConflictPending { .. })
+            ));
+            db.execute_batch(DROP_INJECTED_STOP).unwrap();
+            let installed = inspection_git_image(&root);
+            assert_eq!(
+                fixture.step(1).unwrap().phase,
+                state::IntegrationStepPhase::Applying
+            );
+            assert!(repository.index().unwrap().has_conflicts());
+            fixture.restart_in_new_process();
+            let mut evidence = fixture.record().sync_evidence;
+            assert!(matches!(
+                fixture.reconcile(&mut evidence),
+                Err(SynchronizationError::ConflictPending { .. })
+            ));
+            assert_eq!(inspection_git_image(&root), installed);
+            assert_eq!(
+                fixture.step(1).unwrap().phase,
+                state::IntegrationStepPhase::ConflictPending
+            );
+            assert!(fixture.merge_metadata_phases().is_empty());
+            // Nothing recorded these members as this operation's own, so an
+            // external repair that leaves them behind is never cleaned up.
+            let repaired = commit_external_repair(&repository, local, incoming, true);
+            let members = merge_member_images(&gitdir);
+            assert!(members.iter().all(Option::is_some));
+            let before = inspection_git_image(&root);
+            fixture.restart_in_new_process();
+            let mut evidence = fixture.record().sync_evidence;
+            assert!(matches!(
+                fixture.reconcile(&mut evidence),
+                Err(SynchronizationError::RecoveryRequired)
+            ));
+            assert_eq!(inspection_git_image(&root), before);
+            assert_eq!(merge_member_images(&gitdir), members);
+            assert_eq!(repository.head().unwrap().target(), Some(repaired));
+            let step = fixture.step(1).unwrap();
+            assert_eq!(step.phase, state::IntegrationStepPhase::ConflictPending);
+            assert_eq!(step.result_oid, None);
+            continue;
+        }
+        assert!(matches!(
+            fixture.integrate(incoming),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let repaired = commit_external_repair(&repository, local, incoming, true);
+        let members = merge_member_images(&gitdir);
+        assert!(members.iter().all(Option::is_some), "{point}");
+        let before = local_binding_image(&root);
+        let before_logs = reflog_image(&repository);
+        let before_objects = inspection_odb_inventory(&repository);
+        let event = match point {
+            "retire_intent" => Some(
+                "UPDATE OF phase ON remote_integration_merge_metadata WHEN NEW.phase='retire_intent'",
+            ),
+            "retired" => Some(
+                "UPDATE OF phase ON remote_integration_merge_metadata WHEN NEW.phase='retired'",
+            ),
+            "observation" => {
+                Some("UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'")
+            }
+            _ => None,
+        };
+        let unlinked = match point {
+            "retire_intent" => 0,
+            "unlink_1" => 1,
+            "unlink_2" => 2,
+            _ => 3,
+        };
+        if let Some(event) = event {
+            stop_before(&db, event);
+        } else {
+            // The process dies directly after the chosen unlink.
+            for _ in 1..unlinked {
+                set_merge_metadata_unlinked_hook(root.clone(), || {});
+            }
+            set_merge_metadata_unlinked_hook(root.clone(), || {
+                panic!("fixture process stop after an unlink")
+            });
+        }
+        fixture.restart();
+        let mut evidence = fixture.record().sync_evidence;
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fixture.reconcile(&mut evidence)
+        }));
+        match (event, stopped) {
+            (Some(_), Ok(result)) => assert!(journal_stop(&result), "{point}"),
+            (None, Err(_)) => {}
+            _ => panic!("{point}: the injected stop did not fire"),
+        }
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        let after_stop = merge_member_images(&gitdir);
+        for (ordinal, (image, original)) in after_stop.iter().zip(&members).enumerate() {
+            if ordinal < unlinked {
+                assert_eq!(image, &None, "{point} {ordinal}");
+            } else {
+                assert_eq!(image, original, "{point} {ordinal}");
+            }
+        }
+        assert_eq!(
+            fixture.merge_metadata_phases(),
+            [match point {
+                "retire_intent" => "recorded",
+                "observation" => "retired",
+                _ => "retire_intent",
+            }],
+            "{point}"
+        );
+        let step = fixture.step(1).unwrap();
+        assert_eq!(
+            step.phase,
+            state::IntegrationStepPhase::ConflictPending,
+            "{point}"
+        );
+        assert_eq!(step.result_oid, None, "{point}");
+        assert_eq!(local_binding_image(&root), before, "{point}");
+        assert_eq!(reflog_image(&repository), before_logs, "{point}");
+        assert_eq!(
+            inspection_odb_inventory(&repository),
+            before_objects,
+            "{point}"
+        );
+        // A later process finishes the same retirement and observes the stage.
+        fixture.restart_in_new_process();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(
+            fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+            repaired,
+            "{point}"
+        );
+        assert_eq!(merge_member_images(&gitdir), [None, None, None], "{point}");
+        assert_eq!(fixture.merge_metadata_phases(), ["retired"], "{point}");
+        let step = fixture.step(1).unwrap();
+        assert_eq!(step.phase, state::IntegrationStepPhase::Applied, "{point}");
+        assert_eq!(step.result_oid, Some(repaired), "{point}");
+        assert_eq!(
+            (step.intent.local_oid, step.intent.incoming_oid),
+            (local, incoming)
+        );
+        assert_eq!(fixture.step_count(), 1, "{point}");
+        assert_eq!(repository.head().unwrap().target(), Some(repaired));
+        assert_eq!(
+            git2::Repository::open(&root).unwrap().state(),
+            git2::RepositoryState::Clean,
+            "{point}"
+        );
+        // Convergence is a fixed point: nothing further is retired or moved.
+        fixture.restart_in_new_process();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(
+            fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+            repaired
+        );
+        assert_eq!(fixture.merge_metadata_phases(), ["retired"], "{point}");
+        assert_eq!(local_binding_image(&root), before, "{point}");
+        assert_eq!(reflog_image(&repository), before_logs, "{point}");
+        assert_eq!(
+            inspection_odb_inventory(&repository),
+            before_objects,
+            "{point}"
+        );
+    }
+}
+
+/// B: the generic integration stage has no owned ref-log manifest. After its
+/// real libgit2 ref transaction, a restart observes the exact recorded
+/// candidate from the ref alone and never repairs, rewrites or re-appends a
+/// partial ref log; a log entry without the ref move, and every ambiguous
+/// files-backend lock role, is preserved byte-for-byte as typed Recovery
+/// instead of being replayed.
+#[test]
+fn generic_candidate_restart_preserves_partial_ref_and_log_effects() {
+    for variant in [
+        "complete",
+        "ref_without_branch_log",
+        "ref_without_head_log",
+        "ref_without_logs",
+        "logs_without_ref",
+        "branch_ref_lock",
+        "branch_log_lock",
+        "head_lock",
+        "head_log_lock",
+        "packed_refs_lock",
+    ] {
+        let mut fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let gitdir = repository.path().to_owned();
+        let local = fixture.local;
+        let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        let original_logs = ref_log_bytes(&repository);
+        let db = fixture.db();
+        stop_before(
+            &db,
+            "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'",
+        );
+        assert!(journal_stop(&fixture.integrate(incoming)), "{variant}");
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        let candidate = repository.head().unwrap().target().unwrap();
+        assert_ne!(candidate, local);
+        let complete_logs = ref_log_bytes(&repository);
+        for (complete, original) in complete_logs.iter().zip(&original_logs) {
+            assert!(complete.starts_with(original) && complete.len() > original.len());
+        }
+        let branch = gitdir.join("refs/heads/main");
+        let lock = match variant {
+            "branch_ref_lock" => Some("refs/heads/main.lock"),
+            "branch_log_lock" => Some("logs/refs/heads/main.lock"),
+            "head_lock" => Some("HEAD.lock"),
+            "head_log_lock" => Some("logs/HEAD.lock"),
+            "packed_refs_lock" => Some("packed-refs.lock"),
+            _ => None,
+        };
+        match variant {
+            "ref_without_branch_log" => {
+                fs::write(gitdir.join("logs/refs/heads/main"), &original_logs[1]).unwrap();
+            }
+            "ref_without_head_log" => {
+                fs::write(gitdir.join("logs/HEAD"), &original_logs[0]).unwrap();
+            }
+            "ref_without_logs" => {
+                fs::write(gitdir.join("logs/HEAD"), &original_logs[0]).unwrap();
+                fs::write(gitdir.join("logs/refs/heads/main"), &original_logs[1]).unwrap();
+            }
+            "logs_without_ref" => {
+                // Checkout and both log appends happened; the loose ref did not.
+                fs::write(&branch, format!("{local}\n")).unwrap();
+            }
+            _ => {}
+        }
+        if let Some(lock) = lock {
+            fs::write(gitdir.join(lock), b"operator-owned lock\n").unwrap();
+        }
+        let partial_logs = ref_log_bytes(&repository);
+        let partial_ref = fs::read(&branch).unwrap();
+        let before = local_binding_image(fixture.root.path());
+        let before_objects = inspection_odb_inventory(&repository);
+        fixture.restart_in_new_process();
+        let mut evidence = fixture.record().sync_evidence;
+        let result = fixture.reconcile(&mut evidence);
+        // In every variant: no log repair or append, no second ref
+        // transition, no index, worktree or object effect.
+        assert_eq!(ref_log_bytes(&repository), partial_logs, "{variant}");
+        assert_eq!(fs::read(&branch).unwrap(), partial_ref, "{variant}");
+        assert_eq!(
+            local_binding_image(fixture.root.path()),
+            before,
+            "{variant}"
+        );
+        assert_eq!(
+            inspection_odb_inventory(&repository),
+            before_objects,
+            "{variant}"
+        );
+        let step = fixture.step(1).unwrap();
+        assert_eq!(step.candidate_oid, Some(candidate), "{variant}");
+        if lock.is_none() && variant != "logs_without_ref" {
+            assert_eq!(result.unwrap().unwrap().oid, candidate, "{variant}");
+            assert_eq!(
+                step.phase,
+                state::IntegrationStepPhase::Applied,
+                "{variant}"
+            );
+            assert_eq!(step.result_oid, Some(candidate), "{variant}");
+        } else {
+            assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{variant}"
+            );
+            assert_eq!(
+                step.phase,
+                state::IntegrationStepPhase::Applying,
+                "{variant}"
+            );
+            assert_eq!(step.result_oid, None, "{variant}");
+            if let Some(lock) = lock {
+                assert_eq!(
+                    fs::read(gitdir.join(lock)).unwrap(),
+                    b"operator-owned lock\n",
+                    "{variant}"
+                );
+            }
+        }
+        assert_eq!(fixture.step_count(), 1, "{variant}");
+    }
+}
+
+/// B: an external repair whose ref update left no ref-log entry is observed
+/// from the exact two-parent commit alone. Retiring the owned merge metadata
+/// never creates, appends or rewrites a ref log on the tool's behalf.
+#[test]
+fn external_repair_without_a_ref_log_entry_is_observed_without_writing_logs() {
+    let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+    let repository = fixture.repository();
+    let local = fixture.local;
+    let incoming = child(&repository, fixture.base, b"incoming\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert!(matches!(
+        fixture.integrate(incoming),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let conflict_logs = ref_log_bytes(&repository);
+    let repaired = commit_external_repair(&repository, local, incoming, false);
+    assert_eq!(ref_log_bytes(&repository), conflict_logs);
+    let before = local_binding_image(fixture.root.path());
+    fixture.restart_in_new_process();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        repaired
+    );
+    assert_eq!(ref_log_bytes(&repository), conflict_logs);
+    assert_eq!(local_binding_image(fixture.root.path()), before);
+    assert_eq!(merge_member_images(repository.path()), [None, None, None]);
+    assert_eq!(fixture.merge_metadata_phases(), ["retired"]);
+    let step = fixture.step(1).unwrap();
+    assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+    assert_eq!(step.result_oid, Some(repaired));
+}
+
+/// C: repeated deliberate restarts through the public entry point with no
+/// usable transport. The first may complete a recorded local stage (that is
+/// local-first reconciliation, not new evidence); every later one reaches the
+/// same durable rows, refs, logs, index, worktree and object set, and no
+/// restart appends a window, stage, merge, attempt or observation batch.
+#[test]
+fn offline_public_restarts_reach_a_fixed_point_in_each_recorded_local_state() {
+    for recorded in [
+        "pending_conflict",
+        "external_repair",
+        "prepared_stage",
+        "unobserved_candidate",
+        "applied_candidate",
+    ] {
+        let conflict = matches!(recorded, "pending_conflict" | "external_repair");
+        let fixture = PassFixture::published(
+            if conflict { "fixture.txt" } else { "local.txt" },
+            b"local\n",
+        );
+        let repository = fixture.repository();
+        let root = fixture.root.path();
+        let local = fixture.local;
+        let incoming = if conflict {
+            child(&repository, fixture.base, b"incoming\n")
+        } else {
+            child_file(&repository, fixture.base, "remote.txt", b"remote\n")
+        };
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        let original_logs = ref_log_bytes(&repository);
+        let db = fixture.db();
+        match recorded {
+            "prepared_stage" => stop_before(
+                &db,
+                "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applying'",
+            ),
+            "unobserved_candidate" => stop_before(
+                &db,
+                "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'",
+            ),
+            _ => {}
+        }
+        let integrated = fixture.integrate(incoming);
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        match recorded {
+            "pending_conflict" | "external_repair" => assert!(matches!(
+                integrated,
+                Err(SynchronizationError::ConflictPending { .. })
+            )),
+            "applied_candidate" => {
+                integrated.unwrap();
+            }
+            _ => assert!(journal_stop(&integrated), "{recorded}"),
+        }
+        let repaired = (recorded == "external_repair")
+            .then(|| commit_external_repair(&repository, local, incoming, true));
+        let recorded_image = inspection_git_image(root);
+        let recorded_windows: i64 = db
+            .query_row(
+                "SELECT count(*) FROM remote_integration_windows",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut retry = request(root);
+        retry.operation_id = fixture.operation;
+        retry.restart = true;
+        let mut observed = Vec::new();
+        for _ in 0..3 {
+            // Each restart is a new process; none may prompt for a credential.
+            let error = RepositoryService::open_at(fixture.data.path())
+                .unwrap()
+                .synchronize_remote(retry.clone(), &mut SessionCredentials::new(NoPrompt))
+                .expect_err("no transport is available");
+            observed.push((
+                error.to_string(),
+                durable_evidence(&db),
+                inspection_git_image(root),
+                inspection_odb_inventory(&repository),
+            ));
+        }
+        assert_eq!(observed[1], observed[0], "{recorded}");
+        assert_eq!(observed[2], observed[0], "{recorded}");
+        assert_eq!(fixture.step_count(), 1, "{recorded}");
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM remote_integration_windows",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            recorded_windows,
+            "{recorded}"
+        );
+        assert!(fixture.attempts().is_empty(), "{recorded}");
+        let step = fixture.step(1).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        match recorded {
+            "pending_conflict" => {
+                assert_eq!(observed[0].0, "synchronization conflict pending");
+                assert_eq!(observed[0].2, recorded_image);
+                assert_eq!(step.phase, state::IntegrationStepPhase::ConflictPending);
+                assert_eq!(head, local);
+            }
+            "external_repair" => {
+                assert_eq!(observed[0].0, "synchronization transport unavailable");
+                assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+                assert_eq!(step.result_oid, repaired);
+                assert_eq!(Some(head), repaired);
+                assert_eq!(fixture.merge_metadata_phases(), ["retired"]);
+                assert_eq!(merge_member_images(repository.path()), [None, None, None]);
+                // Only the external tool's own ref update was ever logged.
+                for (log, original) in ref_log_bytes(&repository).iter().zip(&original_logs) {
+                    assert!(log.starts_with(original));
+                    assert!(ref_log_lines(log) <= ref_log_lines(original) + 1);
+                }
+            }
+            _ => {
+                assert_eq!(
+                    observed[0].0, "synchronization transport unavailable",
+                    "{recorded}"
+                );
+                if recorded != "prepared_stage" {
+                    // The local effect predates the restarts: Git is untouched.
+                    assert_eq!(observed[0].2, recorded_image, "{recorded}");
+                }
+                assert_eq!(
+                    step.phase,
+                    state::IntegrationStepPhase::Applied,
+                    "{recorded}"
+                );
+                assert_eq!(step.result_oid, Some(head), "{recorded}");
+                assert_eq!(
+                    repository
+                        .find_commit(head)
+                        .unwrap()
+                        .parent_ids()
+                        .collect::<Vec<_>>(),
+                    [local, incoming],
+                    "{recorded}"
+                );
+                assert_eq!(reachable_merge_commits(&repository), 1, "{recorded}");
+                for (log, original) in ref_log_bytes(&repository).iter().zip(&original_logs) {
+                    assert!(log.starts_with(original), "{recorded}");
+                    assert_eq!(
+                        ref_log_lines(log),
+                        ref_log_lines(original) + 1,
+                        "{recorded}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// G: a superseded owner epoch and another service instance are refused at
+/// every transition of a publication attempt, with no row changed, while the
+/// current owner standing at the identical boundary is accepted. A durable
+/// cancellation request is honored at each attempt write without advancing it.
+#[test]
+fn publication_transitions_fence_stale_owner_foreign_service_and_cancellation() {
+    use RemoteOperationSafePoint as Point;
+    type Transition<'a> = (
+        &'static str,
+        Box<
+            dyn Fn(
+                    &RepositoryService,
+                    &RemoteReservation,
+                ) -> Result<RemoteSafePointOutcome, RepositoryError>
+                + 'a,
+        >,
+    );
+    let refused = |result: Result<RemoteSafePointOutcome, RepositoryError>| {
+        matches!(
+            result,
+            Err(RepositoryError {
+                kind: RepositoryErrorKind::RecoveryRequired,
+                ..
+            })
+        )
+    };
+    let (mut fixture, candidate, tip) = open_attempt_fixture(true);
+    // A later explicit restart supersedes the owner that opened the attempt.
+    let stale = fixture.restart_superseding();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        candidate
+    );
+    fixture.fetch(tip, 3);
+    let resume = PublicationSettlement {
+        intent: PublicationIntent::Open,
+        local_oid: candidate,
+        continuation: false,
+        advertised_oid: None,
+        relation: None,
+    };
+    let foreign = RepositoryService::open_at(fixture.data.path()).unwrap();
+    let root = fixture.root.path();
+    let authority = state::SynchronizationAuthority::Published(candidate);
+    let transitions: Vec<Transition<'_>> = vec![
+        (
+            "settle",
+            Box::new(|service, owner| {
+                service.settle_synchronization_publication(root, owner, &resume)
+            }),
+        ),
+        (
+            "prepare",
+            Box::new(|service, owner| {
+                service.prepare_synchronization_publication(
+                    root,
+                    owner,
+                    candidate,
+                    Some(tip),
+                    false,
+                )
+            }),
+        ),
+        (
+            "before_push",
+            Box::new(|service, owner| service.remote_safe_point(root, owner, Point::BeforePush)),
+        ),
+        (
+            "returned",
+            Box::new(|service, owner| {
+                service.advance_synchronization_publication(
+                    root,
+                    owner,
+                    state::PublicationPhase::Returned,
+                    None,
+                )
+            }),
+        ),
+        (
+            "after_push_return",
+            Box::new(|service, owner| {
+                service.remote_safe_point(root, owner, Point::AfterPushReturn)
+            }),
+        ),
+        (
+            "verified",
+            Box::new(|service, owner| {
+                service.advance_synchronization_publication(
+                    root,
+                    owner,
+                    state::PublicationPhase::Verified,
+                    Some(candidate),
+                )
+            }),
+        ),
+        (
+            "authority",
+            Box::new(|service, owner| {
+                service
+                    .synchronization_publication_authority(root, owner)
+                    .map(|observed| {
+                        assert_eq!(observed, authority);
+                        RemoteSafePointOutcome::Continue
+                    })
+            }),
+        ),
+        (
+            "after_push_verification",
+            Box::new(|service, owner| {
+                service.remote_safe_point(root, owner, Point::AfterPushVerification)
+            }),
+        ),
+        (
+            "classify",
+            Box::new(|service, owner| service.classify_synchronization(root, owner, authority)),
+        ),
+    ];
+    for (label, transition) in &transitions {
+        let before = (
+            fixture.attempts(),
+            fixture.legacy_push(),
+            fixture.envelope(),
+        );
+        assert!(
+            refused(transition(&fixture.service, &stale)),
+            "{label}: superseded owner"
+        );
+        assert!(
+            refused(transition(&foreign, &fixture.owner)),
+            "{label}: foreign service"
+        );
+        assert!(
+            refused(transition(&foreign, &stale)),
+            "{label}: foreign service with a superseded token"
+        );
+        assert_eq!(
+            (
+                fixture.attempts(),
+                fixture.legacy_push(),
+                fixture.envelope()
+            ),
+            before,
+            "{label}"
+        );
+        assert_eq!(
+            transition(&fixture.service, &fixture.owner).unwrap(),
+            RemoteSafePointOutcome::Continue,
+            "{label}"
+        );
+    }
+    assert_eq!(fixture.record().authority, Some(authority));
+    let rows = fixture.attempts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].4, "verified");
+    assert_eq!(rows[0].5, Some(candidate.to_string()));
+
+    for at in ["prepare", "returned", "verified"] {
+        let (fixture, candidate, tip) = open_attempt_fixture(true);
+        if at != "prepare" {
+            fixture.prepare(candidate, Some(tip), false).unwrap();
+            fixture.point(Point::BeforePush);
+        }
+        if at == "verified" {
+            fixture
+                .advance(state::PublicationPhase::Returned, None)
+                .unwrap();
+            fixture.point(Point::AfterPushReturn);
+        }
+        let rows = fixture.attempts();
+        let legacy = fixture.legacy_push();
+        // The request arrives from another service instance.
+        RepositoryService::open_at(fixture.data.path())
+            .unwrap()
+            .cancel_remote_operation(fixture.root.path(), fixture.operation)
+            .unwrap();
+        let outcome = match at {
+            "prepare" => fixture.prepare(candidate, Some(tip), false),
+            "returned" => fixture.advance(state::PublicationPhase::Returned, None),
+            _ => fixture.advance(state::PublicationPhase::Verified, Some(candidate)),
+        };
+        assert_eq!(outcome.unwrap(), RemoteSafePointOutcome::Cancelled, "{at}");
+        assert_eq!(fixture.attempts(), rows, "{at}");
+        assert_eq!(fixture.legacy_push(), legacy, "{at}");
+        assert_eq!(fixture.record().phase, RemoteOperationPhase::Cancelled);
+        // A cancelled operation is replayed, never handed a new owner.
+        assert!(
+            matches!(
+                fixture
+                    .service
+                    .restart_remote_synchronization(
+                        fixture.root.path(),
+                        fixture.operation,
+                        &fixture.target
+                    )
+                    .unwrap(),
+                RemoteReservationOutcome::Replay(_)
+            ),
+            "{at}"
+        );
+        assert_eq!(fixture.attempts(), rows, "{at}");
+    }
+}
+
+/// G: another service instance takes the operation over, or cancels it, while
+/// the first holder stands at a merge-metadata retirement safe point. Before
+/// the lease the fenced or stopped holder unlinks nothing and journals
+/// nothing. Between unlinks it can neither journal `retired` nor observe the
+/// stage. The new owner, or the same operation restarted after the
+/// cancellation, completes that same retirement exactly once.
+#[test]
+fn merge_metadata_retirement_fences_a_superseding_service_and_cancellation() {
+    type Takeover = Arc<std::sync::Mutex<Option<(RepositoryService, RemoteReservation)>>>;
+    for variant in [
+        "superseded_before_lease",
+        "cancelled_before_lease",
+        "superseded_between_unlinks",
+    ] {
+        let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+        let repository = fixture.repository();
+        let gitdir = repository.path().to_owned();
+        let root = fixture.root.path().to_owned();
+        let local = fixture.local;
+        let incoming = child(&repository, fixture.base, b"incoming\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        assert!(matches!(
+            fixture.integrate(incoming),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let repaired = commit_external_repair(&repository, local, incoming, true);
+        let members = merge_member_images(&gitdir);
+        let before = local_binding_image(&root);
+        let before_logs = reflog_image(&repository);
+        fixture.restart();
+        let takeover: Takeover = Arc::new(std::sync::Mutex::new(None));
+        let observer = {
+            let slot = takeover.clone();
+            let data = fixture.data.path().to_owned();
+            let root = root.clone();
+            let operation = fixture.operation;
+            let target = fixture.target.clone();
+            let cancel = variant == "cancelled_before_lease";
+            move || {
+                let other = RepositoryService::open_at(&data).unwrap();
+                if cancel {
+                    other.cancel_remote_operation(&root, operation).unwrap();
+                    return;
+                }
+                let RemoteReservationOutcome::Reserved(owner) = other
+                    .restart_remote_synchronization(&root, operation, &target)
+                    .unwrap()
+                else {
+                    panic!("superseding restart")
+                };
+                *slot.lock().unwrap() = Some((other, owner));
+            }
+        };
+        if variant == "superseded_between_unlinks" {
+            set_merge_metadata_unlinked_hook(root.clone(), observer);
+        } else {
+            set_merge_metadata_observed_hook(root.clone(), observer);
+        }
+        let mut evidence = fixture.record().sync_evidence;
+        let stopped = fixture.reconcile(&mut evidence);
+        if variant == "cancelled_before_lease" {
+            assert!(matches!(stopped, Err(SynchronizationError::Interrupted)));
+        } else {
+            assert!(journal_stop(&stopped), "{variant}");
+        }
+        let after = merge_member_images(&gitdir);
+        if variant == "superseded_between_unlinks" {
+            // Under its lease the fenced holder may finish unlinking members
+            // that were proven its own; it alters none and journals nothing.
+            assert_eq!(after[0], None);
+            for (image, original) in after.iter().zip(&members) {
+                assert!(image.is_none() || image == original);
+            }
+            assert_eq!(fixture.merge_metadata_phases(), ["retire_intent"]);
+        } else {
+            assert_eq!(after, members, "{variant}");
+            assert_eq!(fixture.merge_metadata_phases(), ["recorded"], "{variant}");
+        }
+        let step = fixture.step(1).unwrap();
+        assert_eq!(
+            step.phase,
+            state::IntegrationStepPhase::ConflictPending,
+            "{variant}"
+        );
+        assert_eq!(step.result_oid, None, "{variant}");
+        assert_eq!(local_binding_image(&root), before, "{variant}");
+        assert_eq!(reflog_image(&repository), before_logs, "{variant}");
+        let taken = takeover.lock().unwrap().take();
+        let (other, owner) = if variant == "cancelled_before_lease" {
+            // The pending conflict made the cancellation a recoverable stop:
+            // a later process restarts the same operation into ownership.
+            assert!(taken.is_none());
+            assert_eq!(
+                cancellation_state(&fixture.db(), fixture.operation),
+                ("interrupted".into(), 0)
+            );
+            let other = RepositoryService::open_at(fixture.data.path()).unwrap();
+            let RemoteReservationOutcome::Reserved(owner) = other
+                .restart_remote_synchronization(&root, fixture.operation, &fixture.target)
+                .unwrap()
+            else {
+                panic!("restart after a recoverable stop")
+            };
+            (other, owner)
+        } else {
+            taken.expect("the observer took the operation over")
+        };
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(
+            reconcile_pending_candidate(
+                &other,
+                &root,
+                "main",
+                &SynchronizationTarget::Primary,
+                &owner,
+                &mut evidence,
+            )
+            .unwrap()
+            .unwrap()
+            .oid,
+            repaired,
+            "{variant}"
+        );
+        assert_eq!(
+            merge_member_images(&gitdir),
+            [None, None, None],
+            "{variant}"
+        );
+        assert_eq!(fixture.merge_metadata_phases(), ["retired"], "{variant}");
+        let step = fixture.step(1).unwrap();
+        assert_eq!(
+            step.phase,
+            state::IntegrationStepPhase::Applied,
+            "{variant}"
+        );
+        assert_eq!(step.result_oid, Some(repaired), "{variant}");
+        assert_eq!(fixture.step_count(), 1, "{variant}");
+        assert_eq!(local_binding_image(&root), before, "{variant}");
+        assert_eq!(reflog_image(&repository), before_logs, "{variant}");
+    }
+}
+
+/// G: discovery composes with a pending conflict without owning it. An
+/// ordinary refresh and a rebuild neither clear the installed Git conflict nor
+/// touch synchronization evidence, and the conflict stays directly inspectable
+/// and readable while the index cannot commit.
+#[test]
+fn pending_conflict_survives_refresh_and_rebuild_and_stays_inspectable_without_the_index() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, local, _) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let image = inspection_git_image(root.path());
+    let evidence = durable_evidence(&db);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let inspectable = |service: &RepositoryService| {
+        let again = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        assert!(again.observation == inspection.observation);
+        assert_eq!(again.paths.len(), inspection.paths.len());
+        let sides = service
+            .read_synchronization_conflict(&again.paths[0].token)
+            .unwrap();
+        assert!(sides.local.is_some() && sides.incoming.is_some());
+        assert_eq!(inspection_git_image(root.path()), image);
+        assert_eq!(durable_evidence(&db), evidence);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        assert!(repository.index().unwrap().has_conflicts());
+        assert_eq!(repository.state(), git2::RepositoryState::Merge);
+        assert_eq!(repository.head().unwrap().target(), Some(local));
+    };
+    // An ordinary refresh and a rebuild both complete over the conflicted
+    // worktree; each is read-only towards Git and the synchronization journal.
+    assert!(matches!(
+        service.refresh_repository(RefreshRepositoryRequest {
+            root: root.path().into(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
+    inspectable(&service);
+    let rebuilder = RepositoryService::open_at(data.path()).unwrap();
+    rebuilder
+        .rebuild_repository(crate::repository::RebuildRepositoryRequest {
+            root: root.path().into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    inspectable(&rebuilder);
+    inspectable(&service);
+    // Indexing unavailable: the discovery transaction cannot commit.
+    let interrupted = RefreshRepositoryRequest {
+        root: root.path().into(),
+        operation_id: OperationId::new(),
+    };
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+    assert!(matches!(
+        service.refresh_repository(interrupted.clone()),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::InjectedFailure,
+            ..
+        })
+    ));
+    *service.failure_point.lock().unwrap() = None;
+    inspectable(&service);
+    inspectable(&rebuilder);
+    let mut retry = request(root.path());
+    retry.operation_id = operation;
+    retry.restart = true;
+    // The unfinished index operation fences a new owner, as it does for every
+    // remote operation; the refusal itself changes nothing.
+    assert!(matches!(
+        rebuilder.synchronize_remote(retry.clone(), &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    inspectable(&service);
+    // Resuming that same refresh restores the identical offline restart.
+    assert!(matches!(
+        service.refresh_repository(interrupted),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
+    inspectable(&service);
+    assert!(matches!(
+        rebuilder.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+        Err(SynchronizationError::ConflictPending { operation_id, .. }) if operation_id == operation
+    ));
+    assert_eq!(inspection_git_image(root.path()), image);
+    assert!(
+        service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap()
+            .observation
+            == inspection.observation
+    );
+}
+
+/// G: the authority of a continuation publication attempt composes with
+/// index-only discovery exactly like a legacy one. A failed discovery leaves
+/// exact index-pending authority; an unrelated rebuild neither consumes that
+/// handoff nor replays any mutation; replay then only refreshes, with no
+/// credential prompt, transport, integration or push, and never scans again.
+#[test]
+fn continuation_authority_index_pending_replays_refresh_only_across_rebuild() {
+    use RemoteOperationSafePoint as Point;
+    let (fixture, candidate, tip) = open_attempt_fixture(true);
+    fixture.prepare(candidate, Some(tip), false).unwrap();
+    fixture.point(Point::BeforePush);
+    fixture
+        .advance(state::PublicationPhase::Returned, None)
+        .unwrap();
+    fixture.point(Point::AfterPushReturn);
+    fixture
+        .advance(state::PublicationPhase::Verified, Some(candidate))
+        .unwrap();
+    fixture.point(Point::AfterPushVerification);
+    let authority = fixture.authority();
+    assert_eq!(
+        authority,
+        state::SynchronizationAuthority::Published(candidate)
+    );
+    fixture
+        .service
+        .classify_synchronization(fixture.root.path(), &fixture.owner, authority)
+        .unwrap();
+    let root = fixture.root.path();
+    let repository = fixture.repository();
+    let attempts = fixture.attempts();
+    let legacy = fixture.legacy_push();
+    let image = inspection_git_image(root);
+    let objects = inspection_odb_inventory(&repository);
+    let handoff = |pending: i64| {
+        let envelope = fixture.envelope();
+        assert_eq!(envelope.0, "completed");
+        assert_eq!(envelope.3, Some(candidate.to_string()));
+        assert_eq!(envelope.4, pending);
+        assert_eq!(fixture.attempts(), attempts);
+        assert_eq!(fixture.legacy_push(), legacy);
+        assert_eq!(inspection_git_image(root), image);
+        assert_eq!(inspection_odb_inventory(&repository), objects);
+    };
+    handoff(1);
+    let expected = SynchronizationOutcome::Published {
+        target: SynchronizationTarget::Primary,
+        oid: candidate,
+    };
+    let mut replay = request(root);
+    replay.operation_id = fixture.operation;
+    // A later process whose discovery transaction cannot commit.
+    let service = RepositoryService::open_at(fixture.data.path()).unwrap();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+    assert_eq!(
+        service
+            .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::IndexPending(IndexPending::new(expected.clone()))
+    );
+    *service.failure_point.lock().unwrap() = None;
+    handoff(1);
+    // An ordinary rebuild under its own operation is not this handoff: it is
+    // refused until the pending refresh is resumed, and consumes nothing.
+    let rebuild = || {
+        service.rebuild_repository(crate::repository::RebuildRepositoryRequest {
+            root: root.into(),
+            operation_id: OperationId::new(),
+        })
+    };
+    assert!(matches!(
+        rebuild(),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        })
+    ));
+    handoff(1);
+    let mut restart = replay.clone();
+    restart.restart = true;
+    assert_eq!(
+        service
+            .synchronize_remote(restart, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::Complete(expected.clone())
+    );
+    handoff(0);
+    // Once handed off, a rebuild of the derived index replays no mutation and
+    // leaves the recorded authority as it is.
+    rebuild().unwrap();
+    handoff(0);
+    service.set_observation_hook_for_testing(|| panic!("completed handoff must not scan"));
+    assert_eq!(
+        service
+            .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::Complete(expected)
+    );
+    handoff(0);
+}
+
+/// phase and cancel flag of one operation's envelope.
+fn cancellation_state(db: &rusqlite::Connection, operation: OperationId) -> (String, i64) {
+    db.query_row(
+        "SELECT phase,cancel_requested FROM remote_operation_records WHERE operation_ulid=?1",
+        [operation.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+/// A cancellation honoured while the operation holds a pending conflict stops
+/// that owner and preserves the recoverable transition: the operation is not
+/// terminal, the request is consumed, and the same operation still restarts,
+/// reacquires and resolves its conflict, or retires its own merge metadata
+/// after external repair. Covered at the reconciliation entry boundary, the
+/// under-lease conflict inspection boundary and the retirement boundary.
+#[test]
+fn cancellation_with_a_pending_conflict_is_a_recoverable_stop() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    for boundary in [
+        "reconciliation_entry",
+        "under_lease_inspection",
+        "restart_acknowledgement",
+    ] {
+        let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
+            "docs/document.md",
+            base,
+            &base.replace("base", "local"),
+            &base.replace("base", "incoming"),
+        )]);
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("explicit restart")
+        };
+        let cancel = {
+            let (data, root) = (data.path().to_owned(), root.path().to_owned());
+            move || {
+                RepositoryService::open_at(&data)
+                    .unwrap()
+                    .cancel_remote_operation(&root, operation)
+                    .unwrap();
+            }
+        };
+        if boundary == "under_lease_inspection" {
+            set_local_reconciliation_prepared_hook(root.path().to_owned(), cancel);
+        } else {
+            cancel();
+        }
+        let image = inspection_git_image(root.path());
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
+        })
+        .unwrap();
+        let stopped = if boundary == "restart_acknowledgement" {
+            // The cancelled owner never ran again; the next deliberate
+            // restart through the public entry point honours the request.
+            let mut retry = request(root.path());
+            retry.operation_id = operation;
+            retry.restart = true;
+            RepositoryService::open_at(data.path())
+                .unwrap()
+                .synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt))
+                .map(|_| None)
+        } else {
+            reconcile_pending_candidate(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+                &owner,
+                &mut evidence,
+            )
+        };
+        assert!(
+            matches!(stopped, Err(SynchronizationError::Interrupted)),
+            "{boundary}"
+        );
+        assert_eq!(
+            cancellation_state(&db, operation),
+            ("interrupted".into(), 0),
+            "{boundary}"
+        );
+        assert_eq!(
+            db.query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            "conflict_pending",
+            "{boundary}"
+        );
+        assert_eq!(inspection_git_image(root.path()), image, "{boundary}");
+        // The stopped owner is fenced, but the operation is not terminal: a
+        // later process restarts the same ID into the same offline conflict.
+        let later = RepositoryService::open_at(data.path()).unwrap();
+        let mut retry = request(root.path());
+        retry.operation_id = operation;
+        retry.restart = true;
+        assert!(
+            matches!(
+                later.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+                Err(SynchronizationError::ConflictPending { operation_id, .. })
+                    if operation_id == operation
+            ),
+            "{boundary}"
+        );
+        assert_eq!(inspection_git_image(root.path()), image, "{boundary}");
+        // And that same operation reacquires and resolves it.
+        let resolved = base.replace("base", "resolved");
+        let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+            resolve_fixture(root.path(), &later, operation, &[resolved.as_str()])
+        else {
+            panic!("{boundary}: resolution after a cancelled owner")
+        };
+        let repository = git2::Repository::open(root.path()).unwrap();
+        assert_eq!(repository.head().unwrap().target(), Some(commit_oid));
+        assert_eq!(
+            repository
+                .find_commit(commit_oid)
+                .unwrap()
+                .parent_ids()
+                .collect::<Vec<_>>(),
+            [local, incoming],
+            "{boundary}"
+        );
+        assert!(!repository.index().unwrap().has_conflicts());
+        assert_eq!(repository.state(), git2::RepositoryState::Clean);
+    }
+
+    // The retirement boundary: the conflict was repaired externally and the
+    // cancellation lands after validation, before the lease.
+    let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+    let repository = fixture.repository();
+    let gitdir = repository.path().to_owned();
+    let root = fixture.root.path().to_owned();
+    let incoming = child(&repository, fixture.base, b"incoming\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert!(matches!(
+        fixture.integrate(incoming),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let repaired = commit_external_repair(&repository, fixture.local, incoming, true);
+    let members = merge_member_images(&gitdir);
+    let before = local_binding_image(&root);
+    let before_logs = reflog_image(&repository);
+    fixture.restart();
+    {
+        let (data, root, operation) = (
+            fixture.data.path().to_owned(),
+            root.clone(),
+            fixture.operation,
+        );
+        set_merge_metadata_observed_hook(root.clone(), move || {
+            RepositoryService::open_at(&data)
+                .unwrap()
+                .cancel_remote_operation(&root, operation)
+                .unwrap();
+        });
+    }
+    let mut evidence = fixture.record().sync_evidence;
+    assert!(matches!(
+        fixture.reconcile(&mut evidence),
+        Err(SynchronizationError::Interrupted)
+    ));
+    assert_eq!(
+        cancellation_state(&fixture.db(), fixture.operation),
+        ("interrupted".into(), 0)
+    );
+    assert_eq!(merge_member_images(&gitdir), members);
+    assert_eq!(fixture.merge_metadata_phases(), ["recorded"]);
+    assert_eq!(
+        fixture.step(1).unwrap().phase,
+        state::IntegrationStepPhase::ConflictPending
+    );
+    assert_eq!(local_binding_image(&root), before);
+    // A later process restarts the same operation and completes retirement.
+    fixture.restart_in_new_process();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        repaired
+    );
+    assert_eq!(merge_member_images(&gitdir), [None, None, None]);
+    assert_eq!(fixture.merge_metadata_phases(), ["retired"]);
+    let step = fixture.step(1).unwrap();
+    assert_eq!(step.phase, state::IntegrationStepPhase::Applied);
+    assert_eq!(step.result_oid, Some(repaired));
+    assert_eq!(local_binding_image(&root), before);
+    assert_eq!(reflog_image(&repository), before_logs);
+}
+
+/// A cancellation requested while the first conflicted merge is being
+/// installed (after its boundary, before the conflict is released) does not
+/// survive the release as a latent request: the conflict stays reacquirable
+/// by its own operation and a later restart still converges.
+#[test]
+fn cancellation_requested_during_the_first_conflicted_merge_keeps_it_reacquirable() {
+    let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+    let repository = fixture.repository();
+    let incoming = child(&repository, fixture.base, b"incoming\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    let db = fixture.db();
+    // The request becomes durable together with the effect intent, which is
+    // written after the last boundary that could have honoured it.
+    db.execute_batch(
+        "CREATE TRIGGER injected_stop AFTER UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applying' BEGIN UPDATE remote_operation_records SET cancel_requested=1; END;",
+    )
+    .unwrap();
+    assert!(matches!(
+        fixture.integrate(incoming),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    db.execute_batch(DROP_INJECTED_STOP).unwrap();
+    assert_eq!(
+        cancellation_state(&db, fixture.operation),
+        ("interrupted".into(), 0)
+    );
+    let step = fixture.step(1).unwrap();
+    assert_eq!(step.phase, state::IntegrationStepPhase::ConflictPending);
+    assert!(repository.index().unwrap().has_conflicts());
+    assert_eq!(fixture.merge_metadata_phases(), ["recorded"]);
+    // Explicit reacquisition by the same operation, as resolution performs it.
+    assert!(matches!(
+        fixture
+            .service
+            .reacquire_synchronization_conflict_in_window(
+                fixture.root.path(),
+                fixture.operation,
+                &fixture.target,
+                1,
+                0,
+                step.conflict_digest.unwrap(),
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    // External repair followed by a deliberate restart converges as well.
+    let repaired = commit_external_repair(&repository, fixture.local, incoming, true);
+    fixture.restart_in_new_process();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        repaired
+    );
+    assert_eq!(fixture.merge_metadata_phases(), ["retired"]);
+    assert_eq!(
+        fixture.step(1).unwrap().phase,
+        state::IntegrationStepPhase::Applied
+    );
+}
+
+/// Cycle 05 cancellation is unchanged for an operation without a pending
+/// conflict or owned resolution: it is terminal, with or without a completed
+/// clean stage, and the same ID only ever replays the interruption.
+#[test]
+fn cancellation_without_a_pending_conflict_stays_terminal() {
+    for applied in [false, true] {
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        if applied {
+            let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+            fixture.fetch(incoming, 1);
+            fixture.append_window(1, incoming).unwrap();
+            fixture.integrate(incoming).unwrap();
+        }
+        let image = inspection_git_image(fixture.root.path());
+        RepositoryService::open_at(fixture.data.path())
+            .unwrap()
+            .cancel_remote_operation(fixture.root.path(), fixture.operation)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .service
+                .check_synchronization_requests(fixture.root.path(), &fixture.owner)
+                .unwrap(),
+            RemoteSafePointOutcome::Cancelled,
+            "{applied}"
+        );
+        assert_eq!(
+            fixture.record().phase,
+            RemoteOperationPhase::Cancelled,
+            "{applied}"
+        );
+        assert!(matches!(
+            fixture
+                .service
+                .restart_remote_synchronization(
+                    fixture.root.path(),
+                    fixture.operation,
+                    &fixture.target
+                )
+                .unwrap(),
+            RemoteReservationOutcome::Replay(_)
+        ));
+        let mut retry = request(fixture.root.path());
+        retry.operation_id = fixture.operation;
+        retry.restart = true;
+        for _ in 0..2 {
+            assert!(matches!(
+                RepositoryService::open_at(fixture.data.path())
+                    .unwrap()
+                    .synchronize_remote(retry.clone(), &mut SessionCredentials::new(NoPrompt)),
+                Err(SynchronizationError::Interrupted)
+            ));
+        }
+        assert_eq!(
+            fixture.record().phase,
+            RemoteOperationPhase::Cancelled,
+            "{applied}"
+        );
+        assert_eq!(inspection_git_image(fixture.root.path()), image);
+    }
+}
+
+/// Whether the common Git lease of `root` is held right now.
+fn lease_refusal(root: &Path) -> Option<RepositoryErrorKind> {
+    let repository = git2::Repository::open(root).unwrap();
+    crate::repository::repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)
+        .err()
+        .map(|error| error.kind)
+}
+
+/// G: validation and isolated preparation run outside the short common Git
+/// lease, and owned merge metadata is only ever unlinked under it. An
+/// observer at each safe point sees the lease free before conflict
+/// inspection, before retirement and before the generic candidate
+/// observation, and held after every unlink.
+#[test]
+fn local_reconciliation_validates_outside_the_lease_and_retires_under_it() {
+    type Seen = Arc<std::sync::Mutex<Vec<(&'static str, Option<RepositoryErrorKind>)>>>;
+    let observer = |seen: &Seen, label: &'static str, root: &Path| {
+        let (seen, root) = (seen.clone(), root.to_owned());
+        move || {
+            let refusal = lease_refusal(&root);
+            seen.lock().unwrap().push((label, refusal));
+        }
+    };
+    // Retirement after external repair.
+    let seen: Seen = Arc::default();
+    let mut fixture = PassFixture::new("fixture.txt", b"local\n");
+    let repository = fixture.repository();
+    let root = fixture.root.path().to_owned();
+    let incoming = child(&repository, fixture.base, b"incoming\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert!(matches!(
+        fixture.integrate(incoming),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let repaired = commit_external_repair(&repository, fixture.local, incoming, true);
+    set_merge_metadata_observed_hook(root.clone(), observer(&seen, "validated", &root));
+    for _ in 0..3 {
+        set_merge_metadata_unlinked_hook(root.clone(), observer(&seen, "unlinked", &root));
+    }
+    fixture.restart();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        repaired
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            ("validated", None),
+            ("unlinked", Some(RepositoryErrorKind::RepositoryBusy)),
+            ("unlinked", Some(RepositoryErrorKind::RepositoryBusy)),
+            ("unlinked", Some(RepositoryErrorKind::RepositoryBusy)),
+        ]
+    );
+    assert_eq!(lease_refusal(&root), None);
+
+    // Isolated preparation of a pending conflict's inspection.
+    let seen: Seen = Arc::default();
+    let (root, _data, service, operation, _, _) =
+        resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .restart_remote_synchronization(root.path(), operation, &target)
+        .unwrap()
+    else {
+        panic!("explicit restart")
+    };
+    set_local_reconciliation_prepared_hook(
+        root.path().to_owned(),
+        observer(&seen, "prepared", root.path()),
+    );
+    let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(state::read_operation(tx, id, operation)?
+            .unwrap()
+            .sync_evidence)
+    })
+    .unwrap();
+    assert!(matches!(
+        reconcile_pending_candidate(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &owner,
+            &mut evidence,
+        ),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    assert_eq!(*seen.lock().unwrap(), [("prepared", None)]);
+
+    // Observation of a recorded clean candidate.
+    let seen: Seen = Arc::default();
+    let mut fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let root = fixture.root.path().to_owned();
+    let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    let db = fixture.db();
+    stop_before(
+        &db,
+        "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'",
+    );
+    assert!(journal_stop(&fixture.integrate(incoming)));
+    db.execute_batch(DROP_INJECTED_STOP).unwrap();
+    set_candidate_reconciliation_observed_hook(root.clone(), observer(&seen, "candidate", &root));
+    fixture.restart();
+    let mut evidence = fixture.record().sync_evidence;
+    assert!(fixture.reconcile(&mut evidence).unwrap().is_some());
+    assert_eq!(*seen.lock().unwrap(), [("candidate", None)]);
+}
+
+/// G: a takeover by another service and a cancellation at the remaining local
+/// safe points: the under-lease conflict inspection, the observation of a
+/// recorded clean candidate, and the boundary between the context and primary
+/// stages. The fenced or stopped holder records and moves nothing further.
+#[test]
+fn local_safe_points_fence_takeover_and_cancellation() {
+    let superseded = |result: &Result<Option<ReconciledCandidate>, SynchronizationError>| {
+        matches!(
+            result,
+            Err(SynchronizationError::Repository(RepositoryError {
+                kind: RepositoryErrorKind::RecoveryRequired,
+                ..
+            }))
+        )
+    };
+    for cancel in [false, true] {
+        let intervene =
+            |data: &Path, root: &Path, operation: OperationId, target: &RemoteOperationTarget| {
+                let (data, root, target) = (data.to_owned(), root.to_owned(), target.clone());
+                move || {
+                    let other = RepositoryService::open_at(&data).unwrap();
+                    if cancel {
+                        other.cancel_remote_operation(&root, operation).unwrap();
+                    } else {
+                        assert!(matches!(
+                            other
+                                .restart_remote_synchronization(&root, operation, &target)
+                                .unwrap(),
+                            RemoteReservationOutcome::Reserved(_)
+                        ));
+                    }
+                }
+            };
+
+        // Under-lease inspection of a pending conflict.
+        let (root, data, service, operation, _, _) =
+            resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE remote_integration_steps SET phase='applying',conflict_digest=NULL",
+            [],
+        )
+        .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+        let RemoteReservationOutcome::Reserved(owner) = service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap()
+        else {
+            panic!("explicit restart")
+        };
+        set_local_reconciliation_prepared_hook(
+            root.path().to_owned(),
+            intervene(data.path(), root.path(), operation, &target),
+        );
+        let image = inspection_git_image(root.path());
+        let mut evidence = state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(state::read_operation(tx, id, operation)?
+                .unwrap()
+                .sync_evidence)
+        })
+        .unwrap();
+        let result = reconcile_pending_candidate(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary,
+            &owner,
+            &mut evidence,
+        );
+        if cancel {
+            assert!(matches!(result, Err(SynchronizationError::Interrupted)));
+        } else {
+            assert!(superseded(&result));
+        }
+        // The installed conflict was not recorded by the fenced holder.
+        assert_eq!(
+            db.query_row(
+                "SELECT phase,conflict_digest FROM remote_integration_steps",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
+            )
+            .unwrap(),
+            ("applying".into(), None),
+            "{cancel}"
+        );
+        assert_eq!(inspection_git_image(root.path()), image, "{cancel}");
+
+        // Observation of a recorded clean candidate whose ref already moved.
+        let mut fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+        fixture.fetch(incoming, 1);
+        fixture.append_window(1, incoming).unwrap();
+        let db = fixture.db();
+        stop_before(
+            &db,
+            "UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied'",
+        );
+        assert!(journal_stop(&fixture.integrate(incoming)));
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        let candidate = repository.head().unwrap().target().unwrap();
+        fixture.restart();
+        set_candidate_reconciliation_observed_hook(
+            fixture.root.path().to_owned(),
+            intervene(
+                fixture.data.path(),
+                fixture.root.path(),
+                fixture.operation,
+                &fixture.target,
+            ),
+        );
+        let image = inspection_git_image(fixture.root.path());
+        let mut evidence = fixture.record().sync_evidence;
+        let result = fixture.reconcile(&mut evidence);
+        if cancel {
+            assert!(matches!(result, Err(SynchronizationError::Interrupted)));
+            // No conflict or owned resolution is pending: terminal as before.
+            assert_eq!(fixture.record().phase, RemoteOperationPhase::Cancelled);
+        } else {
+            assert!(superseded(&result));
+        }
+        let step = fixture.step(1).unwrap();
+        assert_eq!(
+            step.phase,
+            state::IntegrationStepPhase::Applying,
+            "{cancel}"
+        );
+        assert_eq!(step.candidate_oid, Some(candidate), "{cancel}");
+        assert_eq!(step.result_oid, None, "{cancel}");
+        assert_eq!(inspection_git_image(fixture.root.path()), image, "{cancel}");
+
+        // Between the context and primary stages. A trigger cannot run a
+        // second service, so the takeover is modelled by its durable effect:
+        // the owner epoch advances in the transaction that observes the
+        // context stage, exactly where an explicit restart could land.
+        let pass = ContextPass::new();
+        let db = pass.db();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER injected_stop AFTER UPDATE OF phase ON remote_integration_steps WHEN NEW.phase='applied' AND NEW.ordinal=0 BEGIN UPDATE remote_operation_records SET {}; END;",
+            if cancel {
+                "cancel_requested=1"
+            } else {
+                "owner_epoch=owner_epoch+1"
+            }
+        ))
+        .unwrap();
+        let original_log = pass.head_log();
+        let result = pass.integrate();
+        db.execute_batch(DROP_INJECTED_STOP).unwrap();
+        if cancel {
+            assert!(matches!(result, Err(SynchronizationError::Interrupted)));
+        } else {
+            assert!(journal_stop(&result));
+        }
+        // The context merge stands; the primary stage never got an intent.
+        let context_merge = pass.head();
+        assert_eq!(
+            pass.parents(context_merge),
+            [pass.local, pass.context_incoming],
+            "{cancel}"
+        );
+        let context_stage = pass.stage(0).unwrap();
+        assert_eq!(context_stage.phase, state::IntegrationStepPhase::Applied);
+        assert_eq!(context_stage.result_oid, Some(context_merge));
+        assert!(pass.stage(1).is_none(), "{cancel}");
+        assert_eq!(
+            ref_log_lines(&pass.head_log()),
+            ref_log_lines(&original_log) + 1,
+            "{cancel}"
+        );
+        if !cancel {
+            // The current owner epoch resumes the primary stage only.
+            assert!(matches!(
+                pass.service
+                    .restart_remote_synchronization(
+                        pass.root.path(),
+                        pass.operation,
+                        &pass.operation_target
+                    )
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+        }
+    }
 }
 
 // Real SIGKILL tests, deliberately separate from synthetic partial-log and

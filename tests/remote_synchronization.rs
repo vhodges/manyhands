@@ -193,6 +193,35 @@ const CASES: &[ssh_harness::Case] = &[
         "merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt",
         merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt,
     ),
+    ("merge_candidate_publication_stop_at_settlement", || {
+        merge_candidate_publication_stop(PublicationStop::Settlement)
+    }),
+    ("merge_candidate_publication_stop_at_window_append", || {
+        merge_candidate_publication_stop(PublicationStop::Window)
+    }),
+    ("merge_candidate_continuation_cancel_before_push", || {
+        merge_candidate_continuation_intervention(false)
+    }),
+    (
+        "merge_candidate_continuation_takeover_after_push_return",
+        || merge_candidate_continuation_intervention(true),
+    ),
+    (
+        "merge_candidate_publication_stop_at_stage_observation",
+        || merge_candidate_publication_stop(PublicationStop::Stage),
+    ),
+    ("merge_candidate_publication_stop_at_prepared", || {
+        merge_candidate_publication_stop(PublicationStop::Prepared)
+    }),
+    ("merge_candidate_publication_stop_at_returned", || {
+        merge_candidate_publication_stop(PublicationStop::Returned)
+    }),
+    ("merge_candidate_publication_stop_at_verified", || {
+        merge_candidate_publication_stop(PublicationStop::Verified)
+    }),
+    ("merge_candidate_publication_stop_at_classification", || {
+        merge_candidate_publication_stop(PublicationStop::Classification)
+    }),
     (
         "merge_candidate_ambiguous_acceptance_exact_restart",
         merge_candidate_ambiguous_acceptance_exact_restart,
@@ -1843,6 +1872,345 @@ fn merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt()
             Some(continued.to_string())
         )
     );
+    Ok(())
+}
+/// Every durable integration and publication evidence row together with the
+/// legacy envelope's checkpoint and Push columns, as one fixed-size digest.
+fn recorded_evidence(w: &World, operation: OperationId) -> Result<[u8; 32], FixtureError> {
+    let db = w.db()?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(format!("{:?}", legacy_push(w, operation)?).as_bytes());
+    for table in [
+        "remote_integration_windows",
+        "remote_integration_steps",
+        "remote_integration_merge_metadata",
+        "remote_publication_attempts",
+        "remote_observation_batches",
+        "remote_ref_observations",
+    ] {
+        let mut statement = fixed(db.prepare(&format!("SELECT * FROM {table} ORDER BY 1,2")))?;
+        let columns = statement.column_count();
+        let mut rows = fixed(statement.query([]))?;
+        hash.update(table.as_bytes());
+        while let Some(row) = fixed(rows.next())? {
+            for column in 0..columns {
+                hash.update(format!(" {:?}", fixed(row.get_ref(column))?).as_bytes());
+            }
+            hash.update(b"\n");
+        }
+    }
+    Ok(*hash.finalize().as_bytes())
+}
+/// HEAD and primary-branch ref logs of the local clone, as one digest.
+fn ref_logs(repo: &git2::Repository) -> Result<[u8; 32], FixtureError> {
+    let mut hash = blake3::Hasher::new();
+    for name in ["logs/HEAD", "logs/refs/heads/main"] {
+        hash.update(&fixed(std::fs::read(repo.path().join(name)))?);
+        hash.update(&[0]);
+    }
+    Ok(*hash.finalize().as_bytes())
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PublicationStop {
+    Settlement,
+    Window,
+    Stage,
+    Prepared,
+    Returned,
+    Verified,
+    Classification,
+}
+/// The continuation of a displaced merge candidate stops at one durable
+/// transition of its publication attempt: the settlement that opens it, the
+/// append of the continuation's window, the observation of its merge stage,
+/// then `prepared`, `returned`, `verified`, and the classification that follows.
+/// Deliberate restarts with no network then leave every evidence row, ref, ref
+/// log, index and worktree byte exactly as the stop left them. Once the
+/// network is back, one restart converges on a single published continuation:
+/// one merge of the recorded parents, one accepted push, one attempt row.
+fn merge_candidate_publication_stop(stop: PublicationStop) -> Result<(), FixtureError> {
+    use PublicationStop as Stop;
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    let db = w.db()?;
+    fixed(db.execute_batch(match stop {
+        Stop::Settlement => "CREATE TRIGGER publication_stop BEFORE INSERT ON remote_publication_attempts BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Window => "CREATE TRIGGER publication_stop BEFORE INSERT ON remote_integration_windows WHEN NEW.number=2 BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Stage => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_integration_steps WHEN NEW.phase='applied' AND NEW.window_number=2 BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Prepared => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='prepared' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Returned => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='returned' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Verified => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='verified' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Classification => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_operation_records WHEN NEW.sync_checkpoint='discovery_pending' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+    }))?;
+    assert!(matches!(
+        w.sync(restart.clone()),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    fixed(db.execute_batch("DROP TRIGGER publication_stop"))?;
+    // Exactly the effects that precede the stopped transition exist.
+    let pushed = matches!(stop, Stop::Returned | Stop::Verified | Stop::Classification);
+    let stopped_head = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let stopped = publication_attempts(&w)?;
+    if matches!(stop, Stop::Settlement | Stop::Window) {
+        // No continuation merge exists yet; the window stop already settled.
+        assert_eq!(stopped.len(), usize::from(stop == Stop::Window));
+        if let Some(open) = stopped.first() {
+            assert_eq!((open.5.as_deref(), open.6.as_str()), (None, "open"));
+        }
+        assert_eq!(stopped_head, merged);
+        assert_eq!(merge_commits(&repo)?, 1);
+    } else {
+        assert_eq!(parents(&repo, stopped_head)?, [merged, race]);
+        assert_eq!(merge_commits(&repo)?, 2);
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(
+            stopped[0].6,
+            match stop {
+                Stop::Stage | Stop::Prepared => "open",
+                Stop::Returned => "prepared",
+                Stop::Verified => "returned",
+                _ => "verified",
+            }
+        );
+        assert_eq!(
+            stopped[0].5,
+            (!matches!(stop, Stop::Stage | Stop::Prepared)).then(|| stopped_head.to_string())
+        );
+    }
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        if pushed { stopped_head } else { race }
+    );
+    assert_eq!(
+        w.server.receive_updates().len(),
+        n + 1 + usize::from(pushed)
+    );
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    // No network: each restart is a new process that reaches the same state.
+    let mut evidence = recorded_evidence(&w, req.operation_id)?;
+    let before = physical(&w.root, &w.root)?;
+    let logs = ref_logs(&repo)?;
+    let commits = commit_inventory(&w.bare()?)?;
+    let local_commits = commit_inventory(&repo)?;
+    let updates = w.server.receive_updates();
+    w.server.disconnect_at(FixtureBoundary::Handshake);
+    for round in 0..3 {
+        let offline = fixed(RepositoryService::open_at(&w.data()))?;
+        assert!(matches!(
+            offline.synchronize_remote(restart.clone(), &mut SessionCredentials::new(Provider)),
+            Err(SynchronizationError::Transport(_))
+        ));
+        let recorded = recorded_evidence(&w, req.operation_id)?;
+        if stop == Stop::Stage && round == 0 {
+            // Local-first: the first restart records the stage effect that
+            // already happened, without the network and without touching Git.
+            assert!(recorded != evidence);
+            evidence = recorded;
+        }
+        assert!(recorded == evidence);
+        assert!(physical(&w.root, &w.root)? == before);
+        assert!(ref_logs(&repo)? == logs);
+        assert_eq!(commit_inventory(&repo)?, local_commits);
+        assert_eq!(commit_inventory(&w.bare()?)?, commits);
+        assert_eq!(w.server.receive_updates(), updates);
+    }
+    w.server.clear_fault();
+    w.privacy()?;
+    let online = fixed(RepositoryService::open_at(&w.data()))?;
+    let result =
+        fixed(online.synchronize_remote(restart.clone(), &mut SessionCredentials::new(Provider)))?;
+    ssh_privacy::clean(format!("{result:?}").as_bytes(), &w.probes)?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(parents(&repo, oid)?, [merged, race]);
+    if !matches!(stop, Stop::Settlement | Stop::Window) {
+        // The stopped continuation is published as it was, never regenerated.
+        assert_eq!(oid, stopped_head);
+        assert!(ref_logs(&repo)? == logs);
+    }
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(merge_commits(&repo)?, 2);
+    // One push of the continuation in total, across the stop and the restarts.
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), n + 2);
+    assert_eq!(
+        updates[n + 1],
+        ReceiveUpdate {
+            reference: "refs/heads/main".into(),
+            old_oid: race,
+            new_oid: oid,
+            accepted: true
+        }
+    );
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![(
+            1,
+            merged.to_string(),
+            Some(race.to_string()),
+            "displaced".into(),
+            Some(2),
+            Some(oid.to_string()),
+            "verified".into()
+        )]
+    );
+    assert_eq!(
+        legacy_push(&w, req.operation_id)?,
+        (
+            "discovery_pending".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(oid.to_string())
+        )
+    );
+    let steps: Vec<(i64, String, String)> = {
+        let mut statement = fixed(db.prepare(
+            "SELECT window_number,phase,result_oid FROM remote_integration_steps ORDER BY window_number",
+        ))?;
+        let rows =
+            fixed(statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))?;
+        fixed(rows.collect::<Result<Vec<_>, _>>())?
+    };
+    assert_eq!(
+        steps,
+        vec![
+            (1, "applied".into(), merged.to_string()),
+            (2, "applied".into(), oid.to_string())
+        ]
+    );
+    w.privacy()?;
+    // Authority replays without transport, integration or another push.
+    let auth = w.server.accepted_keys().len();
+    outcome(
+        fixed(w.sync(req.clone()))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    outcome(
+        fixed(w.sync(restart))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    assert_eq!(w.server.accepted_keys().len(), auth);
+    assert_eq!(w.server.receive_updates().len(), n + 2);
+    assert_eq!(merge_commits(&repo)?, 2);
+    Ok(())
+}
+/// A second party intervenes on the attempt route of the public entry point.
+/// A cancellation that becomes durable with the attempt's push intent is
+/// honoured at the BeforePush boundary: nothing is pushed and, with no
+/// conflict pending, the operation is terminal as in Cycle 05. A takeover that
+/// becomes durable with the returned push fences the old owner at the
+/// AfterPushReturn boundary; the next deliberate restart proves that one push
+/// from the Push advertisement and verifies the same attempt. A trigger cannot
+/// run a second service, so each intervention is its durable effect.
+fn merge_candidate_continuation_intervention(takeover: bool) -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    let db = w.db()?;
+    fixed(db.execute_batch(if takeover {
+        "CREATE TRIGGER intervention AFTER UPDATE ON remote_publication_attempts WHEN NEW.phase='returned' BEGIN UPDATE remote_operation_records SET owner_epoch=owner_epoch+1; END"
+    } else {
+        "CREATE TRIGGER intervention AFTER UPDATE ON remote_publication_attempts WHEN NEW.phase='prepared' BEGIN UPDATE remote_operation_records SET cancel_requested=1; END"
+    }))?;
+    let stopped = w.sync(restart.clone());
+    fixed(db.execute_batch("DROP TRIGGER intervention"))?;
+    let continued = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, continued)?, [merged, race]);
+    let attempts = publication_attempts(&w)?;
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].5, Some(continued.to_string()));
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    let before = physical(&w.root, &w.root)?;
+    if !takeover {
+        assert!(matches!(stopped, Err(SynchronizationError::Interrupted)));
+        assert_eq!(attempts[0].6, "prepared");
+        // Nothing was pushed, and the same ID only replays the interruption.
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, race);
+        let auth = w.server.accepted_keys().len();
+        for _ in 0..2 {
+            assert!(matches!(
+                w.sync(restart.clone()),
+                Err(SynchronizationError::Interrupted)
+            ));
+        }
+        assert_eq!(w.server.accepted_keys().len(), auth);
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert_eq!(publication_attempts(&w)?, attempts);
+        assert!(physical(&w.root, &w.root)? == before);
+        assert_eq!(merge_commits(&repo)?, 2);
+        return Ok(());
+    }
+    assert!(matches!(
+        stopped,
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    // The push happened once; the fenced owner recorded nothing after it.
+    assert_eq!(attempts[0].6, "returned");
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        continued
+    );
+    one_update(&w.server, n + 1, "refs/heads/main", race, continued);
+    let later = fixed(RepositoryService::open_at(&w.data()))?;
+    let result = fixed(later.synchronize_remote(restart, &mut SessionCredentials::new(Provider)))?;
+    ssh_privacy::clean(format!("{result:?}").as_bytes(), &w.probes)?;
+    w.privacy()?;
+    outcome(result, true, SynchronizationTarget::Primary, continued);
+    assert_eq!(w.server.receive_updates().len(), n + 2);
+    assert_eq!(merge_commits(&repo)?, 2);
+    assert!(physical(&w.root, &w.root)? == before);
+    let verified = publication_attempts(&w)?;
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0].6, "verified");
+    assert_eq!(verified[0].5, Some(continued.to_string()));
     Ok(())
 }
 /// Ambiguous acceptance of a MERGE candidate: the receiver took the push but
