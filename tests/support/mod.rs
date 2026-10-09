@@ -915,7 +915,16 @@ pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &P
         .unwrap();
     assert_eq!(
         contexts,
-        vec![root.clone(), format!("{root}/.manyhands/worktrees/second")]
+        vec![
+            root.clone(),
+            PathBuf::from(&root)
+                .join(".manyhands")
+                .join("worktrees")
+                .join("second")
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        ]
     );
     let context_schema: String = connection
         .query_row(

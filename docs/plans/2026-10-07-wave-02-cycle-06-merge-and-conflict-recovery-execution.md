@@ -1447,6 +1447,29 @@ through normal push; seventh full native matrix is running:
 https://github.com/vhodges/manyhands/actions/runs/37863696730
 Inspect exact-source results before Task 4 acceptance.
 
+### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
+
+Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy
+foundation assertions: four expected descendant strings mixed canonical Windows
+roots with '/' suffixes, and the failed-child check assumed POSIX ExitStatus text.
+macOS had one registry-open AfterWal notification exceed the one-second test wait.
+Logs: /tmp/opencode/cycle06-native-37868930176-failures.log.
+
+Worker `ses_ee1af6bdeffegc0tqlCc4VKgCE` changes only support/mod.rs,
+recovery_foundation_gate.rs and repository_enablement.rs. Native PathBuf joins retain
+exact legacy rows/schema/reset/privacy checks. Failed-child assertions use fixed
+early-exit category, exact code 101, captured streams and structured NotFound rather
+than platform display wording. Registry test uses one ten-second test watchdog,
+preserving phase ordering, locked-window assertions and connection release before
+join/assertions; controlled 1.1s notification hold reproduces the former timeout.
+Production SQLite five-second busy timeout and leases stay unchanged; the log
+does not establish an OS/fsync cause, only a notification later than one second.
+
+Focused foundation 51/enablement 78, static gates, full long-budget Devenv suite
+and CLI pass. Independent spec `ses_ee19c5e78ffetygUsh6SL3c4N6` and quality
+`ses_ee19acde1ffe6QpiRuHVkMNU9d` approve the narrow diff. Next exact-source native
+verification remains required; Task 4 unaccepted.
+
 ### Native run 7: later authoring fixture policies corrected — 2026-10-09
 
 Run 37863696730 passed both Linux jobs and prior Windows library/discovery gates,
@@ -1473,3 +1496,8 @@ all-feature authoring 124 and discovery 78 pass, including isolated inherited
 autocrlf=true; static/CLI and one complete full run pass (981 tests/cases: 308
 library, 468 integration, 196 SSH, 9 docs). Native next-source confirmation remains
 required, Task 4 unaccepted.
+
+Published approved fixture corrections as 600e0ff659891d36e631b8967c3e8b56860c5709
+through normal push; eighth full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37868930176
+Inspect exact-source results before Task 4 acceptance.

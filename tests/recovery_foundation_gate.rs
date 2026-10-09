@@ -160,21 +160,37 @@ fn common_git_lease_child() {
 fn failed_lease_holder_is_reported_before_ready_timeout() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
+    let missing = fixture.root.join("missing");
+    let repository_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
     let start = Instant::now();
     let panic = std::panic::catch_unwind(|| {
-        support::hold_lease_in_child(
-            &fixture.root.join("missing"),
-            data.path(),
-            LeaseKind::Repository,
-        );
+        support::hold_lease_in_child(&missing, data.path(), LeaseKind::Repository);
     })
     .unwrap_err();
 
     assert!(start.elapsed() < Duration::from_secs(2));
     let message = panic_message(panic.as_ref());
-    assert!(message.contains("child exited before ready"));
-    assert!(message.contains("exit status"));
-    assert!(message.contains("No such file or directory"));
+    let diagnostic = message
+        .strip_prefix("lease holder child exited before ready (")
+        .expect("early child exit has its own diagnostic category");
+    let (status, output) = diagnostic.split_once("):\nstdout:\n").unwrap();
+    // ExitStatus's label differs by host; libtest's panic exit code does not.
+    assert_eq!(status.rsplit_once(": ").unwrap().1, "101");
+    let (stdout, stderr) = output.split_once("\nstderr:\n").unwrap();
+    assert!(stdout.contains("test common_git_lease_child ... FAILED"));
+    assert!(stderr.contains("common_git_lease_child"));
+    assert!(stderr.contains("panicked at"));
+    assert!(stderr.contains("operation: Inspect, kind: Io"));
+    assert!(stderr.contains("kind: NotFound"));
+    assert!(!message.contains("timed out waiting"));
+    assert!(!missing.exists());
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        repository_before
+    );
+    assert_eq!(support::repository_git_file_bytes(&fixture), git_before);
+    assert_eq!(fs::read_dir(data.path()).unwrap().count(), 0);
 }
 
 fn panic_message(panic: &(dyn Any + Send)) -> &str {
