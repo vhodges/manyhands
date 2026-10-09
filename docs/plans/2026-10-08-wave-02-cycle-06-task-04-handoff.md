@@ -11,6 +11,11 @@ conditional source-review approval, with regressions written but unrun per CI-fi
 Next publish reviewed integration preserving old remote history without force,
 then fresh five-target CI before Task 5 implementation. No accepted work redispatch.
 
+Reviewed integration is now published as 1a65a11, preserving old a68eba7 history
+with an identical reviewed tree through non-force reconciliation. Integrated run:
+https://github.com/vhodges/manyhands/actions/runs/37882898787
+Next inspect this exact-source F1/Task-4 union matrix before new Task 5 code.
+
 Accepted source: a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. Native run
 https://github.com/vhodges/manyhands/actions/runs/37877620596
 completed SUCCESS on all five targets (Linux x86-64/ARM64, Windows x86-64/ARM64,

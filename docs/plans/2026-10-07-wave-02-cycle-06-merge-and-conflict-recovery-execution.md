@@ -1543,6 +1543,34 @@ published a68eba7 and unchanged reviewed tree, no force push. Any unexpected rem
 movement requires inspection first. Fresh integrated five-target evidence is needed
 before new Task 5 source changes. Ticket remains open; no PR/main merge/closure.
 
+Published integrated verification commit fe6771a through history-only reconciliation
+1a65a1172e442b3024194c17bab18f8e3bd98ee5. Reviewed tree stayed
+2409948486b1cf96429cfaf630d65aeee6e3737a, diff from fe6771a is empty; both fresh
+main 6cf5d7f and old published accepted source a68eba7 are ancestors. Normal push
+preserved remote history without force. Integrated five-target matrix (including
+all F1 reads and Task 4 targets) is manually dispatched:
+https://github.com/vhodges/manyhands/actions/runs/37882898787
+No local Rust run; inspect exact integrated-source result before Task 5 code.
+
+### Integrated F1 base native results and bounded Windows read correction
+
+Run 37882898787 passed both Linux jobs and macOS completely on 1a65a11; Windows
+read_items had three classification/expectation failures (56 pass/3 fail). Logs:
+/tmp/opencode/cycle06-integrated-37882898787-failures.log. Worker
+`ses_ee10989cfffe5H6Ll1naZcMAXd` changes only read/items.rs and read_items.rs tests:
+Windows INVALID_NAME/FILENAME_EXCED_RANGE metadata lookups map narrowly to missing,
+NUL remains syntax-invalid, other I/O/sharing denials remain inaccessible. Existing
+ancestors must be directories before querying children, so a regular-file ancestor
+is invalid rather than absent. Reparse/canonical-location guards remain. Diagnostic
+expectations use persisted canonical '/' format, not native string separators.
+Source-written tests strengthen obstruction/missing/long/NUL/no-repair/nonmutation
+and real Windows sharing-denial controls. No local Rust command was run.
+
+Independent spec `ses_ee0f548eeffe2RG2d90OSqLbA5` and quality
+`ses_ee0f362cbffecWsJ5GCFDDPjjh` approve the narrow correction conditionally on
+native CI. This fixes the integration gate, not Task 5 implementation. Task 4
+acceptance/evidence is preserved; Task 5 code waits for the new combined-base run.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy
