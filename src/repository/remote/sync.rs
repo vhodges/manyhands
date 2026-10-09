@@ -3452,8 +3452,9 @@ impl RepositoryService {
                 old.item_id == new.item_id
                     && old.parent_id == new.parent_id
                     && old.created_at == new.created_at
-                    // Author is forward-compatible metadata, but when recorded
-                    // it is still immutable comment provenance.
+                    // Creator and legacy author metadata are immutable comment
+                    // provenance, including their absence on legacy comments.
+                    && old.unknown.get("created_by") == new.unknown.get("created_by")
                     && old.unknown.get("author") == new.unknown.get("author")
             }
             _ => false,

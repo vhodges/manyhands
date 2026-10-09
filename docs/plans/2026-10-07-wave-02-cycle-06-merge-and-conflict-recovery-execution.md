@@ -1508,6 +1508,41 @@ ticket remains open. Push/manual CI is authorized, PR/main merge/closure/cleanup
 is not. No additional unchanged-source broad test run is needed for acceptance
 bookkeeping. The accepted source is preserved and will not be redispatched.
 
+### Task 5 fresh-base preflight and F1 integration — 2026-10-09
+
+Fresh main advanced to 6cf5d7fcf0663f1d383a7f2f50980fa3ba8ab5e8 with merged
+Wave 3 F1 read services/relationships. Worker `ses_ee13cb28effe5XdLaiQZlldwlW`
+rebased the clean ticket da88fb5 onto that source with merge history retained;
+preflight HEAD became 54874c473580f4265191d9dffc71b8aefa7685ce. Original 2dbd3b4
+remains an exact ancestor through restored history-only merge 51bc1df, whose tree
+equals its first parent. No source was lost by the bounded merge replay.
+
+Accepted checkpoint mapping: Task 0 efc896f; Task 1 through lint 2f135a5; Task 2
+a5a27fb; Task 3 whole-Task-4 review base 1fbfc2e; accepted Task 4 source 905273e;
+acceptance record 54874c4. Original native green evidence remains tied to a68eba7;
+the combined F1 base needs fresh CI, not redispatch of accepted implementation.
+151 upstream-only paths match main and 43 ticket-only paths match old accepted tip;
+seven overlaps preserve both sources. Cargo includes upstream serde_json/rusqlite
+limits and ticket WindowsProgramming feature, with the upstream lock. Native
+workflow is the union of 21 integration targets plus library, dispatch-only/five
+targets. Main and other worktrees were untouched, including .superpowers/.
+
+Independent spec `ses_ee1335182ffecKI2TTAlvA1ilQ` found one new F1 contract seam:
+comment created_by is now immutable while older resolution protected only author.
+Worker `ses_ee12f3b8effefM70HxPzVYrL1d` adds exact optional YAML equality to the
+existing all-side guard and source-written regression cases for replacement/removal/
+invention/disagreement, roots/replies, legacy absence, no effects and exact bytes.
+Quality `ses_ee12863e5ffe0viXp12DrZhr0Q` found a missing non-Unix Read trait import
+in the imported guarded configuration reader; one-line local import fixes it.
+Spec re-review and quality approve the bounded integration conditionally on CI.
+No local Rust command was run under CI-first ruling; tests are unrun, not claimed
+red/green. Task 5 implementation has not started while integrated-base gate is pending.
+
+Publish the reviewed integration with history-only reconciliation preserving old
+published a68eba7 and unchanged reviewed tree, no force push. Any unexpected remote
+movement requires inspection first. Fresh integrated five-target evidence is needed
+before new Task 5 source changes. Ticket remains open; no PR/main merge/closure.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy

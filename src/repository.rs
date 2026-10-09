@@ -8424,7 +8424,7 @@ fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile
 // observation does. Making it sound is a native obligation.
 #[cfg(not(unix))]
 fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
-    use std::io::ErrorKind;
+    use std::io::{ErrorKind, Read};
 
     let path = root.join(canonical::CONFIG_PATH);
     for (checked, is_file) in [(root.join(".manyhands"), false), (path.clone(), true)] {

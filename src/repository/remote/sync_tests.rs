@@ -6442,6 +6442,194 @@ fn all_recorded_comment_sides_constrain_immutable_fields_before_writes() {
 }
 
 #[test]
+fn comment_resolution_created_by_changes_fail_validation_before_effects() {
+    let alice = Some("Alice <alice@example.invalid>");
+    let mallory = Some("Mallory <mallory@example.invalid>");
+    for (case, base_creator, local_creator, incoming_creator, result_creator) in [
+        ("replacement", alice, alice, alice, mallory),
+        ("removal", alice, alice, alice, None),
+        ("invented legacy creator", None, None, None, alice),
+        ("base disagreement", mallory, alice, alice, alice),
+        ("local disagreement", alice, mallory, alice, alice),
+        ("incoming disagreement", alice, alice, mallory, alice),
+        ("base cannot be outvoted", alice, mallory, mallory, mallory),
+        ("local absence", alice, None, alice, alice),
+        ("incoming absence", alice, alice, None, alice),
+    ] {
+        let base = resolution_creator_comment(base_creator, false, "base");
+        let local = resolution_creator_comment(local_creator, false, "local");
+        let incoming = resolution_creator_comment(incoming_creator, false, "incoming");
+        let result = resolution_creator_comment(result_creator, false, "resolved");
+        let path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md";
+        let (root, data, service, operation, head, _) = resolution_fixture(&[
+            ("docs/item.md", M2_DOCUMENT, M2_DOCUMENT, M2_DOCUMENT),
+            (path, &base, &local, &incoming),
+        ]);
+        let inspection = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        assert_eq!(inspection.paths.len(), 1);
+        assert_eq!(
+            inspection.paths[0].eligibility,
+            merge::ConflictEligibility::EligibleCanonical
+        );
+        assert!(inspection.paths[0].token.path == path.as_bytes());
+        let attempt = OperationId::new();
+        let request = resolution_request_for_bodies(
+            root.path(),
+            operation,
+            attempt,
+            &inspection,
+            &[&result],
+        );
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let (token, bytes) = &request.resolutions[0];
+        let replacements = std::collections::BTreeMap::from([(token.ordinal, (token, bytes))]);
+        assert!(
+            RepositoryService::validates_prospective_context(&repository, &replacements).unwrap(),
+            "{case}: creator evidence must be the only invalid invariant"
+        );
+        // Compare digests, so a failed assertion never dumps canonical bodies
+        // or raw ref/log images into fixture output.
+        let images = || {
+            let mut paths = vec![root.path().join(path), root.path().join("docs/item.md")];
+            paths.extend(
+                [
+                    "HEAD",
+                    "refs/heads/main",
+                    "logs/HEAD",
+                    "logs/refs/heads/main",
+                    "index",
+                    "ORIG_HEAD",
+                    "MERGE_HEAD",
+                    "MERGE_MSG",
+                    "MERGE_MODE",
+                ]
+                .map(|name| repository.path().join(name)),
+            );
+            paths
+                .iter()
+                .map(|path| match fs::read(path) {
+                    Ok(bytes) => Some(*blake3::hash(&bytes).as_bytes()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(_) => panic!("resolution image unavailable"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = images();
+        let staging = repository
+            .path()
+            .join(format!(".manyhands-resolution-{attempt}"));
+        assert!(!staging.exists());
+        assert!(!repository.path().join("index.lock").exists());
+        assert_eq!(
+            service.resolve_synchronization(request).unwrap(),
+            ResolveSynchronizationOutcome::ValidationFailed,
+            "{case}"
+        );
+        assert_eq!(repository.head().unwrap().target(), Some(head), "{case}");
+        assert_eq!(images(), before, "{case}");
+        assert!(repository.index().unwrap().has_conflicts());
+        assert!(!staging.exists());
+        assert!(!repository.path().join("index.lock").exists());
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for table in [
+            "remote_resolution_attempts",
+            "remote_resolution_paths",
+            "remote_resolution_index_artifacts",
+            "remote_resolution_ref_log_artifacts",
+        ] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+                0,
+                "{case}/{table}"
+            );
+        }
+    }
+}
+
+fn resolution_creator_comment(creator: Option<&str>, reply: bool, body: &str) -> String {
+    let parent = if reply {
+        "parent_id: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"\n"
+    } else {
+        ""
+    };
+    let creator = creator
+        .map(|creator| format!("created_by: \"{creator}\"\n"))
+        .unwrap_or_default();
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: \"01CRZ3NDEKTSV4RRFFQ69G5FAV\"\nitem_id: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n{parent}created_at: \"2026-01-01T00:00:00Z\"\nauthor: \"legacy author\"\n{creator}---\n\n{body}\n"
+    )
+}
+
+#[test]
+fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies() {
+    for creator in [Some("Alice <alice@example.invalid>"), None] {
+        for reply in [false, true] {
+            let base = resolution_creator_comment(creator, reply, "base");
+            let local = resolution_creator_comment(creator, reply, "local");
+            let incoming = resolution_creator_comment(creator, reply, "incoming");
+            let result = resolution_creator_comment(creator, reply, "resolved\n\n  exact spacing")
+                .replace("---\n\n", "custom: [keep, unknown]\n---\n\n");
+            let path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md";
+            let parent_path = ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01BX5ZZKBKACTAV9WEVGEMMVRZ.md";
+            let parent = resolution_creator_comment(None, false, "parent")
+                .replace("01CRZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ");
+            let (root, _data, service, operation, local_oid, incoming_oid) = resolution_fixture(&[
+                ("docs/item.md", M2_DOCUMENT, M2_DOCUMENT, M2_DOCUMENT),
+                (parent_path, &parent, &parent, &parent),
+                (path, &base, &local, &incoming),
+            ]);
+            let inspection = service
+                .inspect_synchronization_recovery(root.path(), operation)
+                .unwrap();
+            assert_eq!(inspection.paths.len(), 1);
+            assert_eq!(
+                inspection.paths[0].eligibility,
+                merge::ConflictEligibility::EligibleCanonical
+            );
+            let request = resolution_request_for_bodies(
+                root.path(),
+                operation,
+                OperationId::new(),
+                &inspection,
+                &[&result],
+            );
+            let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
+                service.resolve_synchronization(request).unwrap()
+            else {
+                panic!("unchanged creator must permit exact caller resolution");
+            };
+            let repository = git2::Repository::open(root.path()).unwrap();
+            let commit = repository.find_commit(commit_oid).unwrap();
+            assert_eq!(commit.parent_count(), 2);
+            assert_eq!(
+                [commit.parent_id(0).unwrap(), commit.parent_id(1).unwrap()],
+                [local_oid, incoming_oid]
+            );
+            assert_eq!(repository.head().unwrap().target(), Some(commit_oid));
+            assert!(!repository.index().unwrap().has_conflicts());
+            assert!(fs::read(root.path().join(path)).unwrap() == result.as_bytes());
+            assert!(fs::read(root.path().join(parent_path)).unwrap() == parent.as_bytes());
+            let blob = repository
+                .find_blob(commit.tree().unwrap().get_path(Path::new(path)).unwrap().id())
+                .unwrap();
+            assert!(blob.content() == result.as_bytes());
+            let canonical::CanonicalItem::Comment(comment) =
+                canonical::parse_item(Path::new(path), &result).unwrap()
+            else {
+                panic!("expected comment");
+            };
+            let expected_creator = creator.map(|value| serde_yaml::Value::String(value.to_owned()));
+            assert!(comment.unknown.get("created_by") == expected_creator.as_ref());
+        }
+    }
+}
+
+#[test]
 fn missing_path_observation_checks_all_images_before_completing_remaining_writes() {
     let second = M2_DOCUMENT.replace("01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ");
     let local = M2_DOCUMENT.replace("base", "local");

@@ -2,6 +2,15 @@
 
 ## Current: Task 4 accepted, Task 5 next — 2026-10-09
 
+Task 5 entry preflight now rebased ticket onto merged F1 main 6cf5d7f, preflight
+HEAD 54874c4. Accepted Task 4 source maps to 905273e; Task 3 base to 1fbfc2e.
+Original a68eba7 native green remains historical exact-source evidence. Source
+integration preserves both read/native modules and the union of 21 native targets.
+New immutable comment created_by guard and Windows Read import correction have
+conditional source-review approval, with regressions written but unrun per CI-first.
+Next publish reviewed integration preserving old remote history without force,
+then fresh five-target CI before Task 5 implementation. No accepted work redispatch.
+
 Accepted source: a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. Native run
 https://github.com/vhodges/manyhands/actions/runs/37877620596
 completed SUCCESS on all five targets (Linux x86-64/ARM64, Windows x86-64/ARM64,
