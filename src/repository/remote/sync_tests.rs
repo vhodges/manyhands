@@ -60,7 +60,8 @@ fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, Repositor
     assert!(matches!(
         service
             .enable(EnableRepositoryRequest {
-                root: root.path().into(),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
+root: root.path().into(),
                 primary_branch: "main".into(),
                 identity: None,
                 operation_id: OperationId::new()
@@ -2974,6 +2975,80 @@ fn unfinished_merge_observation_restart_records_the_installed_conflict_offline()
             .unwrap(),
         "conflict_pending"
     );
+}
+
+#[test]
+fn conflict_inspection_rejects_same_tree_head_movement_during_preparation() {
+    for unfinished in [false, true] {
+        let (root, data, service, operation, local, _) =
+            resolution_fixture(&[("src/foreign.rs", "base\n", "local\n", "incoming\n")]);
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if unfinished {
+            db.execute(
+                "UPDATE remote_integration_steps SET phase='applying',conflict_digest=NULL",
+                [],
+            )
+            .unwrap();
+        }
+        let step = |db: &rusqlite::Connection| {
+            db.query_row(
+                "SELECT phase,conflict_digest FROM remote_integration_steps",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<Vec<u8>>>(1)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        let recorded = step(&db);
+        let fired = Arc::new(AtomicBool::new(false));
+        let observed = fired.clone();
+        let hook_root = root.path().to_owned();
+        set_local_reconciliation_prepared_hook(root.path().to_owned(), move || {
+            observed.store(true, Ordering::SeqCst);
+            let repository = git2::Repository::open(hook_root).unwrap();
+            let commit = repository.find_commit(local).unwrap();
+            let signature = git2::Signature::now("External", "external@example.invalid").unwrap();
+            let foreign = repository
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    "External same-tree commit",
+                    &commit.tree().unwrap(),
+                    &[&commit],
+                )
+                .unwrap();
+            assert_ne!(foreign, local);
+            // Fixture-only direct mutation models stale state at the revalidation
+            // boundary; index, worktree and merge metadata stay byte-identical.
+            fs::write(
+                repository.path().join("refs/heads/main"),
+                format!("{foreign}\n"),
+            )
+            .unwrap();
+        });
+        let mut retry = request(root.path());
+        retry.operation_id = operation;
+        retry.restart = true;
+        assert!(matches!(
+            service.synchronize_remote(retry, &mut SessionCredentials::new(NoPrompt)),
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+        assert!(fired.load(Ordering::SeqCst));
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        assert_ne!(head, local);
+        assert_eq!(repository.find_commit(head).unwrap().parent_id(0).unwrap(), local);
+        assert!(repository.index().unwrap().has_conflicts());
+        assert!(repository.path().join("MERGE_HEAD").exists());
+        // No conflict observation is recorded or released for a parent that
+        // is no longer the attached target's HEAD.
+        assert_eq!(step(&db), recorded);
+    }
 }
 
 #[test]

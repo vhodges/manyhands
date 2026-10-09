@@ -40,6 +40,9 @@ static RESOLUTION_INDEX_RETIRE_HOOK: std::sync::OnceLock<ResolutionIndexLockHook
 #[cfg(test)]
 static RESOLUTION_REF_REFRESH_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
     std::sync::OnceLock::new();
+#[cfg(test)]
+static LOCAL_RECONCILIATION_PREPARED_HOOK: std::sync::OnceLock<ResolutionIndexLockHook> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 fn resolution_hook_root(root: &Path) -> PathBuf {
@@ -109,6 +112,15 @@ fn set_resolution_ref_refresh_hook(root: PathBuf, hook: impl FnOnce() + Send + '
         .get_or_init(|| std::sync::Mutex::new(Vec::new()))
         .lock()
         .expect("resolution ref-refresh hook")
+        .push((resolution_hook_root(&root), Box::new(hook)));
+}
+
+#[cfg(test)]
+fn set_local_reconciliation_prepared_hook(root: PathBuf, hook: impl FnOnce() + Send + 'static) {
+    LOCAL_RECONCILIATION_PREPARED_HOOK
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .expect("local reconciliation prepared hook")
         .push((resolution_hook_root(&root), Box::new(hook)));
 }
 
@@ -2993,11 +3005,17 @@ fn reconcile_pending_candidate(
             }
             let baseline_matches = prepared_merge_index_matches_index(&expected, &index)?;
             let preflight = resolution_preflight(&repository, &[])?;
+            #[cfg(test)]
+            run_resolution_index_hook(&LOCAL_RECONCILIATION_PREPARED_HOOK, root);
             let mut fresh = materialized_target(root, primary_branch, target)?;
             let _lease = repository_lease(&fresh, root, RepositoryOperation::RepositorySnapshot)?;
             service.synchronization_boundary(root, owner)?;
             refuse_local_reconciliation_locks(&fresh)?;
-            if !exact_resolution_merge_metadata(&mut fresh, step.intent.incoming_oid)?
+            // The preflight fingerprint covers index and status, not HEAD. A
+            // same-tree ref movement during isolated preparation must not let
+            // this conflict be recorded against the frozen local parent.
+            if local_oid(&fresh)? != step.intent.local_oid
+                || !exact_resolution_merge_metadata(&mut fresh, step.intent.incoming_oid)?
                 || integration_conflict_digest(&mut fresh, step.window_number, step.intent.ordinal).ok()
                     != expected_conflict
                 || !baseline_matches

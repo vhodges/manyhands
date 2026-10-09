@@ -1,5 +1,18 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 milestone 2 reviewed, native CI next — 2026-10-09
+
+The previous session stalled after the M2 quality review; a fresh Claude Code
+session recovered from WIP 489322f. M2 (local-first restart before preflight/
+transport, offline pending-conflict inspection, exact-ordered-parent external
+repair, released-checkpoint descendant continuation, latest-window stage routing)
+has spec approval after two P1 fixes and quality approval after one P2 fix (HEAD
+rechecked under the lease). Every M2 test is source-written and UNRUN. Next: inspect
+the exact-source five-target run; local Rust only if Linux CI regresses. Then one
+writer for the Task 5 remainder A–G listed in the ledger's M2 section. The native
+workflow has no fmt/clippy step; those remain Task 7 local gates. Ticket open.
+Sections below are historical.
+
 ## Current: Task 5 window foundation verified; orchestration next
 
 Source 0fefeb5204f3b62bcaf5b2116a26979ff8ff984c passed all five native targets in

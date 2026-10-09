@@ -1718,3 +1718,66 @@ Published approved fixture corrections as 600e0ff659891d36e631b8967c3e8b56860c57
 through normal push; eighth full native matrix:
 https://github.com/vhodges/manyhands/actions/runs/37868930176
 Inspect exact-source results before Task 4 acceptance.
+
+### Task 5 milestone 2: local-first restart orchestration — recovered session, 2026-10-09
+
+The previous controller session stalled after the M2 quality review and ended
+without a handoff; its only record was unpublished WIP `489322f`. A fresh Claude
+Code session reconstructed the state read-only from that commit and the retained
+OpenCode session records. Fresh main is still `6cf5d7f`; the ticket branch already
+contains it, so the required preflight rebase was a no-op on a clean tree.
+
+Writer `ses_edfa16b6dffe5PIYWVI3XTe22D` delivered M2 in remote `sync.rs`,
+`sync_tests.rs`, `reservation.rs`, `state.rs` and `merge.rs`: recorded local stages
+reconcile before the clean-target preflight and transport; a same-ID pending
+conflict restarts offline and an installed conflict lacking its durable observation
+is recorded from matching frozen-parent evidence; completed no-op/fast-forward/
+candidate effects are observed without another ref or reflog effect; partial
+checkout/ref mismatches and operator locks stay Recovery. A clean external whole
+merge is accepted only with the exact ordered recorded parents, attached target,
+clean index/worktree and canonical identity/closure/comment-provenance validation.
+A fully released Primary checkpoint admits a clean validated descendant without
+changing its candidate; unreleased artifacts stay fenced. Live orchestration now
+uses the latest pinned window, skips Applied stages and appends one eligible
+changed-ref window per invocation; conflict tokens and hashes carry window/stage
+with window-zero compatibility.
+
+Spec `ses_edf828ce6ffeZIOwH9gim1FiRt` blocked on two P1s, both fixed and closed on
+rereview: (1) external-tree validation silently omitted new non-UTF-8 or
+non-`100644` canonical sources — shape, mode and raw bytes are now captured before
+decoding and changed/new entries must be UTF-8 regular blobs, while exactly
+unchanged malformed baselines keep their diagnostics; (2) inspection recomputed
+merges on the destination ODB before lease/ownership proof — it now prepares one
+index on a separately opened mempack-backed handle and imports nothing on the
+inspection/rejection route. Quality `ses_edf6998d7ffe3JaYVVXrSuat36` found one P2:
+the conflict path never rechecked HEAD's OID under the lease, and the preflight
+fingerprint does not cover HEAD, so a same-tree ref movement during preparation
+could record a conflict observation against a parent that is no longer HEAD.
+
+This session fixed that P2 directly: the under-lease rejection now includes
+`local_oid(&fresh)? != step.intent.local_oid` ahead of either release transition,
+with a test-only hook at the preparation/revalidation boundary and regression
+`conflict_inspection_rejects_same_tree_head_movement_during_preparation` covering
+both the `conflict_pending` and unobserved `applying` variants.
+
+All fifteen M2 regression groups are source-written and UNRUN; no local Rust
+command has been executed for M2, per the CI-first ruling. No compile, format or
+pass claim is made until exact-source native CI reports.
+
+Task 5 remainder after M2, by the writer's own inventory: (A) preparation/import/
+candidate, resolution-retirement, publication and refresh fault coverage; (B)
+broader native ref/log partial-effect proof coverage; (C) composition coverage of
+offline retries; (D) proven retirement of owned remaining merge metadata after
+external repair; (E) a separate append-only publication envelope for continuation
+after an old Push intent; (F) post-merge ambiguity/deletion/endpoint-generation and
+typed-Recovery race composition; (G) full safe-point observer/two-service coverage
+and index-pending/offline-refresh/rebuild composition. Task 5 is not complete.
+
+Independent read-only quality rereview of the P2 fix (Claude Code subagent, source
+inspection only) approves with notes: the recheck reads the reopened target under
+the lease and precedes both release transitions; every other under-lease operand
+is independent of HEAD's OID, so the regression discriminates in both variants;
+no hook-key leak. Its two notes — one probable rustfmt reflow in the test and a
+misplaced comment — are applied. It also observed that the native workflow runs
+no fmt or clippy step, so those gates stay owed to Task 7's final local commands
+rather than being implied by a green matrix. Publish M2 for exact-source native CI.
