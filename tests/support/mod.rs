@@ -250,6 +250,11 @@ pub fn unborn_repository() -> TestRepository {
     let tempdir = tempfile::tempdir().unwrap();
     let root = tempdir.path().to_owned();
     let repository = Repository::init(&root).unwrap();
+    // Source fixtures declare LF checkout policy independently of the user's Git config.
+    Config::open(&repository.path().join("config"))
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
 
     TestRepository {
         repository,
@@ -283,6 +288,8 @@ pub fn born_repository() -> TestRepository {
     options.initial_head("main");
     let repository = Repository::init_opts(&root, &options).unwrap();
     let mut config = Config::open(&repository.path().join("config")).unwrap();
+    // Set this before staging initial content; individual filter controls may override it locally.
+    config.set_bool("core.autocrlf", false).unwrap();
     config.set_str("user.name", "Manyhands Test").unwrap();
     config
         .set_str("user.email", "manyhands-test@example.invalid")

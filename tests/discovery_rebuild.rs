@@ -1178,82 +1178,200 @@ fn non_utf8_source_diagnostic_remains_visible_with_readable_root_and_context() {
     )
     .unwrap();
     let name = std::ffi::OsString::from_vec(b"private-path-\xff.md".to_vec());
-    symlink_file("missing.md", fixture.root.join("docs").join(name)).unwrap();
-    let before = support::repository_and_worktree_snapshot(&fixture);
-
-    for rebuild in [false, true] {
-        let operation_id = support::operation_id();
-        let outcome = if rebuild {
-            enabled
-                .service
-                .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
-                .map(|snapshot| RefreshOutcome::Refreshed { snapshot })
-        } else {
-            enabled
-                .service
-                .refresh_repository(refresh_request!(&fixture.root, operation_id))
-        };
-        let RefreshOutcome::Refreshed { snapshot } =
-            outcome.expect("unrepresentable diagnostic does not reject readable contexts")
-        else {
-            panic!("expected readable diagnostic snapshot");
-        };
-        assert!(!snapshot.refresh_required);
-        assert_eq!(snapshot.contexts.len(), 2);
-        assert_eq!(snapshot.items.len(), 2);
-        assert!(snapshot.items.iter().any(|item| item.id == primary_id
-            && item.context == root
-            && item.path == Path::new("docs/primary.md")
-            && item.title == "Readable primary"));
-        let active = context_worktree(&root, &support::document_id());
-        assert!(
-            snapshot
-                .items
-                .iter()
-                .any(|item| item.id == support::document_id()
-                    && item.context == active
-                    && item.path == Path::new("docs/active.md"))
-        );
-        assert_eq!(snapshot.problems.len(), 1);
-        let problem = &snapshot.problems[0];
-        assert_eq!(problem.context.as_deref(), Some(root.as_path()));
-        assert_eq!(problem.path, None);
-        assert_eq!(problem.code, "source");
-        assert_eq!(problem.guidance, "symbolic links are not canonical sources");
-        assert_eq!(
-            stored_diagnostics(&enabled.service),
-            vec![(
-                Some(root.to_str().unwrap().to_owned()),
-                None,
-                problem.code.clone(),
-                problem.guidance.clone(),
-                problem.observed_at.unix_timestamp()
-            )]
-        );
-        assert!(!format!("{snapshot:?}").contains("private-path-"));
-        assert_eq!(
-            enabled.service.repository_snapshot(&fixture.root).unwrap(),
-            snapshot
-        );
-        let rows_before = stored_diagnostics(&enabled.service);
-        if !rebuild {
-            let replay = enabled
-                .service
-                .refresh_repository(refresh_request!(&fixture.root, operation_id))
-                .unwrap();
-            assert_eq!(replay, RefreshOutcome::IndexPending { root: root.clone() });
+    let RefreshOutcome::Refreshed { snapshot: readable } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
+    else {
+        panic!("expected readable fixture snapshot");
+    };
+    assert_readable_root_and_context(&readable, &root, &primary_id);
+    assert!(readable.problems.is_empty());
+    let filesystem_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let cache_before = available_state(&fixture, enabled.data_directory.path());
+    let created = match symlink_file("missing.md", fixture.root.join("docs").join(name)) {
+        Ok(()) => true,
+        Err(error) => {
+            assert!(
+                cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ),
+                "invalid-byte source fixture creation failed unexpectedly: {error}"
+            );
+            // APFS rejects this name before the application observes it. This proves the
+            // native filesystem boundary and nonmutation, not NULL-path production.
+            assert!(support::repository_and_worktree_snapshot(&fixture) == filesystem_before);
+            assert!(support::repository_git_file_bytes(&fixture) == git_before);
+            assert!(available_state(&fixture, enabled.data_directory.path()) == cache_before);
+            for _ in 0..2 {
+                let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
+                assert_readable_root_and_context(&snapshot, &root, &primary_id);
+                assert_eq!(snapshot, readable);
+            }
+            assert!(available_state(&fixture, enabled.data_directory.path()) == cache_before);
+            assert!(support::repository_and_worktree_snapshot(&fixture) == filesystem_before);
+            assert!(support::repository_git_file_bytes(&fixture) == git_before);
+            false
         }
-        assert_eq!(
-            enabled.service.repository_snapshot(&fixture.root).unwrap(),
-            snapshot
-        );
-        assert_eq!(stored_diagnostics(&enabled.service), rows_before);
-        assert!(
-            support::repository_and_worktree_snapshot(&fixture) == before,
-            "diagnostic observation or replay mutated canonical or Git state"
-        );
-        support::assert_operation_records_hold_no_content(enabled.data_directory.path());
+    };
+    if created {
+        let before = support::repository_and_worktree_snapshot(&fixture);
+
+        for rebuild in [false, true] {
+            let operation_id = support::operation_id();
+            let outcome = if rebuild {
+                enabled
+                    .service
+                    .rebuild_repository(rebuild_request!(&fixture.root, operation_id))
+                    .map(|snapshot| RefreshOutcome::Refreshed { snapshot })
+            } else {
+                enabled
+                    .service
+                    .refresh_repository(refresh_request!(&fixture.root, operation_id))
+            };
+            let RefreshOutcome::Refreshed { snapshot } =
+                outcome.expect("unrepresentable diagnostic does not reject readable contexts")
+            else {
+                panic!("expected readable diagnostic snapshot");
+            };
+            assert_readable_root_and_context(&snapshot, &root, &primary_id);
+            assert_eq!(snapshot.problems.len(), 1);
+            let problem = &snapshot.problems[0];
+            assert_eq!(problem.context.as_deref(), Some(root.as_path()));
+            assert_eq!(problem.path, None);
+            assert_eq!(problem.code, "source");
+            assert_eq!(problem.guidance, "symbolic links are not canonical sources");
+            assert_eq!(
+                stored_diagnostics(&enabled.service),
+                vec![(
+                    Some(root.to_str().unwrap().to_owned()),
+                    None,
+                    problem.code.clone(),
+                    problem.guidance.clone(),
+                    problem.observed_at.unix_timestamp()
+                )]
+            );
+            assert!(!format!("{snapshot:?}").contains("private-path-"));
+            assert_eq!(
+                enabled.service.repository_snapshot(&fixture.root).unwrap(),
+                snapshot
+            );
+            let rows_before = stored_diagnostics(&enabled.service);
+            if !rebuild {
+                let replay = enabled
+                    .service
+                    .refresh_repository(refresh_request!(&fixture.root, operation_id))
+                    .unwrap();
+                assert_eq!(replay, RefreshOutcome::IndexPending { root: root.clone() });
+            }
+            assert_eq!(
+                enabled.service.repository_snapshot(&fixture.root).unwrap(),
+                snapshot
+            );
+            assert_eq!(stored_diagnostics(&enabled.service), rows_before);
+            assert!(
+                support::repository_and_worktree_snapshot(&fixture) == before,
+                "diagnostic observation or replay mutated canonical or Git state"
+            );
+            assert!(support::repository_git_file_bytes(&fixture) == git_before);
+            support::assert_operation_records_hold_no_content(enabled.data_directory.path());
+        }
     }
+}
+
+fn assert_readable_root_and_context(
+    snapshot: &RepositorySnapshot,
+    root: &Path,
+    primary_id: &canonical::ItemId,
+) {
+    assert!(!snapshot.refresh_required);
+    assert_eq!(snapshot.contexts.len(), 2);
+    assert_eq!(snapshot.items.len(), 2);
+    assert!(snapshot.items.iter().any(|item| &item.id == primary_id
+        && item.context == root
+        && item.path == Path::new("docs/primary.md")
+        && item.title == "Readable primary"));
+    let active = context_worktree(root, &support::document_id());
+    assert!(
+        snapshot
+            .items
+            .iter()
+            .any(|item| item.id == support::document_id()
+                && item.context == active
+                && item.path == Path::new("docs/active.md")
+                && item.title == "Active")
+    );
+}
+
+#[test]
+fn cached_null_diagnostic_path_decodes_with_readable_root_and_context_without_mutation() {
+    let (fixture, enabled) = repository_with_primary_and_context_content();
+    let root = fixture.root.canonicalize().unwrap();
+    let primary_id = "01ARZ3NDEKTSV4RRFFQ69G5FC9"
+        .parse::<canonical::ItemId>()
+        .unwrap();
+    fs::write(
+        fixture.root.join("docs/primary.md"),
+        document_source_with(&primary_id, "Readable primary"),
+    )
+    .unwrap();
+    let RefreshOutcome::Refreshed { snapshot: readable } = enabled
+        .service
+        .refresh_repository(refresh_request!(&fixture.root))
+        .unwrap()
+    else {
+        panic!("expected readable fixture snapshot");
+    };
+    assert_readable_root_and_context(&readable, &root, &primary_id);
+    assert!(readable.problems.is_empty());
+    // This is portable cache-decoder coverage, not a fabricated filesystem observation.
+    enabled
+        .service
+        .with_registry_connection_for_testing(|connection| {
+            assert_eq!(connection.execute(
+            "INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at)
+             SELECT repository_id, id, NULL, 'source', 'symbolic links are not canonical sources', 1
+             FROM contexts WHERE worktree_path = ?1",
+            [root.to_str().unwrap()],
+        ).unwrap(), 1);
+        })
+        .unwrap();
+    let connection =
+        Connection::open(enabled.data_directory.path().join("manyhands.sqlite3")).unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=DELETE")
+        .unwrap();
+    drop(connection);
+    let rows_before = stored_diagnostics(&enabled.service);
+    assert_eq!(
+        rows_before,
+        vec![(
+            Some(root.to_str().unwrap().to_owned()),
+            None,
+            "source".to_owned(),
+            "symbolic links are not canonical sources".to_owned(),
+            1
+        )]
+    );
+    let cache_before = available_state(&fixture, enabled.data_directory.path());
+    let filesystem_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let mut expected = readable;
+    expected.problems.push(DiscoveryProblem {
+        context: Some(root.clone()),
+        path: None,
+        code: "source".to_owned(),
+        guidance: "symbolic links are not canonical sources".to_owned(),
+        observed_at: OffsetDateTime::from_unix_timestamp(1).unwrap(),
+    });
+    for _ in 0..2 {
+        let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
+        assert_readable_root_and_context(&snapshot, &root, &primary_id);
+        assert_eq!(snapshot, expected);
+        assert_eq!(stored_diagnostics(&enabled.service), rows_before);
+    }
+    assert!(available_state(&fixture, enabled.data_directory.path()) == cache_before);
+    assert!(support::repository_and_worktree_snapshot(&fixture) == filesystem_before);
+    assert!(support::repository_git_file_bytes(&fixture) == git_before);
 }
 
 #[cfg(unix)]

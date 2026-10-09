@@ -64,6 +64,13 @@ Current sixth native matrix:
 https://github.com/vhodges/manyhands/actions/runs/37856496873
 Inspect this run before accepting Task 4. Tasks 5–7 still have not begun.
 
+Run 6 passes Windows library/metadata/core and Mac SSH synchronization, exposing
+two diagnostic-cache path and five enablement fixture-key cases. Independently
+reviewed fixes retain strict decoding and nullable unrepresentable diagnostics;
+complete local gates pass. Published current bed07e4, seventh full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37863696730
+This is the current exact-source run to inspect before Task 4 acceptance.
+
 ## Current pause — after shared Unix native writer, 2026-10-08
 
 Owner requested pause after the current subagent finishes; it has returned.
