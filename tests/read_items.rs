@@ -2080,6 +2080,51 @@ fn show_path_reads_only_canonical_item_paths() {
     assert_git_transport_uninitialized();
 }
 
+#[test]
+fn a_file_in_place_of_an_item_ancestor_is_invalid_not_missing_and_reads_repair_nothing() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/sub/a.md", &document_source(DOCUMENT_A, "A", ""));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let listed = enabled.service.list_documents(&repo).unwrap();
+    let observed_at = refreshed_at(enabled.data_directory.path());
+    let required = refresh_required(enabled.data_directory.path());
+    let parent = root.join("docs/sub");
+    fs::remove_dir_all(&parent).unwrap();
+    fs::write(&parent, "private ancestor bytes\n").unwrap();
+
+    for expected in [ResultCode::InvalidPath, ResultCode::PathNotFound] {
+        let before = support::repository_and_worktree_snapshot(&fixture);
+        for path in ["docs/sub/a.md", "docs/sub/absent/b.md"] {
+            let error = enabled
+                .service
+                .show_path(&repo, None, Path::new(path))
+                .unwrap_err();
+            assert_eq!(error.code(), expected, "{path}");
+            assert_eq!(recovery(&error), json!([]));
+            assert_eq!(
+                error.scope.repository.as_deref(),
+                Some(root_string(&fixture).as_str())
+            );
+        }
+        let by_id = enabled
+            .service
+            .show_item(&repo, &item_id(DOCUMENT_A))
+            .unwrap_err();
+        assert_eq!(by_id.code(), ResultCode::ItemNotFound);
+        assert_eq!(recovery(&by_id), refresh_recovery(&root_string(&fixture)));
+        assert!(enabled.service.list_documents(&repo).unwrap() == listed);
+        assert_eq!(refreshed_at(enabled.data_directory.path()), observed_at);
+        assert_eq!(refresh_required(enabled.data_directory.path()), required);
+        assert!(before == support::repository_and_worktree_snapshot(&fixture));
+        if expected == ResultCode::InvalidPath {
+            fs::remove_file(&parent).unwrap();
+        }
+    }
+    assert_git_transport_uninitialized();
+}
+
 #[cfg(unix)]
 #[test]
 fn show_path_follows_no_symbolic_link() {
@@ -2874,19 +2919,90 @@ fn a_path_with_a_nul_is_invalid_and_a_name_too_long_to_exist_is_not_found() {
             .service
             .show_path(&repo, None, Path::new(path))
             .unwrap_err()
-            .code()
     };
 
-    assert_eq!(show("docs/a\0b.md"), ResultCode::InvalidPath);
-    assert_eq!(show("docs/a.md\0"), ResultCode::InvalidPath);
+    for path in ["docs/a\0b.md", "docs/a.md\0"] {
+        let error = show(path);
+        assert_eq!(error.code(), ResultCode::InvalidPath);
+        assert_eq!(recovery(&error), json!([]));
+    }
+    for path in [
+        format!("docs/{}.md", "n".repeat(300)),
+        format!("docs/{}/a.md", "n".repeat(300)),
+    ] {
+        // Record the native filesystem failure independently of its API
+        // classification: Windows can reject an oversized component with
+        // either name error, not just ErrorKind::NotFound.
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{ERROR_FILENAME_EXCED_RANGE, ERROR_INVALID_NAME};
+
+            let native_error = fs::symlink_metadata(root.join(&path)).unwrap_err();
+            let native_code = native_error
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok());
+            assert!(
+                native_error.kind() == std::io::ErrorKind::NotFound
+                    || matches!(
+                        native_code,
+                        Some(ERROR_FILENAME_EXCED_RANGE | ERROR_INVALID_NAME)
+                    ),
+                "unexpected native name failure: {native_error:?}"
+            );
+        }
+        let error = show(&path);
+        assert_eq!(error.code(), ResultCode::PathNotFound, "{path}");
+        assert_eq!(recovery(&error), json!([]));
+        assert_eq!(
+            error.scope.repository.as_deref(),
+            Some(root_string(&fixture).as_str())
+        );
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[cfg(windows)]
+#[test]
+fn a_native_sharing_denial_is_inaccessible_not_a_missing_item() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let source = document_source(DOCUMENT_A, "A", "");
+    let file = write(root, "docs/a.md", &source);
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&file)
+        .unwrap();
     assert_eq!(
-        show(&format!("docs/{}.md", "n".repeat(300))),
-        ResultCode::PathNotFound
+        fs::read(&file)
+            .unwrap_err()
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok()),
+        Some(ERROR_SHARING_VIOLATION)
     );
-    assert_eq!(
-        show(&format!("docs/{}/a.md", "n".repeat(300))),
-        ResultCode::PathNotFound
-    );
+
+    let by_path = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/a.md"))
+        .unwrap_err();
+    let by_id = enabled
+        .service
+        .show_item(&repo, &item_id(DOCUMENT_A))
+        .unwrap_err();
+    assert_eq!(by_path.code(), ResultCode::RepositoryInaccessible);
+    assert_eq!(by_id.code(), ResultCode::RepositoryInaccessible);
+    assert_eq!(recovery(&by_path), json!([]));
+    drop(held);
+    let shown = enabled
+        .service
+        .show_path(&repo, None, Path::new("docs/a.md"))
+        .unwrap();
+    assert_eq!(shown.source.as_deref(), Some(source.as_str()));
     assert_git_transport_uninitialized();
 }
 
@@ -4611,12 +4727,6 @@ fn a_list_is_not_complete_when_the_refresh_could_not_read_all_of_its_directory()
     assert_git_transport_uninitialized();
 }
 
-/// A relative path as the index stores it, with the platform's separator.
-fn native_path(components: &[&str]) -> Option<String> {
-    let path: PathBuf = components.iter().collect();
-    Some(path.to_str().unwrap().to_owned())
-}
-
 /// The `(path, code)` of every stored problem.
 fn stored_problem_rows(data_directory: &Path) -> Vec<(Option<String>, String)> {
     index(data_directory)
@@ -4653,7 +4763,7 @@ fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
 
     assert!(
         stored_problem_rows(enabled.data_directory.path())
-            .contains(&(native_path(&["docs", "sub"]), "source".to_owned()))
+            .contains(&(Some("docs/sub".to_owned()), "source".to_owned()))
     );
     let documents = enabled.service.list_documents(&repo).unwrap();
     assert!(!documents.complete);
@@ -4671,7 +4781,7 @@ fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
             .into_iter()
             .filter(|(_, code)| code == "source")
             .collect::<Vec<_>>(),
-        [(native_path(&[".manyhands", "tickets"]), "source".to_owned())]
+        [(Some(".manyhands/tickets".to_owned()), "source".to_owned())]
     );
     let tickets = all_tickets(&enabled.service, &repo);
     assert!(!tickets.complete);

@@ -110,6 +110,48 @@ pub enum RemoteSafePointOutcome {
     Cancelled,
 }
 
+/// How one fresh Push-direction advertisement relates to a recorded immutable
+/// push intent. The caller computes it from actual commit ancestry; a Fetch
+/// advertisement is never an input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PushIntentRelation {
+    Equal,
+    /// The advertised commit is a strict ancestor of the intent.
+    Behind,
+    /// The advertised commit is a strict descendant of the intent.
+    Ahead,
+    Diverged,
+    Absent,
+}
+
+/// The newest publication intent of a synchronization, read under ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PublicationIntent {
+    None,
+    /// The immutable `push_oid` of the legacy envelope; no attempt follows it.
+    Legacy(git2::Oid),
+    /// The candidate of the newest prepared or returned publication attempt.
+    Attempt(git2::Oid),
+    /// The earlier intent is reconciled and no new push intent exists yet.
+    Open,
+    /// The newest attempt is verified; only classification remains.
+    Verified(git2::Oid),
+}
+
+/// Freshly proved inputs for reconciling the newest publication intent.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PublicationSettlement {
+    pub intent: PublicationIntent,
+    /// Clean, validated HEAD of the target.
+    pub local_oid: git2::Oid,
+    /// The caller validated `local_oid` as a clean descendant of a released
+    /// local checkpoint rather than the recorded intent itself.
+    pub continuation: bool,
+    pub advertised_oid: Option<git2::Oid>,
+    /// None only for an already open attempt, which needs no observation.
+    pub relation: Option<PushIntentRelation>,
+}
+
 fn mismatch() -> RepositoryError {
     RepositoryError::new(
         RepositoryOperation::RepositorySnapshot,
@@ -187,6 +229,29 @@ pub(super) fn owned(
     }
     crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
     Ok(record)
+}
+
+fn publication_intent(
+    tx: &Transaction<'_>,
+    record: &state::StoredRemoteOperation,
+) -> Result<PublicationIntent, RepositoryError> {
+    Ok(match state::latest_publication_attempt(tx, record)? {
+        Some(attempt) => match (attempt.phase, attempt.candidate_oid) {
+            (state::PublicationPhase::Open, None) => PublicationIntent::Open,
+            (state::PublicationPhase::Verified, Some(candidate)) => {
+                PublicationIntent::Verified(candidate)
+            }
+            (
+                state::PublicationPhase::Prepared | state::PublicationPhase::Returned,
+                Some(candidate),
+            ) => PublicationIntent::Attempt(candidate),
+            _ => return Err(state::recovery_required()),
+        },
+        None => record
+            .sync_evidence
+            .push_oid
+            .map_or(PublicationIntent::None, PublicationIntent::Legacy),
+    })
 }
 
 fn is_sync(target: &RemoteOperationTarget) -> bool {
@@ -292,11 +357,36 @@ fn point_order(point: RemoteOperationSafePoint) -> u8 {
     }
 }
 
+/// Whether the operation's newest recorded pass holds an installed conflict or
+/// an owned resolution that only this same operation can finish.
+fn pending_recovery_stage(
+    tx: &Transaction<'_>,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND window_number=(SELECT max(window_number) FROM remote_integration_steps WHERE operation_record_id=?1) AND phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",
+        [record.id],
+        |row| row.get(0),
+    )
+    .map_err(|_| state::recovery_required())
+}
+
 fn acknowledge(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
     point: RemoteOperationSafePoint,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    // A pending conflict or owned resolution is the recoverable transition a
+    // cancellation must preserve: stop this owner without ending the
+    // operation, so restart, reacquisition and external repair stay possible.
+    if record.cancel_requested && is_sync(&record.target) && pending_recovery_stage(tx, record)? {
+        tx.execute(
+            "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",
+            params![record.id, now()],
+        )
+        .map_err(|_| state::recovery_required())?;
+        return Ok(RemoteSafePointOutcome::Cancelled);
+    }
     let (phase, outcome, result) = if record.cancel_requested {
         (
             "cancelled",
@@ -489,6 +579,9 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            if is_sync(target) && state::has_pending_conflict(tx, repository_id)? {
+                return Ok(RemoteReservationOutcome::Busy);
+            }
             state::read_snapshot(tx, repository_id)?;
             if let Some(record) = state::read_operation_rows(tx, repository_id, true)?
                 .into_iter()
@@ -551,7 +644,32 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             if is_sync(&record.target) {
-                validate_sync_point(&record, point)?;
+                if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
+                    // The legacy push checkpoint is frozen behind this attempt
+                    // and is never replayed; push boundaries follow the
+                    // attempt's own forward-only phase instead.
+                    use RemoteOperationSafePoint as P;
+                    use state::PublicationPhase as A;
+                    let valid = match point {
+                        P::BeforeFetch => record.phase == RemoteOperationPhase::Reconciling,
+                        P::AfterFetch => record.completed_step == Some(P::AfterFetch),
+                        P::BeforePush => {
+                            !record.reconciliation_required && attempt.phase == A::Prepared
+                        }
+                        P::AfterPushReturn => {
+                            !record.reconciliation_required && attempt.phase == A::Returned
+                        }
+                        P::AfterPushVerification => {
+                            !record.reconciliation_required && attempt.phase == A::Verified
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(state::recovery_required());
+                    }
+                } else {
+                    validate_sync_point(&record, point)?;
+                }
             } else if matches!(
                 point,
                 RemoteOperationSafePoint::BeforeFetch
@@ -705,6 +823,751 @@ impl RepositoryService {
         })
     }
 
+    /// Child intent is durable before a merge/index effect. The owner epoch is
+    /// captured in the immutable row; a later reacquisition receives a new
+    /// token and cannot rewrite the earlier intent.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn prepare_synchronization_integration(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::IntegrationStepIntent,
+    ) -> Result<state::IntegrationStepEvidence, RepositoryError> {
+        self.prepare_synchronization_integration_in_window(root, owner, 0, intent)
+    }
+
+    /// Append-only pass evidence. Git identity, clean/continuation ancestry and
+    /// the exact advertised/tracking pass must be observed by the caller; this
+    /// transition only fences and persists that intent, never proves an effect.
+    pub(super) fn prepare_synchronization_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        number: u32,
+        intent: &state::IntegrationWindowIntent,
+    ) -> Result<state::IntegrationWindowEvidence, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if record.cancel_requested || record.yield_requested {
+                return Err(state::recovery_required());
+            }
+            state::prepare_integration_window(tx, &record, number, intent)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_integration_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        intent: &state::IntegrationStepIntent,
+    ) -> Result<state::IntegrationStepEvidence, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if window_number == 0 {
+                state::prepare_integration_step(tx, &record, intent)
+            } else {
+                if record.cancel_requested || record.yield_requested {
+                    return Err(state::recovery_required());
+                }
+                state::prepare_integration_step_in_window(tx, &record, window_number, intent)
+            }
+        })
+    }
+
+    /// Read one owned, fenced candidate application during explicit restart.
+    /// The returned immutable intent is never reconstructed from live refs.
+    pub(super) fn applying_synchronization_candidate(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<Option<state::IntegrationStepEvidence>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) || !record.reconciliation_required {
+                return Err(state::recovery_required());
+            }
+            // Prefer the latest stage. A locally completed resolution retains
+            // its publication handoff until explicit restart observes Fetch.
+            let window = state::latest_integration_window(tx, &record)?;
+            for ordinal in (0..=1).rev() {
+                if let Some(step) =
+                    state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+                {
+                    if step.phase == state::IntegrationStepPhase::Applied
+                        && state::integration_has_resolution_attempt(tx, &record, &step)?
+                        && !state::integration_resolution_released(tx, &record, &step)?
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    if step.phase == state::IntegrationStepPhase::Applied
+                        && record.sync_evidence.push_oid.is_some()
+                        && state::latest_publication_attempt(tx, &record)?.is_none()
+                        && step.result_oid != record.sync_evidence.local_oid
+                    {
+                        // The frozen legacy envelope must still describe this
+                        // stage. Once an append-only publication attempt
+                        // exists, the newest window is the local authority.
+                        return Err(state::recovery_required());
+                    }
+                    // A recorded Push intent is never cleared or rewritten by
+                    // this local observation; the caller routes it to
+                    // publication reconciliation instead of local handoff.
+                    // Never fall back to an earlier applied context while the
+                    // primary has an unfinished effect or owned resolution.
+                    return Ok(Some(step));
+                }
+            }
+            Ok(None)
+        })
+    }
+
+    /// Commit the already-observed child application into the legacy envelope.
+    /// This is the only restart transition permitted for a pending candidate.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn reconcile_synchronization_candidate_applied(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.reconcile_synchronization_candidate_applied_in_window(
+            root, owner, 0, ordinal, candidate, tree, evidence,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reconcile_synchronization_candidate_applied_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            use state::SynchronizationCheckpoint as C;
+            let step = state::integration_step_in_window(tx, record.id, window_number, ordinal)?
+                .ok_or_else(state::recovery_required)?;
+            let continuation = evidence.local_oid != Some(candidate);
+            if continuation
+                && (evidence.local_oid.is_none()
+                    || step.intent.stage != super::merge::IntegrationStage::Primary
+                    || step.candidate_oid != Some(candidate)
+                    || !state::integration_resolution_released(tx, &record, &step)?)
+            {
+                return Err(state::recovery_required());
+            }
+            if !is_sync(&record.target)
+                || !record.reconciliation_required
+                || !matches!(
+                    record.sync_checkpoint,
+                    Some(C::FetchObserved | C::LocalFastForwarded)
+                )
+                || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
+                || record.sync_evidence.push_oid.is_some()
+                || step.phase != state::IntegrationStepPhase::Applied
+                || step.candidate_oid.is_some_and(|oid| oid != candidate)
+                || (state::integration_has_resolution_attempt(tx, &record, &step)?
+                    && !state::integration_resolution_released(tx, &record, &step)?)
+                || step.result_oid != Some(candidate)
+                || step.observed_tree_oid != Some(tree)
+                || evidence.expected_oid != record.sync_evidence.expected_oid
+                || evidence.primary_tracking_oid.is_none()
+                || state::latest_integration_window(tx, &record)?.number != window_number
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='local_fast_forwarded', sync_checkpoint='local_fast_forwarded', reconciliation_required=0, local_oid=?2, tracking_oid=?3, primary_tracking_oid=?4, updated_at=max(updated_at,?5) WHERE id=?1",
+                params![record.id, evidence.local_oid.map(|oid| oid.to_string()), evidence.tracking_oid.map(|oid| oid.to_string()), evidence.primary_tracking_oid.map(|oid| oid.to_string()), now()],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    pub(super) fn observe_external_synchronization_integration(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+        candidate: git2::Oid,
+        tree: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if record.cancel_requested || record.yield_requested || !record.reconciliation_required
+            {
+                return Err(state::recovery_required());
+            }
+            state::observe_external_integration(
+                tx,
+                &record,
+                step.window_number,
+                step.intent.ordinal,
+                candidate,
+                tree,
+            )
+        })
+    }
+
+    pub(super) fn release_inspected_synchronization_conflict(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if state::integration_step_in_window(
+                tx,
+                record.id,
+                step.window_number,
+                step.intent.ordinal,
+            )?
+            .as_ref()
+                != Some(step)
+                || step.phase != state::IntegrationStepPhase::ConflictPending
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0 WHERE id=?1",
+                [record.id],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn begin_synchronization_integration_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        candidate_oid: Option<git2::Oid>,
+    ) -> Result<(), RepositoryError> {
+        self.begin_synchronization_integration_effect_in_window(
+            root,
+            owner,
+            0,
+            ordinal,
+            candidate_oid,
+        )
+    }
+
+    pub(super) fn begin_synchronization_integration_effect_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        candidate_oid: Option<git2::Oid>,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if window_number == 0 {
+                state::begin_integration_effect(tx, &record, ordinal, candidate_oid)
+            } else {
+                if record.cancel_requested || record.yield_requested {
+                    return Err(state::recovery_required());
+                }
+                state::begin_integration_effect_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    candidate_oid,
+                )
+            }
+        })
+    }
+
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn observe_synchronization_integration_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        result_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        self.observe_synchronization_integration_effect_in_window(
+            root,
+            owner,
+            0,
+            ordinal,
+            result_oid,
+            observed_tree_oid,
+        )
+    }
+
+    pub(super) fn observe_synchronization_integration_effect_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        result_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if window_number == 0 {
+                state::observe_integration_effect(
+                    tx,
+                    &record,
+                    ordinal,
+                    result_oid,
+                    observed_tree_oid,
+                )
+            } else {
+                // Observation must remain durable even if cancellation arrived
+                // after the effect. The next mutation boundary handles it.
+                state::observe_integration_effect_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    result_oid,
+                    observed_tree_oid,
+                )
+            }
+        })
+    }
+
+    /// A conflict is observed after the Git effect and then releases only the
+    /// active slot. The immutable operation/stage remains for explicit matching
+    /// reconciliation; another synchronization cannot adopt it.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn release_synchronization_conflict(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
+        self.release_synchronization_conflict_in_window(root, owner, 0, ordinal, conflict_digest)
+    }
+
+    pub(super) fn release_synchronization_conflict_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if window_number == 0 {
+                state::record_integration_conflict(tx, &record, ordinal, conflict_digest)?;
+            } else {
+                state::record_integration_conflict_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    conflict_digest,
+                )?;
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                params![record.id, now(), owner.epoch],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
+    /// Reacquisition is deliberately separate from ordinary restart: it proves
+    /// the exact durable operation, target, generation and conflict digest.
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn reacquire_synchronization_conflict(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.reacquire_synchronization_conflict_in_window(
+            root,
+            operation_id,
+            target,
+            0,
+            ordinal,
+            conflict_digest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reacquire_synchronization_conflict_in_window(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        window_number: u32,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            if &record.target != target
+                || !is_sync(target)
+                || !matches!(
+                    record.phase,
+                    RemoteOperationPhase::Interrupted | RemoteOperationPhase::Reconciling
+                )
+                || record.generation != state::generation(tx, id)?
+                || record.cancel_requested
+            {
+                return Err(state::recovery_required());
+            }
+            let step = state::integration_step_in_window(tx, record.id, window_number, ordinal)?
+                .ok_or_else(state::recovery_required)?;
+            if !matches!(
+                step.phase,
+                state::IntegrationStepPhase::ConflictPending
+                    | state::IntegrationStepPhase::ResolutionPrepared
+                    | state::IntegrationStepPhase::CommitPrepared
+                    | state::IntegrationStepPhase::Applied
+            ) || step.conflict_digest != Some(conflict_digest)
+            {
+                return Err(state::recovery_required());
+            }
+            if state::read_operation_rows(tx, id, true)?
+                .iter()
+                .any(|other| other.id != record.id)
+            {
+                return Ok(RemoteReservationOutcome::Busy);
+            }
+            let epoch = record
+                .owner_epoch
+                .checked_add(1)
+                .ok_or_else(state::recovery_required)?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='reconciling',reconciliation_required=1,completed_step=NULL,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",
+                params![record.id, epoch, now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            let reacquired = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            Ok(RemoteReservationOutcome::Reserved(token(
+                self,
+                id,
+                &reacquired,
+            )))
+        })
+    }
+
+    /// Release only local execution ownership after verified metadata/sentinel
+    /// retirement. Retain the original synchronization and frozen child evidence
+    /// for explicit re-fetch/publication reconciliation, never published authority.
+    pub(super) fn finalize_synchronization_resolution(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        checkpoint: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            let (step, candidate, phase, _, _, _) =
+                state::resolution_candidate_for_attempt(tx, &record, attempt)?
+                    .ok_or_else(state::recovery_required)?;
+            let artifact = state::resolution_index_artifact(tx, &record, attempt)?
+                .ok_or_else(state::recovery_required)?;
+            if record.phase != RemoteOperationPhase::Reconciling
+                || !record.reconciliation_required
+                || record.authority.is_some()
+                || phase != "applied"
+                || candidate != checkpoint
+                || step.phase != state::IntegrationStepPhase::Applied
+                || step.result_oid != Some(checkpoint)
+                || artifact.phase != "released"
+                || artifact.ref_phase != "observed"
+            {
+                return Err(state::recovery_required());
+            }
+            // Like both conflict releases, completion consumes a cancellation
+            // requested while this owner ran: left set, the next restart would
+            // end the operation with its resolution commit unpublished.
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
+                params![record.id, now(), owner.epoch],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
+    pub(super) fn prepare_synchronization_identity_confirmation(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::IdentityConfirmationIntent,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_identity_confirmation(tx, &record, intent)
+        })
+    }
+
+    #[cfg(test)] // Window-zero form, used by the journal tests only.
+    pub(super) fn prepare_synchronization_resolution_attempt(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        intent: &state::ResolutionAttemptIntent,
+        paths: &[state::ResolutionPathIntent],
+    ) -> Result<(), RepositoryError> {
+        self.prepare_synchronization_resolution_attempt_in_window(root, owner, 0, intent, paths)
+            .map(|_| ())
+    }
+
+    pub(super) fn prepare_synchronization_resolution_attempt_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        intent: &state::ResolutionAttemptIntent,
+        paths: &[state::ResolutionPathIntent],
+    ) -> Result<(i64, i32), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_attempt_in_window(tx, &record, window_number, intent, paths)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_ref_log_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        role: &str,
+        artifact: &state::ResolutionRefLogArtifact,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_ref_log_artifact(tx, &record, attempt, role, artifact)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_index_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        artifact: &state::ResolutionIndexArtifact,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_index_artifact(tx, &record, attempt, artifact)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_index_output(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        output: (u64, u64, [u8; 32]),
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_index_output(tx, &record, attempt, output)
+        })
+    }
+
+    pub(super) fn advance_synchronization_resolution_ref_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        next: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::advance_resolution_ref_effect(tx, &record, attempt, next)
+        })
+    }
+
+    pub(super) fn advance_synchronization_index_artifact(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        next: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::advance_resolution_index_artifact(tx, &record, attempt, next)
+        })
+    }
+
+    pub(super) fn begin_synchronization_resolution_path_effects(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::begin_resolution_path_effects(tx, &record, attempt)
+        })
+    }
+
+    pub(super) fn observe_synchronization_resolution_path_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        ordinal: u32,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_resolution_path_effect(tx, &record, attempt, ordinal)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_resolution_candidate(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        candidate_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::prepare_resolution_candidate(tx, &record, attempt, candidate_oid)
+        })
+    }
+
+    pub(super) fn observe_synchronization_resolution_checkpoint(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        attempt: OperationId,
+        checkpoint_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_resolution_checkpoint(
+                tx,
+                &record,
+                attempt,
+                checkpoint_oid,
+                observed_tree_oid,
+            )
+        })
+    }
+
+    pub(super) fn begin_synchronization_identity_confirmation_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        confirmation: OperationId,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::begin_identity_confirmation_effect(tx, &record, confirmation)
+        })
+    }
+
+    pub(super) fn observe_synchronization_identity_confirmation_effect(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        confirmation: OperationId,
+        applied_configuration_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::observe_identity_confirmation_effect(
+                tx,
+                &record,
+                confirmation,
+                applied_configuration_digest,
+            )
+        })
+    }
+
+    /// Records a completed ordered merge after the child step has durably
+    /// observed its guarded ref transition. Unlike a fast-forward, the merge
+    /// application has its own child intent/effect journal rather than the
+    /// legacy before-local-update safe point.
+    pub(super) fn checkpoint_synchronization_merge_applied(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        evidence: &state::SynchronizationEvidence,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            use state::SynchronizationCheckpoint as C;
+            let window = state::latest_integration_window(tx, &record)?;
+            let ordinal = u8::from(record.target.context_ref().is_some());
+            let applied = state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+                .is_some_and(|step| {
+                    step.phase == state::IntegrationStepPhase::Applied
+                        && step.result_oid == evidence.local_oid
+                });
+            if state::latest_publication_attempt(tx, &record)?
+                .is_some_and(|attempt| attempt.phase == state::PublicationPhase::Open)
+            {
+                // The legacy checkpoint and local OID stay frozen behind the
+                // old Push intent. The applied child stage is the durable
+                // record; binding the publication candidate rechecks it.
+                if !is_sync(&record.target)
+                    || record.reconciliation_required
+                    || record.authority.is_some()
+                    || !applied
+                    || evidence.expected_oid != record.sync_evidence.expected_oid
+                {
+                    return Err(state::recovery_required());
+                }
+                return Ok(if record.cancel_requested || record.yield_requested {
+                    acknowledge(
+                        tx,
+                        &record,
+                        record
+                            .completed_step
+                            .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+                    )?
+                } else {
+                    RemoteSafePointOutcome::Continue
+                });
+            }
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || !matches!(
+                    record.sync_checkpoint,
+                    Some(C::FetchObserved | C::LocalFastForwarded)
+                )
+                || record.sync_evidence.push_oid.is_some()
+                || !applied
+                || evidence.expected_oid != record.sync_evidence.expected_oid
+                || evidence.local_oid.is_none()
+            {
+                return Err(state::recovery_required());
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='local_fast_forwarded',sync_checkpoint='local_fast_forwarded',local_oid=?2,tracking_oid=?3,primary_tracking_oid=?4,updated_at=max(updated_at,?5) WHERE id=?1",
+                params![record.id,evidence.local_oid.map(|oid|oid.to_string()),evidence.tracking_oid.map(|oid|oid.to_string()),evidence.primary_tracking_oid.map(|oid|oid.to_string()),now()],
+            ).map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
     pub(crate) fn checkpoint_synchronization(
         &self,
         root: &Path,
@@ -715,9 +1578,12 @@ impl RepositoryService {
         use state::SynchronizationCheckpoint as C;
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
+            // Once a publication attempt exists the legacy envelope is frozen:
+            // no legacy checkpoint may move it, even with unchanged evidence.
             if !is_sync(&record.target)
                 || record.authority.is_some()
                 || record.reconciliation_required
+                || state::latest_publication_attempt(tx, &record)?.is_some()
             {
                 return Err(state::recovery_required());
             }
@@ -816,6 +1682,13 @@ impl RepositoryService {
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
+            let foreign_conflict: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND operation.id!=?2 AND step.phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",
+                params![id, record.id], |row| row.get(0),
+            ).map_err(|_| state::recovery_required())?;
+            if foreign_conflict {
+                return Err(state::recovery_required());
+            }
             crate::repository::recovery::require_no_pending_local(tx, id)?;
             if record.generation != state::generation(tx, id)?
                 || record.sync_checkpoint.is_none()
@@ -874,6 +1747,9 @@ impl RepositoryService {
                 || record.phase != RemoteOperationPhase::Reconciling
                 || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
                 || local_oid != worktree_oid
+                // A frozen legacy envelope is reconciled only through its
+                // append-only publication attempts.
+                || state::latest_publication_attempt(tx, &record)?.is_some()
             {
                 return Err(state::recovery_required());
             }
@@ -937,6 +1813,307 @@ impl RepositoryService {
         })
     }
 
+    /// Read the newest publication intent under ownership. The legacy Push
+    /// intent and every earlier attempt are immutable history.
+    pub(crate) fn synchronization_publication_intent(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<PublicationIntent, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            publication_intent(tx, &record)
+        })
+    }
+
+    /// Reconcile the newest immutable push intent against fresh, independent
+    /// Push-direction evidence and leave restart reconciliation.
+    ///
+    /// The caller must have completed Fetch, proved the target clean at
+    /// `local_oid`, and computed `relation` from a receive-pack advertisement
+    /// and actual ancestry. An intent that is equal-and-current stays on the
+    /// legacy route; everything else appends one open publication attempt that
+    /// records the fixed disposition. Nothing here rewrites `push_oid`, an
+    /// earlier attempt, the legacy checkpoint or the legacy local OID, and
+    /// nothing authorizes a push: the new attempt has no candidate yet.
+    pub(crate) fn settle_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        settlement: &PublicationSettlement,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::PublicationDisposition as D;
+        use state::SynchronizationCheckpoint as C;
+        enum Action {
+            Resume,
+            Verify,
+            Open(git2::Oid, D),
+        }
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            let Some(checkpoint) = record.sync_checkpoint else {
+                return Err(state::recovery_required());
+            };
+            if !is_sync(&record.target)
+                || !record.reconciliation_required
+                || record.phase != RemoteOperationPhase::Reconciling
+                || record.completed_step != Some(RemoteOperationSafePoint::AfterFetch)
+                || record.authority.is_some()
+                || record.sync_evidence.push_oid.is_none()
+                || !matches!(
+                    checkpoint,
+                    C::PushPrepared | C::PushReturned | C::PushVerified
+                )
+                || publication_intent(tx, &record)? != settlement.intent
+            {
+                return Err(state::recovery_required());
+            }
+            let window = state::latest_integration_window(tx, &record)?;
+            let ordinal = u8::from(record.target.context_ref().is_some());
+            let last = state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+                .filter(|step| step.phase == state::IntegrationStepPhase::Applied);
+            let last_result = last.as_ref().and_then(|step| step.result_oid);
+            let released = match &last {
+                Some(step) => state::integration_resolution_released(tx, &record, step)?,
+                None => false,
+            };
+            let local = settlement.local_oid;
+            let action = match settlement.intent {
+                PublicationIntent::None => return Err(state::recovery_required()),
+                PublicationIntent::Open => {
+                    let attempt = state::latest_publication_attempt(tx, &record)?
+                        .ok_or_else(state::recovery_required)?;
+                    if settlement.relation.is_some()
+                        || !(last_result == Some(local)
+                            || (attempt.local_oid == local && !settlement.continuation)
+                            || (settlement.continuation && released))
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    Action::Resume
+                }
+                PublicationIntent::Verified(candidate) => {
+                    if local != candidate
+                        || settlement.relation != Some(PushIntentRelation::Equal)
+                        || settlement.advertised_oid != Some(candidate)
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    Action::Resume
+                }
+                PublicationIntent::Legacy(intent) | PublicationIntent::Attempt(intent) => {
+                    let legacy = matches!(settlement.intent, PublicationIntent::Legacy(_));
+                    let current = local == intent;
+                    let relation = settlement.relation.ok_or_else(state::recovery_required)?;
+                    if (current && settlement.continuation)
+                        || (!current
+                            && !(settlement.continuation
+                                && released
+                                && last_result == Some(intent)))
+                        || (relation == PushIntentRelation::Absent)
+                            != settlement.advertised_oid.is_none()
+                        || (relation == PushIntentRelation::Equal)
+                            != (settlement.advertised_oid == Some(intent))
+                        || (legacy && checkpoint == C::PushVerified)
+                    {
+                        return Err(state::recovery_required());
+                    }
+                    match relation {
+                        // An equal, behind or never-advertised intent that is
+                        // still HEAD stays on the unchanged legacy route.
+                        PushIntentRelation::Equal if current && legacy => {
+                            return Err(state::recovery_required());
+                        }
+                        PushIntentRelation::Equal if current => Action::Verify,
+                        PushIntentRelation::Equal => Action::Open(intent, D::Accepted),
+                        PushIntentRelation::Behind if current && legacy => {
+                            return Err(state::recovery_required());
+                        }
+                        PushIntentRelation::Behind => Action::Open(intent, D::NotAccepted),
+                        PushIntentRelation::Ahead => Action::Open(intent, D::Contained),
+                        PushIntentRelation::Diverged => Action::Open(intent, D::Displaced),
+                        PushIntentRelation::Absent => {
+                            // Absence after any recorded advertisement is
+                            // remote deletion and is never recreated here.
+                            if (current && legacy)
+                                || state::publication_advertisement_recorded(tx, &record)?
+                            {
+                                return Err(state::recovery_required());
+                            }
+                            Action::Open(intent, D::NotAccepted)
+                        }
+                    }
+                }
+            };
+            let decision = acknowledge(tx, &record, RemoteOperationSafePoint::AfterFetch)?;
+            if decision != RemoteSafePointOutcome::Continue {
+                return Ok(decision);
+            }
+            match action {
+                Action::Resume => {}
+                Action::Verify => {
+                    state::advance_publication_attempt(
+                        tx,
+                        &record,
+                        state::PublicationPhase::Verified,
+                        settlement.advertised_oid,
+                    )?;
+                }
+                Action::Open(previous, disposition) => {
+                    state::open_publication_attempt(
+                        tx,
+                        &record,
+                        previous,
+                        settlement.advertised_oid,
+                        disposition,
+                        local,
+                    )?;
+                }
+            }
+            // Leave reconciliation without moving the frozen legacy checkpoint,
+            // push intent or local OID.
+            tx.execute(
+                "UPDATE remote_operation_records SET phase=?2,reconciliation_required=0,updated_at=max(updated_at,?3) WHERE id=?1",
+                params![record.id, checkpoint.name(), now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Durable push intent of the open attempt, written BEFORE any push effect.
+    /// With `verified`, the fresh Push advertisement already equals the
+    /// candidate and no push will follow.
+    pub(crate) fn prepare_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        candidate: git2::Oid,
+        advertised_oid: Option<git2::Oid>,
+        verified: bool,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            // An endpoint that advertised this target before and now advertises
+            // nothing was deleted remotely; publication never recreates it.
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || (advertised_oid.is_none()
+                    && state::publication_advertisement_recorded(tx, &record)?)
+            {
+                return Err(state::recovery_required());
+            }
+            if let Some(point) = record.completed_step {
+                let decision = acknowledge(tx, &record, point)?;
+                if decision != RemoteSafePointOutcome::Continue {
+                    return Ok(decision);
+                }
+            } else if record.cancel_requested || record.yield_requested {
+                return acknowledge(tx, &record, RemoteOperationSafePoint::BeforeFetch);
+            }
+            state::bind_publication_candidate(tx, &record, candidate, advertised_oid, verified)?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Published or AlreadyCurrent for the verified newest attempt, derived
+    /// only from stored evidence so it is identical before and after a restart.
+    pub(crate) fn synchronization_publication_authority(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<state::SynchronizationAuthority, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            state::publication_authority(tx, &record)
+        })
+    }
+
+    /// Forward-only observation of the newest attempt's own push.
+    pub(crate) fn advance_synchronization_publication(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        phase: state::PublicationPhase,
+        advertised_oid: Option<git2::Oid>,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target)
+                || record.reconciliation_required
+                || (phase == state::PublicationPhase::Returned
+                    && record.completed_step != Some(RemoteOperationSafePoint::BeforePush))
+            {
+                return Err(state::recovery_required());
+            }
+            if let Some(point) = record.completed_step {
+                let decision = acknowledge(tx, &record, point)?;
+                if decision != RemoteSafePointOutcome::Continue {
+                    return Ok(decision);
+                }
+            }
+            state::advance_publication_attempt(tx, &record, phase, advertised_oid)?;
+            Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Record this operation's own merge metadata digests in the same fenced
+    /// step that just produced them. Later retirement accepts nothing else.
+    pub(super) fn record_synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        digests: [Option<[u8; 32]>; 3],
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::record_integration_merge_metadata(tx, &record, window_number, ordinal, digests)
+        })
+    }
+
+    pub(super) fn synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+    ) -> Result<Option<state::MergeMetadataEvidence>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::integration_merge_metadata(tx, &record, step.window_number, step.intent.ordinal)
+        })
+    }
+
+    pub(super) fn advance_synchronization_merge_metadata(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        step: &state::IntegrationStepEvidence,
+        phase: &str,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if record.cancel_requested || record.yield_requested || !record.reconciliation_required
+            {
+                return Err(state::recovery_required());
+            }
+            state::advance_integration_merge_metadata(
+                tx,
+                &record,
+                step.window_number,
+                step.intent.ordinal,
+                phase,
+            )
+        })
+    }
+
     /// Persist authority and index-only handoff together before discovery. This
     /// releases the remote slot; exact-ID replay returns inspection, not ownership.
     pub(crate) fn classify_synchronization(
@@ -947,7 +2124,18 @@ impl RepositoryService {
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            if !is_sync(&record.target)
+            if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
+                // Authority comes from the newest verified attempt alone. The
+                // legacy push columns keep describing the superseded intent.
+                if !is_sync(&record.target)
+                    || record.reconciliation_required
+                    || attempt.phase != state::PublicationPhase::Verified
+                    || attempt.candidate_oid != Some(authority.oid())
+                    || attempt.advertised_oid != Some(authority.oid())
+                {
+                    return Err(state::recovery_required());
+                }
+            } else if !is_sync(&record.target)
                 || record.reconciliation_required
                 || record.sync_checkpoint != Some(state::SynchronizationCheckpoint::PushVerified)
                 || record.sync_evidence.local_oid != Some(authority.oid())
