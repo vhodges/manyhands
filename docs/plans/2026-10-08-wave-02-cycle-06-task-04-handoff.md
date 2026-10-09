@@ -1,5 +1,17 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 milestone 2 verified; M3 next — 2026-10-09
+
+M2 source b9bd929 passed all five native targets in
+https://github.com/vhodges/manyhands/actions/runs/37935757056
+Owner clarified targeted local tests of changed code are fine; run them (and fmt/
+strict clippy, which CI does not run) before each native dispatch. Next one writer:
+M3 = remainder D/E/F (metadata retirement after external repair, publication
+continuation envelope, post-merge race composition); then M4 = A/B/C/G coverage.
+The ledger's M2 sections list the remainder. Save/Git-index gap is separate ticket
+01M4GD0KKXW684QBA49F6EX3WE. Ticket open; Tasks 6/7 pending. Sections below are
+historical.
+
 ## Current: Task 5 milestone 2 reviewed, native CI next — 2026-10-09
 
 The previous session stalled after the M2 quality review; a fresh Claude Code

@@ -1830,3 +1830,22 @@ all-target/all-feature clippy pass; `--lib repository::remote` 247 passed;
 `discovery_rebuild` 78, `local_authoring` 124, `recovery_foundation_gate` 51,
 `repository_enablement` 78 passed. No full all-feature suite was run locally.
 Native evidence is pending the next exact-source run.
+
+### Task 5 milestone 2 verified — 2026-10-09
+
+Manual run 37935757056 completed SUCCESS on exact source
+b9bd929e0f1a47699dacac7889e95358233c8d54 across all five native targets (Linux
+x86_64/ARM64, Windows x86_64/ARM64 MSVC, macOS ARM64); results inspected with gh.
+https://github.com/vhodges/manyhands/actions/runs/37935757056
+With the spec and quality approvals above, M2 is verified. This is not Task 5
+acceptance: remainder A–G stands.
+
+The save/Git-index gap is now ticket `01M4GD0KKXW684QBA49F6EX3WE` on its own
+pushed branch from main, per owner agreement; it is out of Cycle 06 scope.
+
+Next: one sequential writer for M3 — production remainder D (owned merge-metadata
+retirement after proven external repair), E (append-only publication envelope for
+continuation after an old Push intent) and F (post-merge ambiguity/deletion/
+endpoint-generation and typed-Recovery race composition), each with regressions
+run locally before review. M4 then closes fault-matrix, safe-point and index-
+replay coverage (A, B, C, G). Targeted local tests precede each native dispatch.
