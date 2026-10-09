@@ -718,9 +718,46 @@ impl RepositoryService {
         owner: &RemoteReservation,
         intent: &state::IntegrationStepIntent,
     ) -> Result<state::IntegrationStepEvidence, RepositoryError> {
+        self.prepare_synchronization_integration_in_window(root, owner, 0, intent)
+    }
+
+    /// Append-only pass evidence. Git identity, clean/continuation ancestry and
+    /// the exact advertised/tracking pass must be observed by the caller; this
+    /// transition only fences and persists that intent, never proves an effect.
+    #[allow(dead_code)] // Task 5 checkpoint: live orchestration remains window zero.
+    pub(super) fn prepare_synchronization_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        number: u32,
+        intent: &state::IntegrationWindowIntent,
+    ) -> Result<state::IntegrationWindowEvidence, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            state::prepare_integration_step(tx, &record, intent)
+            if record.cancel_requested || record.yield_requested {
+                return Err(state::recovery_required());
+            }
+            state::prepare_integration_window(tx, &record, number, intent)
+        })
+    }
+
+    pub(super) fn prepare_synchronization_integration_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        intent: &state::IntegrationStepIntent,
+    ) -> Result<state::IntegrationStepEvidence, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if window_number == 0 {
+                state::prepare_integration_step(tx, &record, intent)
+            } else {
+                if record.cancel_requested || record.yield_requested {
+                    return Err(state::recovery_required());
+                }
+                state::prepare_integration_step_in_window(tx, &record, window_number, intent)
+            }
         })
     }
 
@@ -743,8 +780,8 @@ impl RepositoryService {
                     && step.candidate_oid.is_some()
                 {
                     let released_resolution: bool = tx.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1 AND attempt.integration_step_id=(SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2) AND attempt.phase='applied' AND artifact.phase='released' AND artifact.ref_phase='observed')",
-                        params![record.id, ordinal], |row| row.get(0),
+                        "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE attempt.operation_record_id=?1 AND attempt.integration_step_id=(SELECT id FROM remote_integration_steps WHERE operation_record_id=?1 AND ordinal=?2 AND window_number=?3) AND attempt.phase='applied' AND artifact.phase='released' AND artifact.ref_phase='observed')",
+                        params![record.id, ordinal, i64::from(step.window_number)], |row| row.get(0),
                     ).map_err(|_| state::recovery_required())?;
                     if step.phase == state::IntegrationStepPhase::Applying
                         || (step.phase == state::IntegrationStepPhase::Applied
@@ -804,9 +841,39 @@ impl RepositoryService {
         ordinal: u8,
         candidate_oid: Option<git2::Oid>,
     ) -> Result<(), RepositoryError> {
+        self.begin_synchronization_integration_effect_in_window(
+            root,
+            owner,
+            0,
+            ordinal,
+            candidate_oid,
+        )
+    }
+
+    pub(super) fn begin_synchronization_integration_effect_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        candidate_oid: Option<git2::Oid>,
+    ) -> Result<(), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            state::begin_integration_effect(tx, &record, ordinal, candidate_oid)
+            if window_number == 0 {
+                state::begin_integration_effect(tx, &record, ordinal, candidate_oid)
+            } else {
+                if record.cancel_requested || record.yield_requested {
+                    return Err(state::recovery_required());
+                }
+                state::begin_integration_effect_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    candidate_oid,
+                )
+            }
         })
     }
 
@@ -819,9 +886,41 @@ impl RepositoryService {
         result_oid: git2::Oid,
         observed_tree_oid: git2::Oid,
     ) -> Result<(), RepositoryError> {
+        self.observe_synchronization_integration_effect_in_window(
+            root,
+            owner,
+            0,
+            ordinal,
+            result_oid,
+            observed_tree_oid,
+        )
+    }
+
+    pub(super) fn observe_synchronization_integration_effect_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        result_oid: git2::Oid,
+        observed_tree_oid: git2::Oid,
+    ) -> Result<(), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            state::observe_integration_effect(tx, &record, ordinal, result_oid, observed_tree_oid)
+            if window_number == 0 {
+                state::observe_integration_effect(tx, &record, ordinal, result_oid, observed_tree_oid)
+            } else {
+                // Observation must remain durable even if cancellation arrived
+                // after the effect. The next mutation boundary handles it.
+                state::observe_integration_effect_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    result_oid,
+                    observed_tree_oid,
+                )
+            }
         })
     }
 
@@ -836,9 +935,30 @@ impl RepositoryService {
         ordinal: u8,
         conflict_digest: [u8; 32],
     ) -> Result<(), RepositoryError> {
+        self.release_synchronization_conflict_in_window(root, owner, 0, ordinal, conflict_digest)
+    }
+
+    pub(super) fn release_synchronization_conflict_in_window(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        window_number: u32,
+        ordinal: u8,
+        conflict_digest: [u8; 32],
+    ) -> Result<(), RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
-            state::record_integration_conflict(tx, &record, ordinal, conflict_digest)?;
+            if window_number == 0 {
+                state::record_integration_conflict(tx, &record, ordinal, conflict_digest)?;
+            } else {
+                state::record_integration_conflict_in_window(
+                    tx,
+                    &record,
+                    window_number,
+                    ordinal,
+                    conflict_digest,
+                )?;
+            }
             tx.execute(
                 "UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1 AND owner_epoch=?3",
                 params![record.id, now(), owner.epoch],

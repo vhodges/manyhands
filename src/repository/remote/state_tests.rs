@@ -99,7 +99,7 @@ fn orphan_remote_rows_require_recovery_during_automatic_startup_audit() {
 }
 
 fn legacy_preflight_schema() -> String {
-    MERGE_EVIDENCE_SCHEMA
+    legacy_window_fixture_schema()
         .replace(
             "            preflight_digest BLOB NOT NULL CHECK(typeof(preflight_digest)='blob' AND length(preflight_digest)=32),\n",
             "",
@@ -720,7 +720,7 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_operation_records")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows; DROP TABLE remote_operation_records")
         .unwrap();
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
@@ -821,12 +821,13 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
     })
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    connection.execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;").unwrap();
+    connection.execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;").unwrap();
     drop(connection);
     let reopened = RepositoryService::open_at(data.path()).unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     for table in [
         "remote_integration_steps",
+        "remote_integration_windows",
         "remote_identity_confirmations",
         "remote_resolution_attempts",
         "remote_resolution_paths",
@@ -861,7 +862,7 @@ fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populat
     let (data, _root, _service) = fixture();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;")
         .unwrap();
     connection
         .execute_batch(&legacy_preflight_schema())
@@ -905,7 +906,7 @@ fn legacy_preflight_digest_migration_upgrades_empty_attempts_and_rejects_populat
         )
         .unwrap();
     connection
-        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;")
+        .execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;")
         .unwrap();
     connection
         .execute_batch(&legacy_preflight_schema())
@@ -979,7 +980,7 @@ fn weakened_complete_task2_evidence_schema_requires_recovery() {
         let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps;",
+                "DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;",
             )
             .unwrap();
         connection.execute_batch(&schema).unwrap();
@@ -1034,7 +1035,7 @@ fn task2_evidence_schema_has_no_content_or_transport_columns_and_wal_stays_redac
     })
     .unwrap();
     assert_eq!(generation, 1);
-    let schema: String = connection.prepare("SELECT group_concat(sql, '\n') FROM sqlite_master WHERE name IN ('remote_integration_steps','remote_identity_confirmations','remote_resolution_attempts','remote_resolution_paths')").unwrap().query_row([], |row| row.get(0)).unwrap();
+    let schema: String = connection.prepare("SELECT group_concat(sql, '\n') FROM sqlite_master WHERE name IN ('remote_integration_windows','remote_integration_steps','remote_identity_confirmations','remote_resolution_attempts','remote_resolution_paths')").unwrap().query_row([], |row| row.get(0)).unwrap();
     for forbidden in ["body", "credential", "endpoint", "server", "path TEXT"] {
         assert!(
             !schema.to_ascii_lowercase().contains(forbidden),
@@ -1183,4 +1184,826 @@ fn ref_log_evidence_additive_migration_partial_schema_and_orphans_fail_closed() 
     assert!(
         matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
     );
+}
+
+// Task 5 source-first regressions. Execution is intentionally left to native CI.
+fn legacy_window_fixture_schema() -> String {
+    // Pinned Task 2/4 SQL: do not derive the changed objects through the
+    // production legacy decoder, or the migration test could share its mistake.
+    const STEPS: &str = r#"CREATE TABLE remote_integration_steps (
+            id INTEGER PRIMARY KEY,
+            operation_record_id INTEGER NOT NULL REFERENCES remote_operation_records(id) ON DELETE CASCADE,
+            configuration_generation INTEGER NOT NULL CHECK(configuration_generation >= 0),
+            owner_epoch INTEGER NOT NULL CHECK(owner_epoch >= 0),
+            ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 1),
+            stage TEXT NOT NULL CHECK(stage IN ('context','primary')),
+            local_oid TEXT NOT NULL CHECK(length(local_oid)=40 AND local_oid NOT GLOB '*[^0-9a-f]*'),
+            incoming_oid TEXT NOT NULL CHECK(length(incoming_oid)=40 AND incoming_oid NOT GLOB '*[^0-9a-f]*'),
+            baseline_tree_oid TEXT NOT NULL CHECK(length(baseline_tree_oid)=40 AND baseline_tree_oid NOT GLOB '*[^0-9a-f]*'),
+            baseline_index_digest BLOB NOT NULL CHECK(typeof(baseline_index_digest)='blob' AND length(baseline_index_digest)=32),
+            candidate_oid TEXT CHECK(length(candidate_oid)=40 AND candidate_oid NOT GLOB '*[^0-9a-f]*'),
+            result_oid TEXT CHECK(length(result_oid)=40 AND result_oid NOT GLOB '*[^0-9a-f]*'),
+            observed_tree_oid TEXT CHECK(length(observed_tree_oid)=40 AND observed_tree_oid NOT GLOB '*[^0-9a-f]*'),
+            conflict_digest BLOB CHECK(conflict_digest IS NULL OR (typeof(conflict_digest)='blob' AND length(conflict_digest)=32)),
+            phase TEXT NOT NULL CHECK(phase IN ('prepared','applying','conflict_pending','resolution_prepared','commit_prepared','applied','recovery_required')),
+            UNIQUE(operation_record_id,ordinal), UNIQUE(operation_record_id,stage),
+            CHECK(phase!='conflict_pending' OR conflict_digest IS NOT NULL),
+            CHECK(phase!='commit_prepared' OR candidate_oid IS NOT NULL),
+            CHECK(phase!='applied' OR (result_oid IS NOT NULL AND observed_tree_oid IS NOT NULL))
+        );"#;
+    MERGE_SCHEMA_OBJECTS
+        .iter()
+        .filter_map(|&(kind, name)| match name {
+            "remote_integration_windows"
+            | "remote_integration_windows_batch"
+            | "remote_integration_window_immutable" => None,
+            "remote_integration_steps" => Some(STEPS),
+            "remote_integration_steps_operation" => Some("CREATE INDEX remote_integration_steps_operation ON remote_integration_steps(operation_record_id,ordinal);"),
+            "remote_integration_step_immutable" => Some("CREATE TRIGGER remote_integration_step_immutable BEFORE UPDATE OF operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest ON remote_integration_steps BEGIN SELECT RAISE(ABORT,'immutable integration evidence'); END;"),
+            _ => merge_schema_object_sql(kind, name),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn replace_with_legacy_merge_schema(connection: &Connection) {
+    connection.execute_batch("DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows;").unwrap();
+    connection
+        .execute_batch(&legacy_window_fixture_schema())
+        .unwrap();
+}
+
+#[test]
+fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenance() {
+    let (data, root, service) = fixture();
+    let operation = crate::repository::OperationId::new();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            operation,
+            &RemoteOperationTarget::for_primary_synchronization(&plan()),
+            RemoteOperationPriority::Manual,
+            123,
+        )
+    })
+    .unwrap();
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    replace_with_legacy_merge_schema(&connection);
+    connection.execute_batch("PRAGMA foreign_keys=ON;
+        INSERT INTO remote_integration_steps(id,operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(41,1,1,0,0,'primary','1111111111111111111111111111111111111111','2222222222222222222222222222222222222222','3333333333333333333333333333333333333333',zeroblob(32),zeroblob(32),'resolution_prepared');
+        INSERT INTO remote_identity_confirmations(id,confirmation_ulid,operation_record_id,configuration_generation,owner_epoch,input_digest,configuration_digest,phase) VALUES(61,'01ARZ3NDEKTSV4RRFFQ69G5FAY',1,1,0,zeroblob(32),zeroblob(32),'prepared');
+        INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,identity_confirmation_id,phase) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',1,41,1,0,zeroblob(32),zeroblob(32),zeroblob(32),61,'paths_applying');
+        INSERT INTO remote_resolution_paths VALUES(51,0,zeroblob(32),zeroblob(32),zeroblob(32),zeroblob(32),NULL,NULL,NULL,33188,1);
+        INSERT INTO remote_resolution_index_artifacts(attempt_id,device,inode,sentinel_digest,baseline_digest,baseline_device,baseline_inode,phase) VALUES(51,7,8,zeroblob(32),zeroblob(32),9,10,'intent');
+        INSERT INTO remote_resolution_ref_log_artifacts VALUES(51,'baseline',11,12,zeroblob(32));").unwrap();
+    let snapshot = |connection: &Connection, table: &str| {
+        let mut query = connection.prepare(&format!("SELECT * FROM {table} ORDER BY 1")).unwrap();
+        let columns = query.column_count();
+        query
+            .query_map([], |row| {
+                (0..columns)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let tables = [
+        "remote_resolution_attempts",
+        "remote_resolution_paths",
+        "remote_resolution_index_artifacts",
+        "remote_resolution_ref_log_artifacts",
+        "remote_identity_confirmations",
+        "remote_operation_records",
+    ];
+    let before = tables.map(|table| snapshot(&connection, table));
+    let original_steps = snapshot(&connection, "remote_integration_steps");
+    for _ in 0..2 {
+        let tx = connection.transaction().unwrap();
+        migrate(&tx).unwrap();
+        tx.commit().unwrap();
+        for (table, expected) in tables.iter().zip(&before) {
+            assert_eq!(&snapshot(&connection, table), expected, "changed {table}");
+        }
+        let mut migrated_steps = snapshot(&connection, "remote_integration_steps");
+        for row in &mut migrated_steps {
+            assert_eq!(row.pop(), Some(rusqlite::types::Value::Integer(0)));
+        }
+        assert_eq!(migrated_steps, original_steps);
+        let record = read_operation(&connection, 1, operation).unwrap().unwrap();
+        assert_eq!(
+            integration_window(&connection, &record, 0).unwrap(),
+            Some(IntegrationWindowEvidence {
+                number: 0,
+                intent: None,
+            })
+        );
+        assert_eq!(
+            connection.query_row("SELECT kind,observation_batch_id,local_oid,primary_oid,context_oid FROM remote_integration_windows", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?))).unwrap(),
+            ("legacy".into(), None, None, None, None)
+        );
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+    }
+    for mutation in [
+        "UPDATE remote_integration_steps SET window_number=1 WHERE id=41",
+        "UPDATE remote_resolution_attempts SET integration_step_id=99 WHERE id=51",
+        "UPDATE remote_resolution_index_artifacts SET inode=99 WHERE attempt_id=51",
+        "UPDATE remote_resolution_ref_log_artifacts SET digest=randomblob(32) WHERE attempt_id=51",
+    ] {
+        assert!(connection.execute(mutation, []).is_err());
+    }
+}
+
+fn window_fixture(service: &RepositoryService, root: &Path) -> crate::repository::OperationId {
+    let operation = crate::repository::OperationId::new();
+    with_transaction(service, root, |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        let target = RemoteOperationTarget::for_context(
+            &plan(),
+            RemoteOperationAction::SynchronizeContext,
+            crate::repository::AuthoringKind::Ticket,
+            ITEM.parse().unwrap(),
+        )
+        .unwrap();
+        insert_operation(
+            tx,
+            id,
+            operation,
+            &target,
+            RemoteOperationPriority::Manual,
+            123,
+        )
+    })
+    .unwrap();
+    operation
+}
+
+fn pinned_window(
+    service: &RepositoryService,
+    root: &Path,
+    operation: crate::repository::OperationId,
+    context: Option<Oid>,
+) -> IntegrationWindowIntent {
+    with_transaction(service, root, |tx, id| {
+        let mut observations = vec![
+            RemoteRefObservation::from_advertisement(
+                &plan(),
+                "refs/heads/main",
+                Oid::from_str(ADVERTISED).unwrap(),
+                Some(Oid::from_str(ADVERTISED).unwrap()),
+            )
+            .unwrap(),
+        ];
+        if let Some(context) = context {
+            observations.push(
+                RemoteRefObservation::from_advertisement(
+                    &plan(),
+                    &format!("refs/heads/manyhands/ticket/{ITEM}"),
+                    context,
+                    Some(context),
+                )
+                .unwrap(),
+            );
+        }
+        let record = read_operation(tx, id, operation)?.unwrap();
+        let batch = complete_batch(tx, id, &plan(), record.generation, &observations, 123)?;
+        Ok(IntegrationWindowIntent {
+            observation_batch_id: batch,
+            local_oid: Oid::from_str(TRACKING).unwrap(),
+            primary_oid: Oid::from_str(ADVERTISED).unwrap(),
+            context_oid: context,
+        })
+    })
+    .unwrap()
+}
+
+#[test]
+fn absent_context_window_keeps_primary_at_slot_one_and_freezes_the_ref_pass() {
+    let (_data, root, service) = fixture();
+    let operation = window_fixture(&service, root.path());
+    let intent = pinned_window(&service, root.path(), operation, None);
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        let window = prepare_integration_window(tx, &record, 1, &intent)?;
+        assert_eq!(window.intent, Some(intent.clone()));
+        assert_eq!(prepare_integration_window(tx, &record, 1, &intent)?, window);
+        let step = IntegrationStepIntent {
+            ordinal: 1,
+            stage: IntegrationStage::Primary,
+            local_oid: intent.local_oid,
+            incoming_oid: intent.primary_oid,
+            baseline_tree_oid: intent.local_oid,
+            baseline_index_digest: [5; 32],
+        };
+        assert!(
+            prepare_integration_step_in_window(
+                tx,
+                &record,
+                1,
+                &IntegrationStepIntent {
+                    ordinal: 0,
+                    ..step.clone()
+                },
+            )
+            .is_err()
+        );
+        prepare_integration_step_in_window(tx, &record, 1, &step)?;
+        assert!(
+            prepare_integration_window(tx, &record, 2, &intent).is_err(),
+            "cannot append past a prepared effect"
+        );
+        begin_integration_effect_in_window(tx, &record, 1, 1, None)?;
+        observe_integration_effect_in_window(tx, &record, 1, 1, step.incoming_oid, step.baseline_tree_oid)?;
+        assert!(
+            prepare_integration_window(
+                tx,
+                &record,
+                1,
+                &IntegrationWindowIntent {
+                    local_oid: intent.primary_oid,
+                    ..intent.clone()
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            prepare_integration_window(tx, &record, 2, &intent).is_err(),
+            "unchanged pass must not duplicate candidates"
+        );
+        let later = prepare_integration_window(
+            tx,
+            &record,
+            2,
+            &IntegrationWindowIntent {
+                local_oid: step.incoming_oid,
+                ..intent.clone()
+            },
+        )?;
+        assert_eq!(later.number, 2);
+        assert!(
+            integration_step(tx, record.id, 1)?.is_none(),
+            "legacy lookup must never select a later window"
+        );
+        assert_eq!(
+            integration_step_in_window(tx, record.id, 1, 1)?.unwrap().phase,
+            IntegrationStepPhase::Applied
+        );
+        audit_merge_evidence(tx, &record)
+    })
+    .unwrap();
+}
+
+#[test]
+fn new_window_requires_exact_batch_generation_and_tracking_oids() {
+    let (_data, root, service) = fixture();
+    let operation = window_fixture(&service, root.path());
+    let intent = pinned_window(&service, root.path(), operation, None);
+    for mutation in [
+        "UPDATE remote_ref_observations SET tracking_oid=NULL",
+        "UPDATE remote_observation_batches SET configuration_generation=99",
+    ] {
+        with_transaction(&service, root.path(), |tx, id| {
+            let record = read_operation(tx, id, operation)?.unwrap();
+            tx.execute_batch("SAVEPOINT corrupt_batch").unwrap();
+            tx.execute_batch(mutation).unwrap();
+            assert!(prepare_integration_window(tx, &record, 1, &intent).is_err());
+            tx.execute_batch("ROLLBACK TO corrupt_batch; RELEASE corrupt_batch").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn append_cannot_skip_applied_context_with_unprepared_primary_or_unreleased_resolution() {
+    let (_data, root, service) = fixture();
+    let operation = window_fixture(&service, root.path());
+    let context = Oid::from_str(TRACKING).unwrap();
+    let intent = pinned_window(&service, root.path(), operation, Some(context));
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        let step = IntegrationStepIntent {
+            ordinal: 0,
+            stage: IntegrationStage::Context,
+            local_oid: context,
+            incoming_oid: context,
+            baseline_tree_oid: context,
+            baseline_index_digest: [4; 32],
+        };
+        prepare_integration_step(tx, &record, &step)?;
+        begin_integration_effect(tx, &record, 0, None)?;
+        observe_integration_effect(tx, &record, 0, context, context)?;
+        assert!(
+            prepare_integration_window(tx, &record, 1, &intent).is_err(),
+            "frozen primary must finish first"
+        );
+        prepare_integration_step(
+            tx,
+            &record,
+            &IntegrationStepIntent {
+                ordinal: 1,
+                stage: IntegrationStage::Primary,
+                ..step
+            },
+        )?;
+        begin_integration_effect(tx, &record, 1, None)?;
+        observe_integration_effect(tx, &record, 1, context, context)?;
+        tx.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,candidate_oid,checkpoint_oid,phase) VALUES(?1,?2,(SELECT id FROM remote_integration_steps WHERE operation_record_id=?2 AND window_number=0 AND ordinal=1),?3,0,zeroblob(32),zeroblob(32),zeroblob(32),?4,?4,'applied')", params![crate::repository::OperationId::new().to_string(), record.id, record.generation, context.to_string()]).unwrap();
+        assert!(
+            prepare_integration_window(tx, &record, 1, &intent).is_err(),
+            "applied SQL without sentinel release is not completion"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn resolution_candidate_follows_its_step_fk_across_repeated_window_ordinals() {
+    let (_data, root, service) = fixture();
+    let operation = window_fixture(&service, root.path());
+    let intent = pinned_window(&service, root.path(), operation, None);
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        let original = IntegrationStepIntent {
+            ordinal: 0,
+            stage: IntegrationStage::Context,
+            local_oid: intent.local_oid,
+            incoming_oid: intent.local_oid,
+            baseline_tree_oid: intent.local_oid,
+            baseline_index_digest: [1; 32],
+        };
+        prepare_integration_step(tx, &record, &original)?;
+        begin_integration_effect(tx, &record, 0, None)?;
+        observe_integration_effect(tx, &record, 0, intent.local_oid, intent.local_oid)?;
+        let primary = IntegrationStepIntent {
+            ordinal: 1,
+            stage: IntegrationStage::Primary,
+            incoming_oid: intent.primary_oid,
+            ..original
+        };
+        prepare_integration_step(tx, &record, &primary)?;
+        begin_integration_effect(tx, &record, 1, None)?;
+        observe_integration_effect(tx, &record, 1, intent.local_oid, intent.local_oid)?;
+        let legacy = integration_step(tx, record.id, 1)?.unwrap();
+        prepare_integration_window(tx, &record, 1, &intent)?;
+        prepare_integration_step_in_window(tx, &record, 1, &primary)?;
+        begin_integration_effect_in_window(tx, &record, 1, 1, None)?;
+        record_integration_conflict_in_window(tx, &record, 1, 1, [8; 32])?;
+        let attempt = ResolutionAttemptIntent {
+            attempt_id: crate::repository::OperationId::new(),
+            step_ordinal: 1,
+            observation_digest: [8; 32],
+            input_digest: [9; 32],
+            preflight_digest: [10; 32],
+            identity_confirmation_id: None,
+        };
+        let path = ResolutionPathIntent {
+            ordinal: 0,
+            path_digest: [11; 32],
+            expected_digest: [12; 32],
+            result_digest: [13; 32],
+            prewrite_digest: [14; 32],
+            base_blob_oid: None,
+            local_blob_oid: None,
+            incoming_blob_oid: None,
+            mode: 33188,
+        };
+        let paths = [path];
+        prepare_resolution_attempt_in_window(tx, &record, 1, &attempt, &paths)?;
+        assert!(prepare_resolution_attempt(tx, &record, &attempt, &paths).is_err());
+        begin_resolution_path_effects(tx, &record, attempt.attempt_id)?;
+        observe_resolution_path_effect(tx, &record, attempt.attempt_id, 0)?;
+        let candidate = Oid::from_str("3333333333333333333333333333333333333333").unwrap();
+        prepare_resolution_candidate(tx, &record, attempt.attempt_id, candidate)?;
+        let (bound, observed, _, _, _, _) =
+            resolution_candidate_for_attempt(tx, &record, attempt.attempt_id)?.unwrap();
+        assert_eq!(bound.window_number, 1);
+        assert_eq!(bound.intent.ordinal, 1);
+        assert_eq!(observed, candidate);
+        assert_eq!(integration_step(tx, record.id, 1)?.unwrap(), legacy);
+        audit_merge_evidence(tx, &record)
+    })
+    .unwrap();
+}
+
+#[test]
+fn legacy_window_upgrade_refuses_orphans_without_discarding_old_evidence() {
+    let (data, _root, _service) = fixture();
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    replace_with_legacy_merge_schema(&connection);
+    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO remote_resolution_attempts(id,attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase) VALUES(51,'01ARZ3NDEKTSV4RRFFQ69G5FAZ',999,41,0,0,zeroblob(32),zeroblob(32),zeroblob(32),'prepared'); PRAGMA foreign_keys=ON;").unwrap();
+    let tx = connection.transaction().unwrap();
+    assert!(migrate(&tx).is_err());
+    tx.rollback().unwrap();
+    assert_eq!(
+        connection.query_row("SELECT integration_step_id FROM remote_resolution_attempts WHERE id=51", [], |row| row.get::<_, i64>(0)).unwrap(),
+        41
+    );
+    assert!(
+        !connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_integration_windows')", [], |row| row.get::<_, bool>(0)).unwrap()
+    );
+}
+
+#[test]
+fn legacy_window_upgrade_sql_fault_rolls_back_rebuilt_tables_and_temp_copies() {
+    let (data, _root, _service) = fixture();
+    let mut connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    replace_with_legacy_merge_schema(&connection);
+    let original: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='remote_integration_steps'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // An occupied new trigger name fails CREATE after the dependency-ordered
+    // rebuild began. The surrounding transaction must restore the old schema.
+    connection.execute_batch("PRAGMA foreign_keys=ON; CREATE TRIGGER remote_integration_window_immutable BEFORE UPDATE ON repositories BEGIN SELECT 1; END;").unwrap();
+    let tx = connection.transaction().unwrap();
+    assert!(migrate(&tx).is_err());
+    tx.rollback().unwrap();
+    let restored: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='remote_integration_steps'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored, original);
+    assert_eq!(
+        connection.query_row("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '%_window_upgrade'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        0
+    );
+    assert_eq!(
+        connection.query_row("SELECT count(*) FROM sqlite_master WHERE name='remote_integration_windows'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn window_schema_loss_or_weakened_immutability_cannot_be_recreated_as_legacy() {
+    for mutation in ["DROP TABLE remote_integration_windows", "DROP TRIGGER remote_integration_window_immutable; CREATE TRIGGER remote_integration_window_immutable BEFORE UPDATE ON remote_integration_windows BEGIN SELECT 1; END;"] {
+        let (data, _root, _service) = fixture();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch(mutation).unwrap();
+        assert!(matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired));
+    }
+}
+
+#[test]
+fn pinned_window_pass_survives_configuration_fencing_and_registration_cascade() {
+    let (data, root, service) = fixture();
+    let operation = window_fixture(&service, root.path());
+    let intent = pinned_window(&service, root.path(), operation, None);
+    let next_plan = RemoteRefPlan::from_configuration("upstream", "trunk").unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        prepare_integration_window(tx, &record, 1, &intent)?;
+        let generation = configure(tx, id, Some(&next_plan), false)?;
+        // A retained old pass is not live endpoint history and must not cause
+        // another generation bump when the new endpoint is first bound.
+        assert_eq!(configure_endpoints(tx, id, &next_plan, &[3; 32])?, generation);
+        let record = read_operation(tx, id, operation)?.unwrap();
+        assert_eq!(record.phase, RemoteOperationPhase::Interrupted);
+        assert_eq!(
+            integration_window(tx, &record, 1)?.unwrap().intent,
+            Some(intent.clone())
+        );
+        assert!(read_snapshot(tx, id)?.observations().is_empty());
+        Ok(())
+    })
+    .unwrap();
+    let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    let tx = db.transaction().unwrap();
+    // Removing just the pass cannot cascade away its frozen local intent.
+    tx.execute(
+        "DELETE FROM remote_observation_batches WHERE id=?1",
+        [intent.observation_batch_id],
+    )
+    .unwrap();
+    assert!(tx.commit().is_err());
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    assert!(
+        reopened
+            .remote_snapshot(root.path())
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+    with_transaction(&reopened, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        assert_eq!(
+            integration_window(tx, &record, 1)?.unwrap().intent,
+            Some(intent.clone())
+        );
+        // Exercise the FK cascade used by explicit registration removal, not a
+        // Git cleanup. Retained pass evidence must not deadlock the root delete.
+        tx.execute("DELETE FROM repositories WHERE id=?1", [id]).unwrap();
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM remote_integration_windows", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM remote_observation_batches", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+// P2 source-first regression: deleting an UPDATE-protected marker is still
+// possible and its FK cascade can erase otherwise-valid child effect evidence.
+fn assert_missing_initial_window_requires_recovery(populated: bool) {
+    for context in [false, true] {
+        let (data, root, service) = fixture();
+        let operation = crate::repository::OperationId::new();
+        let target = if context {
+            RemoteOperationTarget::for_context(
+                &plan(),
+                RemoteOperationAction::SynchronizeContext,
+                crate::repository::AuthoringKind::Ticket,
+                ITEM.parse().unwrap(),
+            )
+            .unwrap()
+        } else {
+            RemoteOperationTarget::for_primary_synchronization(&plan())
+        };
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)?;
+            insert_operation(
+                tx,
+                id,
+                operation,
+                &target,
+                RemoteOperationPriority::Manual,
+                123,
+            )?;
+            let record = read_operation(tx, id, operation)?.unwrap();
+            assert_eq!(
+                integration_window(tx, &record, 0)?,
+                Some(IntegrationWindowEvidence {
+                    number: 0,
+                    intent: None,
+                })
+            );
+            if populated {
+                let local = Oid::from_str(ADVERTISED).unwrap();
+                let incoming = Oid::from_str(TRACKING).unwrap();
+                prepare_integration_step(
+                    tx,
+                    &record,
+                    &IntegrationStepIntent {
+                        ordinal: 0,
+                        stage: if context {
+                            IntegrationStage::Context
+                        } else {
+                            IntegrationStage::Primary
+                        },
+                        local_oid: local,
+                        incoming_oid: incoming,
+                        baseline_tree_oid: local,
+                        baseline_index_digest: [1; 32],
+                    },
+                )?;
+                begin_integration_effect(tx, &record, 0, None)?;
+                record_integration_conflict(tx, &record, 0, [2; 32])?;
+                let confirmation = crate::repository::OperationId::new();
+                prepare_identity_confirmation(
+                    tx,
+                    &record,
+                    &IdentityConfirmationIntent {
+                        confirmation_id: confirmation,
+                        input_digest: [3; 32],
+                        configuration_digest: [4; 32],
+                    },
+                )?;
+                begin_identity_confirmation_effect(tx, &record, confirmation)?;
+                observe_identity_confirmation_effect(tx, &record, confirmation, [5; 32])?;
+                let attempt = crate::repository::OperationId::new();
+                prepare_resolution_attempt(
+                    tx,
+                    &record,
+                    &ResolutionAttemptIntent {
+                        attempt_id: attempt,
+                        step_ordinal: 0,
+                        observation_digest: [2; 32],
+                        input_digest: [6; 32],
+                        preflight_digest: [7; 32],
+                        identity_confirmation_id: Some(confirmation),
+                    },
+                    &[ResolutionPathIntent {
+                        ordinal: 0,
+                        path_digest: [8; 32],
+                        expected_digest: [9; 32],
+                        result_digest: [10; 32],
+                        prewrite_digest: [11; 32],
+                        base_blob_oid: Some(local),
+                        local_blob_oid: Some(local),
+                        incoming_blob_oid: Some(incoming),
+                        mode: 33188,
+                    }],
+                )?;
+                begin_resolution_path_effects(tx, &record, attempt)?;
+                prepare_resolution_index_artifact(
+                    tx,
+                    &record,
+                    attempt,
+                    &ResolutionIndexArtifact {
+                        device: 1,
+                        inode: 2,
+                        sentinel_digest: [12; 32],
+                        baseline_digest: [13; 32],
+                        baseline_identity: (1, 3),
+                        metadata: [Some([14; 32]), Some([15; 32]), Some([16; 32])],
+                        output: None,
+                        ref_phase: "not_started".into(),
+                        phase: "intent".into(),
+                    },
+                )?;
+                advance_resolution_index_artifact(tx, &record, attempt, "published")?;
+                prepare_resolution_ref_log_artifact(
+                    tx,
+                    &record,
+                    attempt,
+                    "baseline",
+                    &ResolutionRefLogArtifact {
+                        device: 1,
+                        inode: 4,
+                        digest: [17; 32],
+                    },
+                )?;
+                observe_resolution_path_effect(tx, &record, attempt, 0)?;
+                prepare_resolution_candidate(
+                    tx,
+                    &record,
+                    attempt,
+                    Oid::from_str("3333333333333333333333333333333333333333").unwrap(),
+                )?;
+                prepare_resolution_ref_log_artifact(
+                    tx,
+                    &record,
+                    attempt,
+                    "transition",
+                    &ResolutionRefLogArtifact {
+                        device: 1,
+                        inode: 5,
+                        digest: [18; 32],
+                    },
+                )?;
+                prepare_resolution_index_output(tx, &record, attempt, (1, 6, [19; 32]))?;
+                advance_resolution_ref_effect(tx, &record, attempt, "intent")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        // Establish that the entire profile passes startup before corrupting
+        // it, including candidate/attempt/path and both native manifest roles.
+        RepositoryService::open_at(data.path()).unwrap();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        let rows = |table: &str| {
+            let mut query = db
+                .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+                .unwrap();
+            let columns = query.column_count();
+            query
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let parent = rows("remote_operation_records");
+        let confirmations = rows("remote_identity_confirmations");
+        for (table, expected) in [
+            ("remote_integration_steps", i64::from(populated)),
+            ("remote_resolution_attempts", i64::from(populated)),
+            ("remote_resolution_paths", i64::from(populated)),
+            ("remote_resolution_index_artifacts", i64::from(populated)),
+            (
+                "remote_resolution_ref_log_artifacts",
+                2 * i64::from(populated),
+            ),
+        ] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get::<_, i64>(0)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            db.execute("DELETE FROM remote_integration_windows WHERE number=0", []).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+        validate_merge_evidence_schema(&db).unwrap();
+        for table in [
+            "remote_integration_steps",
+            "remote_resolution_attempts",
+            "remote_resolution_paths",
+            "remote_resolution_index_artifacts",
+            "remote_resolution_ref_log_artifacts",
+        ] {
+            assert!(rows(table).is_empty(), "cascade did not delete {table}");
+        }
+        assert!(
+            matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        );
+        assert!(
+            with_transaction(&service, root.path(), |tx, id| read_operation(tx, id, operation))
+                .is_err()
+        );
+        assert!(
+            matches!(service.reserve_remote_operation(root.path(), operation, &target), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        );
+        assert_eq!(rows("remote_operation_records"), parent);
+        assert_eq!(rows("remote_identity_confirmations"), confirmations);
+        assert!(
+            rows("remote_integration_windows").is_empty(),
+            "no legacy marker may be inferred or recreated"
+        );
+    }
+}
+
+#[test]
+fn deleted_fresh_sync_window_zero_requires_recovery_without_recreation() {
+    assert_missing_initial_window_requires_recovery(false);
+}
+
+#[test]
+fn deleted_populated_sync_window_zero_requires_recovery_despite_valid_schema_and_fks() {
+    assert_missing_initial_window_requires_recovery(true);
+}
+
+#[test]
+fn window_zero_requirement_excludes_non_sync_operations_and_removed_registrations() {
+    for action in [
+        RemoteOperationAction::Poll,
+        RemoteOperationAction::Promote,
+        RemoteOperationAction::Close,
+    ] {
+        let (data, root, service) = fixture();
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)?;
+            let target = if action == RemoteOperationAction::Poll {
+                RemoteOperationTarget::for_poll(&plan())
+            } else {
+                RemoteOperationTarget::for_context(
+                    &plan(),
+                    action,
+                    crate::repository::AuthoringKind::Ticket,
+                    ITEM.parse().unwrap(),
+                )
+                .unwrap()
+            };
+            let priority = if action == RemoteOperationAction::Poll {
+                RemoteOperationPriority::Poll
+            } else {
+                RemoteOperationPriority::Manual
+            };
+            insert_operation(
+                tx,
+                id,
+                crate::repository::OperationId::new(),
+                &target,
+                priority,
+                123,
+            )?;
+            assert_eq!(read_operations(tx, id)?.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+        RepositoryService::open_at(data.path()).unwrap();
+    }
+    let (data, root, service) = fixture();
+    window_fixture(&service, root.path());
+    with_transaction(&service, root.path(), |tx, id| {
+        tx.execute("DELETE FROM repositories WHERE id=?1", [id])
+            .unwrap();
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM remote_operation_records", [], |row| row.get::<_, i64>(0)).unwrap(),
+            0
+        );
+        Ok(())
+    })
+    .unwrap();
+    RepositoryService::open_at(data.path()).unwrap();
 }

@@ -1591,6 +1591,58 @@ Spec `ses_ee0d69641ffeLpEAHWPapNAX2o` and quality
 native CI. No local Rust command; new tests are source-written, unrun. Publish and
 inspect exact-source combined gate before Task 5 code.
 
+Published the approved fixture correction as 8f32144818d8eb4d7bd4458cd0418746305dca1f
+without local Rust verification. Current combined-base full native matrix:
+https://github.com/vhodges/manyhands/actions/runs/37889668738
+Pending result is not a pass; new Task 5 implementation still waits for this gate.
+
+### Integrated-base gate passed; Task 5 implementation entry — 2026-10-09
+
+Run 37889668738 completed SUCCESS on exact source
+8f32144818d8eb4d7bd4458cd0418746305dca1f across all five native targets, including
+the F1/Task-4 union (21 integration targets plus library), release verification
+and artifacts. Actual gh results inspected. Integrated comment-created_by and
+Windows reader fixes, path/ghost fixtures and preserved Task-4 behavior are now
+verified on the fresh F1 base; no local Rust command was needed.
+
+Read-only readiness inventory `ses_ee0d1156fffe3ORcLJ2YHhwCp0` identifies remaining
+Task 5 seams: local-effect-first dispatch before clean/fetch, explicit same-ID
+conflict/external-repair observation, append-only integration windows retaining
+old attempts/artifacts, later clean authoring continuation after released resolution,
+bounded current-ref pass/push, child-local cancellation/fencing and index-only replay.
+No material owner-policy question was found; internal evidence/window representation
+may honor the already approved append/recovery contract without reopening design.
+Dispatch one implementation writer with source-written regressions first and then
+source review/manual CI; local Rust verification only if Linux CI regresses.
+Implementation base is 8f32144; Task 4 accepted work is not redispatched.
+
+### Task 5 milestone 1: append-only window evidence — source review
+
+Worker `ses_ee0aad1abffe4yjN0lI3JiYt1s` delivers only the first coherent Task 5
+milestone: immutable integration windows, frozen batch/local/primary/context pass
+bindings, window-qualified state/reservation interfaces, explicit absent-context
+slot before primary, and transactional legacy migration preserving step/attempt IDs,
+path/confirmation/native index/ref-log provenance. Legacy window zero contains no
+inferred observations/effects; live orchestration still uses that window. Append
+refuses pending steps, unprepared primary, unreleased artifacts, unchanged passes
+and unreconciled legacy push intents. Configuration fencing retains historical
+pinned batches without making them current; FKs remain enabled through migration.
+
+Spec `ses_ee0870535ffeML155aPh30fDHc` approved conditionally. Quality
+`ses_ee082b9b3ffe9h8y3KAKb6zFx1` found missing window-zero audit could accept
+FK-cascaded evidence loss. Fixed: every synchronization requires zero, even an
+otherwise empty journal; no recreation. Source tests cover fresh/populated deletion,
+valid schema/FKs despite child loss, startup/replay refusal, unchanged remaining
+rows, non-sync exemptions and registration cascades. Both rereviews approve the
+bounded milestone conditionally on exact-source CI. All regressions are UNRUN;
+only source work/git diff checks under CI-first ruling. No local Rust command.
+
+Files: remote state/state_tests/reservation/reservation_tests and exact enablement
+schema inventory. Task 5 is NOT complete: local-effect-first restart, external repair,
+window selection/remaining-stage orchestration, clean descendant continuation,
+publication/cancellation and discovery replay composition remain. Publish this
+foundation for native verification, then continue one sequential writer.
+
 ### Native run 8: remaining legacy fixture spelling and phase watchdog — 2026-10-09
 
 Run 37868930176 again fully passed both Linux jobs. Windows reaches legacy

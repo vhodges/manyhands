@@ -729,6 +729,79 @@ fn sync_fetch(service: &RepositoryService, root: &Path, owner: &RemoteReservatio
         .unwrap();
     commit_observation_batch(service, root, owner, &plan(), &[observation()], 123).unwrap();
 }
+
+#[test]
+fn window_intent_and_local_effect_boundaries_fence_stale_services_and_cancellation() {
+    let (data, root, service) = fixture();
+    let old_owner = sync_owner(&service, root.path());
+    sync_fetch(&service, root.path(), &old_owner);
+    let primary = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+    let local = git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+    let intent = state::with_transaction(&service, root.path(), |tx, id| {
+        let record = state::read_operation(tx, id, old_owner.operation_id())?.unwrap();
+        let observation = RemoteRefObservation::from_advertisement(
+            &plan(),
+            "refs/heads/main",
+            primary,
+            Some(primary),
+        )
+        .unwrap();
+        let batch = state::complete_batch(tx, id, &plan(), record.generation, &[observation], 124)?;
+        Ok(state::IntegrationWindowIntent {
+            observation_batch_id: batch,
+            local_oid: local,
+            primary_oid: primary,
+            context_oid: None,
+        })
+    })
+    .unwrap();
+    let second = RepositoryService::open_at(data.path()).unwrap();
+    let owner = match second
+        .restart_remote_synchronization(root.path(), old_owner.operation_id(), &sync_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .prepare_synchronization_window(root.path(), &old_owner, 1, &intent)
+            .is_err()
+    );
+    second
+        .prepare_synchronization_window(root.path(), &owner, 1, &intent)
+        .unwrap();
+    let step = state::IntegrationStepIntent {
+        ordinal: 0,
+        stage: super::super::merge::IntegrationStage::Primary,
+        local_oid: local,
+        incoming_oid: primary,
+        baseline_tree_oid: local,
+        baseline_index_digest: [7; 32],
+    };
+    second
+        .prepare_synchronization_integration_in_window(root.path(), &owner, 1, &step)
+        .unwrap();
+    second
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert!(
+        second
+            .begin_synchronization_integration_effect_in_window(root.path(), &owner, 1, 0, None)
+            .is_err()
+    );
+    state::with_transaction(&second, root.path(), |tx, id| {
+        let record = state::read_operation(tx, id, owner.operation_id())?.unwrap();
+        assert!(record.cancel_requested);
+        assert_eq!(
+            state::integration_step_in_window(tx, record.id, 1, 0)?.unwrap().phase,
+            state::IntegrationStepPhase::Prepared
+        );
+        assert!(state::integration_step(tx, record.id, 0)?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
 fn sync_push_prepared(service: &RepositoryService, root: &Path, owner: &RemoteReservation) {
     sync_fetch(service, root, owner);
     service

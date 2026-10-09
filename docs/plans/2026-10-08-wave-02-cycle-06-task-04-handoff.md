@@ -1,6 +1,25 @@
 # Wave 02 Cycle 06 — fresh-session handoff
 
+## Current: Task 5 window foundation source-reviewed, CI next
+
+Baseline 8f32144 is all-five-target green with F1 integrated (run 37889668738).
+Task 5 first milestone adds append-only windows/frozen-pass bindings and transactional
+ID/FK/native-provenance-preserving migration; mandatory-zero audit refuses evidence
+loss. Both read-only reviews approve the bounded source conditionally on CI; new
+tests are UNRUN, no local Rust command under CI-first. Live orchestration remains
+window zero; Task 5 is incomplete. Next publish/verify this foundation, then continue
+restart/external-repair/window continuation/publication/discovery composition.
+Tasks 0–4 accepted, Tasks 6/7 pending, ticket open. Ledger records exact workers.
+
 ## Current: Task 4 accepted, Task 5 next — 2026-10-09
+
+Current Task 5 implementation base is 8f32144, fully verified with F1/Task-4
+combined native SUCCESS on all five targets:
+https://github.com/vhodges/manyhands/actions/runs/37889668738
+Preflight and conditional integration sections below are historical; this gate
+is complete. Next one writer implements approved Task 5 recovery/window/external-
+repair behavior, with source-written tests and review before manual CI. Local
+Rust verification only if Linux CI regresses. No accepted implementation redispatch.
 
 Task 5 entry preflight now rebased ticket onto merged F1 main 6cf5d7f, preflight
 HEAD 54874c4. Accepted Task 4 source maps to 905273e; Task 3 base to 1fbfc2e.
@@ -21,6 +40,14 @@ classification/diagnostic expectations. Bounded source-written fixes and read-on
 spec/quality reviews approve b1d39b8; no local Rust jobs. Current integrated run:
 https://github.com/vhodges/manyhands/actions/runs/37887084202
 Inspect this exact combined-base gate before Task 5 implementation.
+
+Run 37887084202 passes Linux/Mac and reveals one later Windows ghost-worktree
+fixture. Test-only Git encoding/physical parser controls now reviewed and published
+as 8f32144, no local Rust job. Current combined-base gate:
+https://github.com/vhodges/manyhands/actions/runs/37889668738
+Inspect this source before Task 5 code. A read-only Task 5 readiness inventory
+identifies append-only windows, local-first replay and external repair seams;
+no material owner-policy question, but implementation has not begun.
 
 Accepted source: a68eba79a41c6d083a3a12cb9dd6babc6d7f291a. Native run
 https://github.com/vhodges/manyhands/actions/runs/37877620596

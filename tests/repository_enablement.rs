@@ -593,6 +593,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_context_states",
             "remote_identity_confirmations",
             "remote_integration_steps",
+            "remote_integration_windows",
             "remote_observation_batches",
             "remote_operation_records",
             "remote_polling_state",
