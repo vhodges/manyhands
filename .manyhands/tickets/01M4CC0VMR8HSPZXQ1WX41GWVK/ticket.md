@@ -26,8 +26,9 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
   and `…-implementation.md`; reviewed in two rounds by three independent
   reviewers; not yet approved. Refreshed on 2026-10-10 for what landed on
   main since (Wave 02 Cycle 06, the index fix, the journal fix); the
-  refresh is unreviewed. Twelve decisions await the product owner in the
-  Cycle document; the journal fix half of decision 2 is done.
+  refresh was reviewed once and corrected; the corrections are unreviewed.
+  Thirteen decisions are in the Cycle document. Decided on 2026-10-10:
+  1 (one Cycle, three parts), the journal fix half of 2, and 13.
 - [ ] Product-owner approval of the three documents.
 - [ ] Implementation authorization (a separate gate).
 
@@ -60,6 +61,15 @@ Add the explicit short-code assign operation, repository-local initials and
 the optional repository prefix. Exit evidence adds: golden vectors for the
 short-code and initials derivations, and a short code unchanged by rename,
 identity change and prefix change.
+
+## Added Scope (2026-10-10)
+
+A confirmed `operation abandon`, decided by the product owner on
+2026-10-10 as a task in Part B rather than a separate ticket. It closes a
+pending local journal row, touches no file and reports what the operation
+left behind, so a repository blocked by an operation that cannot be
+repeated has a way out other than deleting the database. A pending merge
+conflict is not covered; that is ticket `01M4H33R34Z7C7EEKTY1ZCT950`.
 
 ## From F1 Planning (2026-10-07)
 

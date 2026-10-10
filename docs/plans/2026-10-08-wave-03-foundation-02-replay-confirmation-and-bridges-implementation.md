@@ -50,10 +50,9 @@ document; a different decision changes the tasks named under
 
 - Work only in ticket `01M4CC0VMR8HSPZXQ1WX41GWVK`'s worktree and branch.
   Preserve unrelated edits in main and in every other worktree.
-- Before implementation, fetch `origin/main`, rebase this branch onto it,
-  verify ancestry and cleanliness, and record the base and both heads. The
-  branch is unpushed at planning time. Once it is pushed, do not rebase it
-  or force-push; merge main in instead.
+- Before implementation, fetch `origin/main`, merge it into this branch,
+  verify ancestry and cleanliness, and record the base and both heads. Main
+  was merged in on 2026-10-10; do not rebase or force-push.
 - Run every Rust command as `devenv shell -- cargo …`.
 - Keep everything in the headless library. Add no GPUI dependency, no CLI
   parsing, no human output, no exit numbers, no prompt and no thread.
@@ -128,7 +127,8 @@ document; a different decision changes the tasks named under
 | 9, commands bound | Binding `comment add` and polling adds a task after Task 13. |
 | 10, registry names | Names change in Task 5 only. |
 | 11, native evidence | Task 19 step 1 changes. |
-| 12, synchronization after Cycle 06 | As recommended, Task 13 gains the divergent cases and Task 9 the three new error variants. Binding `conflict resolve` adds a task after Task 13. Dropping the two bindings removes Task 13's synchronization tests and the remote half of Task 14. |
+| 12, synchronization after Cycle 06 | Open; reopened after review on 2026-10-10. Any option that keeps the bindings touches Tasks 5 (codes), 6 (the lookup's reading of an interrupted row), 9, 13 and 14. Re-plan those once it is decided. |
+| 13, abandoning an operation | Decided: a new task after Task 12, and the action name in Task 5. Not yet written into the tasks below. |
 
 ## File Map And Dependency Order
 
@@ -161,8 +161,8 @@ document; a different decision changes the tasks named under
 | `tests/mutation_bridges.rs` | 15, 17, 18 | New. |
 | `.github/workflows/build.yml` | 19 | Add the six new test targets to the list. |
 
-Tasks run in order. Part A (Tasks 1–4) depends on nothing in Part B and not
-on the journal fix. Part B depends on the journal fix. Tasks 15–18 each
+Tasks run in order. Part A (Tasks 1–4) depends on nothing in Part B. The
+journal fix Part B depended on is on main. Tasks 15–18 each
 depend on Parts A and B and touch separate source files; they are
 implemented one at a time because they share the test and schema files.
 
@@ -546,8 +546,10 @@ explicit `internal_error` arm for each other kind.
   `BeforeIndexTransactionCommit`, a retry on a fresh service completes;
   exactly one checkpoint commit exists. For the points after the write the
   record stayed `accepted` and the retry succeeds although the caller's
-  token is now stale. For `BeforeItemWrite` nothing was in flight, the
-  record was deleted, and the retry is a new request.
+  token is now stale. For `BeforeItemWrite` nothing was written, but the
+  domain marks its effect before that fault point and leaves the row
+  pending, so the record also stays `accepted`; the outcome is an error,
+  not `partial`, because the file is not what the request intended.
 - The same four with the process killed instead of an injected error (a
   child process that exits at the fault point): the journal row is pending
   in every case, and the retry with the same body completes.
@@ -834,8 +836,9 @@ each with its preview and observation digest.
   remote is deleted and before the journal is updated, the result is
   `partial`, the record stays `accepted`, and the retry completes without
   comparing the observation again.
-- `repo remove` with a failure injected before its transaction: nothing
-  left behind once the journal fix is in; the same request then succeeds.
+- `repo remove` with a failure injected before its transaction: the
+  journal fix does not cover `remove_registration`, so its row stays
+  pending and the record stays `accepted`; the same request then succeeds.
 - `key delete`: the preview names the key and its files; a registration
   changed between preview and confirmation is `external_change`; a key file
   changed is `external_change` from the domain's own review; an imported

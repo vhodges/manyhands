@@ -45,8 +45,9 @@ review. Approving them and authorizing implementation are separate gates.
   without conflicts, from `dc69406` to
   `ff1c8a48d94a91dfbcdc64bc417a3eefcbf0e4be`. The worktree was clean.
 - **Wave 02 dependency.** The Wave requires Cycles 01 to 05 on main for F2.
-  All five are closed and on main. Cycle 06 is in flight in its own worktree
-  and Cycles 07 to 10 are not started; nothing from them is used.
+  All five are closed and on main. Cycle 06 landed on 2026-10-09; the
+  synchronization bindings consume it, see decision 12. Cycles 07 to 10 are
+  not started.
 - **Wave 03 dependency.** F1 merged to main as pull request 13 on
   2026-10-08.
 - **Entry-gate item 3**, the API audit: the design's mutation-surface audit
@@ -232,10 +233,11 @@ so they are not lost:
 
 ## Decisions For The Product Owner
 
-Each has a recommendation. None is decided, except the first half of
-decision 2. Decision 12 was added on 2026-10-10.
+Each has a recommendation. Decided on 2026-10-10: decision 1, the first
+half of decision 2, and decision 13. Decisions 12 and 13 were added that
+day. The rest are open.
 
-1. **Size.** F2 as the Wave scopes it is larger than F1: the boundary,
+1. **Size.** *Decided 2026-10-10: one Cycle in three parts.* F2 as the Wave scopes it is larger than F1: the boundary,
    twenty-eight bindings, three new domain operations and the relationship
    writers, in nineteen tasks. *Recommended:* keep one Cycle, built in three
    parts with a full gate and an independent review after each: (A)
@@ -316,7 +318,10 @@ decision 2. Decision 12 was added on 2026-10-10.
 11. **Native evidence.** *Recommended:* as F1 decision 5: prove F2 on Linux,
     add its test targets to the native workflow's list, dispatch nothing,
     and carry Windows and macOS execution to G1.
-12. **Synchronization after Cycle 06** (added 2026-10-10). The drafts bind
+12. **Synchronization after Cycle 06** (added 2026-10-10; **open**). The
+    product owner chose the recommendation below on 2026-10-10, before a
+    review found this text incomplete. The corrected facts follow it and
+    the decision is put again. The drafts bind
     `item sync` and `repo sync` for clean synchronization and leave
     divergence to C4 and D5. Since Cycle 06, `synchronize_remote` merges a
     divergent remote itself: it makes merge commits, can ask for a
@@ -332,6 +337,24 @@ decision 2. Decision 12 was added on 2026-10-10.
     `conflict resolve` and the conflict reads in F2, a larger Part B; or
     drop the two synchronization bindings from F2 and move their exit
     evidence to C4, which needs a Wave amendment.
+    *What the review found, read from source:* a pending conflict also
+    refuses every save of the conflicted item; other synchronizations get
+    `busy` with nothing to act on; cancelling does not clear it; the only
+    exits are `resolve_synchronization` and a merge commit made by hand.
+    A stopped divergent synchronization can have made merge commits and
+    written conflict markers into canonical files, which the effects as
+    drafted cannot report, and the merge commit of a stopped
+    synchronization has no read. So the recommendation as written ships a
+    command that can enter a conflict and none that leaves it, and touches
+    Tasks 5, 6, 9, 13 and 14, not two tasks.
+13. **Abandoning an operation** (added 2026-10-10). *Decided 2026-10-10:*
+    F2 adds a confirmed `operation abandon`: it closes a pending local
+    journal row, touches no file, and reports what the operation left
+    behind. It is a task in Part B after confirmed administration, and the
+    recovery action offered with `recovery_required`. It does not cover a
+    pending merge conflict, which stays with ticket
+    `01M4H33R34Z7C7EEKTY1ZCT950`. This is added scope; the Wave text does
+    not name it.
 
 Smaller rulings the design makes, listed so they can be overruled:
 
@@ -355,7 +378,8 @@ Smaller rulings the design makes, listed so they can be overruled:
 - Local operations have one safe point, before acceptance. Synchronization
   keeps the seven Wave 02 gave it.
 - `resume_operation` and `show_request` are included. Resume is limited to
-  the index hand-off and clean synchronization; everything else is resumed
+  the index hand-off and clean synchronization (see decision 12 for a
+  conflicted one); everything else is resumed
   by repeating the request.
 - The cycle check uses the index as it stands and does not scan. Its
   members are reported sorted by ID.
@@ -421,7 +445,15 @@ Nothing here has been run.
 | Refresh, 2026-10-10; main `f87ce81` | The journal fix keeps a closed row marked `rejected`, so "a journal row exists" no longer means the operation started. | Settled, unreviewed | A `rejected` row counts as no row in settlement, re-entry and the confirmation recheck. |
 | Refresh, 2026-10-10; `sync.rs` at `f87ce81` | `synchronize_remote` now merges a divergent remote and has three new error variants; the drafts assume it refuses. | Decision | Decision 12. |
 
-Source line anchors in this table are at `6cf5d7f` and no longer hold.
+| Fourth review, of the refresh, 2026-10-10; `recovery.rs:386-401`, `repository.rs:3546-3559` | "Not rejected when the call returned" let `remote select` report another request's commit: a repeat resets the rejected row before the domain runs. | Settled, unreviewed | Rule 4 asks what the row was before the call, or whether the commit appeared during it. |
+| Fourth review; `reservation.rs:582-584`, `repository.rs:2895-2909`, `sync.rs:3653-3916` | Decision 12 understated a pending conflict and its recommendation was not achievable as written. | Decision | Decision 12 reopened with the facts. |
+| Fourth review | A record stranded when rule 1 met a rejected row; four wrong statements and two wrong test expectations about the journal fix. | Settled, unreviewed | Corrected in the design and plan. |
+
+The fourth review read the refresh against the code and the replay rules
+against the journal fix. It did not read the RFCs, the Wave, most of the
+Cycle 06 tests, or the audit rows outside the journal, the lookup and
+synchronization. Source line anchors in the rows above the refresh are at
+`6cf5d7f` and no longer hold.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,

@@ -145,9 +145,10 @@ effect was made and work remains.
   action. Wherever this design asks whether a journal row exists for an
   operation ID, a `rejected` row counts as none.
 - Repeating a rejected operation ID with the same action and target begins
-  again as a new call. With another target it is `OperationMismatch`. The
-  boundary allocates a new operation ID at each acceptance, so neither
-  reaches a caller.
+  again as a new call. With another target it is `OperationMismatch`. A
+  record keeps its operation ID for as long as it is `accepted`, so a
+  re-entry can meet a rejected row under its own ID; a new acceptance gets
+  a new ID, so the mismatch never reaches a caller.
 - A failed `enable` or `set_publication_remote` that restored everything
   now closes its row too.
 - The call does not report what it wrote to its caller. The boundary still
@@ -159,10 +160,16 @@ effect was made and work remains.
   restore, an initialized repository and a half-created editing context.
 - `remove_registration` was examined and no rejection that leaves its row
   could be provoked.
-- Two imprecisions remain, both recorded on the ticket. A Git failure
-  inside an operation's first write call (a stale lock file) leaves the row
-  pending although nothing was written, so the boundary reports work in
-  flight where there is none; the retry clears it. And on a row resumed
+- A pending row after an error does not always mean something was written.
+  The call marks its effect before the step that writes, so these leave a
+  pending row with nothing written: a Git failure inside the first write
+  call (a stale lock file); a save whose error comes from the checkpoint
+  step before the commit, including when the file was already as intended;
+  a failure injected immediately before a write; and any rejection of a
+  retry on a row that an earlier attempt began, because only a row begun
+  by the returning call is closed. The boundary then reports work in
+  flight where there is none; the retry clears it once the cause is gone.
+- On a row resumed
   from an earlier attempt the older rule still applies: an attempt that
   wrote the file and failed to record the step, followed by a retry that is
   cleanly rejected, closes the row with the file written and uncommitted.
@@ -188,10 +195,14 @@ Three cases remain open after the fix. All exist today.
    are busy. The way out is the same request again, or a cancellation
    followed by the same request. This was read from the code and not
    reproduced, and not re-read after Cycle 06 changed synchronization;
-   Task 13 reproduces it, and it is raised as a ticket if it holds. Cycle
-   06 adds a fourth stop of this kind: a pending merge conflict, which
-   blocks every synchronization of the repository until it is resolved
-   (ticket `01M4H33R34Z7C7EEKTY1ZCT950`).
+   Task 13 reproduces it, and it is raised as a ticket if it holds.
+4. Cycle 06 adds a stop of a different kind: a pending merge conflict. It
+   releases the reservation, but until it is resolved every new
+   synchronization of the repository returns busy and every save of the
+   conflicted item returns `RecoveryRequired`; other items can still be
+   saved. Cancelling does not clear it. The only exits are
+   `resolve_synchronization` and a hand-made merge commit (ticket
+   `01M4H33R34Z7C7EEKTY1ZCT950`, on its own unmerged branch). Decision 12.
 
 Decision 2 covers these cases.
 
@@ -494,7 +505,10 @@ returns the same kinds before and after an effect, and returns some
 rejections as successful values. The boundary looks the operation ID up in
 its journal (local, remote or key) through a lookup that says absent,
 pending with its step, or completed. A local row completed with the step
-`rejected` is reported as absent. `show_operation`, now on main, reads all
+`rejected` is reported as absent. A remote row whose phase is interrupted
+or failed is reported as pending: Cycle 06 leaves a conflicted
+synchronization in that phase, and deleting its record would orphan the
+conflict's operation ID. `show_operation`, which F1 added, reads all
 three journals by ID, but it requires the repository to be registered and
 returns a display result; Task 6 decides whether the boundary uses it or
 an internal lookup, which `repo create` and `repo enable` need on a root
@@ -509,7 +523,7 @@ entered. If the lookup itself fails, the record is left as it is.
 | A result the domain has made final for this operation ID: a synchronization whose row is cancelled; a key generation whose recovery state is "retained for inspection" | any | Stored and marked `finished`. |
 | `partial`: work remains (discovery or registration pending; a key generation or deletion the domain says can be recovered) | any | Left `accepted`. A retry continues it. |
 | Blocked, an input error, a transient failure or an error | Absent or completed: nothing is in flight | Deleted. The confirmation it accepted, if any, is released in the same transaction; its expiry still runs from its creation. The request ID is free again. |
-| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error means the call wrote something, with the one exception stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome is `partial` only if a push was accepted. |
+| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error usually means the call wrote something, with the exceptions stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome was drafted as `partial` only if a push was accepted. Since Cycle 06 a stopped synchronization can also have made merge commits and moved a branch, which this rule and the Effects table do not yet account for; decision 12. |
 
 A command with no journal (identity, key registry changes, host approval,
 folder creation) is a single step that either happened or did not; an error
@@ -561,8 +575,11 @@ On re-entry:
 
 1. **If a commit in range changed the request's paths to something the
    request did not intend,** return `external_change`. The request is not
-   re-run and its record stays `accepted`. If its journal row is pending,
-   this is open case 1 of [The Journal Defect](#the-journal-defect).
+   re-run. If its journal row is pending, its record stays `accepted`;
+   this is open case 1 of [The Journal Defect](#the-journal-defect), and
+   `operation abandon` is the way out. If the row is absent or `rejected`,
+   nothing is in flight: the record is deleted and its confirmation
+   released, as in Settling.
 2. **Otherwise call the domain operation with the recorded operation ID and
    the recorded expectation.** This is the only way the work is continued,
    and it is always made, because only the domain operation completes its
@@ -575,11 +592,18 @@ On re-entry:
    the already-applied
    rule: if the content is as intended and committed, the result is a
    no-op with no commit reported.
-4. **Take the commit from the evidence check, made after the call.** A
-   commit is reported only if it is in range, left the paths as intended,
-   and a journal row existed for the operation ID that was not `rejected`
-   when this call returned. Otherwise the checkpoint is `unchanged` and no
-   commit is reported.
+4. **Take the commit from the evidence check, made before and after the
+   call.** A commit is reported only if it is in range, left the paths as
+   intended, and one of two things holds: before the call the operation
+   ID's journal row was pending or completed with a step other than
+   `rejected`, so an earlier attempt of this request had started; or the
+   commit was not there before the call, so this call made it. Otherwise
+   the checkpoint is `unchanged` and no commit is reported. The row's
+   state after the call says nothing: a repeat resets a `rejected` row
+   before the domain runs, and `set_publication_remote` then completes it
+   while reporting someone else's commit. The check before the call is
+   made outside the lease, so another request's identical commit landing
+   between it and the call can still be reported as this one's.
 
 Unrelated commits on the same branch (a comment on the item, a developer's
 commit on primary) do not enter into any of this.
@@ -737,7 +761,10 @@ Otherwise the observation is compared again unless the request's operation
 has a recorded step in its journal. The CLI RFC requires that "the service
 rechecks observations before the first effect". A journal row alone is not
 enough: `enable` writes its row before any check, so a row with no step
-means nothing has been done, and so does a row closed as `rejected`. Once
+means no step has completed, and a row closed as `rejected` means nothing
+was written. A process killed inside `enable` can leave files written
+with no step recorded; the comparison then fails on the dirty worktree,
+which is open case 2. Once
 any other step is recorded, the request's own
 work has changed what would be observed, so the comparison is skipped and
 the re-entry rules protect the rest.
@@ -920,7 +947,10 @@ the caller:
   step itself, because the hand-off would otherwise also complete a row
   whose write never happened.
 - A clean synchronization that was interrupted: it calls
-  `synchronize_remote` with the recorded target and `restart` set.
+  `synchronize_remote` with the recorded target and `restart` set. The
+  existing operation list already offers resume for any interrupted or
+  failed synchronization, a conflicted one included; whether this resume
+  accepts those is part of decision 12.
 
 For anything else, including an interrupted save, whose body no record
 holds, and key generation, it returns `original_request_required` with the
@@ -977,7 +1007,11 @@ The safe points at which a cancellation is honored:
 A cancelled result reports the effects completed before it stopped. If work
 finished before the cancellation was seen, the result is the success it
 earned. A cancelled synchronization is final for its operation ID; the
-record is finished and continuing needs a new request. F2 claims no rollback
+record is finished and continuing needs a new request. That is not true
+of a synchronization with a conflict pending: cancelling it does nothing
+in the domain, and the operation is not terminal. A divergent
+synchronization also reaches no safe point between the fetch and the push,
+so no cancellation is seen while it merges. Decision 12. F2 claims no rollback
 and no deadline. While a blocking transport call has not returned,
 `cancel_request` reports that cancellation is requested and not yet
 acknowledged; the ten-second "still stopping" display and its timer belong
@@ -1390,9 +1424,8 @@ F1 changed no existing public function. F2 changes these:
 | Risk | Control |
 | --- | --- |
 | The Cycle is large: the boundary, twenty-eight bindings, three new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
-| The journal fix changes Wave 01 code on many paths. | Its own ticket and review; every existing test must pass unchanged; a test per path listed above. |
 | A binding maps a partial outcome to a clean success. | Exhaustive matches; one rule for outcome and class; a test per binding family that injects a failure after the authoritative step. |
-| A retry reports a commit that is not this request's. | The commit must come after the position recorded at acceptance, change the request's paths to the intended content, and the request's operation must have a journal row; otherwise none is reported. Two requests with identical content can still be indistinguishable when both started; the content on disk is then what both intended. |
+| A retry reports a commit that is not this request's. | The commit must come after the position recorded at acceptance, change the request's paths to the intended content, and either an earlier attempt of the request had started or the commit appeared during this call; otherwise none is reported. Two requests with identical content can still be indistinguishable when both started; the content on disk is then what both intended. |
 | Settlement deletes or finishes a record another call is using. | Every record change is conditional on the call's own attempt number; a retry never deletes. |
 | A body's digest lets someone with the database test guesses of a short body. | Required by the CLI RFC. Digests are salted per record, so equal bodies do not collide. The database already sits beside the repository it describes. |
 | Request records grow without bound. | Small rows; rejected requests leave none; decision 8. |
