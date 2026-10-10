@@ -46,7 +46,8 @@ review. Approving them and authorizing implementation are separate gates.
   `ff1c8a48d94a91dfbcdc64bc417a3eefcbf0e4be`. The worktree was clean.
 - **Wave 02 dependency.** The Wave requires Cycles 01 to 05 on main for F2.
   All five are closed and on main. Cycle 06 landed on 2026-10-09; the
-  synchronization bindings consume it, see decision 12. Cycles 07 to 10 are
+  synchronization bindings refuse the divergence it merges, see decision
+  12. Cycles 07 to 10 are
   not started.
 - **Wave 03 dependency.** F1 merged to main as pull request 13 on
   2026-10-08.
@@ -68,8 +69,8 @@ review. Approving them and authorizing implementation are separate gates.
   06 (merge and conflict recovery), the index fix
   `01M4GD0KKXW684QBA49F6EX3WE` and the journal fix. The three documents
   were updated for them by their author; the updates are not reviewed, and
-  nothing was run. Cycle 06 changes what a synchronization does, which is
-  new decision 12.
+  nothing was run. Cycle 06 changes what a synchronization does; decision
+  12 keeps F2's bindings clean-only.
 - Seven defect and follow-up tickets raised from F1 are open. Two touch code
   F2 changes: `01M4EHGE4BXGPMCWWA1S1QR0JW` (index refresh atomicity) and
   `01M4EHGE9TMR99VYZC184J9XEC` (discovery entry caps). Neither blocks F2.
@@ -95,7 +96,7 @@ re-check the audit against any library change that landed in between.
   `host replace`, `document repair` and `ticket repair`. A preview creates
   nothing, including for a repository root that does not exist yet.
 - **Bindings** for the twenty-eight baseline mutations the design lists
-  (decision 9).
+  (decision 9), and `operation abandon` (decision 13).
 - **Result model for mutations.** Mutation envelopes, the result codes and
   recovery actions mutations need, one rule for outcome and failure class,
   and a complete mapping from every domain outcome and error.
@@ -136,8 +137,9 @@ Not delivered, and who owns each:
   rule 6.
 - **Conflict resolution and divergent synchronization**: C4 and D5. Wave 02
   Cycle 06 has since landed and `synchronize_remote` now merges a divergent
-  remote itself, so "clean synchronization only" is no longer something a
-  binding gets for free; see decision 12.
+  remote itself. F2's two bindings ask it to refuse divergence instead
+  (decision 12); C4 and D5 turn merging on when they bind
+  `conflict resolve`.
 - **Per-command input schemas**: the CLI Cycle that delivers each verb.
 - **Native execution on Windows and macOS**: see decision 11.
 - **Changing the short-code prefix or code length after enablement.** No RFC
@@ -234,8 +236,8 @@ so they are not lost:
 ## Decisions For The Product Owner
 
 Each has a recommendation. Decided on 2026-10-10: decision 1, the first
-half of decision 2, and decision 13. Decisions 12 and 13 were added that
-day. The rest are open.
+half of decision 2, and decisions 12 and 13, which were added that day.
+The rest are open.
 
 1. **Size.** *Decided 2026-10-10: one Cycle in three parts.* F2 as the Wave scopes it is larger than F1: the boundary,
    twenty-eight bindings, three new domain operations and the relationship
@@ -318,10 +320,20 @@ day. The rest are open.
 11. **Native evidence.** *Recommended:* as F1 decision 5: prove F2 on Linux,
     add its test targets to the native workflow's list, dispatch nothing,
     and carry Windows and macOS execution to G1.
-12. **Synchronization after Cycle 06** (added 2026-10-10; **open**). The
-    product owner chose the recommendation below on 2026-10-10, before a
-    review found this text incomplete. The corrected facts follow it and
-    the decision is put again. The drafts bind
+12. **Synchronization after Cycle 06** (added 2026-10-10). *Decided
+    2026-10-10: F2 stays clean-only.* The synchronization entry point F2
+    adds takes a setting that refuses a divergent remote with
+    `merge_required` before any merge is prepared, as the call behaved
+    before Cycle 06, and the two bindings always set it. No conflict state
+    is reachable through F2. C4 and D5 turn merging on when they bind
+    `conflict resolve`, as a shared-library change. The existing
+    `synchronize_remote` and its tests are unchanged. The three new error
+    variants still get result codes, since the mapping is exhaustive. The
+    product owner noted that nothing calls this code yet, so a state left
+    behind during this work harms no one. The first choice, and why it was
+    put again, are kept below for the record. The product owner first
+    chose the recommendation below, before a review found its text
+    incomplete. The drafts bind
     `item sync` and `repo sync` for clean synchronization and leave
     divergence to C4 and D5. Since Cycle 06, `synchronize_remote` merges a
     divergent remote itself: it makes merge commits, can ask for a
@@ -346,7 +358,8 @@ day. The rest are open.
     drafted cannot report, and the merge commit of a stopped
     synchronization has no read. So the recommendation as written ships a
     command that can enter a conflict and none that leaves it, and touches
-    Tasks 5, 6, 9, 13 and 14, not two tasks.
+    Tasks 5, 6, 9, 13 and 14, not two tasks. The fourth option, chosen,
+    is the setting described at the head of this decision.
 13. **Abandoning an operation** (added 2026-10-10). *Decided 2026-10-10:*
     F2 adds a confirmed `operation abandon`: it closes a pending local
     journal row, touches no file, and reports what the operation left
@@ -378,8 +391,7 @@ Smaller rulings the design makes, listed so they can be overruled:
 - Local operations have one safe point, before acceptance. Synchronization
   keeps the seven Wave 02 gave it.
 - `resume_operation` and `show_request` are included. Resume is limited to
-  the index hand-off and clean synchronization (see decision 12 for a
-  conflicted one); everything else is resumed
+  the index hand-off and clean synchronization; everything else is resumed
   by repeating the request.
 - The cycle check uses the index as it stands and does not scan. Its
   members are reported sorted by ID.
@@ -446,7 +458,7 @@ Nothing here has been run.
 | Refresh, 2026-10-10; `sync.rs` at `f87ce81` | `synchronize_remote` now merges a divergent remote and has three new error variants; the drafts assume it refuses. | Decision | Decision 12. |
 
 | Fourth review, of the refresh, 2026-10-10; `recovery.rs:386-401`, `repository.rs:3546-3559` | "Not rejected when the call returned" let `remote select` report another request's commit: a repeat resets the rejected row before the domain runs. | Settled, unreviewed | Rule 4 asks what the row was before the call, or whether the commit appeared during it. |
-| Fourth review; `reservation.rs:582-584`, `repository.rs:2895-2909`, `sync.rs:3653-3916` | Decision 12 understated a pending conflict and its recommendation was not achievable as written. | Decision | Decision 12 reopened with the facts. |
+| Fourth review; `reservation.rs:582-584`, `repository.rs:2895-2909`, `sync.rs:3653-3916` | Decision 12 understated a pending conflict and its recommendation was not achievable as written. | Settled | Decision 12 reopened with the facts and decided: F2's bindings refuse divergence. |
 | Fourth review | A record stranded when rule 1 met a rejected row; four wrong statements and two wrong test expectations about the journal fix. | Settled, unreviewed | Corrected in the design and plan. |
 
 The fourth review read the refresh against the code and the replay rules

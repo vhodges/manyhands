@@ -127,8 +127,8 @@ document; a different decision changes the tasks named under
 | 9, commands bound | Binding `comment add` and polling adds a task after Task 13. |
 | 10, registry names | Names change in Task 5 only. |
 | 11, native evidence | Task 19 step 1 changes. |
-| 12, synchronization after Cycle 06 | Open; reopened after review on 2026-10-10. Any option that keeps the bindings touches Tasks 5 (codes), 6 (the lookup's reading of an interrupted row), 9, 13 and 14. Re-plan those once it is decided. |
-| 13, abandoning an operation | Decided: a new task after Task 12, and the action name in Task 5. Not yet written into the tasks below. |
+| 12, synchronization after Cycle 06 | Decided: clean-only. Task 13's sibling entry point takes the refuse-divergence setting; Task 9 maps the three new error variants. |
+| 13, abandoning an operation | Decided: Task 12A, and the action name in Task 5. |
 
 ## File Map And Dependency Order
 
@@ -855,6 +855,38 @@ each with its preview and observation digest.
 
 **Verify:** the Task 11 command, with `--test key_material`.
 
+## Task 12A: Operation Abandon
+
+**Files:** `src/repository/recovery.rs`, `src/repository/bridges/abandon.rs`
+(new), `src/repository/mutation/bind/repo.rs`,
+`tests/mutation_confirmation.rs`, `tests/journal_rejection.rs`, schemas
+and goldens.
+
+**Contract:** The design's "Abandoning An Operation". Decision 13.
+
+**Tests first.** Each ends with a different operation on the repository
+succeeding, and with every file, ref and worktree byte-identical to before
+the abandon.
+
+- **Lost input:** a save killed after its file write. Before the abandon a
+  second request is `recovery_required` with an `operation.abandon`
+  action. After it, a save of another item succeeds; a save of the same
+  item is `external_change`, and a fresh read and save commits it once.
+- **Overtaken:** the same, with another commit having changed the file.
+- **Half-written configuration:** `enable` killed after it wrote the
+  configuration file. After the abandon the file is still dirty and is
+  named in the result; once restored with Git, `enable` succeeds.
+- The preview changes nothing. A row that completed between preview and
+  confirmation is `external_change`; an unknown operation ID is
+  `operation_not_found`; a completed or rejected one is a no-op.
+- A repeat of the abandoned operation ID through the domain is refused and
+  writes nothing. The request that owned it has no record afterwards, and
+  the same request ID then runs as new.
+- A remote or key operation ID is refused with nothing changed.
+- A retry of the abandon request returns its stored result.
+
+**Verify:** the Task 11 command, with `--test journal_rejection`.
+
 ## Task 13: Progress, Cancellation And Synchronization
 
 **Files:** `src/repository/mutation/progress.rs`, `mod.rs`, `bind/sync.rs`,
@@ -884,9 +916,11 @@ without changing it; `remote_synchronization` must pass unchanged.
   piece in turn. After they are restored it reports `current` and pushes
   nothing.
 - No publication remote: `blocked` with `publication_remote_required`.
-- A divergent remote: written before Cycle 06 as `merge_required`. The
-  call now merges; the expected results are set by decision 12 before this
-  task starts. A remotely deleted context branch
+- A divergent remote is `merge_required`: the bindings set the sibling's
+  refuse-divergence setting. No merge commit, integration window or
+  conflict exists afterwards, local and remote refs are unchanged, and
+  the existing `synchronize_remote` still merges the same fixture. A
+  remotely deleted context branch
   is `remote_branch_deleted`; a rejected push is `push_rejected`.
 - **Open case 3, reproduced or refuted.** After each of those three, and
   after `host_approval_required` and `unlock_required`: is the

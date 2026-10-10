@@ -202,7 +202,8 @@ Three cases remain open after the fix. All exist today.
    conflicted item returns `RecoveryRequired`; other items can still be
    saved. Cancelling does not clear it. The only exits are
    `resolve_synchronization` and a hand-made merge commit (ticket
-   `01M4H33R34Z7C7EEKTY1ZCT950`, on its own unmerged branch). Decision 12.
+   `01M4H33R34Z7C7EEKTY1ZCT950`, on its own unmerged branch). F2's
+   bindings refuse divergence and so never enter this state (decision 12).
 
 Decision 2 covers these cases.
 
@@ -321,10 +322,11 @@ named below.
 | `document repair`, `ticket repair` | new `repair_item` | Required | |
 | `ticket create`, `ticket save` | `save_ticket_with` | No | Relationships; short code on create. |
 | `ticket slug-assign` | `save_ticket_with` | No | |
-| `item sync`, `repo sync` | `synchronize_remote` | No | Drafted as clean synchronization only; since Cycle 06 the call merges a divergent remote. Decision 12. |
+| `item sync`, `repo sync` | the new sibling of `synchronize_remote` | No | Clean synchronization only: the bindings set the sibling's refuse-divergence setting, so a divergent remote is `merge_required` and nothing is merged (decision 12). |
+| `operation abandon` | new `abandon_operation` | Required | Decision 13; see [Abandoning An Operation](#abandoning-an-operation). |
 | `index refresh`, `index rebuild` | `refresh_repository`, `rebuild_repository` | No | |
 
-That is twenty-eight commands. The saves prepare their editing context
+That is twenty-eight baseline commands and `operation abandon`. The saves prepare their editing context
 themselves, under the same operation ID; a binding makes one domain call.
 
 Not bound in F2, with the owner:
@@ -337,9 +339,9 @@ Not bound in F2, with the owner:
 - `poll configure`, `poll pause`, `poll resume`, `poll once`: the first of C5
   or D6.
 - `document promote`, `ticket close`: the first of C5 or D5; track rule 6.
-- `conflict resolve` and the conflict reads: C4 and D5. Cycle 06 has
-  landed; how much of divergent synchronization the two bindings above
-  carry is decision 12.
+- `conflict resolve`, the conflict reads and merging a divergent remote:
+  C4 and D5, which turn off the refuse-divergence setting when they bind
+  them.
 - Republishing a remotely deleted item branch: the Wave gives C4 "exact
   republish consent for a remotely deleted branch", but no operation
   republishes one today and no Wave 02 Cycle is named for it.
@@ -523,7 +525,7 @@ entered. If the lookup itself fails, the record is left as it is.
 | A result the domain has made final for this operation ID: a synchronization whose row is cancelled; a key generation whose recovery state is "retained for inspection" | any | Stored and marked `finished`. |
 | `partial`: work remains (discovery or registration pending; a key generation or deletion the domain says can be recovered) | any | Left `accepted`. A retry continues it. |
 | Blocked, an input error, a transient failure or an error | Absent or completed: nothing is in flight | Deleted. The confirmation it accepted, if any, is released in the same transaction; its expiry still runs from its creation. The request ID is free again. |
-| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error usually means the call wrote something, with the exceptions stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome was drafted as `partial` only if a push was accepted. Since Cycle 06 a stopped synchronization can also have made merge commits and moved a branch, which this rule and the Effects table do not yet account for; decision 12. |
+| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error usually means the call wrote something, with the exceptions stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome is `partial` only if a push was accepted. That holds because the bindings refuse divergence: a synchronization that merges can stop having made merge commits, which this rule and the Effects table do not cover, and C4 and D5 extend both when they turn merging on. |
 
 A command with no journal (identity, key registry changes, host approval,
 folder creation) is a single step that either happened or did not; an error
@@ -915,7 +917,7 @@ What a client does with each new code that stops a request:
 | `initials_required` | `repo.identity_set` | Or resubmit with initials. |
 | `host_approval_required`, `host_mismatch` | `host.approve` | `data` holds the presented fingerprint. |
 | `host_replacement_required` | `host.replace` | `data` holds both fingerprints. |
-| `recovery_required` | `repo.inspect` | |
+| `recovery_required` | `repo.inspect`; `operation.abandon` when a pending local operation is the cause | |
 | `invalid_slug_configuration`, `invalid_configuration` | `repo.inspect` | |
 | `request_mismatch`, `confirmation_mismatch`, `confirmation_used` | none | A caller error; use a new request ID or a new preview. |
 | `publication_remote_required`, `publication_remote_in_use`, `ticket_closed`, the key and unlock codes outside a synchronization, and the Input codes not named above | none | The code and message say what is missing. Actions for these belong with the commands that resolve them and are added when a front end needs them. |
@@ -929,6 +931,7 @@ Added to the closed registry:
 | `operation.resume` | none; `operation_id` is set |
 | `request.retry` | `request_id` |
 | `request.prepare` | none |
+| `operation.abandon` | `root`; `operation_id` is set |
 | `repo.identity_set` | `root` |
 | `host.approve` | `root`, `authority` |
 | `host.replace` | `root`, `authority` |
@@ -948,9 +951,9 @@ the caller:
   whose write never happened.
 - A clean synchronization that was interrupted: it calls
   `synchronize_remote` with the recorded target and `restart` set. The
-  existing operation list already offers resume for any interrupted or
-  failed synchronization, a conflicted one included; whether this resume
-  accepts those is part of decision 12.
+  existing operation list also offers resume for a conflicted
+  synchronization. F2's bindings cannot produce one; if resume is given
+  one made some other way, it is `recovery_required`.
 
 For anything else, including an interrupted save, whose body no record
 holds, and key generation, it returns `original_request_required` with the
@@ -1008,14 +1011,48 @@ A cancelled result reports the effects completed before it stopped. If work
 finished before the cancellation was seen, the result is the success it
 earned. A cancelled synchronization is final for its operation ID; the
 record is finished and continuing needs a new request. That is not true
-of a synchronization with a conflict pending: cancelling it does nothing
-in the domain, and the operation is not terminal. A divergent
-synchronization also reaches no safe point between the fetch and the push,
-so no cancellation is seen while it merges. Decision 12. F2 claims no rollback
+of a synchronization with a conflict pending, and a merging synchronization
+reaches no safe point between the fetch and the push. Neither arises in
+F2, whose bindings refuse divergence; C4 and D5 meet both. F2 claims no rollback
 and no deadline. While a blocking transport call has not returned,
 `cancel_request` reports that cancellation is requested and not yet
 acknowledged; the ten-second "still stopping" display and its timer belong
 to D6.
+
+## Abandoning An Operation
+
+Decision 13. Drafted on 2026-10-10 and not reviewed.
+
+A pending local journal row blocks every other operation on the repository
+until the same operation is repeated with input it accepts. Open cases 1
+and 2 of [The Journal Defect](#the-journal-defect) are the situations where
+it cannot be. `abandon_operation` is the way out.
+
+- **What it does.** Under the repository lease, it closes one pending row
+  of `operation_records`, named by operation ID, and touches no file, ref,
+  branch or worktree. It reports what the operation left: its action,
+  target and last recorded step, and the paths of that target that differ
+  from their branch head.
+- **What it leaves.** An uncommitted item file stays in its worktree; the
+  next save of that item reports `external_change`, and a fresh read and
+  save commits it. A configuration file written by an interrupted
+  `enable` or `remote select` stays dirty; the user restores or commits
+  it with Git and repeats the command.
+- **The closed row** is kept with its own marker, distinct from
+  `rejected`. A repeat of an abandoned operation ID is refused; it is
+  neither replayed as completed nor begun again. The boundary deletes the
+  request record that owned the operation and releases its confirmation,
+  so that request ID is free and its next use gets a new operation ID.
+- **Not covered.** Rows of the remote and key journals: a held reservation
+  has `cancel_remote_operation`, and key operations complete on their next
+  call. A pending merge conflict is ticket `01M4H33R34Z7C7EEKTY1ZCT950`.
+- **Binding.** `operation abandon`, confirmation required. The preview
+  shows what the report shows and binds the row's state and step; a row
+  that completed or advanced meanwhile is `external_change`. An operation
+  ID that is absent or not pending is `operation_not_found` or a no-op.
+  Every effect is `not_requested`; what was left is in `data`.
+- A refresh or rebuild row can be abandoned too, though repeating it is
+  simpler.
 
 ## Bridges
 
@@ -1360,9 +1397,16 @@ F1 changed no existing public function. F2 changes these:
    field. F1's comment golden is built from hand-written files and does not
    change.
 5. Enablement's configuration writer accepts an optional prefix.
-6. `synchronize_remote` gains a sibling that reports safe points and accepts
-   a cancellation request from its observer; the existing function's
-   behavior is unchanged.
+6. `synchronize_remote` gains a sibling that reports safe points, accepts
+   a cancellation request from its observer, and takes a setting to refuse
+   a divergent remote. With the setting on, it returns `MergeRequired` at
+   the point where the existing function decides a merge is needed
+   (`sync.rs`, the `graph_plan` check ahead of the first integration
+   window), before any window or merge is prepared. That stop is after the
+   reservation, so it is one of open case 3's. The existing function, its
+   request type and its tests are unchanged. A request whose operation
+   already has an integration window, which only a merging call creates,
+   is `RecoveryRequired` when the setting is on.
 7. Refresh and rebuild record folders, if decision 4 is as recommended. The
    new table marks repositories stale once.
 8. Each of the three journals gains a lookup of one operation by ID that
@@ -1423,7 +1467,7 @@ F1 changed no existing public function. F2 changes these:
 
 | Risk | Control |
 | --- | --- |
-| The Cycle is large: the boundary, twenty-eight bindings, three new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
+| The Cycle is large: the boundary, twenty-nine bindings, four new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
 | A binding maps a partial outcome to a clean success. | Exhaustive matches; one rule for outcome and class; a test per binding family that injects a failure after the authoritative step. |
 | A retry reports a commit that is not this request's. | The commit must come after the position recorded at acceptance, change the request's paths to the intended content, and either an earlier attempt of the request had started or the commit appeared during this call; otherwise none is reported. Two requests with identical content can still be indistinguishable when both started; the content on disk is then what both intended. |
 | Settlement deletes or finishes a record another call is using. | Every record change is conditional on the call's own attempt number; a retry never deletes. |
