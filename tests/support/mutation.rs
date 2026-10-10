@@ -666,3 +666,25 @@ impl World {
         Self::commit_in(&self.root, path, content)
     }
 }
+
+impl World {
+    /// Loses the cache: the database, with the request records, the
+    /// journals and the registration, is deleted, and a service is opened
+    /// over what is left, as the next process would.
+    pub fn lose_cache(&mut self) {
+        for entry in fs::read_dir(self.data.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.starts_with("manyhands.sqlite3") && !name.ends_with(".lock") {
+                fs::remove_file(&path).unwrap();
+            }
+        }
+        self.reopen();
+    }
+
+    /// Rebuilds the index with the root, which registers the repository
+    /// again.
+    pub fn rebuild(&self) {
+        items::rebuild(&self.service, &self.root);
+    }
+}

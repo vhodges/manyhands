@@ -431,6 +431,56 @@ impl TicketBinding {
         })
     }
 
+    /// The already-applied rule for a create whose item already exists,
+    /// which is how a create that completed is answered once its record is
+    /// gone. `Ok` when nothing answers the request here: no item holds the
+    /// ID, or what holds it is the domain's to refuse.
+    ///
+    /// The item's file is what the request intends, apart from the short
+    /// code, which is written once, and is committed at its branch tip:
+    /// the end state already holds, and nothing is written. It is what
+    /// the request intends and is not committed: an earlier attempt died
+    /// between its write and its checkpoint, which is an external change;
+    /// the caller reads the item and saves it. It is anything else: the
+    /// path is occupied.
+    fn existing_item(
+        &self,
+        service: &RepositoryService,
+        repository: &ResolvedRepository,
+    ) -> Result<(), Answer> {
+        let item = match service.show_item(repository, &self.id) {
+            Ok(item) => item,
+            Err(error) if error.code() == ResultCode::ItemNotFound => return Ok(()),
+            Err(error) => return Err(Answer::of_read(&error)),
+        };
+        let (ItemDtoKind::Ticket, Some(source)) = (item.kind, item.source) else {
+            return Ok(());
+        };
+        if item.path != ticket_path(&self.id_text()) {
+            return Ok(());
+        }
+        let Some(current) = parse_ticket(&item.path, source.as_bytes()) else {
+            return Ok(());
+        };
+        let data = self.data(slug_of(&current), Vec::new());
+        if !self.holds(&current) {
+            return Err(Answer::stopped(ResultCode::OccupiedPath).with_data(data));
+        }
+        // A worktree that cannot be read is not known to be committed.
+        let committed = observe::is_committed(
+            Path::new(&item.context.worktree),
+            &item.path,
+            source.as_bytes(),
+        )
+        .unwrap_or(false);
+        let code = observe::stale_token_code(true, committed);
+        let mut answer = Answer::stopped(code).with_data(data);
+        if code == ResultCode::AlreadyApplied {
+            (_, answer.effects) = settled_save(None);
+        }
+        Err(answer)
+    }
+
     fn prepare_create(
         &mut self,
         service: &RepositoryService,
@@ -442,6 +492,9 @@ impl TicketBinding {
             ProposedRelationships::default(),
             Checking::NewRequest,
         )?;
+        // Before the short code is composed: an item that exists has its
+        // own, and the initials it would be composed from may be gone.
+        self.existing_item(service, repository)?;
         self.options.slug = Some(self.compose_slug(service, repository)?);
         // A create always expects absence.
         self.prepared(repository.root(), ExpectedPathObservation::Missing)
