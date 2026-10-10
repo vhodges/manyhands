@@ -440,6 +440,75 @@ fn an_interrupted_create_keeps_the_short_code_it_first_wrote() {
     );
 }
 
+/// How many commits the ticket's editing context has that `base` does not.
+fn commits_since(root: &Path, id: &str, base: git2::Oid) -> usize {
+    let repository = Repository::open(items::context_worktree(root, id)).unwrap();
+    let mut walk = repository.revwalk().unwrap();
+    walk.push_head().unwrap();
+    walk.hide(base).unwrap();
+    walk.count()
+}
+
+#[test]
+fn an_interrupted_create_with_relationships_completes_once_as_first_written() {
+    let (fixture, enabled) = repository(&[]);
+    let base = Repository::open(&fixture.root)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    let request = create(&fixture.root, TICKET_A);
+    // The dependencies are given out of order, one of them twice.
+    let options = TicketWriteOptions {
+        deps: ids(&[RELATED_C, RELATED_A, RELATED_C, RELATED_B]),
+        parent: RelationshipWrite::Set(items::item_id(RELATED_D)),
+        slug: Some(SLUG.to_owned()),
+    };
+    let failing = support::FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(enabled.data_directory.path());
+
+    assert_eq!(
+        rejection(failing.save_ticket_with(request.clone(), options.clone())),
+        RepositoryErrorKind::Sqlite
+    );
+    let written = source(
+        TICKET_A,
+        "Title",
+        &format!(
+            "slug: {SLUG}\nparent: {RELATED_D}\ndeps:\n- {RELATED_A}\n- {RELATED_B}\n- {RELATED_C}\n"
+        ),
+    );
+    assert_eq!(text(&fixture.root, TICKET_A), written);
+    assert_eq!(commits_since(&fixture.root, TICKET_A, base), 0);
+
+    // The retry has the same operation ID and the same options.
+    let service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    let oid = checkpointed(service.save_ticket_with(request, options));
+
+    assert_eq!(text(&fixture.root, TICKET_A), written);
+    assert_eq!(committed(&fixture.root, TICKET_A, oid), written);
+    assert_eq!(context_head(&fixture.root, TICKET_A), oid);
+    assert_eq!(commits_since(&fixture.root, TICKET_A, base), 1);
+    let saved = ticket(&fixture.root, TICKET_A);
+    assert_eq!(
+        saved.unknown.get("deps"),
+        Some(&Value::Sequence(vec![
+            RELATED_A.into(),
+            RELATED_B.into(),
+            RELATED_C.into()
+        ]))
+    );
+    assert_eq!(saved.unknown.get("parent"), Some(&RELATED_D.into()));
+    assert_eq!(saved.unknown.get("slug"), Some(&SLUG.into()));
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn an_edit_adds_a_short_code_only_to_a_ticket_without_one() {
     let (fixture, enabled) = repository(&[
