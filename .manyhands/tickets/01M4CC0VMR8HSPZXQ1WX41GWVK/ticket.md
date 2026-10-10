@@ -32,7 +32,11 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
   thirteen decisions decided, each as recommended (12 as its fourth
   option). The last corrections and the abandon section were approved
   without a further independent review.
-- [ ] Implementation authorization (a separate gate).
+- [x] Implementation authorization, Part A only: 2026-10-10, subagent-driven
+  development. Part A (Tasks 1–4) is complete at `d0dbc40` with its
+  checkpoint gate and whole-range review; see the ticket comment of
+  2026-10-10.
+- [ ] Implementation authorization for Parts B and C.
 
 ## Entry Gate
 
