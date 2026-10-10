@@ -679,3 +679,80 @@ at `tests/read_items.rs:3852`. Isolated rerun and the complete read-items target
 gate green; full output `tool_1276d4955001KtBRJwOt42xU7e`. Ticket remains open and
 not review-ready. Push, native dispatch, PR, closure, merge and cleanup remain
 separately gated.
+
+## Task 6: Final Local Gates and Whole-Branch Review — 2026-10-10T20:51:07Z
+
+Task 5 committed as `daf5020ff3c7ce959bfad751909c834a89095e97`. With its working
+changes safely checkpointed, the resumption rebase onto freshly fetched
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6` was a clean no-op; ancestry and clean
+status verified. No shared stash, other branch/worktree or remote publication.
+
+### Concurrent-opening regression and bounded correction
+
+The first full gate's RecoveryRequired was reproduced deterministically: a WAL
+read snapshot establishes the already-present migration marker; another opener
+commits a write; the unnecessary `INSERT OR IGNORE` of the existing Cycle 07
+marker promotes that stale reader to a writer and yields SQLITE_BUSY_SNAPSHOT.
+The regression explicitly proves that SQLite category, then was observed failing
+in the real binding migration audit. Removed only the redundant marker write:
+insert when `!migrated`, audit schema/columns/rows otherwise. New migrations and
+their marker still share the existing atomic operation transaction, and substituted
+or missing schemas still fail closed. No retry loop, longer budget or weakened
+identity audit. Focused publication library **35** and the original concurrent
+opening regression pass. This is a correction to this Cycle's additive migration,
+not a new shared migration policy.
+
+### Final verification
+
+Verified the final Rust tree at `daf5020` plus the two reviewed concurrency-fix
+files. All commands from the ticket worktree via Devenv; full output
+`tool_1277b1033001ZkPN1e3c1ZE5EP`:
+
+| Gate | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | PASS |
+| `cargo fmt --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo test --all-features --locked` | PASS; no failures; one pre-existing intentionally ignored read characterization |
+| `cargo run --locked --bin manyhands-cli` | PASS; opens no window; CLI still has no ticket/comment commands |
+| `git diff --check` | PASS |
+
+Full counts: library **504**; canonical 43; discovery 78; editor 9; rejection 18;
+key material 39; key storage 2; local authoring **131**; read boundary 18, comments
+20, contract 64, credentials 25, items **67**, relationships 17, repository 32,
+status 23; foundation **51**; reservation 9; enablement 78; session credentials
+11; shared-key registry 39; doctests 9. Real SSH: publication **41**, merge recovery
+**25**, observation **15**, synchronization **63**, fixture **31**, transport
+**105**. This full run also completes Task 5's existing synchronization/transport/
+authoring/foundation regression commands without redundant unchanged-tree reruns.
+
+Cargo/dependency inputs unchanged. SHA-256:
+- `Cargo.lock`: `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`
+- `devenv.lock`: `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`
+
+Desktop display variables are present, but no desktop launch was run: approved
+Task 6 is headless and desktop startup paths are unchanged. Desktop builds/checks
+are covered by the all-feature gates; no GUI behavior is claimed.
+
+Independent read-only whole-branch review against the base above approves
+`daf5020` plus the concurrency fix, with **no actionable P1/P2 findings**. It
+examined all commits and the approved contract, binding/receipt/schema/privacy,
+handoff/authority/ownership/fencing, narrow cancellation repair and native wiring.
+The reviewer ran no Rust; the execution results above are controller evidence.
+
+### Remaining delivery gate
+
+Local implementation, local verification and code review are complete. Task 6's
+native/handoff gate remains pending: all five manual jobs (Linux x86_64/aarch64,
+Windows x86_64/aarch64, macOS aarch64) require authorized publication and dispatch
+on the tested revision, including actual native path-length/ABI evidence. Local
+Linux results and workflow wiring are not native matrix proof. No owner deferral
+has been granted. Keep the ticket open and not review-ready until that gate is
+met or explicitly deferred.
+
+Next authorization request: publish this rebased ticket branch using
+`--force-with-lease` pinned to original published ticket HEAD
+`59f27a94b1358bdc7172d10610ae08969b09ff90`, then dispatch the existing manual
+five-target workflow. Fetch/compare remote ticket history before any authorized
+push; a moved ref is a stop, not permission to overwrite it. PR, closure, merge
+and cleanup remain separate stages.

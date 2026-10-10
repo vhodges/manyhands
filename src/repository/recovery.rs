@@ -79,7 +79,12 @@ pub(super) fn migrate_comment_bindings(connection: &Connection) -> Result<(), Re
                     .collect::<String>() => {}
         _ => return Err(failure()),
     }
-    connection.execute("INSERT OR IGNORE INTO registry_migrations(name) VALUES('cycle_07_comment_publication_bindings')", []).map_err(|_| failure())?;
+    // An already migrated registry is an audit only. Even INSERT OR IGNORE of
+    // its existing marker promotes this read transaction to a writer and can
+    // fail with SQLITE_BUSY_SNAPSHOT when another opener commits meanwhile.
+    if !migrated {
+        connection.execute("INSERT INTO registry_migrations(name) VALUES('cycle_07_comment_publication_bindings')", []).map_err(|_| failure())?;
+    }
     // A partial or substituted table is not repaired on startup.
     let columns = [
         "operation_ulid",

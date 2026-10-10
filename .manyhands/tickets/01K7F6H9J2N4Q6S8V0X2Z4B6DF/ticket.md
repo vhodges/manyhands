@@ -61,14 +61,17 @@ owner approved that affected paragraph on 2026-10-10; the Task 0 gate is met.
 - [x] Task 4 retry/cancellation and owner-authorized narrow Cycle 06
   applied-but-unreleased cancellation repair; independent source review.
 - [x] Task 5 complete real-SSH acceptance and fault/privacy matrix; independent review.
-- [ ] Task 6 full local/final review and authorized five-target native evidence.
+- [x] Task 6 full local gates and independent whole-branch code review.
+- [ ] Task 6 authorized five-target native evidence and review-ready handoff.
 
 The public SSH regression exposed terminal cancellation after the resolution
 checkpoint but before cleanup. The owner-authorized shared predicate repair now
 preserves the recoverable stop, same child/candidate, and terminal clean/released
-negatives. Task 5's 41 real-SSH cases and independent review pass. Task 6 is
-investigating a concurrent registry-opening failure from the full gate; the
-isolated and complete read-items reruns pass. Final/native gates remain.
+negatives. Task 5's 41 real-SSH cases and independent review pass. Task 6 reproduced
+and fixed the redundant binding-migration marker write behind the concurrent
+opening failure; all final local gates and whole-branch source review pass
+(library 504, read-items 67, all integration/SSH targets and CLI smoke).
+Five-target native execution remains pending separate push/dispatch authorization.
 The ticket is open and not review-ready.
 
 ## Exit Evidence

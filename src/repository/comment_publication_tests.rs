@@ -1,6 +1,52 @@
 use super::*;
 use keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest};
 
+#[test]
+fn migrated_binding_audit_does_not_promote_a_concurrent_read_snapshot_to_writer() {
+    let data = tempfile::tempdir().unwrap();
+    RepositoryService::open_at(data.path()).unwrap();
+    let registry = data.path().join(REGISTRY_FILE);
+    let mut reader = discovery::open_registry(&registry, &mut |_| {}).unwrap();
+    let snapshot = reader.transaction().unwrap();
+    let markers: i64 = snapshot
+        .query_row("SELECT COUNT(*) FROM registry_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let writer = discovery::open_registry(&registry, &mut |_| {}).unwrap();
+    writer
+        .execute(
+            "INSERT INTO registry_migrations(name) VALUES('concurrent_test_marker')",
+            [],
+        )
+        .unwrap();
+
+    // A completed migration is an audit only. This snapshot predates the other
+    // opener's committed write, so an unnecessary marker INSERT would produce
+    // SQLITE_BUSY_SNAPSHOT rather than waiting for the busy timeout.
+    let promotion = snapshot.execute("INSERT OR IGNORE INTO registry_migrations(name) VALUES('cycle_07_comment_publication_bindings')", []).unwrap_err();
+    assert!(
+        matches!(promotion, rusqlite::Error::SqliteFailure(code, _) if code.extended_code == rusqlite::ffi::SQLITE_BUSY_SNAPSHOT)
+    );
+    recovery::migrate_comment_bindings(&snapshot).unwrap();
+    recovery::validate_comment_bindings(&snapshot).unwrap();
+    assert_eq!(
+        snapshot
+            .query_row("SELECT COUNT(*) FROM registry_migrations", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        markers
+    );
+    snapshot.commit().unwrap();
+    assert_eq!(
+        writer
+            .query_row("SELECT COUNT(*) FROM registry_migrations", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        markers + 1
+    );
+}
+
 struct NoPrompt;
 impl SessionCredentialProvider for NoPrompt {
     fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
