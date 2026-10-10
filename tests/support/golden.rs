@@ -51,6 +51,7 @@ pub const CASES: &[&str] = &[
     "key_list",
     "key_public",
     "key_show",
+    "mutation_partial",
     "operation_list",
     "operation_show",
     "poll_status",
@@ -83,13 +84,14 @@ pub fn fixture_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/read_v1")
 }
 
-/// One envelope a read produced, and everything its contract test checks.
+/// One envelope a command produced, and everything its contract test checks.
 pub struct ContractCase<'a> {
     /// The fixture is `tests/fixtures/read_v1/<name>.json`; `name` must be
     /// listed in `CASES`.
     pub name: &'a str,
-    /// The published schema file for the envelope's `data`, or `None` for a
-    /// failure, which carries no data.
+    /// The published schema file for the envelope's `data`, or `None` when
+    /// the envelope carries none. A read carries data exactly when it
+    /// succeeds; for a mutation this is what says whether data is expected.
     pub data_schema: Option<&'a str>,
     /// `(value, placeholder)` pairs for what differs from run to run:
     /// absolute paths, object IDs, generated IDs and unfixed timestamps. A
@@ -99,29 +101,42 @@ pub struct ContractCase<'a> {
     pub sentinels: &'a [&'a str],
 }
 
-/// Checks one envelope against the published contract: the redaction scan,
-/// the envelope schema, the data schema, and the golden fixture.
+/// Checks one envelope of a read against the published contract: the
+/// redaction scan, the envelope schema, the data schema, and the golden
+/// fixture. A read carries data exactly when it succeeds.
 pub fn assert_contract(case: &ContractCase<'_>, envelope: &impl Serialize) {
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(
+        value["data"].is_null(),
+        value["outcome"] != "success",
+        "{}: a read carries data exactly when it succeeds",
+        case.name
+    );
+    assert_case(case, &value);
+}
+
+/// Checks one envelope of a mutation as `assert_contract` checks a read's,
+/// except that data may accompany any outcome: the case says whether this
+/// envelope carries data, by naming its schema or not.
+pub fn assert_mutation_contract(case: &ContractCase<'_>, envelope: &impl Serialize) {
+    assert_case(case, &serde_json::to_value(envelope).unwrap());
+}
+
+fn assert_case(case: &ContractCase<'_>, value: &Value) {
     let name = case.name;
     assert!(CASES.contains(&name), "{name}: not listed in golden::CASES");
-    let value = serde_json::to_value(envelope).unwrap();
-    if let Some((sentinel, location)) = find_sentinel(&value, case.sentinels) {
+    if let Some((sentinel, location)) = find_sentinel(value, case.sentinels) {
         panic!("{name}: the envelope contains {sentinel:?} at {location}");
     }
 
-    if let Err(problem) = schema::check_published(ENVELOPE_SCHEMA, &value) {
+    if let Err(problem) = schema::check_published(ENVELOPE_SCHEMA, value) {
         panic!("{name}: the envelope does not match {ENVELOPE_SCHEMA}: {problem}");
     }
-    assert_registered_recovery(name, &value);
+    assert_registered_recovery(name, value);
     let data = &value["data"];
-    assert_eq!(
-        data.is_null(),
-        value["outcome"] != "success",
-        "{name}: a read carries data exactly when it succeeds"
-    );
     match case.data_schema {
         Some(data_schema) => {
-            assert!(!data.is_null(), "{name}: a failure names no data schema");
+            assert!(!data.is_null(), "{name}: a data schema needs data");
             if let Err(problem) = schema::check_published(data_schema, data) {
                 panic!("{name}: data does not match {data_schema}: {problem}");
             }
@@ -129,7 +144,7 @@ pub fn assert_contract(case: &ContractCase<'_>, envelope: &impl Serialize) {
         None => assert!(data.is_null(), "{name}: data needs a data schema"),
     }
 
-    assert_golden(name, &value, case.placeholders);
+    assert_golden(name, value, case.placeholders);
 }
 
 /// Checks that every recovery action of `envelope` is a registered one and

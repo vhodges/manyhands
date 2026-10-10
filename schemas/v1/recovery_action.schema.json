@@ -7,8 +7,19 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["index.rebuild", "index.refresh", "repo.inspect"],
-      "description": "What to do next. Each of these takes one argument, root, the repository's root, and carries no arguments when the result names no repository."
+      "enum": [
+        "index.rebuild",
+        "index.refresh",
+        "repo.inspect",
+        "operation.resume",
+        "request.retry",
+        "request.prepare",
+        "operation.abandon",
+        "repo.identity_set",
+        "host.approve",
+        "host.replace"
+      ],
+      "description": "What to do next. An action carries exactly the arguments it registers, or none when the result names no repository. index.rebuild, index.refresh, repo.inspect, operation.abandon and repo.identity_set take root, the repository's root. host.approve and host.replace take root and authority. request.retry takes request_id. operation.resume and request.prepare take none. operation.resume and operation.abandon set operation_id."
     },
     "operation_id": {
       "type": ["string", "null"]

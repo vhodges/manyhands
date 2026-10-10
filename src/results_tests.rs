@@ -27,8 +27,10 @@ const ENVELOPE_FIELDS: [&str; 11] = [
     "recovery",
 ];
 
-/// The design's result-code table, in its order.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 19] = [
+/// Every result code with its class: the codes reads return, in their
+/// order, then the mutation codes of the design's Result Mapping table,
+/// class by class in its order.
+const DESIGN_CODES: [(&str, Option<FailureClass>); 67] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -48,6 +50,77 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 19] = [
     ("index_unavailable", Some(FailureClass::Blocked)),
     ("busy", Some(FailureClass::Transient)),
     ("internal_error", Some(FailureClass::Internal)),
+    ("invalid_input", Some(FailureClass::Input)),
+    ("request_mismatch", Some(FailureClass::Input)),
+    ("request_not_found", Some(FailureClass::Input)),
+    ("confirmation_mismatch", Some(FailureClass::Input)),
+    ("not_confirmable", Some(FailureClass::Input)),
+    ("slug_already_assigned", Some(FailureClass::Input)),
+    ("occupied_path", Some(FailureClass::Input)),
+    ("not_repairable", Some(FailureClass::Input)),
+    ("remote_name_conflict", Some(FailureClass::Input)),
+    ("invalid_remote", Some(FailureClass::Input)),
+    ("key_not_deletable", Some(FailureClass::Input)),
+    ("confirmation_required", Some(FailureClass::Blocked)),
+    ("confirmation_expired", Some(FailureClass::Blocked)),
+    ("confirmation_not_found", Some(FailureClass::Blocked)),
+    ("confirmation_used", Some(FailureClass::Blocked)),
+    ("external_change", Some(FailureClass::Blocked)),
+    ("recovery_required", Some(FailureClass::Blocked)),
+    ("original_request_required", Some(FailureClass::Blocked)),
+    ("identity_required", Some(FailureClass::Blocked)),
+    ("initials_required", Some(FailureClass::Blocked)),
+    ("invalid_slug_configuration", Some(FailureClass::Blocked)),
+    ("identity_ambiguous", Some(FailureClass::Blocked)),
+    ("ticket_closed", Some(FailureClass::Blocked)),
+    ("wrong_branch", Some(FailureClass::Blocked)),
+    ("worktree_not_clean", Some(FailureClass::Blocked)),
+    ("worktree_conflicted", Some(FailureClass::Blocked)),
+    ("invalid_configuration", Some(FailureClass::Blocked)),
+    ("publication_remote_required", Some(FailureClass::Blocked)),
+    ("publication_remote_in_use", Some(FailureClass::Blocked)),
+    ("merge_required", Some(FailureClass::Blocked)),
+    ("remote_branch_deleted", Some(FailureClass::Blocked)),
+    ("push_rejected", Some(FailureClass::Blocked)),
+    ("no_selected_key", Some(FailureClass::Blocked)),
+    ("key_unavailable", Some(FailureClass::Blocked)),
+    ("key_rejected", Some(FailureClass::Blocked)),
+    ("selected_key_in_use", Some(FailureClass::Blocked)),
+    ("unlock_required", Some(FailureClass::Blocked)),
+    ("unlock_failed", Some(FailureClass::Blocked)),
+    ("host_approval_required", Some(FailureClass::Blocked)),
+    ("host_replacement_required", Some(FailureClass::Blocked)),
+    ("host_mismatch", Some(FailureClass::Blocked)),
+    ("discovery_pending", Some(FailureClass::Incomplete)),
+    ("registration_pending", Some(FailureClass::Incomplete)),
+    ("poll_yielding", Some(FailureClass::Transient)),
+    ("remote_unavailable", Some(FailureClass::Transient)),
+    ("transport_unavailable", Some(FailureClass::Transient)),
+    ("cancelled", Some(FailureClass::Cancelled)),
+    ("already_applied", None),
+];
+
+/// The codes a read returns, in its envelope or in its data.
+const READ_CODES: [ResultCode; 19] = [
+    ResultCode::Ok,
+    ResultCode::InvalidPath,
+    ResultCode::NotRepository,
+    ResultCode::NotRepositoryRoot,
+    ResultCode::BareRepository,
+    ResultCode::RepositoryNotRegistered,
+    ResultCode::RepositoryInaccessible,
+    ResultCode::InvalidId,
+    ResultCode::ItemNotFound,
+    ResultCode::PathNotFound,
+    ResultCode::KeyNotFound,
+    ResultCode::PublicKeyUnavailable,
+    ResultCode::AuthorityNotFound,
+    ResultCode::OperationNotFound,
+    ResultCode::RelationshipCycle,
+    ResultCode::InvalidRelationship,
+    ResultCode::IndexUnavailable,
+    ResultCode::Busy,
+    ResultCode::InternalError,
 ];
 
 fn keys(value: &Value) -> Vec<&str> {
@@ -95,6 +168,54 @@ fn result_code_messages_are_fixed() {
         "The index is degraded and must be rebuilt.",
         "The repository is busy; try again.",
         "An internal error occurred.",
+        "The request input is not valid.",
+        "That request ID was already used for a different request.",
+        "No request has that ID.",
+        "The confirmation was prepared for a different request.",
+        "That command does not take a confirmation.",
+        "The item already has a short code.",
+        "Something already exists at that path.",
+        "That item cannot be repaired by this command.",
+        "A remote with that name already exists.",
+        "That remote cannot be used.",
+        "That key cannot be deleted by Manyhands.",
+        "The command needs a confirmation; prepare it first.",
+        "The confirmation has expired; prepare the command again.",
+        "No confirmation has that ID; prepare the command again.",
+        "The confirmation was already used.",
+        "What the request was based on has changed.",
+        "Recovery is required before this can continue.",
+        "The original request must be submitted again to finish the operation.",
+        "A name and an email are required.",
+        "Initials are required to assign a short code.",
+        "The short code configuration is not valid.",
+        "The identity to use is ambiguous.",
+        "The ticket is closed.",
+        "The repository is not on the branch this needs.",
+        "The working tree has uncommitted changes in the way.",
+        "The working tree has unresolved conflicts.",
+        "The Manyhands configuration is not valid.",
+        "No publication remote is selected.",
+        "That remote is the selected publication remote.",
+        "The local and remote branches have diverged and must be merged.",
+        "The published branch was deleted on the remote.",
+        "The remote rejected the push.",
+        "No key is selected.",
+        "The selected key cannot be read.",
+        "The remote rejected the selected key.",
+        "That key is the selected key.",
+        "The key must be unlocked.",
+        "The key could not be unlocked.",
+        "The host must be approved before connecting.",
+        "The host's key differs from the approved one and must be replaced.",
+        "The host did not present the expected fingerprint.",
+        "The change is recorded; the index has not been updated yet.",
+        "The repository was initialized; its registration is not complete.",
+        "A poll is finishing; try again.",
+        "The remote could not be reached; try again.",
+        "The transport is not available; try again.",
+        "The request was cancelled.",
+        "The request was already applied; nothing changed.",
     ];
     let actual: Vec<_> = ResultCode::ALL.iter().map(|code| code.message()).collect();
     assert_eq!(actual, expected);
@@ -123,8 +244,8 @@ fn result_codes_have_unique_snake_case_strings_and_fixed_messages() {
 }
 
 #[test]
-fn result_code_outcomes_follow_the_failure_class() {
-    for code in ResultCode::ALL {
+fn the_outcome_of_a_read_code_follows_its_failure_class() {
+    for code in READ_CODES {
         let expected = match code.failure_class() {
             None => Outcome::Success,
             Some(FailureClass::Blocked) => Outcome::Blocked,
@@ -180,6 +301,62 @@ fn outcomes_and_effects_serialize_as_the_rfc_strings() {
         CleanupEffect::Complete => "complete",
         CleanupEffect::Pending => "pending",
     }
+}
+
+/// The outcome and effect values are frozen: the CLI contract makes any
+/// change to these lists a breaking one.
+#[test]
+fn the_outcome_and_effect_values_are_the_frozen_lists() {
+    assert_eq!(
+        Outcome::ALL.map(Outcome::as_str),
+        [
+            "success",
+            "noop",
+            "partial",
+            "blocked",
+            "cancelled",
+            "error"
+        ]
+    );
+    assert_eq!(
+        WriteEffect::ALL.map(WriteEffect::as_str),
+        ["not_requested", "unchanged", "written"]
+    );
+    assert_eq!(
+        CheckpointEffect::ALL.map(CheckpointEffect::as_str),
+        ["not_requested", "unchanged", "committed", "pending"]
+    );
+    assert_eq!(
+        DiscoveryEffect::ALL.map(DiscoveryEffect::as_str),
+        ["not_requested", "current", "pending"]
+    );
+    assert_eq!(
+        PublicationEffect::ALL.map(PublicationEffect::as_str),
+        ["not_requested", "published", "current", "pending"]
+    );
+    assert_eq!(
+        IntegrationEffect::ALL.map(IntegrationEffect::as_str),
+        ["not_requested", "complete", "pending"]
+    );
+    assert_eq!(
+        CleanupEffect::ALL.map(CleanupEffect::as_str),
+        ["not_requested", "complete", "pending"]
+    );
+    // The six effects, and the commit they produced.
+    assert_eq!(
+        sorted(keys(
+            &serde_json::to_value(Effects::not_requested()).unwrap()
+        )),
+        sorted(vec![
+            "write",
+            "checkpoint",
+            "discovery",
+            "publication",
+            "integration",
+            "cleanup",
+            "commit_oid"
+        ])
+    );
 }
 
 #[test]
@@ -314,6 +491,208 @@ fn failure_serializes_every_field_and_takes_its_outcome_from_the_code() {
         let value = serde_json::to_value(&envelope).unwrap();
         assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
         assert_eq!(value["data"], Value::Null);
+    }
+}
+
+fn committed() -> Effects {
+    Effects {
+        write: WriteEffect::Written,
+        checkpoint: CheckpointEffect::Committed,
+        discovery: DiscoveryEffect::Pending,
+        commit_oid: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+        ..Effects::not_requested()
+    }
+}
+
+#[test]
+fn a_mutation_serializes_every_field_and_keeps_its_data_on_any_outcome() {
+    let scope = Scope {
+        repository: Some("/projects/example".to_owned()),
+        item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        branch: Some("manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        worktree: Some("/projects/example".to_owned()),
+        remote: None,
+    };
+    let envelope = Envelope::mutation(
+        "ticket update",
+        scope,
+        Outcome::Partial,
+        ResultCode::DiscoveryPending,
+    )
+    .with_request_id("01ARZ3NDEKTSV4RRFFQ69G5FAW")
+    .with_operation_id("01ARZ3NDEKTSV4RRFFQ69G5FAX")
+    .with_effects(committed())
+    .with_data(json!({"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}))
+    .with_recovery(vec![RecoveryAction::for_operation(
+        RecoveryActionKind::OperationResume,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+        [],
+    )]);
+    let value = serde_json::to_value(&envelope).unwrap();
+
+    assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
+    assert_eq!(
+        value,
+        json!({
+            "schema_version": 1,
+            "command": "ticket update",
+            "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+            "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+            "outcome": "partial",
+            "code": "discovery_pending",
+            "message": ResultCode::DiscoveryPending.message(),
+            "scope": {
+                "repository": "/projects/example",
+                "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "worktree": "/projects/example",
+                "remote": null,
+            },
+            "effects": {
+                "write": "written",
+                "checkpoint": "committed",
+                "discovery": "pending",
+                "publication": "not_requested",
+                "integration": "not_requested",
+                "cleanup": "not_requested",
+                "commit_oid": "0123456789abcdef0123456789abcdef01234567",
+            },
+            "data": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+            "recovery": [{
+                "action": "operation.resume",
+                "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+                "arguments": {},
+            }],
+        })
+    );
+}
+
+#[test]
+fn a_mutation_starts_with_only_its_command_scope_outcome_and_code() {
+    // A read's outcome follows from its code. A mutation's is the one given.
+    for outcome in Outcome::ALL {
+        let envelope = Envelope::<Value>::mutation(
+            "remote add",
+            Scope::default(),
+            outcome,
+            ResultCode::ExternalChange,
+        );
+        assert_eq!(envelope.outcome, outcome);
+        assert_eq!(envelope.message, ResultCode::ExternalChange.message());
+        let value = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(sorted(keys(&value)), sorted(ENVELOPE_FIELDS.to_vec()));
+        assert_eq!(value["schema_version"], json!(SCHEMA_VERSION));
+        assert_eq!(value["command"], "remote add");
+        assert_eq!(value["code"], "external_change");
+        for absent in ["request_id", "operation_id", "data"] {
+            assert_eq!(value[absent], Value::Null, "{absent}");
+        }
+        assert_eq!(
+            value["effects"],
+            serde_json::to_value(Effects::not_requested()).unwrap()
+        );
+        assert_eq!(value["recovery"], json!([]));
+    }
+}
+
+#[test]
+fn the_failure_class_of_a_mutation_follows_the_classification_order() {
+    let none = Effects::not_requested;
+    let cases = [
+        // 1. A cancellation is cancelled, with or without an effect.
+        (
+            Outcome::Cancelled,
+            ResultCode::Cancelled,
+            none(),
+            Some(FailureClass::Cancelled),
+        ),
+        (
+            Outcome::Cancelled,
+            ResultCode::Cancelled,
+            committed(),
+            Some(FailureClass::Cancelled),
+        ),
+        // 2. A durable effect with work remaining is incomplete, whatever
+        //    stopped it; before any effect the code's own class stands.
+        (
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+            none(),
+            Some(FailureClass::Blocked),
+        ),
+        (
+            Outcome::Partial,
+            ResultCode::ExternalChange,
+            committed(),
+            Some(FailureClass::Incomplete),
+        ),
+        (
+            Outcome::Error,
+            ResultCode::RemoteUnavailable,
+            none(),
+            Some(FailureClass::Transient),
+        ),
+        (
+            Outcome::Partial,
+            ResultCode::RemoteUnavailable,
+            committed(),
+            Some(FailureClass::Incomplete),
+        ),
+        (
+            Outcome::Partial,
+            ResultCode::InvalidInput,
+            committed(),
+            Some(FailureClass::Incomplete),
+        ),
+        // 3. Otherwise a failure takes its code's own class.
+        (
+            Outcome::Error,
+            ResultCode::InvalidInput,
+            none(),
+            Some(FailureClass::Input),
+        ),
+        (
+            Outcome::Blocked,
+            ResultCode::ConfirmationRequired,
+            none(),
+            Some(FailureClass::Blocked),
+        ),
+        (
+            Outcome::Error,
+            ResultCode::InternalError,
+            none(),
+            Some(FailureClass::Internal),
+        ),
+        // 4. Success and a no-op have no class.
+        (Outcome::Success, ResultCode::Ok, committed(), None),
+        (Outcome::Noop, ResultCode::AlreadyApplied, none(), None),
+    ];
+    for (outcome, code, effects, expected) in cases {
+        let envelope =
+            Envelope::<Value>::mutation("ticket update", Scope::default(), outcome, code)
+                .with_effects(effects);
+        assert_eq!(
+            envelope.failure_class(),
+            expected,
+            "{} as {}",
+            code.as_str(),
+            outcome.as_str()
+        );
+    }
+}
+
+#[test]
+fn the_failure_class_of_a_read_is_that_of_its_code() {
+    assert_eq!(
+        Envelope::read_success("item list", Scope::default(), json!({})).failure_class(),
+        None
+    );
+    for code in READ_CODES {
+        if code == ResultCode::Ok {
+            continue;
+        }
+        let envelope = Envelope::<Value>::failure("item show", Scope::default(), code, Vec::new());
+        assert_eq!(envelope.failure_class(), code.failure_class());
     }
 }
 
@@ -909,10 +1288,17 @@ fn a_host_with_an_empty_port_is_not_a_host() {
 }
 
 /// Every recovery action, with the keys of its arguments.
-const RECOVERY_ACTIONS: [(&str, &[&str]); 3] = [
+const RECOVERY_ACTIONS: [(&str, &[&str]); 10] = [
     ("index.rebuild", &["root"]),
     ("index.refresh", &["root"]),
     ("repo.inspect", &["root"]),
+    ("operation.resume", &[]),
+    ("request.retry", &["request_id"]),
+    ("request.prepare", &[]),
+    ("operation.abandon", &["root"]),
+    ("repo.identity_set", &["root"]),
+    ("host.approve", &["authority", "root"]),
+    ("host.replace", &["authority", "root"]),
 ];
 
 #[test]
@@ -927,11 +1313,14 @@ fn recovery_actions_are_a_closed_registry_of_dotted_names_and_argument_keys() {
     for action in RecoveryActionKind::ALL {
         let name = action.as_str();
         assert!(names.insert(name), "{name} is registered twice");
-        // `<resource>.<verb>`, as the CLI contract writes `operation.resume`.
+        // `<resource>.<verb>`, as the CLI contract writes `operation.resume`,
+        // each part a lower_snake_case name, as in `repo.identity_set`.
         let (resource, verb) = name.split_once('.').unwrap();
         for part in [resource, verb] {
             assert!(
-                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase()),
+                part.split('_')
+                    .all(|word| !word.is_empty()
+                        && word.bytes().all(|byte| byte.is_ascii_lowercase())),
                 "{name}"
             );
         }
@@ -971,5 +1360,55 @@ fn a_recovery_action_rejects_an_argument_it_does_not_register() {
     let _ = RecoveryAction::new(
         RecoveryActionKind::IndexRebuild,
         [("repository", json!("/projects/example"))],
+    );
+}
+
+#[test]
+fn operation_resume_serializes_as_the_cli_contract_example() {
+    assert!(
+        RecoveryActionKind::OperationResume
+            .argument_keys()
+            .is_empty()
+    );
+    let resume = RecoveryAction::for_operation(
+        RecoveryActionKind::OperationResume,
+        "01K7F6H9J2N4Q6S8V0X2Z4B6DC",
+        [],
+    );
+    assert_eq!(
+        serde_json::to_value(&resume).unwrap(),
+        json!({
+            "action": "operation.resume",
+            "operation_id": "01K7F6H9J2N4Q6S8V0X2Z4B6DC",
+            "arguments": {},
+        })
+    );
+}
+
+#[test]
+fn an_action_for_an_operation_carries_its_id_and_its_registered_arguments() {
+    let abandon = RecoveryAction::for_operation(
+        RecoveryActionKind::OperationAbandon,
+        "01K7F6H9J2N4Q6S8V0X2Z4B6DC",
+        [("root", json!("/projects/example"))],
+    );
+    assert_eq!(
+        serde_json::to_value(&abandon).unwrap(),
+        json!({
+            "action": "operation.abandon",
+            "operation_id": "01K7F6H9J2N4Q6S8V0X2Z4B6DC",
+            "arguments": {"root": "/projects/example"},
+        })
+    );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a recovery action carries exactly its registered arguments")]
+fn an_action_for_an_operation_rejects_an_argument_it_does_not_register() {
+    let _ = RecoveryAction::for_operation(
+        RecoveryActionKind::OperationResume,
+        "01K7F6H9J2N4Q6S8V0X2Z4B6DC",
+        [("root", json!("/projects/example"))],
     );
 }

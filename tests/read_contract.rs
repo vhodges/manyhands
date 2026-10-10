@@ -17,9 +17,9 @@ use manyhands::{
         UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
-        CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect,
-        OperationFailureCode, Outcome, ProblemCode, PublicationEffect, RecoveryActionKind,
-        ResultCode, Scope, WriteEffect,
+        CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
+        IntegrationEffect, OperationFailureCode, Outcome, ProblemCode, PublicationEffect,
+        RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
     },
 };
 use serde_json::{Value, json};
@@ -2540,10 +2540,108 @@ fn every_recovery_action_a_read_suggests_carries_exactly_its_registered_argument
         [("index.rebuild".to_owned(), Vec::<String>::new())]
     );
 
-    // Every registered action is one a read suggests.
+    // Reads suggest these three and no other: the rest of the registry
+    // belongs to mutations.
     assert_eq!(
         suggested.into_iter().collect::<Vec<_>>(),
-        RecoveryActionKind::ALL.map(RecoveryActionKind::as_str)
+        ["index.rebuild", "index.refresh", "repo.inspect"]
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// A save whose checkpoint is committed and whose index hand-off is not, as
+/// the CLI contract's example of a partial result.
+fn partial_mutation() -> Envelope<Value> {
+    Envelope::mutation(
+        "ticket update",
+        Scope {
+            repository: Some("/projects/example".to_owned()),
+            item_id: Some(items::TICKET_A.to_owned()),
+            branch: Some(format!("manyhands/ticket/{}", items::TICKET_A)),
+            worktree: Some("/projects/example".to_owned()),
+            remote: None,
+        },
+        Outcome::Partial,
+        ResultCode::DiscoveryPending,
+    )
+    .with_request_id(OPERATION_A)
+    .with_operation_id(OPERATION_B)
+    .with_effects(Effects {
+        write: WriteEffect::Written,
+        checkpoint: CheckpointEffect::Committed,
+        discovery: DiscoveryEffect::Pending,
+        commit_oid: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+        ..Effects::not_requested()
+    })
+    .with_data(json!({"id": items::TICKET_A}))
+    .with_recovery(vec![RecoveryAction::for_operation(
+        RecoveryActionKind::OperationResume,
+        OPERATION_B,
+        [],
+    )])
+}
+
+#[test]
+fn a_mutation_that_is_not_a_success_may_carry_data() {
+    let envelope = partial_mutation();
+    let case = ContractCase {
+        name: "mutation_partial",
+        data_schema: Some("new_id.schema.json"),
+        placeholders: &[],
+        sentinels: &[],
+    };
+
+    golden::assert_mutation_contract(&case, &envelope);
+
+    assert_eq!(envelope.failure_class(), Some(FailureClass::Incomplete));
+    let value = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(
+        value["recovery"],
+        json!([{"action": "operation.resume", "operation_id": OPERATION_B, "arguments": {}}])
+    );
+    // The rule for reads still refuses it: a read carries data exactly when
+    // it succeeds.
+    assert!(std::panic::catch_unwind(|| golden::assert_contract(&case, &envelope)).is_err());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn the_mutation_contract_takes_the_presence_of_data_from_its_case() {
+    let with_data = partial_mutation();
+    let without_data = Envelope::<Value> {
+        data: None,
+        ..partial_mutation()
+    };
+    let case = |data_schema| ContractCase {
+        name: "mutation_partial",
+        data_schema,
+        placeholders: &[],
+        sentinels: &[],
+    };
+
+    // Data the case does not expect, and expected data that is absent.
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(&case(None), &with_data))
+            .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(
+            &case(Some("new_id.schema.json")),
+            &without_data
+        ))
+        .is_err()
+    );
+    // Data that is not what its schema describes.
+    let wrong = Envelope::<Value> {
+        data: Some(json!({"identifier": items::TICKET_A})),
+        ..partial_mutation()
+    };
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(
+            &case(Some("new_id.schema.json")),
+            &wrong
+        ))
+        .is_err()
     );
     assert_git_transport_uninitialized();
 }
