@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M4EWN2DK3MY6H4GBYDYXF6QH"
 title: "A rejected operation leaves a journal row that blocks the repository"
 type: "defect"
-status: "open"
+status: "closed"
+closed_at: "2026-10-10T03:09:52Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -28,7 +30,9 @@ does not.
 ## Fix
 
 Implemented on 2026-10-09 after Wave 02 Cycle 06 landed (main `5e4fad6`,
-merged into this branch). Not yet merged.
+merged into this branch). Closed on its branch on 2026-10-09 by the product
+owner, with a pull request open, so that it merges closed. Merge and
+worktree cleanup remain the product owner's.
 
 - Each call tracks whether it has begun a durable write it has not undone
   (`CallEffects` in `src/repository.rs`). When a call returns an error, its
@@ -62,7 +66,8 @@ merged into this branch). Not yet merged.
 Evidence: `tests/journal_rejection.rs`, 18 tests. The 12 that provoke a
 rejection all failed with `RecoveryRequired` on the old code. The two
 repeat tests each fail when their guard is removed. The four required
-Devenv checks and the CLI smoke test pass: 1243 tests, 0 failed.
+Devenv checks and the CLI smoke test pass: 1243 tests, 0 failed. Manual
+native run 38014141474 passed on all five targets at `1fe0b07`.
 
 Two independent reviews. The first found a repeat treated as a replay and a
 lease released before settlement; both were corrected. The second found no
@@ -84,7 +89,8 @@ Known and left, all from the second review:
 - `create_and_enable` marks an effect for the injected interruption before
   initialization, solely so an existing test keeps its expectation.
 
-Not settled here (see "To Decide On This Ticket"): a process killed
+Not settled here, and still undecided at closure (see "To Decide On This
+Ticket"): a process killed
 mid-operation, a kill between a configuration write and its commit, and the
 synchronization reservation case, which was not re-examined after Cycle 06.
 
