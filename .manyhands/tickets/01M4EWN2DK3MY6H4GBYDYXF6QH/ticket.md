@@ -25,20 +25,52 @@ After A Rejection", on that ticket's branch, hold the detail. The product
 owner asked for this ticket on 2026-10-08. F2's Part B depends on it; Part A
 does not.
 
-## On Hold
+## Fix
 
-The product owner decided on 2026-10-09 to wait for Wave 02 Cycle 06
-(`01K7F6H9J2N4Q6S8V0X2Z4B6DE`) to land before fixing this. When it has:
-rebase this branch, rerun `tests/journal_rejection.rs`, add tests for the
-return sites that Cycle adds in `enable` and the saves, and check whether
-it settled the synchronization case (case 3 below). The shape of the fix is
-still undecided.
+Implemented on 2026-10-09 after Wave 02 Cycle 06 landed (main `5e4fad6`,
+merged into this branch). Not yet reviewed by the product owner, pushed or
+merged.
+
+- Each call tracks whether it has begun a durable write it has not undone
+  (`CallEffects` in `src/repository.rs`). When a call returns an error, its
+  row is closed only if this call began the row and nothing is outstanding.
+  The error kind is no longer consulted for that.
+- A closed row is kept, marked `rejected`, so its ID stays bound to its
+  target: reusing the ID for another target is still `OperationMismatch`. A
+  repeat of the same ID and target begins again as a new call.
+- Covered: `prepare_context`, the two saves, `submit_comment`,
+  `add_remote`, `remove_remote`, `set_publication_remote`, `enable`,
+  `create_and_enable`, including the return sites Cycle 06 added.
+- The repository lease is held until the row is settled.
+- Product-owner ruling, 2026-10-09: when `enable` or
+  `set_publication_remote` fails and restores everything it wrote, its row
+  is closed too. Three assertions in `tests/repository_enablement.rs` that
+  expected a pending row were changed to expect none. No other existing
+  test changed.
+- Rows still stay pending after a write that was not undone, after a failed
+  restore, after a repository was initialized, and after a half-created
+  editing context. A save rejected after its editing context was fully
+  created closes its row.
+- Dropped, per the exit rule: `remove_registration` (no rejection that
+  leaves its row could be provoked; its failures are inside one SQLite
+  transaction). Refresh and rebuild are untouched.
+
+Evidence: `tests/journal_rejection.rs`, 15 tests. The 12 that provoke a
+rejection all failed with `RecoveryRequired` on the old code. The four
+required Devenv checks and the CLI smoke test pass: 1240 tests, 0 failed.
+An independent review of the first version found the completed-row replay
+and lease problems that the points above correct; the corrected version has
+not been reviewed again.
+
+Not settled here (see "To Decide On This Ticket"): a process killed
+mid-operation, a kill between a configuration write and its commit, and the
+synchronization reservation case, which was not re-examined after Cycle 06.
 
 ## Reproduction
 
 Reproduced on 2026-10-09 at main `6cf5d7f` by `tests/journal_rejection.rs`.
-Six of its seven tests fail with `RecoveryRequired` on the following
-operation; they are expected to fail until the fix lands.
+Six of its first seven tests failed with `RecoveryRequired` on the following
+operation before the fix.
 
 | Rejected call | Error returned | Next operation |
 |---|---|---|

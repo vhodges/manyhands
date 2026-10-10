@@ -55,8 +55,9 @@ pub use keys::{
 pub use read::*;
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
-    claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
-    record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
+    claim_indexing, discard_operation, owns_indexing, pending_for_root,
+    record_owned_persisted_context, record_persisted_context as record_recovery_context,
+    touch_indexing, transition_indexing,
 };
 pub use remote::{
     AutomaticBackoff, ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation,
@@ -1293,13 +1294,17 @@ impl RepositoryService {
             target.operation_id,
             &authoring_context_target(&target),
         )?;
-        let outcome = match self.prepare_context_unlocked(target, Some(record)) {
+        let effects = CallEffects::default();
+        let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
             Ok(outcome) => outcome,
             Err(error) => {
-                if self.is_definite_authoring_rejection(record, operation, &root, &error)? {
-                    self.complete_lifecycle(&root, operation, record)?;
-                }
-                return Err(error);
+                return self.finish_authoring_lifecycle(
+                    &root,
+                    operation,
+                    record,
+                    &effects,
+                    Err(error),
+                );
             }
         };
         let authoritative =
@@ -1331,6 +1336,7 @@ impl RepositoryService {
         &self,
         target: AuthoringTarget,
         record: Option<RecoveryRecord>,
+        effects: &CallEffects,
     ) -> Result<ContextProvisionOutcome, RepositoryError> {
         let operation = RepositoryOperation::PrepareContext;
         self.require_index_available(operation, Some(&target.root))?;
@@ -1465,6 +1471,7 @@ impl RepositoryService {
                     .head()
                     .and_then(|head| head.peel_to_commit())
                     .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
+                effects.begin();
                 self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
                 let reference = repository
                     .branch(&branch, &head, false)
@@ -1479,6 +1486,7 @@ impl RepositoryService {
         };
         let mut options = WorktreeAddOptions::new();
         options.reference(Some(&reference));
+        effects.begin();
         if self.should_inject(
             FailurePoint::AfterContextBranchBeforeWorktreeGitFailure,
             operation,
@@ -1543,6 +1551,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -1554,11 +1563,14 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
             if !matches!(context.kind, AuthoringKind::Document) {
                 return Err(authoring_error(
                     operation,
@@ -1788,6 +1800,7 @@ impl RepositoryService {
                 false
             };
             if will_write_destination {
+                effects.begin();
                 ensure_safe_owned_parent(
                     &context.worktree,
                     &destination,
@@ -1827,6 +1840,7 @@ impl RepositoryService {
                             &context,
                         )?;
                     }
+                    effects.begin();
                     self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                     remove_owned_file(&context.worktree, source, operation, &context.root)?;
                     self.advance_lifecycle(
@@ -1837,6 +1851,7 @@ impl RepositoryService {
                     )?;
                 }
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -1888,7 +1903,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -1926,6 +1943,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -1937,11 +1955,14 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
             if !matches!(context.kind, AuthoringKind::Ticket) {
                 return Err(authoring_error(
                     operation,
@@ -2098,6 +2119,7 @@ impl RepositoryService {
                 true
             };
             if write {
+                effects.begin();
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                 write_owned_document(
@@ -2114,6 +2136,7 @@ impl RepositoryService {
                     "authoring_destination_observed",
                 )?;
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -2164,7 +2187,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -2207,6 +2232,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
                 return Err(authoring_error(
@@ -2225,11 +2251,14 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
             self.reject_pending_synchronization_merge(&context, operation)?;
             let publication = comment_publication_state(
                 read_configuration_for(&context.root, operation)?,
@@ -2394,6 +2423,7 @@ impl RepositoryService {
                 return Ok(CommentSubmissionOutcome::IdentityRequired { context });
             };
             if !exists {
+                effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
                 write_owned_document(
@@ -2410,6 +2440,7 @@ impl RepositoryService {
                     "authoring_destination_observed",
                 )?;
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -2464,7 +2495,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -2603,17 +2636,56 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(operation, root))
     }
 
+    /// Closes the row a call began and left nothing behind for, so a repeat
+    /// of the same operation ID begins again instead of replaying.
+    fn discard_lifecycle(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+    ) -> Result<(), RepositoryError> {
+        if record.id == 0 {
+            return Ok(());
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        discard_operation(&connection, record.id)
+            .map_err(|error| error.for_operation(operation, root))
+    }
+
+    /// Closes the row a rejected call began, unless that call left an effect.
+    fn settle_rejected_lifecycle<T>(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+        result: Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
+        if result.is_err() && effects.leave_nothing_behind(record) {
+            self.discard_lifecycle(root, operation, record)?;
+        }
+        result
+    }
+
     fn finish_authoring_lifecycle<T>(
         &self,
         root: &Path,
         operation: RepositoryOperation,
         record: RecoveryRecord,
+        effects: &CallEffects,
         result: Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
         match result {
             Ok(value) => {
                 self.complete_lifecycle(root, operation, record)?;
                 Ok(value)
+            }
+            Err(error) if effects.leave_nothing_behind(record) => {
+                self.discard_lifecycle(root, operation, record)?;
+                Err(error)
             }
             Err(error)
                 if self.is_definite_authoring_rejection(record, operation, root, &error)? =>
@@ -3133,7 +3205,7 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::AddRemote)?;
         registry_root_key(&root, RepositoryOperation::AddRemote)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             RepositoryOperation::AddRemote,
@@ -3144,6 +3216,34 @@ impl RepositoryService {
                 Some(&request.url),
             ),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.add_remote_recorded(
+            request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::AddRemote,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn add_remote_recorded(
+        &self,
+        request: AddRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<RemoteOutcome, RepositoryError> {
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
                 if record.is_pending {
@@ -3153,7 +3253,7 @@ impl RepositoryService {
                         RepositoryOperation::AddRemote,
                         record,
                         request.operation_id,
-                        _lease,
+                        held_lease(lease),
                     )? {
                         Ok(if changed {
                             RemoteOutcome::Changed
@@ -3191,6 +3291,7 @@ impl RepositoryService {
                 ));
             }
         }
+        effects.begin();
         repository
             .remote(&request.name, &request.url)
             .map_err(|error| {
@@ -3212,7 +3313,7 @@ impl RepositoryService {
             RepositoryOperation::AddRemote,
             record,
             request.operation_id,
-            _lease,
+            held_lease(lease),
         )? {
             Ok(RemoteOutcome::Changed)
         } else {
@@ -3232,13 +3333,42 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(selected, RepositoryOperation::RemoveRemote)?;
         registry_root_key(&root, RepositoryOperation::RemoveRemote)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             RepositoryOperation::RemoveRemote,
             request.operation_id,
             &remote_target_matcher(RepositoryOperation::RemoveRemote, name, None),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.remove_remote_recorded(
+            &request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::RemoveRemote,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn remove_remote_recorded(
+        &self,
+        request: &RemoveRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<RemoteOutcome, RepositoryError> {
+        let name = &request.name;
         let configuration = read_configuration_for(&root, RepositoryOperation::RemoveRemote)?;
         if matches!(configuration, ConfigurationInspection::Valid(ref config) if config.publication_remote.as_deref() == Some(name))
         {
@@ -3261,7 +3391,7 @@ impl RepositoryService {
                         RepositoryOperation::RemoveRemote,
                         record,
                         request.operation_id,
-                        _lease,
+                        held_lease(lease),
                     )? {
                         Ok(if changed {
                             RemoteOutcome::Changed
@@ -3289,6 +3419,7 @@ impl RepositoryService {
                 ));
             }
         }
+        effects.begin();
         repository.remote_delete(name).map_err(|error| {
             RepositoryError::git(RepositoryOperation::RemoveRemote, Some(root.clone()), error)
         })?;
@@ -3308,7 +3439,7 @@ impl RepositoryService {
             RepositoryOperation::RemoveRemote,
             record,
             request.operation_id,
-            _lease,
+            held_lease(lease),
         )? {
             Ok(RemoteOutcome::Changed)
         } else {
@@ -3325,13 +3456,36 @@ impl RepositoryService {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             operation,
             request.operation_id,
             request.name.as_deref().unwrap_or(""),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.set_publication_remote_recorded(
+            request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(&root, operation, record, &effects, result)
+    }
+
+    fn set_publication_remote_recorded(
+        &self,
+        request: SetPublicationRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<PublicationRemoteOutcome, RepositoryError> {
+        let operation = RepositoryOperation::SetPublicationRemote;
         let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
@@ -3410,7 +3564,7 @@ impl RepositoryService {
                     operation,
                     record,
                     request.operation_id,
-                    _lease,
+                    held_lease(lease),
                 )? {
                     Ok(if changed {
                         PublicationRemoteOutcome::Changed { commit_oid }
@@ -3451,6 +3605,7 @@ impl RepositoryService {
         let path = root.join(canonical::CONFIG_PATH);
         let before = std::fs::read(&path)
             .map_err(|error| RepositoryError::io(operation, Some(root.clone()), error))?;
+        effects.begin();
         replace_bytes_atomically(&path, source.as_bytes(), &root)
             .map_err(|error| error.for_operation(operation, &root))?;
         self.advance_lifecycle(
@@ -3506,6 +3661,7 @@ impl RepositoryService {
                         },
                     ));
                 }
+                effects.undone();
                 return Err(error);
             }
         };
@@ -3517,7 +3673,7 @@ impl RepositoryService {
                     operation,
                     record,
                     request.operation_id,
-                    _lease,
+                    held_lease(lease),
                 )? {
                     Ok(PublicationRemoteOutcome::Changed { commit_oid })
                 } else {
@@ -3625,12 +3781,45 @@ impl RepositoryService {
                         )
                 )
             });
-        self.begin_lifecycle_record(
+        let record = self.begin_lifecycle_record(
             &root,
             RepositoryOperation::CreateAndEnable,
             request.operation_id,
             &request.primary_branch,
         )?;
+        let mut bootstrap = Some(bootstrap);
+        let effects = CallEffects::default();
+        let result = self.create_and_enable_recorded(
+            CreateRepositoryRequest {
+                root: request.root,
+                primary_branch: request.primary_branch,
+                identity: None,
+                operation_id: request.operation_id,
+            },
+            identity,
+            root.clone(),
+            &mut bootstrap,
+            resumes_create,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::CreateAndEnable,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn create_and_enable_recorded(
+        &self,
+        request: CreateRepositoryRequest,
+        identity: CommitIdentity,
+        root: PathBuf,
+        bootstrap: &mut Option<BootstrapLease>,
+        resumes_create: bool,
+        effects: &CallEffects,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         if resumes_create && Repository::open(&root).is_ok() {
             let repository = Repository::open(&root).map_err(|error| {
                 RepositoryError::git(
@@ -3646,7 +3835,7 @@ impl RepositoryService {
                 request.operation_id,
                 &request.primary_branch,
             )?;
-            drop(bootstrap);
+            drop(bootstrap.take());
             drop(lease);
             return self
                 .enable(EnableRepositoryRequest {
@@ -3727,6 +3916,8 @@ impl RepositoryService {
             )?;
             validate_creation_target(&root)?;
             if injected {
+                // The hook stands for an interruption, which leaves its row.
+                effects.begin();
                 return Err(RepositoryError::new(
                     RepositoryOperation::CreateAndEnable,
                     Some(root.clone()),
@@ -3736,6 +3927,7 @@ impl RepositoryService {
             }
             let mut options = RepositoryInitOptions::new();
             options.initial_head(&request.primary_branch);
+            effects.begin();
             Repository::init_opts(&root, &options).map_err(|error| {
                 RepositoryError::git(
                     RepositoryOperation::CreateAndEnable,
@@ -3775,7 +3967,7 @@ impl RepositoryService {
                 request.operation_id,
                 &request.primary_branch,
             )?;
-            drop(bootstrap);
+            drop(bootstrap.take());
             drop(lease);
             self.enable(EnableRepositoryRequest {
                 root: root.clone(),
@@ -3824,6 +4016,31 @@ impl RepositoryService {
             request.operation_id,
             &request.primary_branch,
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.enable_recorded(
+            request,
+            identity_config,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(&root, RepositoryOperation::Enable, record, &effects, result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enable_recorded(
+        &self,
+        request: EnableRepositoryRequest,
+        identity_config: &mut impl IdentityConfigProvider,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         let requested_config =
             canonical_configuration(&request.primary_branch, &root, RepositoryOperation::Enable)?;
         let unborn = match repository.head() {
@@ -3936,7 +4153,7 @@ impl RepositoryService {
                         RepositoryOperation::Enable,
                         record,
                         request.operation_id,
-                        lease,
+                        held_lease(lease),
                     )? {
                         Ok(EnableRepositoryOutcome::AlreadyEnabled)
                     } else {
@@ -3963,7 +4180,7 @@ impl RepositoryService {
                         RepositoryOperation::Enable,
                         record,
                         request.operation_id,
-                        lease,
+                        held_lease(lease),
                     )? {
                         Ok(EnableRepositoryOutcome::AlreadyEnabled)
                     } else {
@@ -4019,6 +4236,7 @@ impl RepositoryService {
             read_bytes_if_exists(&local_config_path, RepositoryOperation::Enable, &root)?;
         let mut created_manyhands_directory = false;
         let result = (|| {
+            effects.begin();
             if write_identity {
                 write_local_identity(&repository, &root, &identity)?;
             }
@@ -4104,7 +4322,10 @@ impl RepositoryService {
                     )),
                 );
                 return match rollback {
-                    Ok(()) => Err(original),
+                    Ok(()) => {
+                        effects.undone();
+                        Err(original)
+                    }
                     Err(failures) => Err(rollback_incomplete(&root, original, *failures)),
                 };
             }
@@ -4122,7 +4343,7 @@ impl RepositoryService {
                     RepositoryOperation::Enable,
                     record,
                     request.operation_id,
-                    lease,
+                    held_lease(lease),
                 )? {
                     Ok(EnableRepositoryOutcome::Enabled { commit_oid })
                 } else {
@@ -4463,6 +4684,35 @@ impl RepositoryService {
             RemoveRegistrationOutcome::Removed
         })
     }
+}
+
+/// Whether the current call has begun a durable write that it has not undone.
+///
+/// A rejected call that began its own journal row and left nothing behind
+/// completes that row, so the rejection does not block later operations. The
+/// error kind and the recorded step cannot answer this: the same kinds are
+/// returned before and after a write, and a step may fail to persist.
+#[derive(Default)]
+struct CallEffects(std::cell::Cell<bool>);
+
+impl CallEffects {
+    fn begin(&self) {
+        self.0.set(true);
+    }
+
+    fn undone(&self) {
+        self.0.set(false);
+    }
+
+    fn leave_nothing_behind(&self, record: RecoveryRecord) -> bool {
+        record.is_new && !self.0.get()
+    }
+}
+
+fn held_lease<T>(lease: &mut Option<T>) -> T {
+    lease
+        .take()
+        .expect("the lease is handed off at most once per call")
 }
 
 fn checkpoint_after_refresh(checkpoint: LocalCheckpoint) -> LocalCheckpoint {

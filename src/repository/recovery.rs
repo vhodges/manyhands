@@ -382,6 +382,23 @@ fn begin_or_reconcile(
         return Err(recovery_required(operation, root));
     }
     if let Some((id, _, _, _, _, completed_step)) = existing {
+        if completed_step.as_deref() == Some(REJECTED_STEP) {
+            // The earlier call left nothing behind, so this one begins again.
+            // Its row was kept so that the ID stays bound to its target.
+            transaction
+                .execute(
+                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2 WHERE id = ?1",
+                    params![id, now()],
+                )
+                .map_err(RepositoryError::sqlite)?;
+            transaction.commit().map_err(RepositoryError::sqlite)?;
+            return Ok(RecoveryRecord {
+                id,
+                is_new: true,
+                is_pending: false,
+                completed_step: None,
+            });
+        }
         transaction.commit().map_err(RepositoryError::sqlite)?;
         return Ok(RecoveryRecord {
             id,
@@ -433,6 +450,23 @@ fn authoring_observation_step(step: &str) -> Option<&'static str> {
 
 fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
     existing == requested || (existing == "create_and_enable" && requested == "enable")
+}
+
+const REJECTED_STEP: &str = "rejected";
+
+/// Closes the row of a call that was rejected and left nothing behind. The row
+/// no longer blocks the repository, and a repeat of its ID begins again.
+pub(super) fn discard_operation(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<(), RepositoryError> {
+    connection
+        .execute(
+            "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3 WHERE id = ?1",
+            params![record_id, REJECTED_STEP, now()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(())
 }
 
 pub(super) fn advance_after_observation(

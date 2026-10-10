@@ -268,6 +268,11 @@ fn assert_pending_lifecycle(
     );
 }
 
+/// A failure whose writes were all restored leaves nothing to finish.
+fn assert_no_pending_lifecycle(service: &RepositoryService, root: &std::path::Path) {
+    assert_eq!(service.recovery_inspection(root).unwrap(), vec![]);
+}
+
 #[test]
 fn create_nonexistent_project_initializes_enables_and_registers_main() {
     let data = tempfile::tempdir().unwrap();
@@ -3277,13 +3282,7 @@ fn assert_recovery_before_configuration_write(fixture: support::TestRepository) 
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
     assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
-    assert_pending_lifecycle(
-        &service,
-        &fixture.root,
-        operation_id,
-        RepositoryOperation::Enable,
-        None,
-    );
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(
         repository_snapshot(&fixture.repository, &fixture.root),
         repository_before
@@ -3367,13 +3366,7 @@ fn assert_recovery_before_initialization_commit(fixture: support::TestRepository
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
     assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
-    assert_pending_lifecycle(
-        &service,
-        &fixture.root,
-        operation_id,
-        RepositoryOperation::Enable,
-        Some("configuration_written"),
-    );
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(
         repository_snapshot(&fixture.repository, &fixture.root),
         repository_before
@@ -3557,13 +3550,7 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
     assert_eq!(error.operation, RepositoryOperation::SetPublicationRemote);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
     assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
-    assert_pending_lifecycle(
-        &service,
-        &fixture.root,
-        operation_id,
-        RepositoryOperation::SetPublicationRemote,
-        Some("publication_configuration_written"),
-    );
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(support::tracked_configuration(&fixture.root), config_before);
     assert_eq!(support::index_bytes(&fixture.repository), index_before);
     assert_eq!(commit_count(&fixture.repository), commits_before);
