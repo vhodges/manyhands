@@ -28,6 +28,7 @@ use crate::canonical;
 mod coordination;
 mod discovery;
 pub mod keys;
+mod mutation;
 #[cfg(unix)]
 mod native_resolution;
 #[cfg(windows)]
@@ -52,6 +53,7 @@ pub use keys::{
     SharedKeyOwnership, SharedKeyRegistration, SharedKeySelectionOutcome,
     UnregisterSharedKeyOutcome,
 };
+pub use mutation::*;
 pub use read::*;
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
