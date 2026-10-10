@@ -930,20 +930,13 @@ impl Binding for TicketBinding {
         }
     }
 
-    fn reenter(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<Before, Ran> {
+    fn reenter(
+        &mut self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Before, Ran> {
         let root = registered_root(accepted);
-        // The row as it is before this call: its state afterwards proves
-        // nothing about an earlier attempt.
-        let journal =
-            match service.journal_row(accepted.family, &accepted.scope, accepted.operation_id) {
-                Ok(journal) => journal,
-                Err(error) => {
-                    return Err(Ran {
-                        answer: Answer::of_read(&error),
-                        standing: Standing::Stopped { journal: None },
-                    });
-                }
-            };
         if let Err(answer) = self.resume(service) {
             return Err(Ran {
                 answer,

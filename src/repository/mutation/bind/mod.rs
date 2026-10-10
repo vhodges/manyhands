@@ -271,11 +271,17 @@ pub(crate) trait Binding {
     /// started and its end was not recorded. Sets what `prepare` worked
     /// out for the domain call, without the checks a retry skips: the
     /// caller's token described the file before the first attempt, whose own
-    /// write is allowed to have changed it. Then reads the journal row and
-    /// the evidence the rules need.
+    /// write is allowed to have changed it. Then reads the evidence the
+    /// rules need. `journal` is the operation's row as the boundary read
+    /// it before this call.
     ///
     /// An `Err` answers the request without a domain call.
-    fn reenter(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<Before, Ran>;
+    fn reenter(
+        &mut self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Before, Ran>;
 
     /// Re-entry, the domain call: made with the recorded operation ID and
     /// the recorded expectation, which is the only way the work is

@@ -1459,19 +1459,15 @@ fn a_save_that_changed_nothing_does_not_take_a_later_commit_of_the_same_content(
 
 const UNIDENTIFIED_HOME: &str = "MANYHANDS_UNIDENTIFIED_HOME";
 
-/// Runs in a process of its own: where libgit2 looks for configuration is
-/// process-wide, and this points every level but the repository's at an
-/// empty directory so that no identity is found.
-#[test]
-fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit() {
+/// Runs the calling test, `name`, in a process of its own in which no
+/// identity is found outside the repository: where libgit2 looks for
+/// configuration is process-wide. `false` in the parent, once the child
+/// has passed; `true` in the child, which goes on with the test.
+fn in_a_process_without_an_identity(name: &str) -> bool {
     let Some(home) = std::env::var_os(UNIDENTIFIED_HOME) else {
         let home = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "reenter::a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit",
-                "--nocapture",
-            ])
+            .args(["--exact", &format!("reenter::{name}"), "--nocapture"])
             .env(UNIDENTIFIED_HOME, home.path())
             .output()
             .unwrap();
@@ -1481,7 +1477,11 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        return;
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the child ran no test"
+        );
+        return false;
     };
     for level in [
         git2::ConfigLevel::System,
@@ -1493,8 +1493,10 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
         // libgit2 overlaps the change.
         unsafe { git2::opts::set_search_path(level, &home).unwrap() };
     }
-    let mut world = losing_output();
-    let token = world.token(TICKET_A);
+    true
+}
+
+fn remove_identity(world: &World) {
     let mut local = git2::Repository::open(&world.root)
         .unwrap()
         .config()
@@ -1503,12 +1505,38 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
         .unwrap();
     local.remove("user.name").unwrap();
     local.remove("user.email").unwrap();
+}
 
-    // The first request stops for want of an identity. The domain
-    // completes its row, having written nothing, and the output is lost.
+fn set_identity(world: &World) {
+    world.set_local_config("user.name", "Manyhands Test");
+    world.set_local_config("user.email", "manyhands-test@example.invalid");
+}
+
+/// A world in which the first request has stopped for want of an
+/// identity and lost its output: the domain completed its row, having
+/// written nothing, and the record is still `accepted`. Returns the
+/// world, the request's token and its operation ID.
+fn stopped_for_an_identity_and_lost() -> (World, String, String) {
+    let world = losing_output();
+    let token = world.token(TICKET_A);
+    remove_identity(&world);
     let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
     assert_output_lost(&world, REQUEST_1, &lost);
-    // The step the journal kept is the context's, not a checkpoint's.
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+    assert!(!world.worktree_source(TICKET_A).contains(TITLE));
+    let operation_id = world.record(REQUEST_1).unwrap().operations[0]
+        .operation_id
+        .to_string();
+    // The row never reached a checkpoint: the step the journal kept is
+    // the context's.
+    assert_eq!(
+        world.journal_row(&operation_id),
+        JournalRow::Final {
+            kind: manyhands::repository::request_store::FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        }
+    );
     let step: String = crate::support::items::index(world.data.path())
         .query_row(
             "SELECT completed_step FROM operation_records WHERE action = 'save_ticket'",
@@ -1517,41 +1545,102 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
         )
         .unwrap();
     assert_eq!(step, "worktree_observed");
-    let operation_id = world.record(REQUEST_1).unwrap().operations[0]
-        .operation_id
-        .to_string();
-    assert_eq!(
-        world.journal_row(&operation_id),
-        JournalRow::Final {
-            kind: manyhands::repository::request_store::FinalKind::Completed,
-            owes_work: false,
-            checkpointed: false,
-        },
-        "the row never reached a checkpoint"
-    );
-    assert_eq!(world.branch_commits(TICKET_A), 0);
-    assert!(!world.worktree_source(TICKET_A).contains(TITLE));
+    (world, token, operation_id)
+}
+
+#[test]
+fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit() {
+    if !in_a_process_without_an_identity(
+        "a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit",
+    ) {
+        return;
+    }
+    let (mut world, token, _) = stopped_for_an_identity_and_lost();
 
     // An identity is set and another request saves the same content.
-    world.set_local_config("user.name", "Manyhands Test");
-    world.set_local_config("user.email", "manyhands-test@example.invalid");
+    set_identity(&world);
     world.reopen();
     let second = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
     assert_eq!(second.outcome, Outcome::Success);
     let tip = world.branch_tip(TICKET_A);
     assert_eq!(world.branch_commits(TICKET_A), 1);
 
-    // The commit was made from exactly the state the first request was
-    // accepted against, and leaves the file as it intends. Only the
-    // journal says the first request never reached a checkpoint.
+    // The first request's record is of a request that did nothing and
+    // was never answered. It is released, and the retry is a new request:
+    // what it asks for is there, committed by someone else.
     let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
     assert_no_op_without_a_commit(&retry, "the retry");
+    assert_eq!(retry.operation_id, None, "no operation ran");
     assert_eq!(world.branch_tip(TICKET_A), tip);
     assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert!(world.record(REQUEST_1).is_none(), "the record is released");
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_one() {
+    if !in_a_process_without_an_identity(
+        "a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_one",
+    ) {
+        return;
+    }
+    let (mut world, token, stopped_operation) = stopped_for_an_identity_and_lost();
+    set_identity(&world);
+    world.reopen();
+
+    // The retry runs the save the first attempt never ran, under a new
+    // operation ID, commits once, and reports that commit.
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_ne!(retry.operation_id, Some(stopped_operation.clone()));
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 1);
+    // The stopped operation's row is final and is left as it was.
     assert_eq!(
-        world.record(REQUEST_1).map(|record| record.state),
-        Some(RequestState::Finished)
+        world.journal_row(&stopped_operation),
+        JournalRow::Final {
+            kind: manyhands::repository::request_store::FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        }
     );
+}
+
+#[test]
+fn a_request_that_stopped_for_an_identity_takes_no_commit_after_a_second_lost_retry() {
+    if !in_a_process_without_an_identity(
+        "a_request_that_stopped_for_an_identity_takes_no_commit_after_a_second_lost_retry",
+    ) {
+        return;
+    }
+    let (mut world, token, _) = stopped_for_an_identity_and_lost();
+
+    // An identity is set and another request saves the same content.
+    set_identity(&world);
+    world.reopen();
+    let second = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(second.outcome, Outcome::Success);
+    let tip = world.branch_tip(TICKET_A);
+
+    // The first request is retried by a process that would lose the
+    // result of a domain call, were one made. Calling the save on the
+    // stopped operation's row would find nothing to change, record a
+    // checkpoint on that row and complete it: the row would then say the
+    // request may have committed.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&retry, "the retry");
+    assert!(world.record(REQUEST_1).is_none());
+
+    // A third call is answered the same way, and never with the other
+    // request's commit.
+    world.reopen();
+    let third = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&third, "the third call");
+    assert_eq!(world.branch_tip(TICKET_A), tip);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
 }
 
 #[test]

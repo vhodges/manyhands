@@ -405,8 +405,10 @@ impl RepositoryService {
         let identity = RequestIdentity::of(request_id, binding.as_ref());
         // Two processes that submit the same new request ID race on the
         // record's key. The one that loses finds a record on its second
-        // look and is answered from it.
-        for _ in 0..2 {
+        // look and is answered from it. A record released on re-entry, of
+        // a request that ended before its checkpoint, takes one more look:
+        // the request is then new.
+        for _ in 0..3 {
             let record = match self.request_record(request_id) {
                 Ok(record) => record,
                 Err(error) => {
@@ -746,7 +748,40 @@ impl RepositoryService {
         let Some(accepted) = Accepted::of_record(record, attempt) else {
             return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
         };
-        let before = binding.reenter(self, &accepted);
+        // The row as it is before this call: its state afterwards proves
+        // nothing about an earlier attempt.
+        let journal =
+            match self.journal_row(accepted.family, &accepted.scope, accepted.operation_id) {
+                Ok(journal) => journal,
+                Err(error) => {
+                    let ran = Ran {
+                        answer: Answer::of_read(&error),
+                        standing: Standing::Stopped { journal: None },
+                    };
+                    return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
+                }
+            };
+        if let JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        } = journal
+        {
+            // The operation ended before its checkpoint: it stopped or was
+            // refused with nothing in flight. Had that answer not been
+            // lost, settling would have deleted the record. It is deleted
+            // now, with this call's attempt, and the request is taken as
+            // new on the next look: a new operation ID, the token check
+            // and the already-applied rule. The old row is final and is
+            // left alone; calling the domain on it again would record a
+            // checkpoint on a row that never had one, and a later retry
+            // could then take another request's commit for this one's.
+            return match self.delete_request(accepted.request_id, accepted.attempt) {
+                Ok(_) => None,
+                Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
+            };
+        }
+        let before = binding.reenter(self, &accepted, journal);
         let reply = Reply { binding, identity };
         Some(match before {
             Ok(before) => self.called(&reply, &accepted, || {
