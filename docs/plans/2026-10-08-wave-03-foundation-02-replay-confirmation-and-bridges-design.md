@@ -473,66 +473,245 @@ the mechanism is changed.
 
 ### What `execute` does
 
-1. Look up the request ID.
-2. **A record exists and its scope, command, target or digest differs.**
-   Return `request_mismatch`, carrying the recorded effects. Nothing runs.
-   If the recorded request is unfinished and made a durable effect, the
-   outcome is `partial`, so the CLI's exit status is 4 as its RFC requires
-   for input rejected after an earlier attempt's effects; otherwise it is an
-   input error.
-3. **A finished record matches.** Return the stored result. If it names a
-   commit, first confirm that commit is still reachable from the branch
-   recorded in `base_ref`, or from primary once that branch is gone; if
-   not, return `recovery_required` and do nothing. No domain call is made.
-4. **An accepted record matches.** An earlier attempt started and its end was
-   not recorded. Raise `attempt` and go to
+This subsection and the next describe the mechanism as Task 7 built it, for
+`ticket create` and `ticket save`. Those are the only two commands bound so
+far. Confirmation, progress events, cancellation after acceptance,
+synchronization and the key commands are not built. Where the text speaks
+of one of them, it says so, and it is the plan for the task that binds it.
+[What changed from the proposal, and known limits](#what-changed-from-the-proposal-and-known-limits)
+lists each place where the built mechanism differs from the one this
+section first proposed.
+
+Three terms are used throughout.
+
+- A **binding** connects one command to the boundary (`Binding` in
+  `mutation/bind/mod.rs`). It names the command, its target and its digest
+  fields, and has four steps: `prepare` makes the checks before acceptance,
+  `run` makes the domain call of a first call, `reenter` reads what a retry
+  needs before its domain call, and `rerun` makes the domain call of a
+  retry. `TicketBinding` serves both ticket commands.
+- The **journal row** is where the request's operation stands in its
+  journal. `journal_row` returns it as a `JournalRow`, which is one of
+  three things. `Absent`: the journal holds no row for the operation ID, or
+  holds a local row completed with the step `rejected`. `Pending`: the
+  operation has not ended; a remote row whose phase is interrupted or
+  failed reads this way. `Final`: the operation has ended. A `Final` row
+  carries `kind` (`Completed`, `Cancelled` or `RetainedForInspection`),
+  `owes_work` (a remote row whose index hand-off or reconciliation is
+  still owed) and `checkpointed`.
+- `checkpointed` says the row records that the operation passed the point
+  where its work is committed. For a local row it is true when the last
+  step recorded is `authoring_checkpoint_observed`,
+  `authoritative_observed`, `initialization_committed` or
+  `publication_committed`. A save records its checkpoint step whether it
+  committed or found nothing to commit, so the step does not show that a
+  commit was made. Its absence shows that none was. Remote and key rows
+  record phases, and their final rows always read `true`.
+
+A row is **in flight** when it is `Pending`, or `Final` with `owes_work`
+set (`JournalRow::in_flight`). Nothing is in flight under an `Absent` row or
+a `Final` row that owes nothing.
+
+**Looking the request up.** `execute` builds the binding and computes the
+request's scope key and intent digest. It then looks the request ID up, at
+most three times. A look reads the record and does one of four things:
+
+1. **No record:** the first call, below.
+2. **A record whose scope, command, target or digest differs:** a mismatch.
+3. **A finished record that matches:** a replay of the stored result.
+4. **An accepted record that matches:** an earlier call started and its end
+   was not recorded. The call goes to
    [Re-entering a request](#re-entering-a-request).
-5. **No record.** Validate the input; an invalid one is `invalid_input`.
-   Resolve the repository; an unregistered one is
-   `repository_not_registered`, except for the four commands that work
-   without a registration: `repo create`, `repo enable`,
-   `repo identity-set` and `index rebuild`. Make the binding's checks that
-   need no lease: the observation token (with the already-applied rule
-   under [Observations](#observations)), relationship validation,
-   short-code inputs. If the command needs confirmation, check it (below)
-   or stop. Check the cancellation token. Then, in one transaction, insert
-   the record as `accepted` with attempt 1, a new operation ID, the
-   recorded position and the expected digest, and mark the confirmation
-   accepted, conditionally on its not having been accepted meanwhile. Run
-   the binding.
-6. Map the domain outcome to an envelope, take the commit and effects from
-   the evidence check below, made after the domain call, and settle the
-   record.
 
-**Settling** is decided from the envelope's outcome and from the operation's
-journal row, never from the kind of error the domain returned: the domain
-returns the same kinds before and after an effect, and returns some
-rejections as successful values. The boundary looks the operation ID up in
-its journal (local, remote or key) through a lookup that says absent,
-pending with its step, or completed. A local row completed with the step
-`rejected` is reported as absent. A remote row whose phase is interrupted
-or failed is reported as pending: Cycle 06 leaves a conflicted
-synchronization in that phase, and deleting its record would orphan the
-conflict's operation ID. `show_operation`, which F1 added, reads all
-three journals by ID, but it requires the repository to be registered and
-returns a display result; Task 6 decides whether the boundary uses it or
-an internal lookup, which `repo create` and `repo enable` need on a root
-that is not registered. Every change to the record is
-conditional on the record still being `accepted` with this call's
-`attempt`, so a call never settles a record another call has since
-entered. If the lookup itself fails, the record is left as it is.
+Cases 2 and 3 always answer. Cases 1 and 4 answer or ask for another look.
+A first call asks for one when another call inserted a record for the same
+request ID first. A re-entry asks for one when the record stopped being
+`accepted` before it could enter, or when it released the record itself.
+Three looks cover a call that releases a record and then loses the insert.
+After a third look with no answer the result is `busy` with a
+`request.retry` action. If the record cannot be read, the result is the
+read's code, such as `index_unavailable`, and nothing is done.
 
-| The envelope's outcome | The operation's journal row | The record |
+**A mismatch** returns `request_mismatch`. Nothing runs and the record is
+not changed. The result names no operation and offers no recovery action.
+
+- Against a **finished** record the result is an input error and every
+  effect is `not_requested`. The finished request's own result is what
+  `show_request` returns; it is not reported as this call's.
+- Against an **accepted** record the boundary reads the journal row
+  (`bind::recorded_effects`). If the row is `Absent`, no attempt reached
+  the domain: the result is an input error with no effects. If the row is
+  anything else, or cannot be read, the effects are taken from the
+  repository. A commit in range that changed the request's path gives
+  `write: written`, `checkpoint: committed`, `discovery: pending` and that
+  commit; the newest such commit is named, whatever it left at the path
+  (`path_commit`). With no such commit, a file in the item's editing
+  context whose digest differs from the recorded `expected_digest` gives
+  `write: written`, `checkpoint: pending`, `discovery: pending`. With
+  neither, no effect is reported. A range that cannot be read shows no
+  commit. The outcome is `partial` when an effect is durable, so the CLI's
+  exit status is 4 as its RFC requires for input rejected after an earlier
+  attempt's effects; otherwise it is an input error.
+
+**A replay** returns the stored result and makes no domain call. The
+envelope is rebuilt from the record: the command, the stored outcome, code,
+six effects, commit and data, the request ID and the operation ID. The
+scope comes from this call's repository and target, which the match has
+shown equal to the record's, with the branch from the recorded position.
+The outcome is the stored one; this is the one place it is not derived.
+The record stores no recovery action, and a finished ticket create or save
+has none. If the stored result names a commit, the boundary first checks
+that the commit can be reached from the branch recorded in `base_ref`, or,
+once that branch is gone, from the branch checked out at the root
+(`still_reachable`). If it cannot, or Git cannot be read, the result is
+`recovery_required` with no effects. The record stays `finished` with its
+result, and the next call checks again.
+
+**The first call.** A request no record holds is checked, accepted, run
+once and settled, in this order.
+
+1. **A presented confirmation** is `not_confirmable`: neither bound command
+   takes one. The check of a required confirmation belongs here and is
+   built with the first confirmed command.
+2. **The binding's `prepare`** validates the input and makes the checks
+   that need no lease. A failure answers the request with no record and no
+   operation ID. For the two ticket commands, in order:
+   - The draft must be writable as a ticket, or the result is
+     `invalid_input`.
+   - The repository must resolve; an unregistered one is
+     `repository_not_registered` with the `index.rebuild` action.
+   - The root must be the repository's own root. A linked worktree is
+     `not_repository_root`.
+   - **A create** checks its relationships
+     ([Validation before any write](#validation-before-any-write)); a
+     target that is not an ID is `invalid_relationship`. It then applies
+     the already-applied rule to an item that already holds the ID at the
+     ticket's path: as intended and committed is `already_applied`, as
+     intended and not committed is `external_change`, anything else is
+     `occupied_path`. An item at another path, or a document, is left to
+     the domain operation to refuse. Then it composes the short code. Its
+     expectation is that no file is at the path.
+   - **A save** reads the item (`item_not_found`), refuses a closed ticket
+     (`ticket_closed`), checks its relationships, and then checks the
+     caller's token. A token that is not the file's is answered by the
+     already-applied rule under [Observations](#observations). A token
+     that matches gives the expectation: the digest of the same bytes. For
+     an item with no editing context, primary's file must also be the blob
+     at primary's head, or the result is `worktree_not_clean`.
+   - The binding reads the recorded position (below). If Git cannot be
+     read for it, the result is `repository_inaccessible`.
+3. **The cancellation token** is checked. A cancelled request is
+   `cancelled` and has done nothing. This is the only cancellation check
+   built.
+4. **Acceptance** is one transaction (`insert_request`). It inserts the
+   record as `accepted` with attempt 1, the scope, command, target, digest,
+   recorded position and expected digest, and one operation row holding a
+   new operation ID and its journal family. If a record already holds the
+   request ID, nothing is written and `execute` looks again. The same
+   transaction marks a presented confirmation accepted, conditionally on
+   its not having been accepted meanwhile; no bound command presents one
+   yet.
+5. **The domain call.** The record functions release the cache guard
+   before they return, so the guard is not held when the binding's `run`
+   makes its one domain call, `save_ticket_with`, with the recorded
+   operation ID and expectation. The domain call takes the guard, its
+   lease and its journal row itself. The boundary takes no lease and holds
+   no lock between its steps.
+6. **The first-call commit rule** decides the commit and effects, and the
+   record is settled. Both are described next.
+
+**The first-call commit rule.** The commit and the effects come from what
+Git and the journal show after the domain call, never from the kind of
+result alone.
+
+- **The domain returned saved.** If it names a commit, `evidence::confirms`
+  asks whether that commit is in range and changed the request's path. If
+  so, the commit is reported: `ok`, `write: written`,
+  `checkpoint: committed`, `discovery: current`. If not, or if the domain
+  named none, no commit is reported: `already_applied`, `unchanged`,
+  `unchanged`, `not_requested`. A save that changed nothing can name the
+  head it found, and this is what refuses it. If the index hand-off is
+  still owed, the code is `discovery_pending` and `discovery` is `pending`,
+  with or without a commit.
+- **The domain returned "identity required".** The code is
+  `identity_required` with no effects.
+- **The domain returned an error.** The code comes from the error's kind
+  alone. The boundary reads the journal row. If the row is in flight, or
+  cannot be read, the effects come from the repository. The newest commit
+  in range that changed the path, if it left the path as intended, gives
+  `written`, `committed`, `discovery: pending` and that commit
+  (`intended_commit`). With no such commit, a file in the editing context
+  that is as intended and is not what it was before the request gives
+  `written`, `checkpoint: pending`, `discovery: pending`. Otherwise, and
+  whenever nothing is in flight, no effect is reported.
+
+A first call trusts the domain's claim inside the range. A retry does not;
+it applies the stricter rule under
+[Re-entering a request](#re-entering-a-request).
+
+**Settling.** A binding ends each call with an answer (code, effects, data)
+and a `Standing`, which says what is left of the request. The outcome is
+derived from the code and the effects in one place
+(`Envelope::classified_mutation`); no binding chooses it. A stop that left
+a durable effect is therefore `partial`. `Settlement::of` turns the
+standing into one of three changes to the record: store the result and mark
+it `finished`, delete it, or leave it `accepted`.
+
+Settling is decided from the standing and the journal row, never from the
+kind of error the domain returned: the domain returns the same kinds before
+and after an effect, and returns some rejections as successful values.
+
+| Standing | When a binding returns it | The record |
 | --- | --- | --- |
-| `success` or `noop` | any | Stored and marked `finished`. |
-| A result the domain has made final for this operation ID: a synchronization whose row is cancelled; a key generation whose recovery state is "retained for inspection" | any | Stored and marked `finished`. |
-| `partial`: work remains (discovery or registration pending; a key generation or deletion the domain says can be recovered) | any | Left `accepted`. A retry continues it. |
-| Blocked, an input error, a transient failure or an error | Absent or completed: nothing is in flight | Deleted. The confirmation it accepted, if any, is released in the same transaction; its expiry still runs from its creation. The request ID is free again. |
-| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error usually means the call wrote something, with the exceptions stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome is `partial` only if a push was accepted. That holds because the bindings refuse divergence: a synchronization that merges can stop having made merge commits, which this rule and the Effects table do not cover, and C4 and D5 extend both when they turn merging on. |
+| `Final` | The request's end state holds: a save returned and its hand-off is complete; a retry found the request done; a retry was answered by the already-applied rule. | Stored and marked `finished`. |
+| `Owed` | The domain returned a result and the index hand-off is still owed (`discovery_pending`). | Left `accepted`. A retry continues it. |
+| `Unconfirmed` | Git could not be read to say what the request committed. The result claims no effect and no commit. | Left `accepted`. Nothing is stored and nothing is deleted. |
+| `Stopped`, journal row not read | The request stopped and the journal lookup failed. | Left `accepted`. |
+| `Stopped`, row `Final` with kind `Cancelled` or `RetainedForInspection` | A result the domain has made final for the operation ID. No bound command reaches this yet; it is for synchronization and key generation. | Stored and marked `finished`, whether or not the row owes work. |
+| `Stopped`, any other row that is in flight | The request stopped with work under its operation ID: `identity_required`, a domain error, or a change from elsewhere found on a retry. | Left `accepted`. |
+| `Stopped`, any other row that is not in flight | The same, with the row `Absent` or completed and owing nothing. | Deleted. The confirmation it accepted, if any, is released in the same transaction; its expiry still runs from its creation. The request ID is free again. |
+| `NotRun`, row `Absent` | A retry stopped before its domain call, and no attempt had started. | Deleted, as above. |
+| `NotRun`, row `Pending` or `Final` | The same, and an earlier attempt had started. The stop says nothing of what that attempt did. | Left `accepted`, also when the row has completed. |
+
+Four rules hold for every row of the table.
+
+- **Final kind first, then in flight.** For a stopped request the boundary
+  asks whether the row's `kind` is one the domain has made final before it
+  asks whether anything is in flight. A cancelled synchronization that
+  still owes its index hand-off is in flight and final at once; asking in
+  the other order would leave its record `accepted` for good.
+- **Every record change is conditional on the attempt.** `finish_request`
+  and `delete_request` change the record only if it is still `accepted`
+  with this call's `attempt`. A call never settles a record another call
+  has since entered.
+- **A failed journal lookup leaves the record as it is.** After a first
+  call's domain error the effects are then read as if the row were in
+  flight. On a retry, before any domain call, the result is the read's
+  code and no domain call is made.
+- **A record change that fails leaves the record as it is.** The caller
+  still gets its result. The next call of the request re-enters the record.
+
+**Could not read Git.** A failure to read Git is never taken for "no
+commit". When the domain returned a result and the evidence could not be
+read, the result is `internal_error` with no effects and no commit, and the
+record stays `accepted` for a retry to settle. A no-op stored at that point
+would be replayed for good for a save that may have committed.
+
+**Recovery actions.** A recovery action a failed read suggested for itself
+is kept. Otherwise the action follows the code. `discovery_pending` names
+`operation.resume` for the operation; `resume_operation` itself is not yet
+built. `identity_required` and `initials_required` name
+`repo.identity_set`. `recovery_required`, `invalid_slug_configuration` and
+`invalid_configuration` name `repo.inspect`. `repository_not_registered`
+and `index_unavailable` name `index.rebuild`. `external_change` offers
+none, also when its record stays `accepted`: the caller reads the item
+again and submits a new request. Any other result whose record is left
+`accepted`, and any `busy`, offers `request.retry` with the request ID.
 
 A command with no journal (identity, key registry changes, host approval,
 folder creation) is a single step that either happened or did not; an error
-from one deletes the record, and a re-run is idempotent.
+from one deletes the record, and a re-run is idempotent. No such command is
+bound yet; this is the plan for the tasks that bind them.
 
 Losing a record is always safe. If a record is deleted or never written and
 the work was in fact done, the next attempt is treated as new and is
@@ -540,85 +719,214 @@ answered by the already-applied rule: the content is as intended and
 committed, so nothing is written. This is the backstop for every settlement
 mistake and for the loss of the whole database.
 
-Two processes that submit the same new request ID race on the primary key.
-The loser sees an accepted record, raises `attempt` and re-enters; the
-repository lease serializes the two domain calls. The first caller's
-`attempt` is then no longer current, so it reports what it did and changes
-nothing; the second settles the record from the evidence check made after
-its own domain call, which sees the first caller's commit.
+Two calls that submit the same new request ID race on the record's key.
+The one that loses the insert looks again, finds an accepted record, raises
+`attempt` and re-enters; the repository lease serializes the two domain
+calls. The first caller's `attempt` is then no longer current, so it
+reports what it did and changes nothing. The second settles the record from
+the evidence read around its own domain call, which sees the first caller's
+commit. Or the second finds the lease held and returns `busy`; its record
+stays `accepted` when the first call's journal row already exists. The
+first known limit below covers the case where it does not.
 
 If a rejected first attempt created an editing context before it was
 rejected, the context stays. The item's observation token names its branch,
 so after the next refresh the caller's token is stale and it reads the item
-again. That is the one way a rejected call is visible afterwards.
+again. That is the one way a rejected call is visible afterwards. A save
+that stopped for a missing identity is the common case. Once an identity is
+set, the same request ID runs the save if nothing refreshed the index in
+between, and is `external_change` if something did; the caller then reads
+again and may use the same request ID. No test covers the second branch.
 
 ### Re-entering a request
 
 A retry of an accepted request skips the token check. The caller's token
 described the file before the first attempt, and the first attempt's own
 write or context is allowed to have changed it; the CLI RFC says "the
-operation's own completed transitions do not invalidate its retry".
+operation's own completed transitions do not invalidate its retry". It also
+skips the closed-ticket guard, the rule for an item with no editing context
+and the rejection of a relationship: the request passed them when it was
+accepted.
 
 **The recorded position.** At acceptance the boundary records the branch the
-request will commit to and its tip. For an item with no editing context yet
-the branch does not exist; the boundary records the context's branch name
-and primary's head. For `repo create` on a root that is not yet a
-repository it records nothing. The position only bounds where the evidence
-check looks: commits reachable from the branch and not from the recorded
-commit, or the whole branch if nothing was recorded or the recorded commit
-is not an ancestor.
+request will commit to and its tip, in `base_ref` and `base_oid`. For an
+item with no editing context yet the branch does not exist; the boundary
+records the context's branch name and primary's head. For `repo create` on
+a root that is not yet a repository the plan is to record nothing. The
+position only bounds where the evidence is read.
 
-**The evidence check** looks only at the request's own paths: the item's
-file, or for a move both paths, or the configuration file for
-`repo enable`, `repo create` and `remote select`. It compares parsed
-fields, ignoring the ones written once (`created_at`, `created_by`, and
-the value of `slug`; for a create or a slug assignment a slug must be
-present). For a move, the destination holds the content and the source is
-absent in the same commit.
+**The evidence** is what Git shows of the request's own path since the
+recorded position (`PathEvidence`, read by `evidence::path_evidence`). For
+a ticket the path is the ticket's file. A move's two paths and the
+configuration file of `repo enable`, `repo create` and `remote select` are
+the plan for those bindings. These terms describe it:
 
-On re-entry:
-
-1. **If a commit in range changed the request's paths to something the
-   request did not intend,** return `external_change`. The request is not
-   re-run. If its journal row is pending, its record stays `accepted`;
-   this is open case 1 of [The Journal Defect](#the-journal-defect), and
-   `operation abandon` is the way out. If the row is absent or `rejected`,
-   nothing is in flight: the record is deleted and its confirmation
-   released, as in Settling.
-2. **Otherwise call the domain operation with the recorded operation ID and
-   the recorded expectation.** This is the only way the work is continued,
-   and it is always made, because only the domain operation completes its
-   own journal row and hand-off. Its replay check accepts a file equal to
-   the intent or to the recorded expectation, writes and commits whatever
-   remains, or reports no change.
-3. **If the domain reports an external change and no journal row existed
-   for the operation ID before the call, or only a `rejected` one,** the
-   earlier attempt wrote nothing and the content came from elsewhere. Apply
-   the already-applied
-   rule: if the content is as intended and committed, the result is a
-   no-op with no commit reported.
-4. **Take the commit from the evidence check, made before and after the
-   call.** A commit is reported only if it is in range, left the paths as
-   intended, and one of two things holds: before the call the operation
-   ID's journal row was pending or completed with a step other than
-   `rejected`, so an earlier attempt of this request had started; or the
-   commit was not there before the call, so this call made it. Otherwise
-   the checkpoint is `unchanged` and no commit is reported. The row's
-   state after the call says nothing: a repeat resets a `rejected` row
-   before the domain runs, and `set_publication_remote` then completes it
-   while reporting someone else's commit. The check before the call is
-   made outside the lease, so another request's identical commit landing
-   between it and the call can still be reported as this one's.
+- The **range** is the commits reachable from the recorded branch and not
+  from the recorded commit. It is **bounded** when the recorded commit is
+  the branch's tip or an ancestor of it. If the branch does not exist, the
+  range is empty.
+- The range is **widened** when the branch exists and the recorded commit
+  does not bound it: nothing was recorded, the repository does not hold
+  the recorded commit, or the commit is no longer an ancestor of the
+  branch because the branch was amended or reset. The range is then the
+  whole branch, which holds history older than the request.
+- A **change** is a commit in range that left the path other than its first
+  parent had it. A commit with no parent is compared with no file.
+- A change is **intended** when it left the path as the request intends.
+  The binding decides this from the file's parsed fields (`holds`). For a
+  save, the file is as intended when applying the draft's fields and the
+  relationship options to it changes nothing. For a create, the file must
+  equal the ticket built from the input, with a `slug` present whose value
+  is ignored because it is written once. A change that removed the file is
+  not intended.
+- A change is **from the expected state** when its first parent held at the
+  path exactly what the request expected: a file whose digest is the
+  record's `expected_digest`, or no file for a create.
+- The evidence is **anchored** when the range is bounded and the recorded
+  commit holds the expected state at the path. That is the case when the
+  file was committed at acceptance. It is not the case when the file had
+  been edited and not committed.
+- The request was **settled at acceptance** when the evidence is anchored
+  and the file in the recorded commit is already as intended. The request
+  then had nothing to commit. This is never so for a create.
+- The **candidates** are the changes that can be the request's own commit,
+  oldest first. A candidate is intended and, when the evidence is anchored,
+  from the expected state. There are no candidates when the request was
+  settled at acceptance.
+- **Own** is the oldest candidate, and only when the range is not widened
+  (`PathEvidence::own`).
+- The path is **superseded**, meaning changed from elsewhere, when the
+  newest change is not intended. There is one exemption. While the branch's
+  tip still holds the expected state at the path and there is no own
+  commit, the path is not superseded: what the range shows is history
+  older than the request. When there is an own commit and the tip is back
+  at the expected state, someone undid that commit, and the path is
+  superseded.
 
 Unrelated commits on the same branch (a comment on the item, a developer's
-commit on primary) do not enter into any of this.
+commit on primary) change none of these.
+
+**A Git read failure** is its own answer at every read.
+
+| Read | What a failure does |
+| --- | --- |
+| The recorded position, at acceptance | `repository_inaccessible`. The request is not accepted. |
+| `confirms`, after a first call's save | `internal_error`, no effects, no commit. The record stays `accepted`. |
+| `intended_commit`, after a first call's error | No commit is shown. The row is in flight, so the record stays `accepted` anyway. |
+| `path_commit`, on a mismatch | No commit is shown. |
+| The evidence before a retry's domain call | `internal_error`, no effects. No domain call. The record stays `accepted`. |
+| The evidence after a retry's domain call | After a save: `internal_error`, no effects, the record stays `accepted`. After a domain error: no commit is shown; if the row has completed, the record stays `accepted` with the domain's code. |
+| Whether the file is committed, for the already-applied rule on a retry | `internal_error`, no effects. The record stays `accepted`. |
+| The same, for a new request | Read as not committed: `external_change`. Nothing is recorded. |
+| `still_reachable`, on a replay | `recovery_required`. The record is not changed. |
+
+**The steps.** `reenter` in `mutation/mod.rs` runs them in this order.
+
+1. **Raise the attempt** (`enter_request`). This call is now the only one
+   that may settle the record. If the record is no longer `accepted`,
+   `execute` looks again and answers from what it finds.
+2. **Read the journal row** of the recorded operation ID, before anything
+   else is done under that ID. The row's state after a domain call proves
+   nothing about an earlier attempt: a repeat resets a `rejected` row
+   before the domain runs. If the lookup fails, the result is the read's
+   code and the record is left as it is.
+3. **Release the record and run the request as new** when the row is
+   `Final` with kind `Completed`, owes no work and is not `checkpointed`.
+   The earlier attempt ended before its checkpoint: it stopped, for want of
+   an identity for example, with nothing in flight. Had its answer not been
+   lost, settling would have deleted the record. The boundary deletes it
+   now, conditionally on this call's attempt, and releases its
+   confirmation in the same transaction. `execute` looks again, finds no
+   record and makes a first call: every check of `prepare`, the token check
+   and the already-applied rule among them, and a new operation ID. The old
+   journal row is left alone and no domain call is made under it. The
+   remaining steps do not apply.
+4. **Set up the domain call** without `prepare`'s checks (`resume`). The
+   relationships are read again only to list the targets nothing holds;
+   neither a rejection nor a failed read stops the retry. A create passes
+   the short code the file in the editing context holds, if it holds one,
+   and composes one only if it does not: the initials or the prefix may
+   have changed to something no short code can be composed from. If this
+   step fails, the result is its code with standing `NotRun`.
+5. **Read the evidence** as it is before the call. If Git cannot be read,
+   the result is `internal_error` with standing `Unconfirmed` and no
+   domain call is made.
+6. **Decide before any call** (`Before::found`). An earlier attempt **may
+   have committed** when the journal row read at step 2 is `Pending`, or
+   `Final` and `checkpointed` (`Before::committing`). The own commit counts
+   here only when an earlier attempt may have committed. The three answers
+   are tried in this order:
+   - **Done.** The row is `Final` with kind `Completed` and owes no work,
+     and there is an own commit. The request's work is done. The record is
+     finished with `ok`, `written`, `committed`, `discovery: current` and
+     that commit. No domain call is made: nothing remains for the domain to
+     complete, and it could only refuse for what has happened to the file
+     since. A later change by someone else, committed or not, is left as
+     it is.
+   - **Foreign.** Otherwise, the path is superseded. The result is
+     `external_change`, nothing is written and no domain call is made. If
+     there is an own commit beneath the foreign one, the effects are
+     `written`, `committed`, `discovery: pending` and that commit, so the
+     outcome is `partial`. Otherwise there are no effects and the outcome
+     is `blocked`. The standing is `Stopped` with the row from step 2: the
+     record stays `accepted` while the row is in flight and is deleted
+     otherwise. A record that stays is open case 1 of
+     [The Journal Defect](#the-journal-defect), and `operation abandon` is
+     the planned way out.
+   - **Continue.** Otherwise the domain operation is called.
+7. **Call the domain operation** with the recorded operation ID and the
+   recorded expectation (`rerun`). This is the only way work is continued:
+   only the domain operation completes its own journal row and hand-off.
+   Its replay check accepts a file equal to the intent or to the recorded
+   expectation, writes and commits whatever remains, or reports no change.
+8. **Read the evidence again** and map the result.
+   - **Saved.** The commit is the one the call reports (below). With a
+     commit the result is `ok`, `written`, `committed`; with none it is
+     `already_applied`, `unchanged`, no commit. The standing is `Final`. If
+     the hand-off is still owed, the code is `discovery_pending` and the
+     standing is `Owed`. The commit the domain names is not used: a second
+     call of a save that committed names none.
+   - **"Identity required."** `identity_required` with no effects. The
+     standing is `Stopped` with the row as read after the call.
+   - **An external change, when no attempt had started** (the row at step 2
+     was `Absent`). The earlier attempt wrote nothing, so the content came
+     from elsewhere. The already-applied rule is applied to the file in the
+     editing context: as intended and committed at its worktree's head is
+     `already_applied` with no commit, standing `Final`. Otherwise the next
+     case applies.
+   - **Any other error.** The code comes from the error's kind. The
+     boundary reads the journal row again. If the row is now `Final` with
+     kind `Completed` and owes no work, and the call reports a commit, the
+     request is done all the same: an earlier attempt, or a call of the
+     same request that ran beside this one, did the work. The record is
+     finished with `ok` and that commit. Otherwise the effects are read as
+     after a first call's error, with the commit the call reports, and the
+     standing is `Stopped` with the row as read after the call.
+9. **Settle** the record with this call's attempt, as a first call's is
+   settled.
+
+**The commit a call reports** after its domain call
+(`PathEvidence::reported`) is the oldest candidate in the evidence read
+after the call for which one of two things holds. Either an earlier attempt
+may have committed and the range is not widened, so the commit is the own
+commit. Or the commit was not in the range read before the call, so this
+call made it. If neither holds for any candidate, no commit is reported:
+identical content that was there before is someone else's. The second
+clause is what reports the commit of a retry that completes over a
+rewritten branch.
+
+The check before the call is made outside the lease, so another request's
+commit that is a candidate and lands between it and the call can still be
+reported as this one's.
 
 What each domain operation does when called again with the same operation
-ID, as read from source, and what the binding does about it:
+ID, as read from source, and what the binding does about it. Only
+`save_ticket` is bound; its row describes what was built. Every other row,
+`save_document` included, is the plan for the task that binds it.
 
 | Operation | On replay after completing | Binding |
 | --- | --- | --- |
-| `save_ticket`, `save_document` | Returns saved with no change; no rewrite; runs the hand-off if owed. | Calls it; takes the commit from the evidence check. |
+| `save_ticket`, `save_document` | Returns saved with no change; no rewrite; runs the hand-off if owed. With no identity it returns "identity required" and completes its row. | Built for `save_ticket`. Not called when the earlier attempt ended before its checkpoint (the record is released and the request runs as new), when the request is done, or when the path is superseded. Otherwise called with the recorded ID and expectation; the commit is the one the call reports from the evidence read before and after. `save_document` is to bind the same way and is not yet built. |
 | `enable` | Returns already enabled; completes registration. | Calls it; takes the commit from the evidence check. |
 | `create_and_enable` | Fails: it rejects the now non-empty directory. | On a retry, if the root holds a repository, including one initialized and not yet committed, calls `enable` with the recorded ID, which the journal accepts as the same action. |
 | `set_publication_remote` | Returns changed with the current head whenever the configuration equals the request, whoever made the commit. | Never takes a commit from this outcome, on a first call or a retry. Runs the evidence check; if the configuration already equals the request and the check finds no commit of this request, reports a no-op. With no identity it returns an identity error, which the binding reports as `identity_required`. |
@@ -629,6 +937,109 @@ ID, as read from source, and what the binding does about it:
 | `synchronize_remote` | Replays its recorded outcome. | Passes it through. An "interrupted" result is `cancelled` only when the row's phase is cancelled. |
 | `synchronize_remote`, interrupted | Returns recovery required unless `restart` is set. | Sets `restart`. A restart fences any executor still running under that ID, which is Wave 02's own takeover and pushes nothing twice. |
 | Key registry changes, identity, host approval, folders | No operation ID; idempotent. | Runs again; reports a no-op if the state is already as requested. |
+
+### What changed from the proposal, and known limits
+
+The mechanism this section first proposed was changed in the places below
+while Task 7 was built and reviewed. Each change was made because a
+sequence of events gave a result the
+[Required outcomes](#required-outcomes) table forbids, or because a ruling
+during the build decided a point the proposal left open. Row numbers count
+the rows of that table from the top.
+
+| Place | The proposal's rule | What showed it wrong, or the ruling | The rule as built |
+| --- | --- | --- | --- |
+| Whether a retry calls the domain | Always: only the domain completes its row and hand-off. | A save commits and its output is lost. Someone edits the file and does not commit. The retry's domain call is refused as an external change, the row has completed, so the record is deleted and the caller never learns its commit. Row 3. | No domain call when the row has completed, owes nothing and the own commit is in range. The record is finished with that commit. |
+| Order of the checks before the call | A foreign change is looked for first. | A save commits and its output is lost. Another request saves other content. The retry is `external_change`. Row 4 requires the first commit. | Done is decided before foreign. |
+| The commit rule: the journal row before the call | An earlier attempt "had started" when its row was pending or completed with any step but `rejected`. | A save stops for want of an identity and its output is lost. An identity is set and another request commits the same content. The retry reports that commit. Rows 9 and 11. | An earlier attempt may have committed only when its row was `Pending`, or `Final` and `checkpointed`. `JournalRow::Final` gained `checkpointed` for this. |
+| The commit rule: the state the commit was made from | Any commit in range that left the path as intended. | A save changes nothing and its output is lost. A second request saves other content and a third saves the first content again. The retry reports the third request's commit. Row 9. | When the file was committed at acceptance, a candidate's first parent must hold the expected state at the path. |
+| The commit rule: a request with nothing to commit | Not considered. | A save changes nothing and its output is lost. Another request, from the same state, commits a change to a field the first does not set, such as `deps`. That commit is from the expected state and leaves every field the first sets as intended. Row 9. | A request settled at acceptance has no candidates. |
+| The commit rule: a widened range | When the recorded commit is not an ancestor, the whole branch is searched and treated like any range. | The branch is amended or reset under a request in flight. The foreign-change check then refuses the request for history older than itself, and the repository stays blocked. "Done" can also pick an old commit of the same content. | A widened range gives no own commit. The path is not superseded while the tip holds the expected state and there is no own commit. A revert of the own commit by someone else is still superseded. |
+| The commit rule: which commit | Not said. | Decided in the build: a later commit of the same content was made over a path that already held it, or over someone else's change. | The oldest candidate. |
+| The first call's commit | Taken from the evidence check after the domain call. | A save that changes nothing, whose refresh mark fails, names the head it found as its commit. | The commit the domain names is kept only if it is in range and changed the path. |
+| The answer of the evidence check | Yes or no. The Settling table had no row for a check that could not read Git. | A Git read error after a save that committed was read as "no commit", and the save was finished as a no-op for good. Row 3. | Three answers: `Claim::Confirmed`, `NotThisRequests`, `Unreadable`. "Could not tell" gives `internal_error` with no effects and leaves the record `accepted` (standing `Unconfirmed`). |
+| Mismatch against a finished record | `request_mismatch`, carrying the recorded effects. | Ruling: an error envelope may not carry a durable effect, and the effects describe what this call did, which is nothing. | An input error with no effects. `show_request` returns the finished result. |
+| Mismatch against an accepted record | `partial` if the recorded request made a durable effect. An accepted record stores no effects, so there was nothing to read them from. | A request that committed and was not settled was reported as a plain input error. A request that never created its context was reported as `write: written`. | When the journal row is anything but `Absent`, or cannot be read, the effects are read from Git and the editing context, as described under a mismatch. |
+| A foreign change over the request's own commit | `external_change`; nothing said of the effects. | Ruling: the request did commit, and saying so is truthful. | `partial`, `external_change`, with the own commit. No recovery action. |
+| A retry whose earlier attempt ended before its checkpoint | Re-entered like any other, under the recorded operation ID. | A save stops for want of an identity and its output is lost. The retry calls the domain, which records the checkpoint step although nothing changed, and its output is lost too. Another request has committed the same content. The next retry reports that commit. Rows 9 and 11. | The record is released and the request runs as new, with a new operation ID. |
+| A retry refused after another call of the request committed | An error with a completed row deletes the record. | Call 1 is accepted. Call 2 enters and reads no row and no commit. Call 1 runs to its end. Call 2's domain call is refused. The record is deleted and the request, which committed, is answered as new. Row 13. | If the row has completed, owes nothing, and the call reports a commit, the record is finished with that commit. |
+| A retry that stops before its domain call | Settled like any stop: deleted when nothing is in flight. | Decided in the build: the retry could not resolve the repository, and deleting the record would lose the report of a commit an earlier attempt made. | Standing `NotRun`: deleted only when no attempt had started; left `accepted` otherwise, also when the row has completed. |
+| `partial` after an error | `write: written`, `checkpoint: pending` when the file in the worktree is what the request intended. | A save that would have changed nothing also has such a file. | The file must also differ from what it was before the request. |
+| `discovery` on an uncommitted write | The proposal names only `write` and `checkpoint`. | Ruling: discovery is work the retry still owes. | `discovery: pending` alongside `written` and `checkpoint: pending`. |
+| `request.retry` | The recovery table lists it for named codes only. | Ruling: the same request is what finishes a record left `accepted`. `external_change` on an item write stays without an action, as the table says. | Offered on any result whose record is left `accepted`, unless the code has an action of its own or is `external_change`. |
+| The short code on a create's retry | Composed again, as on the first attempt. | A create writes its file and dies. The initials change to something no short code can be composed from. The retry is `initials_required`. Row 10. | `resume` passes the short code the file holds and composes one only when the file holds none. |
+| The journal lookup | Absent, pending with its step, or completed. | Ruling in Task 6: a completed or cancelled remote row that still owes its index hand-off or a reconciliation must not release its record, and settling must know which way a row ended. | A typed `JournalRow` with `kind` and `owes_work` as separate facts. |
+| The lookup loop | Not said. | Decided in the build: a call can lose the insert race, and a re-entry can release its record. | At most three looks, then `busy`. |
+
+**Known limits.** Each is behavior of the code at the end of Task 7.
+
+- **A second attempt can release the record before the first attempt's
+  journal row exists.** Between acceptance and the insert of the journal
+  row, a second call that stops with no row deletes the record; the first
+  call then commits and cannot settle, and a later retry is
+  `already_applied` with no commit. It is accepted because no effect is
+  repeated, the first caller has its result, and every alternative found
+  breaks reuse of a request ID with corrected input.
+- **A changed-input result can name another request's commit.** A mismatch
+  against an accepted record names the newest commit to the request's path
+  since acceptance, and counts a row that ended before its checkpoint as
+  an attempt that ran. It is accepted because the mismatch holds only a
+  digest of the original input and cannot compare a commit with an intent.
+- **After a crash between a rejection and the record's deletion, corrected
+  input is `request_mismatch`** until the original input is sent once
+  more, which releases the record. The boundary cannot tell a correction
+  from a different request; this is raised for the product owner, since
+  row 11 says the request ID can be used with corrected input.
+- **A context removed by hand after lost output.** With only the context's
+  branch deleted, the retry is `internal_error` and the record is
+  released; with the whole context removed, the save recreates it from
+  primary and commits again; and when the context already existed at
+  acceptance, its removal leaves the request's row pending and the
+  repository blocked until `operation abandon` exists. These are accepted
+  because only hand-editing produces them today and the first commit went
+  with the branch, so nothing is committed twice.
+- **A request whose file was uncommitted at acceptance, on a branch that is
+  then rewritten,** can be answered `external_change` from history older
+  than itself. It is accepted because no rule was found that tells this
+  from a real change from elsewhere.
+- **Identity removed between attempts.** A retry then completes the journal
+  row with "identity required" and the record is deleted, also when an
+  earlier attempt had committed, so that commit is never reported. It is
+  accepted because nothing is written twice and the next call is answered
+  by the already-applied rule.
+- **Two requests accepted against the same state with identical content
+  cannot be told apart once both have started.** The retry of either can
+  report the one commit. It is accepted because the content on disk is
+  what both intended.
+- **The evidence walk is not first-parent.** The range follows every parent
+  of a merge while a change is judged against its first parent only. It is
+  accepted because F2's bindings refuse divergence, so no merge reaches an
+  item's branch through them; C4 and D5 revisit it when they bind merging.
+- **A first save that changes nothing still creates the editing context,**
+  which makes the caller's token stale. It is accepted as existing domain
+  behavior; the already-applied rule is given only for a stale token.
+- **An external Git commit that nothing has refreshed** still reads as a
+  current, complete index in every index-backed read, the relationship
+  check included. It is accepted because detecting it is a product
+  decision outside this Cycle.
+
+**To decide before the next binding.**
+
+- The rule that releases a record and runs the request as new lives in the
+  boundary, and reads "no checkpoint step" as "did nothing". That holds
+  for authoring operations only. A command whose journal records no
+  checkpoint step, `index refresh` for one, would always retry as new
+  after lost output. A confirmed command would be sent back through
+  confirmation, against the row "A confirmed command completes; its result
+  is lost; retry". The rule must become something a binding opts into
+  before either kind of command is bound.
+- The structural cleanups the ledger lists before Task 8: destructure
+  `TicketDraft` in `fields`, `holds` and `validate`, so a new field cannot
+  be left out of the digest; replace the command lookups by string with a
+  closed enum and an exhaustive match; move the generic derivation of
+  effects out of the ticket binding; split `execute`, settling and replay
+  out of `mutation/mod.rs`; make `outcome::recovery` an exhaustive match;
+  and give the context names one source.
 
 ### After the cache is lost
 
@@ -657,6 +1068,24 @@ A retry then arrives at a repository that is not registered.
 
 No retry in this table writes content the first attempt did not intend, and
 none reports a commit it cannot find.
+
+The rows for a create and a save are built, for a ticket. The other rows
+are the plan for the tasks that bind those commands. For a ticket the built
+checks differ from the table in these ways:
+
+- The only field written once is `slug`. Its value is ignored and it must
+  be present.
+- "Committed at its branch tip" is checked as: the file's bytes are the
+  blob at the head of the worktree the read took the file from. If that
+  cannot be read, the file counts as not committed and the result is
+  `external_change`.
+- A save refuses a closed ticket and a rejected relationship before it
+  looks at the token. A retried save whose ticket has since been closed is
+  therefore `ticket_closed`, not `already_applied`.
+- A create whose ID is held by an item at another path, or by a document,
+  is left to the domain operation to refuse.
+- Each of these results is given before acceptance, so it leaves no record
+  and names no operation.
 
 ## Observations
 
@@ -1412,15 +1841,47 @@ F1 changed no existing public function. F2 changes these:
    is `RecoveryRequired` when the setting is on.
 7. Refresh and rebuild record folders, if decision 4 is as recommended. The
    new table marks repositories stale once.
-8. Each of the three journals gains a lookup of one operation by ID that
-   says absent, pending with its step or phase, or completed, unless
-   `show_operation`, which main now has, can serve; see Settling.
+8. Each of the three journals gained a lookup of one operation by ID:
+   `recovery::lookup_operation` for the local journal,
+   `remote::state::lookup_operation` for the remote one and
+   `keys::lookup_material_operation` for key material. Each reads the
+   index only, so it answers for a root that is not registered or no
+   longer exists; that is why `show_operation` does not serve. All three
+   return the new type `JournalRow` in `src/repository/recovery.rs`:
+   `Absent`, `Pending` with the journal's own state, step or phase, or
+   `Final` with `kind`, `owes_work` and `checkpointed`, and the method
+   `in_flight`. A local row completed with the step `rejected` reads
+   `Absent`; a remote row that was interrupted or failed reads `Pending`.
+   `RepositoryService::journal_row` chooses the lookup by journal family.
+   See Settling.
 9. Public enums gain variants: `ContextIntent::Repair`, the `repair_item`
    action, new `RepositoryOperation` variants. Exhaustive matches on them
    inside the crate are extended.
 10. `IdentityDto` and its schema and golden gain the initials fields.
 11. The index gains the three request tables and, with item 7, the folder
     table.
+12. Plumbing that the design did not list, added while Tasks 6 and 7 were
+    built. None of it changes what an existing function does.
+    - Test-only, in `src/repository.rs`, hidden from the documentation and
+      reached only through `_for_testing` constructors and setters:
+      - two failure points, `FailurePoint::BeforeRequestDomainCall` and
+        `FailurePoint::BeforeRequestSettlement`, at which a call in the
+        boundary ends with its record untouched, as a process that died
+        would leave it;
+      - a request hook, the field `request_hook`, set by
+        `set_request_hook_for_testing`, which runs once immediately before
+        the next domain call an `execute` makes;
+      - an exit-at-failure-point mode, `open_at_with_exit_point_for_testing`
+        with `FAILURE_POINT_EXIT_STATUS`, in which `should_inject` ends
+        the process at the failure point instead of returning an error,
+        so its leases and locks are left as a killed process leaves them.
+    - Behavior-preserving edits Task 6 made to reach existing code:
+      `stored_phase` was extracted in `src/repository/remote/state.rs` so
+      that the remote lookup parses a phase the way the journal does; and
+      the visibility of `read_session` (`src/repository/read/mod.rs`) and
+      of the key phase parser `parse_phase`
+      (`src/repository/keys/generation.rs`) was widened within the
+      repository module.
 
 ## Alternatives Rejected
 
@@ -1472,7 +1933,7 @@ F1 changed no existing public function. F2 changes these:
 | --- | --- |
 | The Cycle is large: the boundary, twenty-nine bindings, four new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
 | A binding maps a partial outcome to a clean success. | Exhaustive matches; one rule for outcome and class; a test per binding family that injects a failure after the authoritative step. |
-| A retry reports a commit that is not this request's. | The commit must come after the position recorded at acceptance, change the request's paths to the intended content, and either an earlier attempt of the request had started or the commit appeared during this call; otherwise none is reported. Two requests with identical content can still be indistinguishable when both started; the content on disk is then what both intended. |
+| A retry reports a commit that is not this request's. | The commit must be a candidate: in the range since the position recorded at acceptance, a change of the request's path to the intended content, made from the state the request expected when that state was committed at acceptance, for a request that had something to commit at acceptance. It must also either have appeared during this call, or lie in a range the recorded commit bounds while the journal row read before the call shows an earlier attempt may have committed (pending, or final and checkpointed). The oldest such commit is reported; otherwise none is. A retry whose earlier attempt ended before its checkpoint is released and run as new. A failure to read Git reports nothing and leaves the record `accepted`. Two requests accepted against the same state with identical content can still be indistinguishable once both started; the content on disk is then what both intended. |
 | Settlement deletes or finishes a record another call is using. | Every record change is conditional on the call's own attempt number; a retry never deletes. |
 | A body's digest lets someone with the database test guesses of a short body. | Required by the CLI RFC. Digests are salted per record, so equal bodies do not collide. The database already sits beside the repository it describes. |
 | Request records grow without bound. | Small rows; rejected requests leave none; decision 8. |
