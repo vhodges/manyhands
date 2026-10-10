@@ -65,5 +65,5 @@ native workflow's test list.
 **For Part B.** `ProposedRelationships` is typed, so the ticket bindings map a
 non-ULID entry to a code themselves. A `Set(deps)` equal to the file's list as
 a set but in another order writes and commits. A create retry must pass a
-short code if and only if the first attempt did. Fifteen minor findings are
+short code if and only if the first attempt did. Seventeen minor findings remain
 deferred in the execution ledger.
