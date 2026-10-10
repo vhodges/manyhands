@@ -131,10 +131,12 @@ fn blob_at(commit: &git2::Commit<'_>, path: &Path) -> Result<Option<Oid>, git2::
 fn changed_path(repository: &Repository, commit: Oid, path: &Path) -> Result<bool, git2::Error> {
     let commit = repository.find_commit(commit)?;
     let after = blob_at(&commit, path)?;
-    let before = match commit.parent(0) {
-        Ok(parent) => blob_at(&parent, path)?,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
-        Err(error) => return Err(error),
+    // A commit with no parent is a root. A parent that is named and
+    // cannot be found is a failure to read, not a root.
+    let before = if commit.parent_count() == 0 {
+        None
+    } else {
+        blob_at(&commit.parent(0)?, path)?
     };
     Ok(before != after)
 }
@@ -178,6 +180,13 @@ pub(crate) struct PathEvidence {
     /// not committed), no commit's parent holds the expected state, and
     /// the parent is not asked.
     anchored: bool,
+    /// The file as it was committed at acceptance already was what the
+    /// request intends: the request had nothing to commit, so no commit
+    /// is its own, whatever the range holds. Another request's commit
+    /// can be made from exactly that state and leave every field this
+    /// request sets as it intends, by changing one it does not set.
+    /// Never so for a create, which is accepted against no file.
+    settled_at_acceptance: bool,
     /// The branch's tip still holds at the path what the request
     /// expected: whatever history shows, the file has not been changed
     /// from elsewhere.
@@ -212,6 +221,7 @@ impl PathEvidence {
                 .collect(),
             widened: false,
             anchored: false,
+            settled_at_acceptance: false,
             tip_as_expected: false,
         }
     }
@@ -220,12 +230,17 @@ impl PathEvidence {
     /// the path as intended and, when the file was committed at
     /// acceptance, changed it from exactly the state the request was
     /// accepted against. A commit of the same content made over anything
-    /// else, by another request or by hand, is not the request's.
+    /// else, by another request or by hand, is not the request's. None at
+    /// all when the request had nothing to commit.
     fn candidates(&self) -> impl Iterator<Item = Oid> + '_ {
         self.changes
             .iter()
             .rev()
-            .filter(|change| change.intended && (!self.anchored || change.from_expected))
+            .filter(|change| {
+                !self.settled_at_acceptance
+                    && change.intended
+                    && (!self.anchored || change.from_expected)
+            })
             .map(|change| change.commit)
     }
 
@@ -295,21 +310,28 @@ pub(crate) fn path_evidence(
                     // The commit removed the file.
                     None => false,
                 },
-                from_expected: match found.parent(0) {
-                    Ok(parent) => observed_at(&repository, &parent, path)? == *expected,
-                    // A root commit changed the path from nothing.
-                    Err(error) if error.code() == git2::ErrorCode::NotFound => {
-                        *expected == ExpectedPathObservation::Missing
-                    }
-                    Err(error) => return Err(error),
+                // A root commit changed the path from nothing.
+                from_expected: if found.parent_count() == 0 {
+                    *expected == ExpectedPathObservation::Missing
+                } else {
+                    observed_at(&repository, &found.parent(0)?, path)? == *expected
                 },
             });
         }
+        let anchored = base.map(holds_expected).transpose()?.unwrap_or(false);
+        let base_intended = match base {
+            Some(base) => match blob_at(&repository.find_commit(base)?, path)? {
+                Some(blob) => intended(repository.find_blob(blob)?.content()),
+                None => false,
+            },
+            None => false,
+        };
         Ok(PathEvidence {
             range: commits,
             changes,
             widened: tip.is_some() && base.is_none(),
-            anchored: base.map(holds_expected).transpose()?.unwrap_or(false),
+            anchored,
+            settled_at_acceptance: anchored && base_intended,
             tip_as_expected: tip.map(holds_expected).transpose()?.unwrap_or(false),
         })
     };

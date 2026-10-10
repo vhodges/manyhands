@@ -557,3 +557,34 @@ fn a_range_widened_to_the_whole_branch_shows_no_commit_of_the_request_s() {
     commit(&fixture.repository, BRANCH, Some(made), PATH, "foreign\n");
     assert!(evidence_against(&fixture, &recorded, &expected).superseded());
 }
+
+#[test]
+fn a_request_with_nothing_to_commit_at_acceptance_has_no_commit_of_its_own() {
+    let fixture = fixture();
+    let position = fixture.position();
+    // The request sets the first line only, and the file as committed at
+    // acceptance already has it.
+    let first_line = |bytes: &[u8]| bytes.starts_with(b"before\n");
+    let evidence = |expected: &ExpectedPathObservation| {
+        path_evidence(fixture.root(), &position, PATH, expected, &first_line).unwrap()
+    };
+    // Someone else's commit is made from exactly that state and leaves
+    // the first line alone.
+    let other = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "before\nand a line the request does not set\n",
+    );
+    let committed = ExpectedPathObservation::from_bytes(b"before\n");
+    let found = evidence(&committed);
+    assert_eq!(found.own(), None);
+    assert_eq!(found.reported(STARTED, &found), None);
+    assert!(!found.superseded());
+
+    // A request whose file was edited by hand to the intended content and
+    // not committed had something to commit: the rule does not apply.
+    let edited = ExpectedPathObservation::from_bytes(b"before\nedited by hand\n");
+    assert_eq!(evidence(&edited).own(), Some(other));
+}

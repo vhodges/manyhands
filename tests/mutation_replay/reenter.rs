@@ -2045,3 +2045,44 @@ fn a_retry_after_lost_output_and_the_deletion_of_the_context_branch() {
         assert_eq!(world.pending_journal_rows(), 0, "{what}");
     }
 }
+
+#[test]
+fn a_save_that_changed_nothing_does_not_take_a_commit_that_leaves_its_fields_alone() {
+    // The first request asks for what the file already holds. It runs, as
+    // a no-op, and its output is lost.
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    // Another request saves the same title and body and sets the
+    // dependencies, which the first request leaves unchanged. Its commit
+    // is made from exactly what the first expected, and leaves every
+    // field the first sets as the first intends.
+    world.reopen();
+    let other = world.execute(
+        REQUEST_3,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: manyhands::repository::RelationshipWrite::Set(vec![
+                crate::support::items::TICKET_ABSENT.to_owned(),
+            ]),
+            ..world.save_input(TICKET_A, &world.token(TICKET_A))
+        }),
+    );
+    assert_eq!(other.outcome, Outcome::Success);
+    let tip = world.branch_tip(TICKET_A);
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+
+    // The first request had nothing to commit when it was accepted, so no
+    // commit is its own.
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&retry, "the retry");
+    assert_eq!(world.branch_tip(TICKET_A), tip);
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+    assert!(world.worktree_source(TICKET_A).contains("deps:"));
+}
