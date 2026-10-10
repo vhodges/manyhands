@@ -169,17 +169,23 @@ impl IntentDigest {
 
     /// A digest as a record holds it: 64 lowercase hexadecimal digits.
     pub fn from_stored(stored: &str) -> Option<Self> {
-        let is_canonical = stored.len() == 64
-            && stored
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-        if !is_canonical {
-            return None;
-        }
-        blake3::Hash::from_hex(stored)
-            .ok()
-            .map(|hash| Self(*hash.as_bytes()))
+        stored_digest(stored).map(Self)
     }
+}
+
+/// The 32 bytes a record holds as 64 lowercase hexadecimal digits, or
+/// `None` for anything else.
+pub(super) fn stored_digest(stored: &str) -> Option<[u8; 32]> {
+    let is_canonical = stored.len() == 64
+        && stored
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !is_canonical {
+        return None;
+    }
+    blake3::Hash::from_hex(stored)
+        .ok()
+        .map(|hash| *hash.as_bytes())
 }
 
 impl fmt::Display for IntentDigest {

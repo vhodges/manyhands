@@ -496,20 +496,16 @@ pub enum JournalRow {
 /// The longest state or step name a local operation is taken to have.
 const LONGEST_STORED_NAME: usize = 64;
 
-/// A state or step name of a local operation. The journal keeps these as
-/// free text, so only what has the form of a name is passed on: a
-/// lowercase letter followed by lowercase letters, digits and underscores.
-fn stored_name(stored: String) -> Result<String, ReadError> {
-    let is_name = stored.len() <= LONGEST_STORED_NAME
+/// Whether `stored` has the form of a local operation's state or step
+/// name. The journal keeps these as free text, so only what has that form
+/// is passed on: a lowercase letter followed by lowercase letters, digits
+/// and underscores.
+fn is_stored_name(stored: &str) -> bool {
+    stored.len() <= LONGEST_STORED_NAME
         && stored.starts_with(|first: char| first.is_ascii_lowercase())
         && stored
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
-    if is_name {
-        Ok(stored)
-    } else {
-        Err(ReadError::new(ResultCode::InternalError))
-    }
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// Where the local operation `operation_id` on `root_path` stands.
@@ -536,8 +532,9 @@ pub(super) fn lookup_operation(
     let Some((state, step)) = row else {
         return Ok(JournalRow::Absent);
     };
-    let state = stored_name(state)?;
-    let step = step.map(stored_name).transpose()?;
+    if !is_stored_name(&state) || step.as_deref().is_some_and(|step| !is_stored_name(step)) {
+        return Err(ReadError::new(ResultCode::InternalError));
+    }
     Ok(if state != "completed" {
         JournalRow::Pending { state, step }
     } else if step.as_deref() == Some(REJECTED_STEP) {

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 request",
+  "description": "What the request records hold for one request ID. Nothing is observed again: this is not what Git, the file system or an operation's own store holds now. state is accepted for a request that was begun and whose end is not recorded, and finished for one whose result is stored and is returned to every retry. A request whose record was deleted, because it was refused or failed with nothing in flight, is not found and its ID is free again. operations are the request's operations in the order it runs them; operation show reads each. result is set exactly when state is finished: the outcome, code, message, effects and data of the envelope the request returned. The envelope of this read reports the read itself, so it is a success whatever result holds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "state",
+    "command",
+    "accepted_at",
+    "finished_at",
+    "operations",
+    "result"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["accepted", "finished"]
+    },
+    "command": {
+      "type": "string"
+    },
+    "accepted_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": ["string", "null"]
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "request_operation.schema.json"
+      }
+    },
+    "result": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["outcome", "code", "message", "effects", "data"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["success", "noop", "partial", "blocked", "cancelled", "error"]
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "invalid_path",
+            "not_repository",
+            "not_repository_root",
+            "bare_repository",
+            "repository_not_registered",
+            "repository_inaccessible",
+            "invalid_id",
+            "item_not_found",
+            "path_not_found",
+            "key_not_found",
+            "public_key_unavailable",
+            "authority_not_found",
+            "operation_not_found",
+            "relationship_cycle",
+            "invalid_relationship",
+            "index_unavailable",
+            "busy",
+            "internal_error",
+            "invalid_input",
+            "request_mismatch",
+            "request_not_found",
+            "confirmation_mismatch",
+            "not_confirmable",
+            "slug_already_assigned",
+            "occupied_path",
+            "not_repairable",
+            "remote_name_conflict",
+            "invalid_remote",
+            "key_not_deletable",
+            "confirmation_required",
+            "confirmation_expired",
+            "confirmation_not_found",
+            "confirmation_used",
+            "external_change",
+            "recovery_required",
+            "original_request_required",
+            "identity_required",
+            "initials_required",
+            "invalid_slug_configuration",
+            "identity_ambiguous",
+            "ticket_closed",
+            "wrong_branch",
+            "worktree_not_clean",
+            "worktree_conflicted",
+            "invalid_configuration",
+            "publication_remote_required",
+            "publication_remote_in_use",
+            "merge_required",
+            "remote_branch_deleted",
+            "push_rejected",
+            "no_selected_key",
+            "key_unavailable",
+            "key_rejected",
+            "selected_key_in_use",
+            "unlock_required",
+            "unlock_failed",
+            "host_approval_required",
+            "host_replacement_required",
+            "host_mismatch",
+            "discovery_pending",
+            "registration_pending",
+            "poll_yielding",
+            "remote_unavailable",
+            "transport_unavailable",
+            "cancelled",
+            "already_applied"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "effects": {
+          "$ref": "effects.schema.json"
+        },
+        "data": {
+          "type": ["object", "null"],
+          "description": "The data of the envelope the request returned, whose shape is the command's own."
+        }
+      }
+    }
+  }
+}

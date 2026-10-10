@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 operation of a request",
+  "description": "One operation a request began, and the store that holds it: local for the repository's local operations, remote for its remote operations, key_material for the application's key operations. operation show reads the operation there.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["family", "operation_id"],
+  "properties": {
+    "family": {
+      "type": "string",
+      "enum": ["local", "remote", "key_material"]
+    },
+    "operation_id": {
+      "type": "string"
+    }
+  }
+}

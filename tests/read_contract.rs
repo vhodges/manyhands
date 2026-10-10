@@ -13,8 +13,8 @@ use manyhands::{
         KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
         OperationFamily, OperationNextAction, OperationOwner, PollingInterval, PollingOutcome,
         ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode, ReadinessState,
-        RelationshipRejectionDto, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
-        UnplannableReasonCode, transport::SshAuthority,
+        RelationshipRejectionDto, RepositoryService, RequestState, ResolvedRepository, SharedKeyId,
+        TicketFilter, UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -470,13 +470,16 @@ fn every_published_schema_uses_only_the_checked_keywords() {
 
 /// The only objects the contract leaves open, by file and location: the
 /// envelope's `data`, which each DTO schema describes; an item's and a
-/// comment's `unknown_metadata`, whose keys are the file's own; and a
-/// recovery action's `arguments`, which each action defines.
-const OPEN_OBJECTS: [(&str, &str); 4] = [
+/// comment's `unknown_metadata`, whose keys are the file's own; a
+/// recovery action's `arguments`, which each action defines; and the
+/// `data` of a request's stored result, which is the envelope's `data` of
+/// the command the request made.
+const OPEN_OBJECTS: [(&str, &str); 5] = [
     ("comment.schema.json", "/properties/unknown_metadata"),
     ("envelope.schema.json", "/properties/data"),
     ("item.schema.json", "/properties/unknown_metadata"),
     ("recovery_action.schema.json", "/properties/arguments"),
+    ("request.schema.json", "/properties/result/properties/data"),
 ];
 
 /// Every schema that can describe an object must close it: `properties`,
@@ -899,6 +902,26 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             RelationshipRejectionDto::CODES
                 .map(ResultCode::as_str)
                 .to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "state",
+            RequestState::ALL.map(RequestState::as_str).to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "result.outcome",
+            Outcome::ALL.map(Outcome::as_str).to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "result.code",
+            ResultCode::ALL.map(ResultCode::as_str).to_vec(),
+        ),
+        (
+            "request_operation.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
         ),
     ]
 }

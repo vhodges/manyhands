@@ -13,16 +13,13 @@
 //! A failure is returned as a `ReadError`, whose code says whether the
 //! index was busy, unavailable or held something unreadable.
 
-// `ReadError` carries its whole scope by value, as the result contract has it.
-#![allow(clippy::result_large_err)]
-
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{
     dto::RequestState,
-    identity::{ConfirmationId, IntentDigest, RequestId, ScopeKey},
+    identity::{ConfirmationId, IntentDigest, RequestId, ScopeKey, stored_digest},
 };
 use crate::{
     repository::{
@@ -159,7 +156,7 @@ fn missing_request_tables(connection: &Connection) -> Result<Vec<&'static str>, 
 /// lock. One that lacks any is migrated in a transaction that takes the
 /// write lock before it looks again: of two processes that open an old
 /// index at once, the second waits for the first and then adds nothing.
-pub(in crate::repository) fn migrate(connection: &mut Connection) -> Result<(), RepositoryError> {
+pub(in super::super) fn migrate(connection: &mut Connection) -> Result<(), RepositoryError> {
     if missing_request_tables(connection)?.is_empty() {
         return Ok(());
     }
@@ -308,10 +305,8 @@ fn stored_expected_digest(text: &str) -> Result<ExpectedPathObservation, ReadErr
     if text == "missing" {
         return Ok(ExpectedPathObservation::Missing);
     }
-    // The digest's own form check is the one for any stored digest.
-    IntentDigest::from_stored(text)
-        .and_then(|_| blake3::Hash::from_hex(text).ok())
-        .map(|hash| ExpectedPathObservation::Blake3(*hash.as_bytes()))
+    stored_digest(text)
+        .map(ExpectedPathObservation::Blake3)
         .ok_or_else(invalid_stored_data)
 }
 

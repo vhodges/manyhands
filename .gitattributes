@@ -2,3 +2,4 @@
 schemas/** -text
 tests/fixtures/read_v1/** -text
 tests/fixtures/slug_v1/** -text
+tests/fixtures/mutation_v1/** -text

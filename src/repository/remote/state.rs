@@ -8,7 +8,10 @@ use super::{
     RemoteRefClassification, RemoteRefPlan, RemoteRefTarget,
     merge::{ConfirmedCommitIdentity, IntegrationStage},
 };
-use crate::repository::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
+use crate::repository::{
+    ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation, recovery::JournalRow,
+};
+use crate::results::ResultCode;
 use crate::{canonical::ItemId, repository::AuthoringKind};
 
 pub(in super::super) fn recovery_required() -> RepositoryError {
@@ -2248,8 +2251,7 @@ pub(in super::super) fn lookup_operation(
     connection: &Connection,
     root_path: &str,
     operation_id: crate::repository::OperationId,
-) -> Result<crate::repository::recovery::JournalRow, crate::repository::ReadError> {
-    use crate::repository::{ReadError, recovery::JournalRow};
+) -> Result<JournalRow, ReadError> {
     let row: Option<(String, Option<String>, bool, bool)> = connection
         .query_row(
             "SELECT operation.phase, operation.completed_step, operation.index_pending,
@@ -2264,8 +2266,7 @@ pub(in super::super) fn lookup_operation(
     let Some((state, step, index_pending, reconciliation_required)) = row else {
         return Ok(JournalRow::Absent);
     };
-    let phase = stored_phase(&state)
-        .ok_or_else(|| ReadError::new(crate::results::ResultCode::InternalError))?;
+    let phase = stored_phase(&state).ok_or_else(|| ReadError::new(ResultCode::InternalError))?;
     let in_flight = match phase {
         RemoteOperationPhase::Reserved
         | RemoteOperationPhase::Advertising

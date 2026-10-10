@@ -8,14 +8,17 @@ use manyhands::{
     repository::{
         AddRemoteRequest, ConfirmationId, ExpectedPathObservation, LeaseKind, OperationFamily,
         OperationId, RemoveRegistrationOutcome, RemoveRegistrationRequest, RepositoryService,
-        RequestId, RequestState,
+        RequestDto, RequestId, RequestOperationDto, RequestResultDto, RequestState,
         request_store::{
             ConfirmationRecord, DigestSalt, FieldValue, InsertRequestOutcome, IntentDigest,
             JournalRow, NewConfirmation, NewRequest, RequestOperation, RequestRecord,
             RequestResult, ScopeKey,
         },
     },
-    results::{CheckpointEffect, DiscoveryEffect, Effects, Outcome, ResultCode, WriteEffect},
+    results::{
+        CheckpointEffect, DiscoveryEffect, Effects, Outcome, RecoveryActionKind, ResultCode, Scope,
+        WriteEffect,
+    },
 };
 use rusqlite::{Connection, types::Value as SqlValue};
 use serde_json::json;
@@ -23,9 +26,12 @@ use serde_json::json;
 mod support;
 
 use support::{
-    EnabledRepository, TestRepository, items,
+    EnabledRepository, TestRepository,
+    golden::{self, ContractCase},
+    items,
     mutation::{self, TestClock},
     operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
+    schema,
 };
 
 const REQUEST_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FQ0";
@@ -1789,4 +1795,264 @@ fn the_journal_lookup_reports_what_it_cannot_read() {
         )
         .unwrap(),
     );
+}
+
+const SHOW: &str = "request show";
+
+impl World {
+    /// A request that began a local and a remote operation.
+    fn insert_two_operation_request(&self, id: &str) {
+        let mut request = self.request(id);
+        request.operations.push(RequestOperation {
+            family: OperationFamily::Remote,
+            operation_id: operations::operation_id(OPERATION_B),
+        });
+        self.service.insert_request(&request).unwrap();
+    }
+}
+
+fn case<'a>(
+    name: &'a str,
+    data_schema: Option<&'a str>,
+    placeholders: &'a [(&'a str, &'a str)],
+    sentinels: &'a [&'a str],
+) -> ContractCase<'a> {
+    ContractCase {
+        name,
+        data_schema,
+        placeholders,
+        sentinels,
+    }
+}
+
+#[test]
+fn show_request_returns_an_accepted_request() {
+    let world = world();
+    world.insert_two_operation_request(REQUEST_A);
+    world.clock.set(T0 + 60);
+    assert_eq!(
+        world.service.enter_request(request_id(REQUEST_A)).unwrap(),
+        Some(2)
+    );
+
+    let envelope = world.service.show_request(request_id(REQUEST_A));
+
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.command.as_str()),
+        (Outcome::Success, ResultCode::Ok, SHOW)
+    );
+    assert_eq!(
+        envelope.scope.repository.as_deref(),
+        Some(world.scope.as_str())
+    );
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert_eq!(
+        envelope.data,
+        Some(RequestDto {
+            request_id: REQUEST_A.to_owned(),
+            state: RequestState::Accepted,
+            command: "document save".to_owned(),
+            accepted_at: operations::STORED_AT_TEXT.to_owned(),
+            finished_at: None,
+            operations: vec![
+                RequestOperationDto {
+                    family: OperationFamily::Local,
+                    operation_id: OPERATION_A.to_owned(),
+                },
+                RequestOperationDto {
+                    family: OperationFamily::Remote,
+                    operation_id: OPERATION_B.to_owned(),
+                },
+            ],
+            result: None,
+        })
+    );
+    let data_directory = world.data.path().to_str().unwrap();
+    mutation::assert_contract(
+        &case(
+            "request_show_accepted",
+            Some("request.schema.json"),
+            &[(world.scope.as_str(), "<repository>")],
+            &[BODY_SENTINEL, data_directory],
+        ),
+        &envelope,
+    );
+}
+
+#[test]
+fn show_request_returns_a_finished_request_with_its_stored_result() {
+    let world = world();
+    world.insert_two_operation_request(REQUEST_A);
+    world.clock.set(T0 + 100);
+    world
+        .service
+        .finish_request(request_id(REQUEST_A), 1, &committed())
+        .unwrap();
+
+    let envelope = world.service.show_request(request_id(REQUEST_A));
+
+    // The read succeeded; what the request came to is in its data.
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let data = envelope.data.clone().unwrap();
+    assert_eq!(data.state, RequestState::Finished);
+    assert_eq!(data.accepted_at, operations::STORED_AT_TEXT);
+    assert_eq!(data.finished_at.as_deref(), Some("2023-11-14T22:15:00Z"));
+    assert_eq!(data.operations.len(), 2);
+    assert_eq!(
+        data.result,
+        Some(RequestResultDto {
+            outcome: Outcome::Success,
+            code: ResultCode::Ok,
+            message: ResultCode::Ok.message().to_owned(),
+            effects: committed().effects,
+            data: committed().data,
+        })
+    );
+    let data_directory = world.data.path().to_str().unwrap();
+    mutation::assert_contract(
+        &case(
+            "request_show_finished",
+            Some("request.schema.json"),
+            &[(world.scope.as_str(), "<repository>")],
+            &[BODY_SENTINEL, data_directory],
+        ),
+        &envelope,
+    );
+
+    // A result that carried no data shows none.
+    world
+        .service
+        .insert_request(&world.request(REQUEST_B))
+        .unwrap();
+    world
+        .service
+        .finish_request(request_id(REQUEST_B), 1, &already_applied())
+        .unwrap();
+    let noop = world
+        .service
+        .show_request(request_id(REQUEST_B))
+        .data
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(
+        (noop.outcome, noop.code, noop.data),
+        (Outcome::Noop, ResultCode::AlreadyApplied, None)
+    );
+}
+
+#[test]
+fn show_request_of_an_application_request_names_no_repository() {
+    let world = world();
+    let request = NewRequest {
+        scope: ScopeKey::application(),
+        ..world.request(REQUEST_A)
+    };
+    world.service.insert_request(&request).unwrap();
+
+    let envelope = world.service.show_request(request_id(REQUEST_A));
+
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_eq!(envelope.scope, Scope::default());
+}
+
+#[test]
+fn show_request_reports_a_request_no_record_holds() {
+    let world = world();
+    world
+        .service
+        .insert_request(&world.request(REQUEST_A))
+        .unwrap();
+
+    let envelope = world.service.show_request(request_id(REQUEST_ABSENT));
+
+    assert_eq!(envelope.code, ResultCode::RequestNotFound);
+    assert_eq!(envelope.outcome, Outcome::Error);
+    assert_eq!(envelope.data, None);
+    assert_eq!(envelope.scope, Scope::default());
+    mutation::assert_contract(
+        &case("failure_request_not_found", None, &[], &[BODY_SENTINEL]),
+        &envelope,
+    );
+
+    // A deleted record is no longer shown.
+    assert!(
+        world
+            .service
+            .delete_request(request_id(REQUEST_A), 1)
+            .unwrap()
+    );
+    assert_eq!(
+        world.service.show_request(request_id(REQUEST_A)).code,
+        ResultCode::RequestNotFound
+    );
+}
+
+#[test]
+fn show_request_reports_an_unavailable_or_unreadable_database() {
+    let degraded = degraded_world();
+    let envelope = degraded.service.show_request(request_id(REQUEST_A));
+    assert_eq!(envelope.code, ResultCode::IndexUnavailable);
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert_eq!(envelope.data, None);
+    assert_eq!(
+        envelope
+            .recovery
+            .iter()
+            .map(|action| action.action)
+            .collect::<Vec<_>>(),
+        [RecoveryActionKind::IndexRebuild]
+    );
+
+    let world = world();
+    world
+        .service
+        .insert_request(&world.request(REQUEST_A))
+        .unwrap();
+    let held = RepositoryService::hold_lease_for_testing(
+        &world.fixture.root,
+        world.data.path(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    assert_eq!(
+        world.service.show_request(request_id(REQUEST_A)).code,
+        ResultCode::Busy
+    );
+    drop(held);
+
+    // A row no record function wrote is not passed on.
+    world
+        .index()
+        .execute_batch("UPDATE request_operations SET operation_ulid = 'not an operation ID'")
+        .unwrap();
+    let envelope = world.service.show_request(request_id(REQUEST_A));
+    assert_eq!(envelope.code, ResultCode::InternalError);
+    assert_eq!(envelope.data, None);
+}
+
+#[test]
+fn the_mutation_goldens_are_exactly_the_registered_cases() {
+    let mut fixtures: Vec<_> = std::fs::read_dir(mutation::fixture_directory())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    fixtures.sort();
+    let mut cases: Vec<_> = mutation::CASES
+        .iter()
+        .map(|case| format!("{case}.json"))
+        .collect();
+    cases.sort();
+    assert_eq!(fixtures, cases);
+
+    for case in mutation::CASES {
+        let path = mutation::fixture_directory().join(format!("{case}.json"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(golden::render(&value, &[]), text, "{path:?}");
+        schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
+    }
 }
