@@ -158,9 +158,11 @@ pub(crate) struct Before {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Found {
     /// The request's work is done and nothing is in flight: its operation
-    /// completed, its commit is in range, and the path has since been
-    /// changed by someone else. The request is not run again; its commit
-    /// is reported and the later change is left as it is.
+    /// completed and its commit is in range. Nothing remains for the domain
+    /// to complete, and calling it again could only be refused for what
+    /// has happened to the file since. The request is not run again; its
+    /// commit is reported, and a later change by someone else, committed
+    /// or not, is left as it is.
     Done { commit: git2::Oid },
     /// A commit in range changed the path to something the request did
     /// not intend, and the request's work is not known to be done: the
@@ -184,9 +186,6 @@ impl Before {
     }
 
     pub(crate) fn found(&self) -> Found {
-        if !self.evidence.superseded() {
-            return Found::Continue;
-        }
         // A commit of the intended content is the request's own only when
         // an attempt of the request had started.
         let own = self.evidence.own().filter(|_| self.started());
@@ -207,7 +206,13 @@ impl Before {
                     owes_work: _,
                 },
                 own,
-            ) => Found::Foreign { own },
+            ) => {
+                if self.evidence.superseded() {
+                    Found::Foreign { own }
+                } else {
+                    Found::Continue
+                }
+            }
         }
     }
 

@@ -38,15 +38,25 @@ fn before(journal: JournalRow, changes: &[(u8, bool)]) -> Before {
 }
 
 #[test]
-fn a_path_nobody_else_changed_is_continued_whatever_the_journal_says() {
+fn a_path_nobody_else_changed_is_continued_while_the_request_s_work_is_not_done() {
     for journal in [JournalRow::Absent, pending(), completed()] {
-        assert_eq!(before(journal.clone(), &[]).found(), Found::Continue);
-        assert_eq!(
-            before(journal, &[(OWN, true)]).found(),
-            Found::Continue,
-            "the newest change is as intended"
-        );
+        assert_eq!(before(journal, &[]).found(), Found::Continue);
     }
+    // The newest change is as intended, and the operation has not
+    // completed: the domain is what finishes it.
+    for journal in [JournalRow::Absent, pending()] {
+        assert_eq!(before(journal, &[(OWN, true)]).found(), Found::Continue);
+    }
+}
+
+#[test]
+fn a_completed_request_with_its_commit_in_range_is_done() {
+    // Nothing remains for the domain to do, and calling it again could
+    // only be refused for what has happened to the file since.
+    assert_eq!(
+        before(completed(), &[(OWN, true)]).found(),
+        Found::Done { commit: oid(OWN) }
+    );
 }
 
 #[test]

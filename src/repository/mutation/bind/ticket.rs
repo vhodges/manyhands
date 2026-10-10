@@ -20,7 +20,8 @@ use super::{
             ExpectedPathObservation, ItemDtoKind, OperationFamily, ProposedRelationships,
             RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
             RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
-            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
+            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
+            recovery::{FinalKind, JournalRow},
         },
         dto::{MutationDataDto, TicketMutationDto},
         evidence::{self, Claim, PathEvidence, Position, Unreadable},
@@ -990,20 +991,53 @@ impl Binding for TicketBinding {
                     Some(Ok(false)) | None => {
                         let code = outcome::repository_error_code(error.kind);
                         let journal = accepted.journal_row(service);
-                        let effects = if journal.as_ref().is_none_or(JournalRow::in_flight) {
-                            // A range that cannot be read shows no commit.
-                            // The record stays accepted either way: the
-                            // row is in flight.
-                            let commit = after.ok().and_then(|after| before.reported(&after));
-                            let written = file.as_deref().is_some_and(|bytes| {
-                                ExpectedPathObservation::from_bytes(bytes) != expectation(accepted)
-                                    && self.holds_bytes(bytes)
-                            });
-                            outcome::stopped_save_effects(commit, commit.is_some() || written)
-                        } else {
-                            Effects::not_requested()
-                        };
-                        (code, effects, Standing::Stopped { journal })
+                        let completed = matches!(
+                            journal,
+                            Some(JournalRow::Final {
+                                kind: FinalKind::Completed,
+                                owes_work: false,
+                            })
+                        );
+                        let commit = after.as_ref().ok().and_then(|after| before.reported(after));
+                        match (completed, commit, after) {
+                            // This call was refused, and the request's work
+                            // is done all the same: its operation has
+                            // completed and its commit is there, made by an
+                            // earlier attempt or by a call of the same
+                            // request that ran beside this one. What is
+                            // true of the request is its result.
+                            (true, Some(commit), _) => {
+                                let (code, effects) = settled_save(Some(commit));
+                                (code, effects, Standing::Final)
+                            }
+                            // The operation completed and Git cannot be
+                            // read to say whether the request committed.
+                            // Deleting the record now could lose a commit's
+                            // report: it is left for a retry to settle.
+                            (true, None, Err(Unreadable)) => {
+                                (code, Effects::not_requested(), Standing::Unconfirmed)
+                            }
+                            (true, None, Ok(_)) | (false, _, _) => {
+                                let in_flight = journal.as_ref().is_none_or(JournalRow::in_flight);
+                                let effects = if in_flight {
+                                    // A range that cannot be read shows no
+                                    // commit. The record stays accepted
+                                    // either way: the row is in flight.
+                                    let written = file.as_deref().is_some_and(|bytes| {
+                                        ExpectedPathObservation::from_bytes(bytes)
+                                            != expectation(accepted)
+                                            && self.holds_bytes(bytes)
+                                    });
+                                    outcome::stopped_save_effects(
+                                        commit,
+                                        commit.is_some() || written,
+                                    )
+                                } else {
+                                    Effects::not_requested()
+                                };
+                                (code, effects, Standing::Stopped { journal })
+                            }
+                        }
                     }
                 }
             }

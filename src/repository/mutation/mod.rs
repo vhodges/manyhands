@@ -711,14 +711,16 @@ impl RepositoryService {
     ///    of the request's path since the recorded position. A row or a
     ///    repository that cannot be read answers the call and leaves the
     ///    record as it is.
-    /// 2. When someone else has changed the path since, the request is not
-    ///    run again: it is `external_change`, or, when its operation
-    ///    completed and its own commit is in range beneath the change, it
-    ///    is finished with that commit.
-    /// 3. Otherwise the domain operation is called under the recorded
+    /// 2. When the operation has completed and the request's own commit
+    ///    is in range, the request is finished with that commit and no
+    ///    domain call is made: nothing remains to continue.
+    /// 3. Otherwise, when someone else has committed other content to the
+    ///    path since, the request is not run again: it is
+    ///    `external_change`.
+    /// 4. Otherwise the domain operation is called under the recorded
     ///    operation ID and expectation. This is the only way the work is
     ///    continued: only the domain completes its row and its hand-off.
-    /// 4. The commit reported comes from the evidence read before and
+    /// 5. The commit reported comes from the evidence read before and
     ///    after that call, and the record is settled as a first call's is.
     fn reenter(
         &self,

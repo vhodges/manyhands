@@ -909,3 +909,318 @@ fn a_commit_whose_journal_step_was_refused_is_finished_by_a_retry() {
     );
     assert_eq!(world.branch_commits(TICKET_A), 3);
 }
+
+#[test]
+fn a_retry_after_lost_output_reports_the_commit_whatever_the_file_has_become() {
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    let commit = world.branch_tip(TICKET_A).unwrap();
+
+    // Someone edits the file afterwards and does not commit. The request
+    // finished before that: its operation completed and its commit is
+    // there. Calling the save again would only be refused for the edit.
+    let file = world
+        .worktree(TICKET_A)
+        .join(crate::support::items::ticket_path(TICKET_A));
+    std::fs::write(&file, foreign_source()).unwrap();
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(retry.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit));
+    assert_eq!(world.worktree_source(TICKET_A), foreign_source());
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
+
+/// A save of `TICKET_A` in the repository at `root`, as `World::save`
+/// makes it, for a caller that holds no `World`.
+fn save_at(root: &std::path::Path, token: &str) -> Mutation {
+    Mutation::TicketSave(TicketSaveInput {
+        root: root.to_owned(),
+        id: crate::support::items::item_id(TICKET_A),
+        draft: World::draft(TITLE, BODY),
+        deps: manyhands::repository::RelationshipWrite::Unchanged,
+        parent: manyhands::repository::RelationshipWrite::Unchanged,
+        observation: token.to_owned(),
+    })
+}
+
+/// While one call is inside the domain operation, a second call of the
+/// same request finds the repository busy.
+#[cfg(unix)]
+#[test]
+fn a_concurrent_duplicate_is_busy_and_a_third_call_finishes_the_record() {
+    use std::sync::mpsc;
+
+    use crate::support::mutation::{execute_with, owned_path_hook_test_lock};
+    use manyhands::repository::{OwnedPathBoundary, RepositoryService};
+
+    let _hook_guard = owned_path_hook_test_lock();
+    let world = World::new();
+    let token = world.token(TICKET_A);
+
+    // The first call is held at its save's first read of the file, which
+    // is made under the repository lease.
+    let (entered, has_entered) = mpsc::channel::<()>();
+    let (release, released) = mpsc::channel::<()>();
+    let first_service = RepositoryService::open_at(world.data.path()).unwrap();
+    first_service.set_owned_path_hook_for_root_for_testing(
+        world.worktree(TICKET_A),
+        crate::support::items::ticket_path(TICKET_A).into(),
+        OwnedPathBoundary::Read,
+        move || {
+            entered.send(()).unwrap();
+            released.recv().unwrap();
+        },
+    );
+    let first = {
+        let root = world.root.clone();
+        let token = token.clone();
+        std::thread::spawn(move || execute_with(&first_service, REQUEST_1, save_at(&root, &token)))
+    };
+    has_entered.recv().unwrap();
+    let record = world.record(REQUEST_1).expect("accepted");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
+
+    // The second call enters the record and cannot take the lease.
+    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (second.outcome, second.code, second.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::Busy,
+            Some(FailureClass::Transient)
+        )
+    );
+    assert_eq!(second.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&second), ["request.retry"]);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+
+    // The first completes and returns its commit to its caller. Its
+    // attempt is no longer the record's, so it does not settle it.
+    release.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(record.result, None);
+
+    // A third call finishes the record with that same commit.
+    let third = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &third, 1, "the third call");
+    assert_eq!(third.effects.commit_oid, Some(commit));
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
+}
+
+/// A second call reads its evidence before the first commits and makes
+/// its domain call after: the commit it finds was not there before, and
+/// is the request's. `edited`: someone also edits the file between the
+/// two, so the second call's save is refused.
+fn second_call_after_the_first_commits(edited: bool) {
+    use std::sync::mpsc;
+
+    use crate::support::mutation::execute_with;
+    use manyhands::repository::RepositoryService;
+
+    let world = World::new();
+    let token = world.token(TICKET_A);
+
+    // The first call is accepted and held before its domain call: no
+    // journal row and no commit exist yet.
+    let (accepted, is_accepted) = mpsc::channel::<()>();
+    let (go, gone) = mpsc::channel::<()>();
+    let first_service = RepositoryService::open_at(world.data.path()).unwrap();
+    first_service.set_request_hook_for_testing(move || {
+        accepted.send(()).unwrap();
+        gone.recv().unwrap();
+    });
+    let (done, is_done) = mpsc::channel();
+    let first = {
+        let root = world.root.clone();
+        let token = token.clone();
+        std::thread::spawn(move || {
+            let envelope = execute_with(&first_service, REQUEST_1, save_at(&root, &token));
+            done.send(()).unwrap();
+            envelope
+        })
+    };
+    is_accepted.recv().unwrap();
+    let operation_id = world.record(REQUEST_1).unwrap().operations[0]
+        .operation_id
+        .to_string();
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+
+    // The second call has read the journal row and the evidence when its
+    // hook runs. Only then does the first go on, to its end.
+    let file = world
+        .worktree(TICKET_A)
+        .join(crate::support::items::ticket_path(TICKET_A));
+    world.service.set_request_hook_for_testing(move || {
+        go.send(()).unwrap();
+        is_done.recv().unwrap();
+        if edited {
+            std::fs::write(&file, foreign_source()).unwrap();
+        }
+    });
+    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+
+    // Not a no-op: the request committed, and the second call says so.
+    assert_eq!(
+        (second.outcome, second.code),
+        (Outcome::Success, ResultCode::Ok),
+        "edited: {edited}"
+    );
+    assert_eq!(second.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(second.effects.commit_oid, Some(commit));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!((record.state, record.attempt), (RequestState::Finished, 2));
+    assert_eq!(record.result.unwrap().effects, second.effects);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_second_call_that_read_its_evidence_before_the_first_committed_reports_that_commit() {
+    second_call_after_the_first_commits(false);
+}
+
+#[test]
+fn a_second_call_whose_save_is_refused_after_the_first_committed_reports_that_commit() {
+    second_call_after_the_first_commits(true);
+}
+
+const SAME_REQUEST_ROOT: &str = "MANYHANDS_SAME_REQUEST_ROOT";
+const SAME_REQUEST_DATA: &str = "MANYHANDS_SAME_REQUEST_DATA";
+const SAME_REQUEST_TOKEN: &str = "MANYHANDS_SAME_REQUEST_TOKEN";
+const SAME_REQUEST_GO: &str = "MANYHANDS_SAME_REQUEST_GO";
+const SAME_REQUEST_OUT: &str = "MANYHANDS_SAME_REQUEST_OUT";
+
+/// The process `two_processes_...` starts twice: it submits the request
+/// when it is told to and writes the envelope it gets.
+#[test]
+fn same_request_child() {
+    let Some(root) = std::env::var_os(SAME_REQUEST_ROOT) else {
+        return;
+    };
+    let variable = |name: &str| std::path::PathBuf::from(std::env::var_os(name).unwrap());
+    let service =
+        manyhands::repository::RepositoryService::open_at(&variable(SAME_REQUEST_DATA)).unwrap();
+    let token = std::env::var(SAME_REQUEST_TOKEN).unwrap();
+    let out = variable(SAME_REQUEST_OUT);
+    std::fs::write(out.with_extension("ready"), b"").unwrap();
+    let go = variable(SAME_REQUEST_GO);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !go.exists() {
+        assert!(std::time::Instant::now() < deadline, "never told to go");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let envelope = crate::support::mutation::execute_with(
+        &service,
+        REQUEST_1,
+        save_at(std::path::Path::new(&root), &token),
+    );
+    std::fs::write(&out, serde_json::to_vec(&envelope).unwrap()).unwrap();
+}
+
+#[test]
+fn two_processes_submitting_the_same_new_request_make_one_commit() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let scratch = tempfile::tempdir().unwrap();
+    let go = scratch.path().join("go");
+    let outs = [scratch.path().join("a.json"), scratch.path().join("b.json")];
+    let mut children: Vec<std::process::Child> = outs
+        .iter()
+        .map(|out| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "reenter::same_request_child", "--nocapture"])
+                .env(SAME_REQUEST_ROOT, &world.root)
+                .env(SAME_REQUEST_DATA, world.data.path())
+                .env(SAME_REQUEST_TOKEN, &token)
+                .env(SAME_REQUEST_GO, &go)
+                .env(SAME_REQUEST_OUT, out)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for (child, out) in children.iter_mut().zip(&outs) {
+        crate::support::wait_for_path(child, &out.with_extension("ready"));
+    }
+    std::fs::write(&go, b"").unwrap();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "a child failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // One set of effects.
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    assert_eq!(world.request_rows(), 1);
+    // Each caller gets the request's result, or is told the repository
+    // was busy; at least one of them made the commit and says so.
+    let mut succeeded = 0;
+    for out in &outs {
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(out).unwrap()).unwrap();
+        let what = envelope.to_string();
+        match envelope["code"].as_str().unwrap() {
+            "ok" => {
+                succeeded += 1;
+                assert_eq!(envelope["outcome"], "success", "{what}");
+                assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
+                assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
+            }
+            "busy" => {
+                assert_eq!(envelope["outcome"], "error", "{what}");
+                assert!(envelope["effects"]["commit_oid"].is_null(), "{what}");
+            }
+            other => panic!("neither a result nor busy: {other}: {what}"),
+        }
+    }
+    assert!(succeeded >= 1);
+
+    // Whatever each was told, the request is answered with its commit
+    // from here on, and nothing is left in flight.
+    let after = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (after.outcome, after.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(after.effects.commit_oid, Some(commit));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
