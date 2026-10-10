@@ -25,7 +25,11 @@ use time::OffsetDateTime;
 
 use crate::canonical;
 
+mod comment_publication;
 mod coordination;
+pub use comment_publication::*;
+#[cfg(test)]
+mod comment_publication_tests;
 mod discovery;
 pub mod keys;
 #[cfg(unix)]
@@ -396,6 +400,7 @@ pub struct AuthoringTarget {
     pub operation_id: OperationId,
 }
 
+#[derive(Clone)]
 pub struct ItemContext {
     pub root: PathBuf,
     pub kind: AuthoringKind,
@@ -472,24 +477,19 @@ pub enum SaveOutcome {
     },
 }
 
-pub enum CommentPublicationState {
-    PublishPending,
-    SyncDeferred,
-}
-
-pub enum CommentSubmissionOutcome {
+pub(crate) enum LocalCommentCheckpointOutcome {
     IdentityRequired {
         context: ItemContext,
     },
     Saved {
         context: ItemContext,
         checkpoint: LocalCheckpoint,
-        publication: CommentPublicationState,
+        binding: recovery::CommentBinding,
     },
     IndexPending {
         context: ItemContext,
         checkpoint: LocalCheckpoint,
-        publication: CommentPublicationState,
+        binding: recovery::CommentBinding,
     },
 }
 
@@ -2190,28 +2190,13 @@ impl RepositoryService {
         }
     }
 
-    pub fn submit_comment(
-        &self,
-        request: SubmitCommentRequest,
-    ) -> Result<CommentSubmissionOutcome, RepositoryError> {
-        self.submit_comment_with_effective_config(request, None)
-    }
-
-    #[doc(hidden)]
-    pub fn submit_comment_with_identity_config_for_testing(
-        &self,
-        request: SubmitCommentRequest,
-        effective_config: &Config,
-    ) -> Result<CommentSubmissionOutcome, RepositoryError> {
-        self.submit_comment_with_effective_config(request, Some(effective_config))
-    }
-
-    fn submit_comment_with_effective_config(
+    pub(crate) fn checkpoint_comment_locally(
         &self,
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
-    ) -> Result<CommentSubmissionOutcome, RepositoryError> {
+    ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
+        let operation_id = request.target.operation_id;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let comment_id = request.comment_id.to_string();
@@ -2230,6 +2215,8 @@ impl RepositoryService {
             &authoring_write_target(&request.target, &paths),
         )?;
         let effects = CallEffects::default();
+        let mut known_checkpoint = None;
+        let mut retained_binding = None;
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
                 return Err(authoring_error(
@@ -2239,6 +2226,8 @@ impl RepositoryService {
                     "comment submission requires an edit target",
                 ));
             }
+            retained_binding =
+                Some(self.bind_comment_publication(&root_repository, &root, &request, record)?);
             let context = match self.prepare_context_unlocked(
                 AuthoringTarget {
                     root: request.target.root,
@@ -2256,12 +2245,19 @@ impl RepositoryService {
             };
             // A whole editing context is reusable by any later operation.
             effects.undone();
+            let binding = retained_binding
+                .as_ref()
+                .ok_or_else(comment_publication::recovery_error)?;
+            let repository = Repository::open(&context.worktree)
+                .map_err(|_| comment_publication::recovery_error())?;
+            let head = repository
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(|_| comment_publication::recovery_error())?;
+            if head.id() != binding.pre_checkpoint_oid {
+                return Err(comment_publication::recovery_error());
+            }
             self.reject_pending_synchronization_merge(&context, operation)?;
-            let publication = comment_publication_state(
-                read_configuration_for(&context.root, operation)?,
-                operation,
-                &context.root,
-            )?;
             let context_content = canonical_context_at(&context.worktree, operation)?;
             if !context_content
                 .items
@@ -2417,7 +2413,7 @@ impl RepositoryService {
             let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
-                return Ok(CommentSubmissionOutcome::IdentityRequired { context });
+                return Ok(LocalCommentCheckpointOutcome::IdentityRequired { context });
             };
             if !exists {
                 effects.begin();
@@ -2449,41 +2445,61 @@ impl RepositoryService {
                     removed_source: None,
                 },
             )?;
+            let oid = match checkpoint {
+                LocalCheckpoint::Checkpointed { commit_oid }
+                | LocalCheckpoint::RefreshPending { commit_oid } => commit_oid,
+                LocalCheckpoint::NoChange => repository
+                    .head()
+                    .and_then(|head| head.peel_to_commit())
+                    .map(|commit| commit.id())
+                    .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?,
+            };
+            known_checkpoint = Some((context.clone(), oid));
+            if !matches!(checkpoint, LocalCheckpoint::NoChange) {
+                let mut binding = retained_binding
+                    .clone()
+                    .ok_or_else(comment_publication::recovery_error)?;
+                binding.checkpoint_oid = Some(oid);
+                let (receipt, time) =
+                    self.prove_comment_receipt(&root, &binding, Some(&request.body))?;
+                self.store_comment_receipt(&root, &binding, receipt.checkpoint_oid, &time)?;
+                binding.created_at = Some(time);
+                retained_binding = Some(binding);
+            }
             self.advance_lifecycle(
                 &context.root,
                 operation,
                 record,
                 "authoring_checkpoint_observed",
             )?;
-            Ok(CommentSubmissionOutcome::Saved {
+            Ok(LocalCommentCheckpointOutcome::Saved {
                 context,
                 checkpoint,
-                publication,
+                binding: retained_binding
+                    .clone()
+                    .ok_or_else(comment_publication::recovery_error)?,
             })
         })();
         match result {
-            Ok(CommentSubmissionOutcome::Saved {
+            Ok(LocalCommentCheckpointOutcome::Saved {
                 context,
                 checkpoint,
-                publication,
+                binding,
             }) if !matches!(checkpoint, LocalCheckpoint::NoChange) || record.is_pending => {
-                if self.handoff_post_authoritative(
-                    &root,
-                    operation,
-                    record,
-                    request.target.operation_id,
-                    lease,
-                )? {
-                    Ok(CommentSubmissionOutcome::Saved {
+                if self
+                    .handoff_post_authoritative(&root, operation, record, operation_id, lease)
+                    .unwrap_or(false)
+                {
+                    Ok(LocalCommentCheckpointOutcome::Saved {
                         context,
                         checkpoint: checkpoint_after_refresh(checkpoint),
-                        publication,
+                        binding,
                     })
                 } else {
-                    Ok(CommentSubmissionOutcome::IndexPending {
+                    Ok(LocalCommentCheckpointOutcome::IndexPending {
                         context,
                         checkpoint,
-                        publication,
+                        binding,
                     })
                 }
             }
@@ -2493,6 +2509,14 @@ impl RepositoryService {
                 Ok(value)
             }
             Err(error) => {
+                if let Some((context, commit_oid)) = known_checkpoint {
+                    return Ok(LocalCommentCheckpointOutcome::IndexPending {
+                        context,
+                        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+                        binding: retained_binding
+                            .ok_or_else(comment_publication::recovery_error)?,
+                    });
+                }
                 self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
             }
         }
@@ -7988,29 +8012,6 @@ fn canonical_comment_paths_for_id(
                 .then_some(path)
         })
         .collect())
-}
-
-fn comment_publication_state(
-    configuration: ConfigurationInspection,
-    operation: RepositoryOperation,
-    root: &Path,
-) -> Result<CommentPublicationState, RepositoryError> {
-    match configuration {
-        ConfigurationInspection::Valid(configuration)
-            if configuration.publication_remote.is_some() =>
-        {
-            Ok(CommentPublicationState::SyncDeferred)
-        }
-        ConfigurationInspection::Valid(_) => Ok(CommentPublicationState::PublishPending),
-        ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
-            Err(authoring_error(
-                operation,
-                root,
-                RepositoryErrorKind::InvalidConfiguration,
-                "the repository configuration is not valid",
-            ))
-        }
-    }
 }
 
 fn ensure_authoring_worktree_base(

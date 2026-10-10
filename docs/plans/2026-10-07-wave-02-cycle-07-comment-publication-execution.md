@@ -305,3 +305,65 @@ Cycle amendment point 2. Applied the qualification to that approved paragraph;
 the existing Cycle 06 local guard and saved-local/Busy mapping stand. Task 0
 is complete. No additional implementation, publication or lifecycle authority
 is inferred from this document approval.
+
+## Task 1: Compound API and Local Checkpoint Extraction — 2026-10-10
+
+Task review base: `4d69314` (approved Task 0 qualification). Direct controller
+implementation; independent read-only review and re-review of the actual diff.
+
+- Added the compound requests, original receipt, independent publication/index
+  states and redacted submission error in `repository/comment_publication.rs`.
+  Requests carry host/confirmed-identity controls but no endpoint/refspec/key/
+  passphrase/force controls. Large receipt/recovery/error values are boxed;
+  Debug never renders drafts, roots, paths or backend text.
+- Extracted existing validation/identity/owned-path/scoped-checkpoint behavior
+  into the crate-private `checkpoint_comment_locally`. No public local-only
+  submission bypass; the identity-config test seam also takes a compound request
+  and caller-owned session. Retired normal `SyncDeferred`.
+- Migrated local-authoring/foundation/journal callers through an explicit test
+  session adapter calling the public API. Source-included Cycle 06 setup uses
+  the crate-private helper to arrange independently synchronized history. This
+  is fixture setup, not a public authoring bypass or index repair.
+- Updated the Wave 03 API audit with a dated current-signature/receipt/retry
+  update and acceptance limits while retaining its historical source evidence.
+- A coherent public Saved receipt requires stable child correlation. The
+  minimum binding/receipt/delegation foundation from Tasks 2–4 is therefore
+  included in this API checkpoint rather than returning an ephemeral child or
+  exposing a temporary bypass. Their migration/collision/fault/transport and
+  retry acceptance remains separate work; this does not complete Tasks 2–4.
+
+### Review and fixes
+
+Initial independent Task 1 review requested changes. Confirmed each finding
+against code and failing tests, then re-reviewed the fixes:
+
+| Finding | Resolution/evidence |
+| --- | --- |
+| Missing-identity retry after an intervening context save could commit, then lose Saved because its frozen pre-OID no longer matched | Added failing regression using an intervening public document save. Now check frozen pre-OID before canonical writes; refusal leaves HEAD and missing comment unchanged. Known postcommit effects always retain Saved/local recovery. |
+| Receiptless body-bearing replay could recreate an externally deleted comment | Added failing receipt-persistence/deletion/replay test. Reconcile existing binding against immutable Git before entering the writer; return the original OID and recovery without recreating the file. |
+| Original receipt persisted after discovery rather than before it | Persist validated OID/time before discovery. On journal/receipt failure retain in-memory binding and known commit so the public result remains Saved. |
+| Journal observation failure left body-free retry unable to claim local indexing | Added failing handoff-repair regression. A short-lease conditional update advances only pre-index states; existing active indexing owner state/epoch is preserved. Then reuse normal refresh after releasing the lease. |
+| API audit stale and outcome assertions too broad | Dated audit update; exact NoPublicationRemote assertions; configured-remote regression requires delegated Transport(RuntimeUninitialized). |
+| New binding FK blocked deliberate registration removal | Binding cascades with its local operation record, matching existing explicit registration-removal recovery deletion. Missing correlation subsequently requires recovery, never inferred adoption. Journal rejection regression passes. |
+
+Re-review found no remaining Task 1 blocker by source inspection. It carried
+these explicit Task 2 acceptance debts: reciprocal child-ID collision checks at
+local and remote consuming transactions; strict substituted-schema/root/target
+startup validation; table-inventory update; receiptless original checkpoint made
+unreachable by a reset back to its pre-OID (must not create a replacement).
+
+### Verification
+
+Red type/API compilation established the missing compound signature and types;
+fixture ULID spelling was corrected before the second red run. The two review
+regressions and the journal-repair assertion were observed failing before fixes.
+The new fixture constructs its born canonical initial commit before service
+calls and performs no index repair after any save or comment.
+
+Focused green checks via Devenv: library `comment_publication` 7; local-authoring
+`comment_` 17; foundation recovery 51; journal rejection 18. All-target,
+all-feature locked Cargo check and clippy (`-D warnings`) pass. Cargo fmt and
+`git diff --check` pass. Clippy initially flagged large values; boxed them and
+reran clippy plus focused library/authoring tests green. Full final and native
+Cycle evidence is still owed by Tasks 5–6. The exact table inventory is a known
+Task 2 regression migration, not a claimed passing full suite.

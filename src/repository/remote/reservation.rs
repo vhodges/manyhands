@@ -618,6 +618,19 @@ impl RepositoryService {
         })
     }
 
+    /// Read-only correlation adapter: existence and historical authority, never
+    /// a reservation token or permission to restart.
+    pub(crate) fn comment_child_authority(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+    ) -> Result<Option<bool>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            Ok(state::read_operation(tx, id, operation_id)?
+                .map(|record| record.authority.is_some()))
+        })
+    }
+
     pub fn cancel_remote_operation(
         &self,
         root: &Path,

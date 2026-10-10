@@ -9,6 +9,7 @@ use manyhands::repository::{
 };
 
 mod support;
+use support::comment_publication::TestCommentSession;
 
 fn rejection<T>(result: Result<T, RepositoryError>) -> RepositoryErrorKind {
     match result {
@@ -247,13 +248,18 @@ fn a_rejected_comment_does_not_block_the_repository() {
     let enabled = support::enabled_repository(&fixture);
     detach(&fixture);
 
-    let kind = rejection(enabled.service.submit_comment(SubmitCommentRequest {
-        target: target(&fixture.root, AuthoringKind::Ticket, ContextIntent::Edit),
-        comment_id: support::root_comment_id(),
-        parent_id: None,
-        body: "Body\n".to_owned(),
-        expected_destination: ExpectedPathObservation::Missing,
-    }));
+    let kind = enabled
+        .service
+        .submit_comment_with_test_session(SubmitCommentRequest {
+            target: target(&fixture.root, AuthoringKind::Ticket, ContextIntent::Edit),
+            comment_id: support::root_comment_id(),
+            parent_id: None,
+            body: "Body\n".to_owned(),
+            expected_destination: ExpectedPathObservation::Missing,
+        })
+        .err()
+        .expect("comment rejection")
+        .kind;
     assert_eq!(kind, RepositoryErrorKind::DetachedHead);
     fixture.repository.set_head("refs/heads/main").unwrap();
 

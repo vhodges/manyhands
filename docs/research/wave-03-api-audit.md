@@ -315,12 +315,38 @@ W2-05 owns clean deliberate sync, W2-06 merge/conflict resolution, W2-07 compoun
 comment publication, W2-08 one-shot poll/clean updates/materialization, W2-09
 promotion and W2-10 closure. Their source/outcome tests are absent here.
 
-`submit_comment` only local checkpoint/discovery: no remote gives PublishPending;
+At the original audit base, `submit_comment` only local checkpoint/discovery: no remote gives PublishPending;
 configured remote gives SyncDeferred. It is **not** Post and sync. Reuse comment
 ID/timestamp/file/checkpoint on retry; W2-07 must add publication-only continuation
 without resubmission. Ordinary save remains local. Automatic poll must never
 push/checkpoint/merge/cleanup. Previously published remote-deleted branches
 require explicit republish consent, not ordinary silent sync.
+
+**Cycle 07 implementation update — 2026-10-10 (verification in progress):**
+`RepositoryService::submit_comment<P>(PublishCommentRequest,
+&mut SessionCredentials<P>)` replaces the local-only signature. The request
+wraps the unchanged `SubmitCommentRequest` draft plus optional `HostApproval`
+and `ConfirmedCommitIdentity`; identity confirmation goes to child sync only.
+`CommentSubmissionOutcome::Saved` carries an original `CommentReceipt`
+(action/comment/item/parent IDs, bound synchronization ID, original checkpoint
+OID and derived context/path), `CommentPublicationState::{Published,
+AlreadyCurrent, Pending}` and independent `CommentIndexingState` local/remote
+pending flags. There is no normal `SyncDeferred` outcome. `IdentityRequired`
+remains pre-write; other pre-checkpoint failures use redacted
+`CommentSubmissionError`. The additional `context`/`checkpoint` Saved fields
+describe local effects of this call, not publication authority.
+
+`retry_comment_publication<P>(RetryCommentPublicationRequest, &mut
+SessionCredentials<P>)` takes the original operation ID, root, optional host/
+identity controls and explicit restart; it accepts no body. The bound child ID
+keys existing Cycle 06 inspection/resolution. `cancel_comment_publication`
+looks up that child and requests only existing active safe-point cancellation.
+Comments in another writable context may checkpoint while a conflict exists,
+then report pending/Busy; authoring inside the context owned by the pending
+merge is refused before checkpointing. Whole already-checkpointed context
+history can publish; unsaved item buffers are not saved. Focused local tests
+are executed during this update; full Cycle acceptance and native evidence
+remain pending Tasks 2–6 in the Cycle 07 execution ledger.
 
 ## C5 — Desktop-only state and editor obligations
 
@@ -395,7 +421,7 @@ Line anchors identify inspected definitions at the recorded HEAD.
 | E-context | [prepare_context](../../src/repository.rs#L1211), AuthoringTarget L369 → ContextProvisionOutcome L385 / ItemContext L377 | [prepare_context_creates_a_document_context_at_its_deterministic_location](../../tests/local_authoring.rs#L77), [context_replay_worktree_interruption_uses_one_journaled_context](../../tests/local_authoring.rs#L5685); mutation, not viewing |
 | E-document | [save_document](../../src/repository.rs#L1453), SaveDocumentRequest L408 / DocumentDraft L392 → SaveOutcome L439 / LocalCheckpoint L433 | [document_create_writes_canonical_markdown_and_a_scoped_checkpoint](../../tests/local_authoring.rs#L1575), [document_move_removes_source_and_checkpoints_only_the_owned_pair](../../tests/local_authoring.rs#L1656), [stale_document_edit_preserves_external_replacement](../../tests/local_authoring.rs#L5807), [recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not_commit_again](../../tests/local_authoring.rs#L2706); destination observation mandatory, source comparison only for Some; no missing-source-observation rejection proof, assigned W3-02/04 with C1 tests; C1 no-op/digest gaps |
 | E-ticket | [save_ticket](../../src/repository.rs#L1837), SaveTicketRequest L418 / TicketDraft L398 → SaveOutcome / LocalCheckpoint | [ticket_create_writes_exact_canonical_body_and_scoped_checkpoint](../../tests/local_authoring.rs#L3088), [ticket_edit_preserves_unknown_closure_and_exact_body](../../tests/local_authoring.rs#L3132), [stale_ticket_edit_preserves_pre_save_repository_and_worktree_state](../../tests/local_authoring.rs#L5966); no W2-10 lifecycle/closed-edit proof |
-| E-comment | [submit_comment](../../src/repository.rs#L2106), SubmitCommentRequest L425 → CommentSubmissionOutcome L458 / CommentPublicationState L453 | [comment_document_root_writes_only_its_path_and_checkpoints](../../tests/local_authoring.rs#L3696), [comment_ticket_reply_validates_parent_and_defers_configured_publication](../../tests/local_authoring.rs#L3747), [comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops](../../tests/local_authoring.rs#L3814); local only |
+| E-comment | [submit_comment and retry_comment_publication](../../src/repository/comment_publication.rs), PublishCommentRequest / RetryCommentPublicationRequest + caller SessionCredentials → CommentSubmissionOutcome, original CommentReceipt, publication and indexing states | [local authoring regressions](../../tests/local_authoring.rs), [receipt/identity/rejection/reconciliation tests](../../src/repository/comment_publication_tests.rs); Cycle 07 implementation in progress, real-SSH and native acceptance pending |
 | E-index | [repository_snapshot](../../src/repository.rs#L1160), root → RepositorySnapshot L542 / DiscoveredItem L588 / DiscoveryProblem L613; [refresh_repository](../../src/repository.rs#L970), RefreshRepositoryRequest L327 → RefreshOutcome L622; [rebuild_repository](../../src/repository.rs#L1106), RebuildRepositoryRequest L333 → RepositorySnapshot | [snapshot_reads_a_registered_cache_without_mutating_available_state](../../tests/discovery_rebuild.rs#L537), [discovery_public_types_hold_metadata_only](../../tests/discovery_rebuild.rs#L434), [refresh_requires_registration_but_rebuild_registers_the_explicit_root](../../tests/discovery_rebuild.rs#L567), [refresh_scan_race_retains_previous_rows_then_converges_on_retry](../../tests/discovery_rebuild.rs#L867), [rebuild_corrupt_cache_restores_only_the_explicit_root](../../tests/discovery_rebuild.rs#L1930); cache/lock effects, metadata-only |
 | E-recovery | [recovery_inspection](../../src/repository.rs#L1198), root → Vec<RecoveryInspection> L339; private pending_for_root in recovery.rs L525 | [pending_lifecycle_records_block_differently_identified_mutations_without_side_effects](../../tests/recovery_foundation_gate.rs#L790), [fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts](../../tests/recovery_foundation_gate.rs#L2007); exact typed original calls, not generic list/show/resume service |
 | E-keyreg | [register_shared_key](../../src/repository/keys/registry.rs#L25), RegisterSharedKeyRequest in keys/mod.rs L94 → RegisterSharedKeyOutcome; [list_shared_keys](../../src/repository/keys/registry.rs#L107) → Vec<SharedKeyRegistration>; [select_shared_key](../../src/repository/keys/registry.rs#L151), [clear_shared_key_selection](../../src/repository/keys/registry.rs#L206) → SharedKeySelectionOutcome; [unregister_shared_key](../../src/repository/keys/registry.rs#L237) → UnregisterSharedKeyOutcome | [registration_survives_reopen_and_remains_unselected](../../tests/shared_key_registry.rs#L811), [selection_replaces_the_selected_key_and_survives_reopen](../../tests/shared_key_registry.rs#L1236), [unregistering_requires_clearing_the_selected_key_and_preserves_key_fixtures](../../tests/shared_key_registry.rs#L1413); no request IDs/public text read |
@@ -454,7 +480,7 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `ticket create` — W3-04/09 | `save_ticket` E-ticket Create; caller ID, full TicketDraft | Missing canonical ticket path/unique ID; status text closed allowed | Op ID; provision/write/checkpoint/discovery; closure fields omitted; no publish | C2 absence/digest/progress missing | Local identity only; no raw body logs | partially-present | W1-03/05; W3-02/04; R-author |
 | `ticket save` — W3-04/09 | `save_ticket` E-ticket Edit | Exact byte expected_path; project/team optional full draft, patch/null adapter missing | Op ID; preserves unknown/closure and semantic no-op; lifecycle guard re-audit C1 | C2; no closure via save, no force | Local identity only; C0 | partially-present | W1-03/05; W3-01/02/04, W2-10 guard; R-author + R-domain |
 | `comment list` — W3-01/10 | `repository_snapshot` E-index IDs/order only; ordered_comment_threads E-canon pure | Item ID in canonical context; roots/replies and visible malformed thread DTO needed | Read; no body/author/token public service; no checkpoint | No consent/context provisioning; complete safe reads missing | Requested bodies allowed, C0/C1 author provenance gap | partially-present | W1-01/04; W3-01; R-read |
-| `comment add` — W3-05/10 | `submit_comment` E-comment exists; **missing compound publication API/outcome/tests** | Exact item/context/comment ID/parent + Missing destination | Local write/checkpoint/index; PublishPending or SyncDeferred only; same ID retry C4 | C2; immediate configured sync awaits W2-07; source separate from item drafts | Local identity now; future sync selected-key/trust C3 | pending-Wave-02 | W2-07 over W1-03 and W2-05/06; W3-02/05; R-domain |
+| `comment add` — W3-05/10 | Compound `submit_comment`, original receipt and body-free `retry_comment_publication` E-comment; Cycle 07 acceptance in progress | Exact item/context/comment ID/parent + Missing destination; one bound sync child | Scoped checkpoint/discovery, then context sync; separate Saved publication/index state; original action reused on retry | Immediate configured context sync; explicit child restart/cancel; source separate from unsaved item drafts | Local commit identity; caller-owned selected-key session/host approval; confirmation only for child merge | implementation-in-progress | W2-07 over W1-03 and W2-05/06; W3-02/05; R-domain |
 | `item sync` — W3-05/10 | Missing public sync; E-observe/E-reserve and private transfer helpers not service | Exact item/shared context/remote/ref observations; never unsaved caller input | No sync outcomes/tests; future fetch/FF/merge/push/discovery effects C4 | C2 safe cancel + deleted-branch republish consent required | Future selected-key/trust C3 | pending-Wave-02 | W2-05 clean + W2-06 merge; W3-02/05; R-domain |
 | `repo sync` — W3-05/10 | Missing public primary sync; E-observe is advertisement | Exact primary/remote, clean-primary observations | Future fetch/FF/merge/push/discovery, not polling; replay unproved | C2 progress/cancel, no inferred publication intent | Future selected-key/trust C3 | pending-Wave-02 | W2-05/06; W3-02/05; R-domain |
 | `document promote` — W3-06/11 | Missing public preflight/confirmed promotion; future enum action not API | Exact item + whole branch/primary/remote/OIDs/paths/cleanup | Future final checkpoint/sync/merge/primary publish/remote-first cleanup; partial/replay absent | W2-09 preflight then W3-02 expiry/accepted consent/progress C2 | Local identity + selected-key if remote; local-only pending explicit | pending-Wave-02 | W2-09; W3-02/06; R-domain |

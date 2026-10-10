@@ -2368,19 +2368,22 @@ fn review_primary_resolution_releases_whole_repository_authoring_without_restart
         service.save_document(save()).unwrap(),
         SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
     ));
-    let submitted = service.submit_comment(SubmitCommentRequest {
-        target: AuthoringTarget {
-            root: root.path().into(),
-            kind: AuthoringKind::Document,
-            item_id,
-            intent: ContextIntent::Edit,
-            operation_id: OperationId::new(),
+    let submitted = service.checkpoint_comment_locally(
+        SubmitCommentRequest {
+            target: AuthoringTarget {
+                root: root.path().into(),
+                kind: AuthoringKind::Document,
+                item_id,
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            parent_id: None,
+            body: "available after local completion".into(),
+            expected_destination: ExpectedPathObservation::Missing,
         },
-        comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
-        parent_id: None,
-        body: "available after local completion".into(),
-        expected_destination: ExpectedPathObservation::Missing,
-    });
+        None,
+    );
     assert!(
         submitted.is_ok(),
         "comment authoring after primary release; category={:?}",
@@ -2445,14 +2448,14 @@ fn review_resolution_releases_parent_after_verified_cleanup_and_replays_original
             matches!(service.save_ticket(edit()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
         );
         assert!(
-            matches!(service.submit_comment(comment()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+            matches!(service.checkpoint_comment_locally(comment(), None), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
         );
         if recover {
             *service.failure_point.lock().unwrap() =
                 Some(FailurePoint::ResolutionBeforeMetadataRetirement);
             assert!(service.resolve_synchronization(request.clone()).is_err());
             assert!(service.save_ticket(edit()).is_err());
-            assert!(service.submit_comment(comment()).is_err());
+            assert!(service.checkpoint_comment_locally(comment(), None).is_err());
             *service.failure_point.lock().unwrap() = None;
         }
         let restarted = RepositoryService::open_at(data.path()).unwrap();
@@ -2508,7 +2511,7 @@ fn review_resolution_releases_parent_after_verified_cleanup_and_replays_original
             saved.unwrap(),
             SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
         ));
-        let submitted = restarted.submit_comment(comment());
+        let submitted = restarted.checkpoint_comment_locally(comment(), None);
         assert!(
             submitted.is_ok(),
             "comment authoring after parent release; category={:?}",
@@ -6829,7 +6832,7 @@ fn pending_context_synchronization_blocks_only_its_public_authoring_context() {
     );
     let comment_id: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap();
     assert!(
-        matches!(service.submit_comment(SubmitCommentRequest { target: AuthoringTarget { root: root.path().into(), kind: AuthoringKind::Ticket, item_id: ticket_id.clone(), intent: ContextIntent::Edit, operation_id: OperationId::new() }, comment_id, parent_id: None, body: "blocked".into(), expected_destination: ExpectedPathObservation::Missing }), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        matches!(service.checkpoint_comment_locally(SubmitCommentRequest { target: AuthoringTarget { root: root.path().into(), kind: AuthoringKind::Ticket, item_id: ticket_id.clone(), intent: ContextIntent::Edit, operation_id: OperationId::new() }, comment_id, parent_id: None, body: "blocked".into(), expected_destination: ExpectedPathObservation::Missing }, None), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
     );
     assert_eq!(
         (

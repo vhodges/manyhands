@@ -22,6 +22,7 @@ use manyhands::repository::{
 use rusqlite::{Connection, params};
 
 mod support;
+use support::comment_publication::TestCommentSession;
 
 #[test]
 fn corrupt_recovery_publishes_permanent_host_trust_fence() {
@@ -1990,7 +1991,7 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
     );
     assert!(
         service
-            .submit_comment(comment_request(&born.root, OperationId::new()))
+            .submit_comment_with_test_session(comment_request(&born.root, OperationId::new()))
             .is_ok()
     );
 

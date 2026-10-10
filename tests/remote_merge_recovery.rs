@@ -949,25 +949,30 @@ impl Pair {
     }
     /// An ordinary public comment submission on the shared ticket.
     fn submit_comment(&self, side: &Side, body: &str) -> Result<git2::Oid, FixtureError> {
-        let outcome = fixed(side.service.submit_comment(SubmitCommentRequest {
-            target: self.target(side, AuthoringKind::Ticket, TICKET),
-            comment_id: fixed(NEW_COMMENT.parse())?,
-            parent_id: None,
-            body: body.into(),
-            expected_destination: ExpectedPathObservation::Missing,
-        }))?;
+        // Arrange independent Cycle 06 history through the crate-private local
+        // helper in this source-included fixture. Public submission is compound.
+        let outcome = fixed(side.service.checkpoint_comment_locally(
+            SubmitCommentRequest {
+                target: self.target(side, AuthoringKind::Ticket, TICKET),
+                comment_id: fixed(NEW_COMMENT.parse())?,
+                parent_id: None,
+                body: body.into(),
+                expected_destination: ExpectedPathObservation::Missing,
+            },
+            None,
+        ))?;
         match outcome {
-            CommentSubmissionOutcome::Saved {
+            repository::LocalCommentCheckpointOutcome::Saved {
                 context,
                 checkpoint,
                 ..
             }
-            | CommentSubmissionOutcome::IndexPending {
+            | repository::LocalCommentCheckpointOutcome::IndexPending {
                 context,
                 checkpoint,
                 ..
             } => self.checkpointed(&context, checkpoint),
-            CommentSubmissionOutcome::IdentityRequired { .. } => Err(FixtureError),
+            repository::LocalCommentCheckpointOutcome::IdentityRequired { .. } => Err(FixtureError),
         }
     }
     fn inspect(
