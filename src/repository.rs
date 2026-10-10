@@ -664,6 +664,7 @@ pub enum RegistryConnectionPhase {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    CommentAfterLocalHandoff,
     CommentAfterDestinationPrepared,
     CommentAfterCheckpointIntent,
     GenerationEntropyUnavailable,

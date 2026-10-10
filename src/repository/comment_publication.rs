@@ -294,6 +294,22 @@ impl RepositoryService {
                     },
                 });
             }
+            if self
+                .check_failure(
+                    FailurePoint::CommentAfterLocalHandoff,
+                    RepositoryOperation::SubmitComment,
+                    &root,
+                )
+                .is_err()
+            {
+                return Ok(CommentSubmissionOutcome::Saved {
+                    receipt: Box::new(receipt),
+                    context,
+                    checkpoint,
+                    publication: pending_synchronization(SynchronizationError::Interrupted),
+                    indexing: CommentIndexingState::default(),
+                });
+            }
             self.continue_comment_publication(
                 receipt,
                 checkpoint,

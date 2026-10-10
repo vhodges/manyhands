@@ -616,3 +616,66 @@ The owner-authorized shared repair is complete. Task 4 is complete; ticket is
 open, not review-ready. Continue Task 5 complete public SSH fault/privacy/
 collaborator/identity/transport acceptance, then Task 6 final local and native
 gates. No push, dispatch or lifecycle authorization inferred.
+
+## Task 5: Public SSH Acceptance and Fault Matrix — 2026-10-10
+
+Review base `c5dfb13`; direct sequential controller implementation with independent
+read-only review/re-reviews. Resumption fetch confirms origin/main remains
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6`, already an ancestor. Retained the
+identified Task 5 working changes; no stash or unrelated worktree mutation.
+
+Expanded the custom target from 12 to **41 real-SSH cases**, with two fixture-free
+negative output-capture controls. Ordinary services and public compound/retry/
+resolution APIs exercise canonical document/ticket roots and nested replies,
+local-only discovery/later publication, collaborator AlreadyCurrent, clean merge,
+explicit owned resolution, exact external repair, other-context conflict Busy,
+identity confirmation, authentication/trust/endpoint/deletion/push failures,
+durable local/remote boundaries and independent discovery failures. No post-save
+fixture index refresh, extra bound child or no-upgrade service bypass.
+
+Review required stronger proof, rather than a production redesign:
+
+- Genuine local discovery INSERT failure blocks prompts/transport/child until
+  reopened body-free repair; the older registry-marker fault is retained as a
+  distinct durable window. Added an existing-pattern hidden stop after completed
+  local handoff and before child start; compile/runtime red then green were
+  observed. Original unused child is retained.
+- Faults compare original action/comment/child/time/OID and retained canonical
+  bytes; complete ODB checks and total child counts exclude duplicate effects.
+  Roots/replies check request/receipt/canonical identities and exactly three
+  correctly targeted context children.
+- Negative public calls cover root/item/kind/comment/parent/action mismatches,
+  missing binding/OID, committed removal/replacement and checkpoint-excluding
+  reset with file/index/ref preservation and no transport.
+- A live second endpoint proves generation/digest fencing before authentication;
+  shared-selection changes retain the original fenced child and publish through
+  later ordinary synchronization. Wrong selected-key acceptance originally
+  cancelled unlock: the strengthened assertion failed, then supplied credentials
+  proved actual attempted/rejected authentication with the selected registration.
+- Applied/unreleased resolution drops/reopens before cancel/restart, retaining
+  candidate/attempt and exact two-parent commit through cleanup/publication.
+- Accepted push effects use the exact receive-update wait and bounded Condvar
+  relay-audit barriers before/after counter comparisons. Terminal index replay
+  preserves all commit objects, integration journals, HEAD and transport counts
+  while restoring discovery membership.
+- Preservation includes index stat timestamps, primary/FETCH_HEAD/tracking state,
+  published prior item content and non-context remote refs. Privacy scans the
+  complete probe union, raw/hex body digest, nonempty WAL/backup surfaces and
+  failed public diagnostic formatting plus unfiltered captured stdout/stderr.
+
+Independent final Task 5 re-review approves all five original P1 and three P2
+proof findings; no remaining scoped source-review blocker. Latest focused target
+**41 passes**; all-target/all-feature locked clippy with warnings denied, fmt and
+`git diff --check` pass. Workflow wiring remains manual on all five native targets.
+No native path-length/ABI execution or total-deadline claim is inferred. Canonical
+comment paths add 125 characters to each short clone root; actual native temp,
+resolution staging and Windows temporary-path evidence remain owed.
+
+Task 5 is complete. Task 6 full run passed library **503** (including the restored
+bounded-history guard), publication **41**, local authoring **131** and preceding
+suites, then failed one existing concurrent-opening read test with RecoveryRequired
+at `tests/read_items.rs:3852`. Isolated rerun and the complete read-items target
+**67 pass**. Investigate the Cycle 07 migration write before declaring the final
+gate green; full output `tool_1276d4955001KtBRJwOt42xU7e`. Ticket remains open and
+not review-ready. Push, native dispatch, PR, closure, merge and cleanup remain
+separately gated.
