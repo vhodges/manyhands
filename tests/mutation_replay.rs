@@ -2146,6 +2146,9 @@ fn the_mutation_goldens_are_exactly_the_registered_cases() {
 #[path = "mutation_replay/execute.rs"]
 mod execute;
 
+#[path = "mutation_replay/reenter.rs"]
+mod reenter;
+
 /// The process `support::hold_lease_in_child` starts: it holds the lease
 /// it is told to until it is released.
 #[test]

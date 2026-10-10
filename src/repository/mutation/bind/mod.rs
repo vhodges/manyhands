@@ -13,10 +13,10 @@ use crate::results::{Effects, RecoveryAction, ResultCode, Scope};
 use super::{
     super::{
         ExpectedPathObservation, OperationFamily, OperationId, ReadError, RepositoryService,
-        recovery::JournalRow,
+        recovery::{FinalKind, JournalRow},
     },
     dto::MutationDataDto,
-    evidence::Position,
+    evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     records::RequestRecord,
 };
@@ -124,17 +124,98 @@ pub(crate) enum Standing {
     /// row's to say: `journal` is the row as the binding read it after the
     /// call, or `None` when it could not be read.
     Stopped { journal: Option<JournalRow> },
-    /// The domain returned a result that names a commit, and Git could not
-    /// be read to say whether the commit is this request's. Nothing is
-    /// stored: a result finished now would be a no-op for a save that may
-    /// have committed. The record stays accepted for a retry to settle.
+    /// Git could not be read to say what the request committed: after a
+    /// domain call that returned a result, or on re-entry before any call.
+    /// Nothing is stored and nothing is deleted: a result finished now
+    /// would be a no-op for a save that may have committed. The record
+    /// stays accepted for a retry to settle.
     Unconfirmed,
+    /// A re-entry stopped before its domain call, for a reason that says
+    /// nothing of what an earlier attempt did. `journal` is the row as it
+    /// was read: when no attempt had started, nothing is in flight and the
+    /// record is deleted; otherwise the request's result is still owed and
+    /// the record stays accepted, also when the row has completed.
+    NotRun { journal: JournalRow },
 }
 
 /// A domain call's result and what it leaves.
 pub(crate) struct Ran {
     pub(crate) answer: Answer,
     pub(crate) standing: Standing,
+}
+
+/// What re-entry reads before it makes its domain call: where the
+/// request's operation stood in its journal, and what Git showed of the
+/// request's path. The same two are what the commit rule needs after the
+/// call, because the row's state after the call proves nothing: a repeat
+/// resets a rejected row before the domain runs.
+pub(crate) struct Before {
+    pub(crate) journal: JournalRow,
+    pub(crate) evidence: PathEvidence,
+}
+
+/// What re-entry does about what it read before the domain call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Found {
+    /// The request's work is done and nothing is in flight: its operation
+    /// completed, its commit is in range, and the path has since been
+    /// changed by someone else. The request is not run again; its commit
+    /// is reported and the later change is left as it is.
+    Done { commit: git2::Oid },
+    /// A commit in range changed the path to something the request did
+    /// not intend, and the request's work is not known to be done: the
+    /// answer is `external_change` and the request is not run again.
+    /// `own` is the commit an earlier attempt of the request made before
+    /// that, when one had started and made one.
+    Foreign { own: Option<git2::Oid> },
+    /// Nothing stands in the way: the domain operation is called.
+    Continue,
+}
+
+impl Before {
+    /// Whether an earlier attempt of the request had started: its
+    /// operation's journal row was pending, or final and not rejected. A
+    /// rejected row reads as absent.
+    pub(crate) fn started(&self) -> bool {
+        match self.journal {
+            JournalRow::Absent => false,
+            JournalRow::Pending(_) | JournalRow::Final { .. } => true,
+        }
+    }
+
+    pub(crate) fn found(&self) -> Found {
+        if !self.evidence.superseded() {
+            return Found::Continue;
+        }
+        // A commit of the intended content is the request's own only when
+        // an attempt of the request had started.
+        let own = self.evidence.own().filter(|_| self.started());
+        match (&self.journal, own) {
+            (
+                JournalRow::Final {
+                    kind: FinalKind::Completed,
+                    owes_work: false,
+                },
+                Some(commit),
+            ) => Found::Done { commit },
+            (
+                JournalRow::Absent
+                | JournalRow::Pending(_)
+                | JournalRow::Final {
+                    kind:
+                        FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                    owes_work: _,
+                },
+                own,
+            ) => Found::Foreign { own },
+        }
+    }
+
+    /// The commit a call reports, from the evidence read after its domain
+    /// call.
+    pub(crate) fn reported(&self, after: &PathEvidence) -> Option<git2::Oid> {
+        after.reported(self.started(), &self.evidence)
+    }
 }
 
 pub(crate) trait Binding {
@@ -166,6 +247,22 @@ pub(crate) trait Binding {
     /// operation ID and expectation, and reports what the repository shows
     /// of it afterwards.
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran;
+
+    /// Re-entry, before the domain call: an earlier call of the request
+    /// started and its end was not recorded. Sets what `prepare` worked
+    /// out for the domain call, without the checks a retry skips: the
+    /// caller's token described the file before the first attempt, whose own
+    /// write is allowed to have changed it. Then reads the journal row and
+    /// the evidence the rules need.
+    ///
+    /// An `Err` answers the request without a domain call.
+    fn reenter(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<Before, Ran>;
+
+    /// Re-entry, the domain call: made with the recorded operation ID and
+    /// the recorded expectation, which is the only way the work is
+    /// continued. The commit is taken from the evidence read before and
+    /// after the call, never from what the domain names.
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran;
 }
 
 /// The effects the repository shows of the unfinished request `record`
@@ -193,3 +290,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Effects::not_requested()
     }
 }
+
+#[cfg(test)]
+#[path = "before_tests.rs"]
+mod before_tests;

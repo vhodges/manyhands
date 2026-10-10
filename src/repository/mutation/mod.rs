@@ -402,14 +402,22 @@ impl RepositoryService {
                         binding: binding.as_ref(),
                         identity: &identity,
                     };
-                    return if !identity.matches(binding.as_ref(), &record) {
-                        self.mismatched(&reply, &record)
-                    } else {
-                        match record.state {
-                            RequestState::Finished => self.replay(&reply, record),
-                            RequestState::Accepted => self.reenter(&reply, record),
+                    if !identity.matches(binding.as_ref(), &record) {
+                        return self.mismatched(&reply, &record);
+                    }
+                    match record.state {
+                        RequestState::Finished => return self.replay(&reply, record),
+                        RequestState::Accepted => {
+                            // `None` when another call settled the record
+                            // meanwhile: the next look answers from what
+                            // it left.
+                            if let Some(envelope) =
+                                self.reenter(binding.as_mut(), &identity, &record)
+                            {
+                                return envelope;
+                            }
                         }
-                    };
+                    }
                 }
                 None => {
                     if let Some(envelope) =
@@ -495,7 +503,19 @@ impl RepositoryService {
     fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
         // The cache guard is not held here: the record functions release
         // it before they return, and the domain call takes it itself.
-        let Ran { answer, standing } = reply.binding.run(self, accepted);
+        let ran = reply.binding.run(self, accepted);
+        self.settled(reply, accepted, ran)
+    }
+
+    /// The envelope of what a call found or did, with its record settled
+    /// from it.
+    fn settled(
+        &self,
+        reply: &Reply<'_>,
+        accepted: &Accepted,
+        ran: Ran,
+    ) -> Envelope<MutationDataDto> {
+        let Ran { answer, standing } = ran;
         let settlement = Settlement::of(&standing);
         let envelope = reply.envelope(answer, Some(accepted), settlement == Settlement::Leave);
         self.settle(accepted, settlement, &envelope);
@@ -621,36 +641,49 @@ impl RepositoryService {
         )
     }
 
-    /// SEAM(7b): an accepted record matches this call. An earlier attempt
-    /// started and its end was not recorded.
+    /// An accepted record matches this call: an earlier call of the
+    /// request started and its end was not recorded. `None` when the
+    /// record was settled between the look that found it and this.
     ///
-    /// Re-entering a request is not built yet. This returns
-    /// `ReentryNotBuilt::envelope`, an `internal_error` that changes
-    /// nothing: the record keeps its state and its attempt, no domain call
-    /// is made. The call that replaces it raises the attempt with
-    /// `enter_request`, makes `Accepted::of_record(&record, attempt)` and
-    /// goes on to `run_accepted` or its own evidence rules.
-    fn reenter(&self, reply: &Reply<'_>, record: RequestRecord) -> Envelope<MutationDataDto> {
-        ReentryNotBuilt { record }.envelope(reply)
-    }
-}
-
-/// The placeholder for re-entering an accepted request, which holds what
-/// re-entry starts from.
-struct ReentryNotBuilt {
-    /// The matching record: `accepted`, with its attempt, operation ID,
-    /// recorded position (`base_ref`, `base_oid`) and expected digest.
-    record: RequestRecord,
-}
-
-impl ReentryNotBuilt {
-    fn envelope(self, reply: &Reply<'_>) -> Envelope<MutationDataDto> {
-        let accepted = Accepted::of_record(&self.record, self.record.attempt);
-        reply.envelope(
-            Answer::stopped(ResultCode::InternalError),
-            accepted.as_ref(),
-            false,
-        )
+    /// The call raises the record's attempt, so that it is the one call
+    /// that may settle it: a call that entered before it and is still
+    /// running reports what it did and changes nothing. The caller's
+    /// token is not checked again. Then, in order:
+    ///
+    /// 1. The binding reads the operation's journal row and what Git shows
+    ///    of the request's path since the recorded position. A row or a
+    ///    repository that cannot be read answers the call and leaves the
+    ///    record as it is.
+    /// 2. When someone else has changed the path since, the request is not
+    ///    run again: it is `external_change`, or, when its operation
+    ///    completed and its own commit is in range beneath the change, it
+    ///    is finished with that commit.
+    /// 3. Otherwise the domain operation is called under the recorded
+    ///    operation ID and expectation. This is the only way the work is
+    ///    continued: only the domain completes its row and its hand-off.
+    /// 4. The commit reported comes from the evidence read before and
+    ///    after that call, and the record is settled as a first call's is.
+    fn reenter(
+        &self,
+        binding: &mut dyn Binding,
+        identity: &RequestIdentity,
+        record: &RequestRecord,
+    ) -> Option<Envelope<MutationDataDto>> {
+        let attempt = match self.enter_request(record.request_id) {
+            Ok(Some(attempt)) => attempt,
+            Ok(None) => return None,
+            Err(error) => return Some(Reply { binding, identity }.read_failure(&error)),
+        };
+        let Some(accepted) = Accepted::of_record(record, attempt) else {
+            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
+        };
+        let before = binding.reenter(self, &accepted);
+        let reply = Reply { binding, identity };
+        let ran = match before {
+            Ok(before) => binding.rerun(self, &accepted, &before),
+            Err(ran) => ran,
+        };
+        Some(self.settled(&reply, &accepted, ran))
     }
 }
 
@@ -682,6 +715,10 @@ impl Settlement {
             Standing::Final => Self::Finish,
             Standing::Owed | Standing::Unconfirmed => Self::Leave,
             Standing::Stopped { journal: None } => Self::Leave,
+            Standing::NotRun { journal } => match journal {
+                JournalRow::Absent => Self::Delete,
+                JournalRow::Pending(_) | JournalRow::Final { .. } => Self::Leave,
+            },
             Standing::Stopped {
                 journal: Some(journal),
             } => match journal {

@@ -65,37 +65,159 @@ fn range(repository: &Repository, position: &Position) -> Result<Vec<Oid>, git2:
     walk.set_sorting(git2::Sort::TOPOLOGICAL)?;
     walk.push(tip)?;
     if let Some(base) = position.base_oid
-        && (base == tip || repository.graph_descendant_of(tip, base).unwrap_or(false))
+        && (base == tip || is_ancestor(repository, base, tip)?)
     {
         walk.hide(base)?;
     }
     walk.collect()
 }
 
-/// The blob at `path` in `commit`, if a file is there.
-fn blob_at(
-    repository: &Repository,
-    commit: &git2::Commit<'_>,
-    path: &Path,
-) -> Result<Option<Oid>, git2::Error> {
+/// Whether the recorded commit `base` is an ancestor of `tip`.
+///
+/// A commit the repository does not hold is not an ancestor of anything in
+/// it. Any other failure to read is an error and never "no": that answer
+/// widens the range to the whole branch, where a commit made before the
+/// request was accepted could be taken for the request's.
+fn is_ancestor(repository: &Repository, base: Oid, tip: Oid) -> Result<bool, git2::Error> {
+    match repository.find_commit(base) {
+        Ok(_) => repository.graph_descendant_of(tip, base),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// The blob at `path` in `commit`, if a file is there. Whether one is
+/// there is read from the tree: the blob itself is not opened, so a blob
+/// that cannot be read is still a file, and reading it fails where its
+/// content is asked for.
+fn blob_at(commit: &git2::Commit<'_>, path: &Path) -> Result<Option<Oid>, git2::Error> {
     match commit.tree()?.get_path(path) {
-        Ok(entry) => Ok(Some(entry.id())),
+        Ok(entry) => Ok((entry.kind() == Some(git2::ObjectType::Blob)).then(|| entry.id())),
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
         Err(error) => Err(error),
     }
-    .map(|blob| blob.filter(|blob| repository.find_blob(*blob).is_ok()))
 }
 
 /// Whether `commit` left `path` other than its first parent had it.
 fn changed_path(repository: &Repository, commit: Oid, path: &Path) -> Result<bool, git2::Error> {
     let commit = repository.find_commit(commit)?;
-    let after = blob_at(repository, &commit, path)?;
+    let after = blob_at(&commit, path)?;
     let before = match commit.parent(0) {
-        Ok(parent) => blob_at(repository, &parent, path)?,
+        Ok(parent) => blob_at(&parent, path)?,
         Err(error) if error.code() == git2::ErrorCode::NotFound => None,
         Err(error) => return Err(error),
     };
     Ok(before != after)
+}
+
+/// What Git shows of a request's path since the request was accepted: the
+/// commits in range, and of those the ones that changed the path, each
+/// with whether it left the path as the request intended.
+///
+/// Re-entry reads this before and after its domain call. It is never a
+/// guess: a range, commit or file that could not be read is `Unreadable`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PathEvidence {
+    /// Every commit in range, newest first.
+    range: Vec<Oid>,
+    /// The commits in range that changed the path, newest first.
+    changes: Vec<PathChange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PathChange {
+    commit: Oid,
+    /// Whether the commit left the path as the request intended.
+    intended: bool,
+}
+
+impl PathEvidence {
+    /// The evidence of a range that holds exactly `changes`, newest first,
+    /// each with whether it left the path as intended.
+    #[cfg(test)]
+    pub(crate) fn of_changes_for_testing(changes: &[(Oid, bool)]) -> Self {
+        Self {
+            range: changes.iter().map(|(commit, _)| *commit).collect(),
+            changes: changes
+                .iter()
+                .map(|(commit, intended)| PathChange {
+                    commit: *commit,
+                    intended: *intended,
+                })
+                .collect(),
+        }
+    }
+
+    /// The commit that is the request's own, if an attempt of the request
+    /// committed: the oldest in range that left the path as intended. A
+    /// later commit of the same content was made over a path that already
+    /// held it, or over someone else's change, and is not the request's.
+    pub(crate) fn own(&self) -> Option<Oid> {
+        self.changes
+            .iter()
+            .rev()
+            .find(|change| change.intended)
+            .map(|change| change.commit)
+    }
+
+    /// Whether the newest commit that changed the path left it as
+    /// something the request did not intend: the path was changed from
+    /// elsewhere, after the request's own commit if it made one.
+    pub(crate) fn superseded(&self) -> bool {
+        self.changes.first().is_some_and(|change| !change.intended)
+    }
+
+    /// The commit a call reports, given this evidence read after its
+    /// domain call and `before` read ahead of it.
+    ///
+    /// A commit is reported only if it is in range and left the path as
+    /// intended, and one of two things holds. `started`: before the call
+    /// the operation's journal row was pending or final, so an earlier
+    /// attempt of this request had started, and the commit is the oldest
+    /// such. Or the commit was not there before the call, so this call
+    /// made it. Otherwise no commit is the request's: identical content
+    /// that was there before a request that had not started is someone
+    /// else's.
+    pub(crate) fn reported(&self, started: bool, before: &Self) -> Option<Oid> {
+        self.changes
+            .iter()
+            .rev()
+            .filter(|change| change.intended)
+            .map(|change| change.commit)
+            .find(|commit| started || !before.range.contains(commit))
+    }
+}
+
+/// Reads what Git shows of `path` since `position`. `intended` decides
+/// from a file's bytes whether they are what the request intends.
+pub(crate) fn path_evidence(
+    root: &Path,
+    position: &Position,
+    path: &str,
+    intended: &dyn Fn(&[u8]) -> bool,
+) -> Result<PathEvidence, Unreadable> {
+    let read = || -> Result<PathEvidence, git2::Error> {
+        let repository = Repository::open(root)?;
+        let path = Path::new(path);
+        let range = range(&repository, position)?;
+        let mut changes = Vec::new();
+        for commit in &range {
+            if !changed_path(&repository, *commit, path)? {
+                continue;
+            }
+            let blob = blob_at(&repository.find_commit(*commit)?, path)?;
+            changes.push(PathChange {
+                commit: *commit,
+                intended: match blob {
+                    Some(blob) => intended(repository.find_blob(blob)?.content()),
+                    // The commit removed the file.
+                    None => false,
+                },
+            });
+        }
+        Ok(PathEvidence { range, changes })
+    };
+    read().map_err(|_| Unreadable)
 }
 
 /// Git could not be read, so the check has no answer. This is not "not
@@ -150,7 +272,7 @@ pub(crate) fn intended_commit(
             if !changed_path(&repository, commit, path)? {
                 continue;
             }
-            let blob = blob_at(&repository, &repository.find_commit(commit)?, path)?;
+            let blob = blob_at(&repository.find_commit(commit)?, path)?;
             let Some(blob) = blob else {
                 return Ok(None);
             };

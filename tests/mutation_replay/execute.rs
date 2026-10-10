@@ -571,28 +571,6 @@ fn a_failure_after_the_checkpoint_is_partial_with_discovery_pending() {
     assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
 }
 
-/// 7b replaces this: re-entering an accepted request is not built, and
-/// until it is, a second call of one changes nothing.
-#[test]
-fn an_accepted_request_is_not_re_entered_yet() {
-    let world = failing_at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence);
-    let token = world.token(TICKET_A);
-    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-    assert_eq!(first.outcome, Outcome::Partial);
-    let record = world.record(REQUEST_1);
-
-    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-    assert_stopped(
-        &second,
-        Outcome::Error,
-        ResultCode::InternalError,
-        FailureClass::Internal,
-    );
-    assert_eq!(second.operation_id, first.operation_id);
-    assert_eq!(world.record(REQUEST_1), record);
-    assert_eq!(world.branch_commits(TICKET_A), 0);
-}
-
 #[test]
 fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
     let world = World::new();

@@ -16,20 +16,20 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, ExpectedPathObservation,
-            ItemDtoKind, OperationFamily, ProposedRelationships, RelationshipWrite,
-            RepositoryOperation, RepositoryService, ResolvedRepository, SaveTicketRequest,
-            TicketDraft, TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
-            recovery::JournalRow,
+            AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
+            ExpectedPathObservation, ItemDtoKind, OperationFamily, ProposedRelationships,
+            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
+            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         dto::{MutationDataDto, TicketMutationDto},
-        evidence::{self, Claim, Position, Unreadable},
+        evidence::{self, Claim, PathEvidence, Position, Unreadable},
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, Prepared, Ran, Standing,
+    Accepted, Answer, Before, Binding, Found, Prepared, Ran, Standing,
 };
 
 pub(crate) const TICKET_CREATE: &str = "ticket create";
@@ -192,6 +192,15 @@ pub(crate) fn recorded_effects(record: &RequestRecord, accepted: &Accepted) -> E
     outcome::stopped_save_effects(commit, written)
 }
 
+/// Which call of a request is checking its relationships.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Checking {
+    /// A request no record holds: a rejection or a failed read answers it.
+    NewRequest,
+    /// An accepted request entered again.
+    Reentry,
+}
+
 /// Parses relationship targets a caller gave as text.
 fn item_ids<'a>(ids: impl IntoIterator<Item = &'a String>) -> Result<Vec<ItemId>, Answer> {
     ids.into_iter()
@@ -298,11 +307,17 @@ impl TicketBinding {
     /// Nothing is checked when the request sets neither: a save that
     /// leaves the relationships alone is not refused for what they
     /// already are.
+    ///
+    /// A request that is re-entered was checked when it was accepted, and
+    /// its own first attempt may have written since. Its relationships are
+    /// read again only to say which targets nothing holds: neither a
+    /// rejection nor a failure to read stops it.
     fn check_relationships(
         &mut self,
         service: &RepositoryService,
         repository: &ResolvedRepository,
         current: ProposedRelationships,
+        checking: Checking,
     ) -> Result<(), Answer> {
         let deps = match &self.deps {
             RelationshipWrite::Unchanged => RelationshipWrite::Unchanged,
@@ -334,19 +349,26 @@ impl TicketBinding {
             },
         };
         if !named.is_empty() {
-            let check = service
-                .check_ticket_relationships(repository, &self.id, &proposed)
-                .map_err(|error| Answer::of_read(&error))?;
-            if let Some(rejection) = check.rejection {
-                return Err(
-                    Answer::stopped(rejection.code).with_data(self.data(None, rejection.ids))
-                );
+            let check = service.check_ticket_relationships(repository, &self.id, &proposed);
+            let check = match (check, checking) {
+                (Ok(check), _) => Some(check),
+                (Err(error), Checking::NewRequest) => return Err(Answer::of_read(&error)),
+                (Err(_), Checking::Reentry) => None,
+            };
+            if let Some(check) = check {
+                match (check.rejection, checking) {
+                    (Some(rejection), Checking::NewRequest) => {
+                        return Err(Answer::stopped(rejection.code)
+                            .with_data(self.data(None, rejection.ids)));
+                    }
+                    (Some(_), Checking::Reentry) | (None, _) => {}
+                }
+                self.unresolved = check
+                    .unresolved
+                    .into_iter()
+                    .filter(|id| named.contains(id))
+                    .collect();
             }
-            self.unresolved = check
-                .unresolved
-                .into_iter()
-                .filter(|id| named.contains(id))
-                .collect();
         }
         self.options.deps = deps;
         self.options.parent = parent;
@@ -413,7 +435,12 @@ impl TicketBinding {
         service: &RepositoryService,
         repository: &ResolvedRepository,
     ) -> Result<Prepared, Answer> {
-        self.check_relationships(service, repository, ProposedRelationships::default())?;
+        self.check_relationships(
+            service,
+            repository,
+            ProposedRelationships::default(),
+            Checking::NewRequest,
+        )?;
         self.options.slug = Some(self.compose_slug(service, repository)?);
         // A create always expects absence.
         self.prepared(repository.root(), ExpectedPathObservation::Missing)
@@ -446,16 +473,11 @@ impl TicketBinding {
         {
             return Err(Answer::stopped(ResultCode::TicketClosed));
         }
-        let ids = |ids: Vec<String>| -> Vec<ItemId> {
-            ids.iter().filter_map(|id| id.parse().ok()).collect()
-        };
         self.check_relationships(
             service,
             repository,
-            ProposedRelationships {
-                deps: ids(item.deps.into_iter().map(|dep| dep.id).collect()),
-                parent: ids(item.parent.into_iter().map(|parent| parent.id).collect()).pop(),
-            },
+            current_relationships(item.deps, item.parent),
+            Checking::NewRequest,
         )?;
 
         let observed = ObservedFile {
@@ -494,6 +516,145 @@ impl TicketBinding {
             return Err(Answer::stopped(ResultCode::WorktreeNotClean));
         }
         self.prepared(repository.root(), expected)
+    }
+}
+
+/// The dependencies and parent a read reports for a ticket, as the
+/// relationship check takes them.
+fn current_relationships(
+    deps: Vec<DependencyDto>,
+    parent: Option<DependencyDto>,
+) -> ProposedRelationships {
+    let ids =
+        |ids: Vec<String>| -> Vec<ItemId> { ids.iter().filter_map(|id| id.parse().ok()).collect() };
+    ProposedRelationships {
+        deps: ids(deps.into_iter().map(|dep| dep.id).collect()),
+        parent: ids(parent.into_iter().map(|parent| parent.id).collect()).pop(),
+    }
+}
+
+/// The root as it is registered: what the scope key holds.
+fn registered_root(accepted: &Accepted) -> PathBuf {
+    PathBuf::from(accepted.scope.as_str())
+}
+
+/// What the domain operation is to expect at the ticket's path: the
+/// recorded expectation.
+fn expectation(accepted: &Accepted) -> ExpectedPathObservation {
+    accepted
+        .expected
+        .clone()
+        .unwrap_or(ExpectedPathObservation::Missing)
+}
+
+/// The code and effects of a save that left nothing to do, with the commit
+/// the evidence shows to be the request's, if it made one.
+fn settled_save(commit: Option<git2::Oid>) -> (ResultCode, Effects) {
+    SaveReport::Saved {
+        claimed: None,
+        discovered: true,
+    }
+    .result(commit)
+}
+
+impl TicketBinding {
+    /// The one domain call, under the recorded operation ID and
+    /// expectation.
+    fn call_domain(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+    ) -> Result<SaveOutcome, RepositoryError> {
+        service.save_ticket_with(
+            SaveTicketRequest {
+                target: AuthoringTarget {
+                    root: registered_root(accepted),
+                    kind: AuthoringKind::Ticket,
+                    item_id: self.id.clone(),
+                    intent: self.intent,
+                    operation_id: accepted.operation_id,
+                },
+                draft: self.draft.clone(),
+                expected_path: expectation(accepted),
+            },
+            self.options.clone(),
+        )
+    }
+
+    /// The short code the ticket's file holds in its editing context.
+    fn written_slug(&self, root: &Path) -> Option<String> {
+        let id = self.id_text();
+        context_file(root, &id)
+            .as_deref()
+            .and_then(|bytes| parse_ticket(&ticket_path(&id), bytes))
+            .and_then(|ticket| slug_of(&ticket))
+    }
+
+    fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer {
+        Answer {
+            effects,
+            ..Answer::stopped(code).with_data(self.data(self.written_slug(root), Vec::new()))
+        }
+    }
+
+    /// What Git shows of the ticket's path since the request was accepted.
+    fn evidence(&self, accepted: &Accepted) -> Result<PathEvidence, Unreadable> {
+        evidence::path_evidence(
+            &registered_root(accepted),
+            &accepted.position,
+            &ticket_path(&self.id_text()),
+            &|bytes| self.holds_bytes(bytes),
+        )
+    }
+
+    /// Sets the domain call's options for a request that is entered
+    /// again, as `prepare` set them, and makes none of its checks.
+    ///
+    /// A create passes a short code if and only if its first attempt did,
+    /// which every create through the boundary does. The domain adopts the
+    /// one the file holds, so the file's is passed when there is one: the
+    /// initials or the prefix may have changed since, to something no
+    /// short code can be composed from.
+    fn resume(&mut self, service: &RepositoryService) -> Result<(), Answer> {
+        let repository = service
+            .resolve_repository(&self.root)
+            .map_err(|error| Answer::of_read(&error))?;
+        match self.intent {
+            ContextIntent::Create => {
+                self.check_relationships(
+                    service,
+                    &repository,
+                    ProposedRelationships::default(),
+                    Checking::Reentry,
+                )?;
+                self.options.slug = Some(match self.written_slug(repository.root()) {
+                    Some(written) => written,
+                    None => self.compose_slug(service, &repository)?,
+                });
+            }
+            ContextIntent::Edit => {
+                let current = service
+                    .show_item(&repository, &self.id)
+                    .map(|item| current_relationships(item.deps, item.parent))
+                    .unwrap_or_default();
+                self.check_relationships(service, &repository, current, Checking::Reentry)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The already-applied rule, for the ticket's file in its editing
+    /// context: whether it is what the request intends and is committed at
+    /// its branch tip.
+    fn already_applied(&self, root: &Path, file: Option<&[u8]>) -> Result<bool, Unreadable> {
+        let id = self.id_text();
+        match file {
+            Some(bytes) if self.holds_bytes(bytes) => {
+                observe::is_committed(&worktree(root, &id), &ticket_path(&id), bytes)
+                    .map_err(|_| Unreadable)
+            }
+            Some(_) | None => Ok(false),
+        }
     }
 }
 
@@ -622,26 +783,9 @@ impl Binding for TicketBinding {
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
         let id = self.id_text();
         let path = ticket_path(&id);
-        // The root as it is registered: what the scope key holds.
-        let root = PathBuf::from(accepted.scope.as_str());
-        let expected = accepted
-            .expected
-            .clone()
-            .unwrap_or(ExpectedPathObservation::Missing);
-        let result = service.save_ticket_with(
-            SaveTicketRequest {
-                target: AuthoringTarget {
-                    root: root.clone(),
-                    kind: AuthoringKind::Ticket,
-                    item_id: self.id.clone(),
-                    intent: self.intent,
-                    operation_id: accepted.operation_id,
-                },
-                draft: self.draft.clone(),
-                expected_path: expected.clone(),
-            },
-            self.options.clone(),
-        );
+        let root = registered_root(accepted);
+        let expected = expectation(accepted);
+        let result = self.call_domain(service, accepted);
         let file = context_file(&root, &id);
         let slug = file
             .as_deref()
@@ -727,6 +871,145 @@ impl Binding for TicketBinding {
                 effects,
                 ..Answer::stopped(code).with_data(self.data(slug, Vec::new()))
             },
+            standing,
+        }
+    }
+
+    fn reenter(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<Before, Ran> {
+        let root = registered_root(accepted);
+        // The row as it is before this call: its state afterwards proves
+        // nothing about an earlier attempt.
+        let journal =
+            match service.journal_row(accepted.family, &accepted.scope, accepted.operation_id) {
+                Ok(journal) => journal,
+                Err(error) => {
+                    return Err(Ran {
+                        answer: Answer::of_read(&error),
+                        standing: Standing::Stopped { journal: None },
+                    });
+                }
+            };
+        if let Err(answer) = self.resume(service) {
+            return Err(Ran {
+                answer,
+                standing: Standing::NotRun { journal },
+            });
+        }
+        let evidence = match self.evidence(accepted) {
+            Ok(evidence) => evidence,
+            // Git could not be read, so nothing is known of what an
+            // earlier attempt committed: nothing is run, finished or
+            // deleted on that.
+            Err(Unreadable) => {
+                return Err(Ran {
+                    answer: Answer::stopped(ResultCode::InternalError),
+                    standing: Standing::Unconfirmed,
+                });
+            }
+        };
+        let before = Before { journal, evidence };
+        match before.found() {
+            Found::Continue => Ok(before),
+            Found::Done { commit } => {
+                let (code, effects) = settled_save(Some(commit));
+                Err(Ran {
+                    answer: self.answer(code, effects, &root),
+                    standing: Standing::Final,
+                })
+            }
+            Found::Foreign { own } => Err(Ran {
+                answer: self.answer(
+                    ResultCode::ExternalChange,
+                    outcome::stopped_save_effects(own, own.is_some()),
+                    &root,
+                ),
+                standing: Standing::Stopped {
+                    journal: Some(before.journal),
+                },
+            }),
+        }
+    }
+
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
+        let id = self.id_text();
+        let root = registered_root(accepted);
+        let result = self.call_domain(service, accepted);
+        // What Git shows now. The commit is taken from this and from what
+        // it showed before the call, never from what the domain names: a
+        // second call of a save that committed names none.
+        let after = self.evidence(accepted);
+        let file = context_file(&root, &id);
+        let (code, effects, standing) = match result {
+            Ok(outcome) => match (SaveReport::of(outcome), after) {
+                (SaveReport::IdentityRequired, _) => (
+                    ResultCode::IdentityRequired,
+                    Effects::not_requested(),
+                    Standing::Stopped {
+                        journal: accepted.journal_row(service),
+                    },
+                ),
+                (report @ SaveReport::Saved { discovered, .. }, Ok(after)) => {
+                    let (code, effects) = report.result(before.reported(&after));
+                    let standing = if discovered {
+                        Standing::Final
+                    } else {
+                        Standing::Owed
+                    };
+                    (code, effects, standing)
+                }
+                // The save returned and Git cannot be read to say whether
+                // the request committed. A no-op stored now would be
+                // replayed for good.
+                (SaveReport::Saved { .. }, Err(Unreadable)) => (
+                    ResultCode::InternalError,
+                    Effects::not_requested(),
+                    Standing::Unconfirmed,
+                ),
+            },
+            Err(error) => {
+                // No attempt of this request had started, and the domain
+                // found the file other than the request expected: the
+                // content came from elsewhere. Asking for the state that
+                // already exists is not a conflict.
+                let applied =
+                    if error.kind == RepositoryErrorKind::ExternalChange && !before.started() {
+                        Some(self.already_applied(&root, file.as_deref()))
+                    } else {
+                        None
+                    };
+                match applied {
+                    Some(Ok(true)) => {
+                        let (code, effects) = settled_save(None);
+                        (code, effects, Standing::Final)
+                    }
+                    Some(Err(Unreadable)) => (
+                        ResultCode::InternalError,
+                        Effects::not_requested(),
+                        Standing::Unconfirmed,
+                    ),
+                    Some(Ok(false)) | None => {
+                        let code = outcome::repository_error_code(error.kind);
+                        let journal = accepted.journal_row(service);
+                        let effects = if journal.as_ref().is_none_or(JournalRow::in_flight) {
+                            // A range that cannot be read shows no commit.
+                            // The record stays accepted either way: the
+                            // row is in flight.
+                            let commit = after.ok().and_then(|after| before.reported(&after));
+                            let written = file.as_deref().is_some_and(|bytes| {
+                                ExpectedPathObservation::from_bytes(bytes) != expectation(accepted)
+                                    && self.holds_bytes(bytes)
+                            });
+                            outcome::stopped_save_effects(commit, commit.is_some() || written)
+                        } else {
+                            Effects::not_requested()
+                        };
+                        (code, effects, Standing::Stopped { journal })
+                    }
+                }
+            }
+        };
+        Ran {
+            answer: self.answer(code, effects, &root),
             standing,
         }
     }

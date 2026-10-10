@@ -66,3 +66,33 @@ fn a_commit_the_evidence_check_could_not_confirm_leaves_the_record_accepted() {
     // finishing the record would store a no-op for a save that committed.
     assert_eq!(Settlement::of(&Standing::Unconfirmed), Settlement::Leave);
 }
+
+#[test]
+fn a_re_entry_that_stopped_before_its_domain_call_keeps_what_an_earlier_attempt_left() {
+    // No attempt ever reached the domain: nothing is in flight and the
+    // request ID is free again.
+    assert_eq!(
+        Settlement::of(&Standing::NotRun {
+            journal: JournalRow::Absent
+        }),
+        Settlement::Delete
+    );
+    // An earlier attempt started. Whether its row is pending or has
+    // completed, the request's result is still owed, and this call
+    // learned nothing of it.
+    for journal in [
+        JournalRow::Pending(PendingOperation::Local {
+            state: "created".to_owned(),
+            step: None,
+        }),
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+        },
+    ] {
+        assert_eq!(
+            Settlement::of(&Standing::NotRun { journal }),
+            Settlement::Leave
+        );
+    }
+}
