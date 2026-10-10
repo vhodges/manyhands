@@ -9,12 +9,12 @@ use std::{
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::super::{
-    IndexAvailability, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    IndexAvailability, ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation,
     RepositoryService, cache_read_guard, cache_write_guard, migrate_registry, open_registry,
-    open_registry_read_only,
+    open_registry_read_only, recovery::JournalRow,
 };
 use super::{
-    GeneratedKeyDeletionPreflight, PrivateKeySourceState, PublicKeyMetadataState,
+    GeneratedKeyDeletionPreflight, KeyMaterialPhase, PrivateKeySourceState, PublicKeyMetadataState,
     RegisterSharedKeyOutcome, RegisterSharedKeyRequest, SharedKeyId, SharedKeyOwnership,
     SharedKeyRegistration, SharedKeySelectionOutcome, UnregisterSharedKeyOutcome,
 };
@@ -672,6 +672,47 @@ pub(in super::super) fn migrate_material_schema(
                 ON key_material_operations(key_id) WHERE phase <> 'completed';",
         )
         .map_err(RepositoryError::sqlite)
+}
+
+/// Where the key-material operation `operation_id` stands, for the
+/// mutation boundary's settling. Of the operation only its phase is read:
+/// neither its paths nor its label.
+///
+/// A phase a generation or a deletion passes through has something in
+/// flight, which key-material recovery takes up again. `completed` and
+/// `retained-for-inspection` have ended: nothing continues either, whether
+/// or not the operation failed.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_material_operation(
+    connection: &rusqlite::Connection,
+    operation_id: super::OperationId,
+) -> Result<JournalRow, ReadError> {
+    let stored: Option<String> = connection
+        .query_row(
+            "SELECT phase FROM key_material_operations WHERE operation_id = ?1",
+            [operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(JournalRow::Absent);
+    };
+    let in_flight = match super::generation::parse_phase(&stored)? {
+        KeyMaterialPhase::Reserved
+        | KeyMaterialPhase::PrivateWritten
+        | KeyMaterialPhase::PairWritten
+        | KeyMaterialPhase::Prepared
+        | KeyMaterialPhase::PrivateRemoved
+        | KeyMaterialPhase::FilesRemoved => true,
+        KeyMaterialPhase::Completed | KeyMaterialPhase::RetainedForInspection => false,
+    };
+    // The journal writes its phases with hyphens.
+    let state = stored.replace('-', "_");
+    Ok(if in_flight {
+        JournalRow::Pending { state, step: None }
+    } else {
+        JournalRow::Completed { state }
+    })
 }
 
 fn require_no_pending_material(

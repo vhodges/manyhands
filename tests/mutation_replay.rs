@@ -11,7 +11,8 @@ use manyhands::{
         RequestId, RequestState,
         request_store::{
             ConfirmationRecord, DigestSalt, FieldValue, InsertRequestOutcome, IntentDigest,
-            NewConfirmation, NewRequest, RequestOperation, RequestRecord, RequestResult, ScopeKey,
+            JournalRow, NewConfirmation, NewRequest, RequestOperation, RequestRecord,
+            RequestResult, ScopeKey,
         },
     },
     results::{CheckpointEffect, DiscoveryEffect, Effects, Outcome, ResultCode, WriteEffect},
@@ -1316,5 +1317,476 @@ fn the_privacy_scan_finds_a_sentinel_in_every_request_store() {
         mutation::find_stored_sentinel(data, &[operations::KEY_MATERIAL_SENTINEL])
             .map(|found| found.table),
         Some("key_material_operations")
+    );
+}
+
+fn pending(state: &str, step: Option<&str>) -> JournalRow {
+    JournalRow::Pending {
+        state: state.to_owned(),
+        step: step.map(str::to_owned),
+    }
+}
+
+fn completed(state: &str) -> JournalRow {
+    JournalRow::Completed {
+        state: state.to_owned(),
+    }
+}
+
+impl World {
+    fn journal_row(&self, family: OperationFamily, id: &str) -> JournalRow {
+        self.service
+            .journal_row(family, &self.scope, operations::operation_id(id))
+            .unwrap()
+    }
+
+    fn set_local(&self, id: &str, state: &str, step: Option<&str>) {
+        self.index()
+            .execute(
+                "UPDATE operation_records SET state = ?2, completed_step = ?3
+                  WHERE operation_ulid = ?1",
+                rusqlite::params![id, state, step],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn the_journal_lookup_reads_a_local_operation() {
+    let world = world();
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        JournalRow::Absent
+    );
+
+    operations::insert_local(
+        world.data.path(),
+        Some(OPERATION_A),
+        "save_document",
+        "created",
+        None,
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        pending("created", None)
+    );
+
+    world.set_local(
+        OPERATION_A,
+        "authoring",
+        Some("authoring_destination_observed"),
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        pending("authoring", Some("authoring_destination_observed"))
+    );
+
+    world.set_local(OPERATION_A, "completed", Some("authoritative_observed"));
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        completed("completed")
+    );
+    world.set_local(OPERATION_A, "completed", None);
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        completed("completed")
+    );
+
+    // Each journal answers for its own rows only.
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, OPERATION_A),
+        JournalRow::Absent
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::KeyMaterial, OPERATION_A),
+        JournalRow::Absent
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, operations::OPERATION_ABSENT),
+        JournalRow::Absent
+    );
+    // And a root answers for its own operations only.
+    assert_eq!(
+        world
+            .service
+            .journal_row(
+                OperationFamily::Local,
+                &ScopeKey::from_stored("/projects/other"),
+                operations::operation_id(OPERATION_A),
+            )
+            .unwrap(),
+        JournalRow::Absent
+    );
+}
+
+#[test]
+fn the_journal_lookup_reads_a_local_row_closed_as_rejected_as_absent() {
+    let world = world();
+    let rejected = operations::operation_id(OPERATION_A);
+
+    // A real rejection: the name is refused before anything is written.
+    assert!(
+        world
+            .service
+            .add_remote(AddRemoteRequest {
+                root: world.fixture.root.clone(),
+                name: "not a name".to_owned(),
+                url: "https://example.invalid/origin.git".to_owned(),
+                operation_id: rejected,
+            })
+            .is_err()
+    );
+
+    // The row is kept, closed.
+    let stored: (String, Option<String>) = world
+        .index()
+        .query_row(
+            "SELECT state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+            [OPERATION_A],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        stored,
+        ("completed".to_owned(), Some("rejected".to_owned()))
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        JournalRow::Absent
+    );
+
+    // Only `completed` with that step is a closed row.
+    world.set_local(OPERATION_A, "created", Some("rejected"));
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        pending("created", Some("rejected"))
+    );
+}
+
+#[test]
+fn the_journal_lookup_reads_a_synchronization_bound_locally() {
+    let world = world();
+    // What a synchronization with no remote to publish to leaves: a
+    // refresh in the local journal, under the synchronization's ID.
+    world
+        .index()
+        .execute(
+            "INSERT INTO operation_records (
+                repository_id, root_path, operation_ulid, action, target, state, observed_at
+             ) SELECT id, root_path, ?1, 'refresh', ?2, 'indexing', 1 FROM repositories",
+            [
+                OPERATION_A,
+                &format!("synchronization-local-v1/primary/{COMMIT}"),
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, OPERATION_A),
+        JournalRow::Absent
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        pending("indexing", None)
+    );
+
+    world.set_local(OPERATION_A, "completed", None);
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        completed("completed")
+    );
+}
+
+/// Every phase of a remote operation, and whether an operation in it has
+/// something in flight.
+const REMOTE_PHASES: [(&str, bool); 15] = [
+    ("reserved", true),
+    ("advertising", true),
+    ("persisting", true),
+    ("fetch_prepared", true),
+    ("fetch_observed", true),
+    ("local_prepared", true),
+    ("local_fast_forwarded", true),
+    ("push_prepared", true),
+    ("push_returned", true),
+    ("push_verified", true),
+    ("reconciling", true),
+    // Stopped, with work only this operation ID can take up again.
+    ("interrupted", true),
+    ("failed", true),
+    ("completed", false),
+    ("cancelled", false),
+];
+
+#[test]
+fn the_journal_lookup_reads_a_synchronization_in_the_remote_journal() {
+    let world = world();
+    let data = world.data.path();
+    operations::configure_remote(data);
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, OPERATION_A),
+        JournalRow::Absent
+    );
+    operations::insert_remote_synchronization(
+        data,
+        OPERATION_A,
+        Some(("ticket", items::TICKET_A)),
+        "reserved",
+        None,
+        None,
+    );
+    let set = |assignments: &str| {
+        world
+            .index()
+            .execute_batch(&format!(
+                "UPDATE remote_operation_records SET {assignments}
+                  WHERE operation_ulid = '{OPERATION_A}'"
+            ))
+            .unwrap();
+    };
+
+    for (phase, in_flight) in REMOTE_PHASES {
+        set(&format!("phase = '{phase}', completed_step = NULL"));
+        let expected = if in_flight {
+            pending(phase, None)
+        } else {
+            completed(phase)
+        };
+        assert_eq!(
+            world.journal_row(OperationFamily::Remote, OPERATION_A),
+            expected,
+            "{phase}"
+        );
+    }
+
+    // A pending row carries the last safe point it recorded.
+    set("phase = 'interrupted', completed_step = 'after_fetch'");
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, OPERATION_A),
+        pending("interrupted", Some("after_fetch"))
+    );
+
+    // A row whose phase has ended still has something in flight while Git
+    // may hold what it started.
+    for phase in ["completed", "cancelled"] {
+        set(&format!(
+            "phase = '{phase}', completed_step = NULL, reconciliation_required = 1"
+        ));
+        assert_eq!(
+            world.journal_row(OperationFamily::Remote, OPERATION_A),
+            pending(phase, None),
+            "{phase}"
+        );
+    }
+
+    // And so does a synchronization that completed and has not yet handed
+    // what it published to the index.
+    operations::insert_remote_index_pending(data, OPERATION_B);
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, OPERATION_B),
+        pending("completed", Some("before_discovery"))
+    );
+
+    assert_eq!(
+        world.journal_row(OperationFamily::Local, OPERATION_A),
+        JournalRow::Absent
+    );
+    assert_eq!(
+        world.journal_row(OperationFamily::Remote, operations::OPERATION_ABSENT),
+        JournalRow::Absent
+    );
+    // And a root answers for its own operations only.
+    assert_eq!(
+        world
+            .service
+            .journal_row(
+                OperationFamily::Remote,
+                &ScopeKey::from_stored("/projects/other"),
+                operations::operation_id(OPERATION_A),
+            )
+            .unwrap(),
+        JournalRow::Absent
+    );
+}
+
+#[test]
+fn the_journal_lookup_reads_a_key_operation() {
+    let world = world();
+    let data = world.data.path();
+    assert_eq!(
+        world.journal_row(OperationFamily::KeyMaterial, OPERATION_A),
+        JournalRow::Absent
+    );
+    operations::insert_key_material(data, OPERATION_A, "generate", "reserved", None);
+    operations::insert_key_material(data, OPERATION_B, "delete", "prepared", None);
+    let set = |id: &str, phase: &str, failure: Option<&str>| {
+        world
+            .index()
+            .execute(
+                "UPDATE key_material_operations SET phase = ?2, failure_code = ?3
+                  WHERE operation_id = ?1",
+                rusqlite::params![id, phase, failure],
+            )
+            .unwrap();
+    };
+
+    for (id, phases) in [
+        (OPERATION_A, ["reserved", "private-written", "pair-written"]),
+        (
+            OPERATION_B,
+            ["prepared", "private-removed", "files-removed"],
+        ),
+    ] {
+        for phase in phases {
+            set(id, phase, None);
+            assert_eq!(
+                world.journal_row(OperationFamily::KeyMaterial, id),
+                pending(&phase.replace('-', "_"), None),
+                "{phase}"
+            );
+        }
+        // A phase that has ended has nothing in flight, whether or not the
+        // operation failed.
+        for (phase, failure) in [
+            ("completed", None),
+            ("completed", Some("source-missing")),
+            ("retained-for-inspection", Some("storage-unavailable")),
+        ] {
+            set(id, phase, failure);
+            assert_eq!(
+                world.journal_row(OperationFamily::KeyMaterial, id),
+                completed(&phase.replace('-', "_")),
+                "{phase}"
+            );
+        }
+    }
+
+    // A key operation belongs to the application, whatever scope asks.
+    assert_eq!(
+        world
+            .service
+            .journal_row(
+                OperationFamily::KeyMaterial,
+                &ScopeKey::application(),
+                operations::operation_id(OPERATION_A),
+            )
+            .unwrap(),
+        completed("retained_for_inspection")
+    );
+}
+
+#[test]
+fn the_journal_lookup_works_for_a_root_that_no_longer_exists() {
+    let world = world();
+    let data = world.data.path();
+    operations::configure_remote(data);
+    operations::insert_local(data, Some(OPERATION_A), "save_ticket", "authoring", None);
+    operations::insert_remote_synchronization(
+        data,
+        OPERATION_B,
+        None,
+        "interrupted",
+        None,
+        Some("transport_unavailable"),
+    );
+    // An operation on a root that was never registered, as creating a
+    // repository leaves one.
+    let unregistered = ScopeKey::from_stored("/projects/never-registered");
+    world
+        .index()
+        .execute(
+            "INSERT INTO operation_records (root_path, operation_ulid, action, target, state,
+                                            completed_step, observed_at)
+             VALUES (?1, ?2, 'create_and_enable', '', 'created', 'initialization_committed', 1)",
+            [unregistered.as_str(), OPERATION_C],
+        )
+        .unwrap();
+    let World {
+        fixture,
+        data,
+        service,
+        scope,
+        ..
+    } = world;
+    let root = fixture.root.clone();
+    drop(fixture);
+    assert!(!root.exists());
+    assert!(ScopeKey::for_repository(&root).is_none());
+    let lookup = |family, scope: &ScopeKey, id: &str| {
+        service
+            .journal_row(family, scope, operations::operation_id(id))
+            .unwrap()
+    };
+
+    assert_eq!(
+        lookup(OperationFamily::Local, &scope, OPERATION_A),
+        pending("authoring", None)
+    );
+    assert_eq!(
+        lookup(OperationFamily::Remote, &scope, OPERATION_B),
+        pending("interrupted", None)
+    );
+    assert_eq!(
+        lookup(OperationFamily::Local, &unregistered, OPERATION_C),
+        pending("created", Some("initialization_committed"))
+    );
+    assert_eq!(
+        lookup(OperationFamily::Remote, &unregistered, OPERATION_C),
+        JournalRow::Absent
+    );
+    drop(data);
+}
+
+#[test]
+fn the_journal_lookup_reports_what_it_cannot_read() {
+    let degraded = degraded_world();
+    for family in OperationFamily::ALL {
+        assert_eq!(
+            degraded
+                .service
+                .journal_row(
+                    family,
+                    &degraded.scope,
+                    operations::operation_id(OPERATION_A)
+                )
+                .unwrap_err()
+                .code(),
+            ResultCode::IndexUnavailable
+        );
+    }
+
+    // A state no operation writes is not passed on.
+    let world = world();
+    operations::insert_local(
+        world.data.path(),
+        Some(OPERATION_A),
+        "save_document",
+        "Not A State",
+        None,
+    );
+    let lookup = || {
+        world
+            .service
+            .journal_row(
+                OperationFamily::Local,
+                &world.scope,
+                operations::operation_id(OPERATION_A),
+            )
+            .map_err(|error| error.code())
+    };
+    assert_eq!(lookup(), Err(ResultCode::InternalError));
+    world.set_local(OPERATION_A, "authoring", Some("Not A Step"));
+    assert_eq!(lookup(), Err(ResultCode::InternalError));
+
+    // The lookup holds no lock once it has answered.
+    world.set_local(OPERATION_A, "authoring", None);
+    assert_eq!(lookup(), Ok(pending("authoring", None)));
+    drop(
+        RepositoryService::hold_lease_for_testing(
+            &world.fixture.root,
+            world.data.path(),
+            LeaseKind::CacheWrite,
+        )
+        .unwrap(),
     );
 }

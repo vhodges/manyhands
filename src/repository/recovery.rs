@@ -4,8 +4,10 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use super::{
-    OperationId, RecoveryInspection, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    OperationId, ReadError, RecoveryInspection, RepositoryError, RepositoryErrorKind,
+    RepositoryOperation,
 };
+use crate::results::ResultCode;
 
 #[derive(Clone, Copy)]
 pub(super) struct RecoveryRecord {
@@ -468,6 +470,81 @@ pub(super) fn discard_operation(
         )
         .map_err(RepositoryError::sqlite)?;
     Ok(())
+}
+
+/// Where one operation stands in its journal: the local one here, the
+/// remote one or the key-material one. Each journal answers through a
+/// lookup of its own, by operation ID, that needs no registration and no
+/// repository on disk.
+///
+/// `state` is the journal's own name for where the operation stands, in
+/// lower_snake_case: a local operation's state, or a remote or
+/// key-material operation's phase. `step` is the last step a local or
+/// remote operation recorded as done.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JournalRow {
+    /// The journal holds no row for the ID, or holds the row of a call
+    /// that was rejected and left nothing behind.
+    Absent,
+    /// Something is in flight: the operation has work that only a call
+    /// under its ID takes up again.
+    Pending { state: String, step: Option<String> },
+    /// The operation ended and nothing is in flight.
+    Completed { state: String },
+}
+
+/// The longest state or step name a local operation is taken to have.
+const LONGEST_STORED_NAME: usize = 64;
+
+/// A state or step name of a local operation. The journal keeps these as
+/// free text, so only what has the form of a name is passed on: a
+/// lowercase letter followed by lowercase letters, digits and underscores.
+fn stored_name(stored: String) -> Result<String, ReadError> {
+    let is_name = stored.len() <= LONGEST_STORED_NAME
+        && stored.starts_with(|first: char| first.is_ascii_lowercase())
+        && stored
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    if is_name {
+        Ok(stored)
+    } else {
+        Err(ReadError::new(ResultCode::InternalError))
+    }
+}
+
+/// Where the local operation `operation_id` on `root_path` stands.
+///
+/// The row is matched by root, as recovery matches it, and not by
+/// registration: an operation that creates or enables a repository
+/// precedes its registration, and the root may since have gone. A row
+/// that is completed with the step `rejected` is the kept row of a call
+/// that left nothing behind, and is reported as absent.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn lookup_operation(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: OperationId,
+) -> Result<JournalRow, ReadError> {
+    let row: Option<(String, Option<String>)> = connection
+        .query_row(
+            "SELECT state, completed_step FROM operation_records
+              WHERE root_path = ?1 AND operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((state, step)) = row else {
+        return Ok(JournalRow::Absent);
+    };
+    let state = stored_name(state)?;
+    let step = step.map(stored_name).transpose()?;
+    Ok(if state != "completed" {
+        JournalRow::Pending { state, step }
+    } else if step.as_deref() == Some(REJECTED_STEP) {
+        JournalRow::Absent
+    } else {
+        JournalRow::Completed { state }
+    })
 }
 
 pub(super) fn advance_after_observation(

@@ -471,7 +471,7 @@ fn phase_value(phase: KeyMaterialPhase) -> &'static str {
         KeyMaterialPhase::RetainedForInspection => "retained-for-inspection",
     }
 }
-fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
+pub(super) fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
     match value {
         "reserved" => Ok(KeyMaterialPhase::Reserved),
         "private-written" => Ok(KeyMaterialPhase::PrivateWritten),

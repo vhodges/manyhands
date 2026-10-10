@@ -11,13 +11,18 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 
-use super::RepositoryService;
+use super::{
+    OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService, keys,
+    recovery::{self, JournalRow},
+    remote,
+};
 
 mod dto;
 mod identity;
 mod records;
 
 pub use dto::RequestState;
+use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(super) use records::migrate as migrate_request_tables;
 
@@ -43,6 +48,40 @@ impl RepositoryService {
         self.clock = clock;
         self
     }
+
+    /// Where the operation `operation_id` stands in the journal of its
+    /// family: absent, pending with its state and step, or completed.
+    ///
+    /// A local or remote operation is looked up under the root `scope`
+    /// names; a key-material operation belongs to the application,
+    /// whatever `scope` is. The lookup reads the index only. It needs no
+    /// registration and no repository on disk, so it answers for a root
+    /// that is not registered and for one that no longer exists.
+    ///
+    /// This is what settling a request asks, and not the display read
+    /// `show_operation`: a local row closed as `rejected` is absent here,
+    /// and a remote operation that was interrupted or that failed is
+    /// pending.
+    #[doc(hidden)]
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    pub fn journal_row(
+        &self,
+        family: OperationFamily,
+        scope: &ScopeKey,
+        operation_id: OperationId,
+    ) -> Result<JournalRow, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| match family {
+            OperationFamily::Local => {
+                recovery::lookup_operation(connection, scope.as_str(), operation_id)
+            }
+            OperationFamily::Remote => {
+                remote::state::lookup_operation(connection, scope.as_str(), operation_id)
+            }
+            OperationFamily::KeyMaterial => {
+                keys::lookup_material_operation(connection, operation_id)
+            }
+        })
+    }
 }
 
 /// What the boundary is built from: the intent digest, the request records
@@ -57,5 +96,6 @@ pub mod request_store {
             ConfirmationRecord, InsertRequestOutcome, NewConfirmation, NewRequest,
             RequestOperation, RequestRecord, RequestResult,
         },
+        recovery::JournalRow,
     };
 }
