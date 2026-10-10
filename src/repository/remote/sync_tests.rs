@@ -896,12 +896,6 @@ fn materialized_context_uses_existing_authoring_identity_and_checks_its_own_work
         SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
         _ => panic!("missing context"),
     };
-    let linked = git2::Repository::open(&context.worktree).unwrap();
-    let mut index = linked.index().unwrap();
-    index
-        .read_tree(&linked.head().unwrap().peel_to_tree().unwrap())
-        .unwrap();
-    index.write().unwrap();
     let mut req = request(root.path());
     req.target = SynchronizationTarget::Context {
         kind: AuthoringKind::Ticket,
@@ -1205,12 +1199,6 @@ fn materialize_local_context(service: &RepositoryService, root: &Path) -> Synchr
         SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
         _ => panic!("fixture context"),
     };
-    let linked = git2::Repository::open(&context.worktree).unwrap();
-    let mut index = linked.index().unwrap();
-    index
-        .read_tree(&linked.head().unwrap().peel_to_tree().unwrap())
-        .unwrap();
-    index.write().unwrap();
     SynchronizationTarget::Context {
         kind: AuthoringKind::Ticket,
         item_id: context.item_id,
@@ -3891,14 +3879,6 @@ fn released_checkpoint_then_normal_save_continuation_preserves_original_candidat
             .graph_descendant_of(descendant, checkpoint)
             .unwrap()
     );
-    // A save commits its owned paths without rewriting the on-disk index.
-    // Continuation needs a clean target, so refresh it as the public
-    // synchronization fixtures do after authoring.
-    let mut index = repository.index().unwrap();
-    index
-        .read_tree(&repository.head().unwrap().peel_to_tree().unwrap())
-        .unwrap();
-    index.write().unwrap();
     let before = local_binding_image(&worktree);
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();

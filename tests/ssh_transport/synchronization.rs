@@ -433,10 +433,6 @@ fn author_context(case: &Case) -> Result<ItemContext, FixtureError> {
         SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
         _ => return Err(FixtureError),
     };
-    let linked = fixed(git2::Repository::open(&context.worktree))?;
-    let mut index = fixed(linked.index())?;
-    fixed(index.read_tree(&fixed(fixed(linked.head())?.peel_to_tree())?))?;
-    fixed(index.write())?;
     Ok(context)
 }
 fn context_request(case: &Case) -> Result<SynchronizeRemoteRequest, FixtureError> {
