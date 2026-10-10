@@ -21,6 +21,7 @@ fn completed() -> JournalRow {
     JournalRow::Final {
         kind: FinalKind::Completed,
         owes_work: false,
+        checkpointed: true,
     }
 }
 
@@ -95,6 +96,7 @@ fn a_completed_request_whose_commit_was_saved_over_is_done() {
     let owing = JournalRow::Final {
         kind: FinalKind::Completed,
         owes_work: true,
+        checkpointed: true,
     };
     assert_eq!(
         before(owing, &[(FOREIGN, false), (OWN, true)]).found(),
@@ -102,4 +104,28 @@ fn a_completed_request_whose_commit_was_saved_over_is_done() {
             own: Some(oid(OWN))
         }
     );
+}
+
+#[test]
+fn a_request_whose_row_never_reached_a_checkpoint_has_no_commit_of_its_own() {
+    // The row completed with no step of its work recorded: the request
+    // stopped for an identity, say. A commit of the intended content in
+    // range is someone else's, whatever it was made from.
+    let unworked = || JournalRow::Final {
+        kind: FinalKind::Completed,
+        owes_work: false,
+        checkpointed: false,
+    };
+    let found = before(unworked(), &[(OWN, true)]);
+    assert!(found.started());
+    assert!(!found.committing());
+    assert_eq!(found.found(), Found::Continue);
+    assert_eq!(found.reported(&found.evidence), None);
+    assert_eq!(
+        before(unworked(), &[(FOREIGN, false), (OWN, true)]).found(),
+        Found::Foreign { own: None }
+    );
+    // A pending row may have committed and not recorded it.
+    assert!(before(pending(), &[]).committing());
+    assert!(!before(JournalRow::Absent, &[]).committing());
 }

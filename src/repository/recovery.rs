@@ -456,6 +456,17 @@ fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
 }
 
 const REJECTED_STEP: &str = "rejected";
+/// Whether `step`, the last step a local row recorded, is at or past the
+/// point where the operation's work is committed.
+fn is_checkpoint_step(step: &str) -> bool {
+    matches!(
+        step,
+        "authoring_checkpoint_observed"
+            | "authoritative_observed"
+            | "initialization_committed"
+            | "publication_committed"
+    )
+}
 
 /// Closes the row of a call that was rejected and left nothing behind. The row
 /// no longer blocks the repository, and a repeat of its ID begins again.
@@ -498,7 +509,24 @@ pub enum JournalRow {
     /// row is in flight for settlement, exactly as a pending one is, and
     /// is still told apart from one: a cancelled row that owes work is
     /// `Final { kind: Cancelled, owes_work: true }`.
-    Final { kind: FinalKind, owes_work: bool },
+    ///
+    /// `checkpointed` says whether the row records that the operation
+    /// passed the point where its work is committed. For a local
+    /// operation that is one of the steps `authoring_checkpoint_observed`,
+    /// `authoritative_observed`, `initialization_committed` and
+    /// `publication_committed`. An authoring operation records its
+    /// checkpoint step whether the checkpoint committed or found nothing
+    /// to commit, so the step does not say a commit was made; its absence
+    /// says none was: the operation stopped before its checkpoint, for
+    /// want of an identity, say, with only a context step or none
+    /// recorded. A local operation with no such step, a refresh among
+    /// them, reads `false`. The remote and key-material journals record
+    /// phases and not steps, and their final rows read `true`.
+    Final {
+        kind: FinalKind,
+        owes_work: bool,
+        checkpointed: bool,
+    },
 }
 
 /// Where an operation that has not ended stands, in its journal's terms.
@@ -595,6 +623,7 @@ pub(super) fn lookup_operation(
         JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work: false,
+            checkpointed: step.as_deref().is_some_and(is_checkpoint_step),
         }
     })
 }

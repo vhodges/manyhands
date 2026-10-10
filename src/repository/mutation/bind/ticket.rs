@@ -657,6 +657,7 @@ impl TicketBinding {
             &registered_root(accepted),
             &accepted.position,
             &ticket_path(&self.id_text()),
+            &expectation(accepted),
             &|bytes| self.holds_bytes(bytes),
         )
     }
@@ -1049,6 +1050,7 @@ impl Binding for TicketBinding {
                             Some(JournalRow::Final {
                                 kind: FinalKind::Completed,
                                 owes_work: false,
+                                checkpointed: _,
                             })
                         );
                         let commit = after.as_ref().ok().and_then(|after| before.reported(after));

@@ -185,15 +185,28 @@ impl Before {
         }
     }
 
+    /// Whether an earlier attempt of the request may have committed: its
+    /// operation's journal row was pending, or was final having recorded a
+    /// step of its work. A row that completed with none never reached a
+    /// checkpoint, and no commit is that request's, whatever Git shows.
+    pub(crate) fn committing(&self) -> bool {
+        match self.journal {
+            JournalRow::Absent => false,
+            JournalRow::Pending(_) => true,
+            JournalRow::Final { checkpointed, .. } => checkpointed,
+        }
+    }
+
     pub(crate) fn found(&self) -> Found {
         // A commit of the intended content is the request's own only when
-        // an attempt of the request had started.
-        let own = self.evidence.own().filter(|_| self.started());
+        // an attempt of the request may have committed.
+        let own = self.evidence.own().filter(|_| self.committing());
         match (&self.journal, own) {
             (
                 JournalRow::Final {
                     kind: FinalKind::Completed,
                     owes_work: false,
+                    checkpointed: _,
                 },
                 Some(commit),
             ) => Found::Done { commit },
@@ -204,6 +217,7 @@ impl Before {
                     kind:
                         FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
                     owes_work: _,
+                    checkpointed: _,
                 },
                 own,
             ) => {
@@ -219,7 +233,7 @@ impl Before {
     /// The commit a call reports, from the evidence read after its domain
     /// call.
     pub(crate) fn reported(&self, after: &PathEvidence) -> Option<git2::Oid> {
-        after.reported(self.started(), &self.evidence)
+        after.reported(self.committing(), &self.evidence)
     }
 }
 

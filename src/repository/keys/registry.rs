@@ -711,10 +711,12 @@ pub(in super::super) fn lookup_material_operation(
         KeyMaterialPhase::Completed => JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work: false,
+            checkpointed: true,
         },
         KeyMaterialPhase::RetainedForInspection => JournalRow::Final {
             kind: FinalKind::RetainedForInspection,
             owes_work: false,
+            checkpointed: true,
         },
     })
 }

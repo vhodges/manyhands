@@ -1348,6 +1348,7 @@ fn ended(kind: FinalKind) -> JournalRow {
     JournalRow::Final {
         kind,
         owes_work: false,
+        checkpointed: true,
     }
 }
 
@@ -1357,6 +1358,7 @@ fn owing(kind: FinalKind) -> JournalRow {
     JournalRow::Final {
         kind,
         owes_work: true,
+        checkpointed: true,
     }
 }
 
@@ -1427,16 +1429,42 @@ fn the_journal_lookup_reads_a_local_operation() {
         pending_local("authoring", Some("authoring_destination_observed"))
     );
 
+    for step in [
+        "authoring_checkpoint_observed",
+        "authoritative_observed",
+        "initialization_committed",
+        "publication_committed",
+    ] {
+        world.set_local(OPERATION_A, "completed", Some(step));
+        assert_eq!(
+            world.journal_row(OperationFamily::Local, OPERATION_A),
+            ended(FinalKind::Completed),
+            "{step}"
+        );
+    }
     world.set_local(OPERATION_A, "completed", Some("authoritative_observed"));
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
         ended(FinalKind::Completed)
     );
-    world.set_local(OPERATION_A, "completed", None);
-    assert_eq!(
-        world.journal_row(OperationFamily::Local, OPERATION_A),
-        ended(FinalKind::Completed)
-    );
+    // A row that completed short of the step where its work is committed
+    // says so: for an authoring operation, no commit is its own.
+    for step in [
+        None,
+        Some("completed"),
+        Some("worktree_observed"),
+        Some("authoring_destination_observed"),
+    ] {
+        world.set_local(OPERATION_A, "completed", step);
+        assert_eq!(
+            world.journal_row(OperationFamily::Local, OPERATION_A),
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: false,
+                checkpointed: false,
+            }
+        );
+    }
 
     // Each journal answers for its own rows only.
     assert_eq!(
@@ -1538,7 +1566,11 @@ fn the_journal_lookup_reads_a_synchronization_bound_locally() {
     world.set_local(OPERATION_A, "completed", None);
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        ended(FinalKind::Completed)
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        }
     );
 }
 

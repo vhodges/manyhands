@@ -238,7 +238,13 @@ fn corrupt(repository: &Repository, oid: Oid) {
 
 impl Fixture {
     fn evidence(&self, position: &Position) -> Result<PathEvidence, Unreadable> {
-        path_evidence(self.root(), position, PATH, &|bytes| bytes == b"intended\n")
+        path_evidence(
+            self.root(),
+            position,
+            PATH,
+            &ExpectedPathObservation::from_bytes(b"before\n"),
+            &|bytes| bytes == b"intended\n",
+        )
     }
 }
 
@@ -402,12 +408,152 @@ fn a_commit_is_reported_only_for_a_request_that_had_started_or_that_made_it() {
     // Nothing in range is nothing to report, started or not.
     assert_eq!(before.reported(STARTED, &before), None);
 
-    // Someone else's identical commit was there before the call, the
-    // content changed, and this call committed it again: the commit
-    // reported is the one that was not there.
+    // The content changes and the intended content is committed again,
+    // over the other: that commit was not made from what the request
+    // expected, and is nobody's but its maker's.
     let other = commit(&fixture.repository, BRANCH, Some(made), PATH, "other\n");
-    let again = commit(&fixture.repository, BRANCH, Some(other), PATH, "intended\n");
+    commit(&fixture.repository, BRANCH, Some(other), PATH, "intended\n");
     let later = fixture.evidence(&position).unwrap();
-    assert_eq!(later.reported(NOT_STARTED, &after), Some(again));
+    assert_eq!(later.reported(NOT_STARTED, &after), None);
     assert_eq!(later.reported(STARTED, &after), Some(made));
+}
+
+/// The evidence for a request accepted against `expected` at the path.
+fn evidence_against(
+    fixture: &Fixture,
+    position: &Position,
+    expected: &ExpectedPathObservation,
+) -> PathEvidence {
+    path_evidence(fixture.root(), position, PATH, expected, &|bytes| {
+        bytes == b"intended\n"
+    })
+    .unwrap()
+}
+
+#[test]
+fn the_request_s_commit_changed_the_file_from_what_the_request_expected() {
+    let fixture = fixture();
+    let position = fixture.position();
+    // Someone saves other content, and then someone saves the intended
+    // content over it.
+    let other = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "other\n",
+    );
+    let again = commit(&fixture.repository, BRANCH, Some(other), PATH, "intended\n");
+
+    // The file was committed when the request was accepted: the commit of
+    // the intended content was made from something else, and is not the
+    // request's, started or not.
+    let committed = ExpectedPathObservation::from_bytes(b"before\n");
+    let evidence = evidence_against(&fixture, &position, &committed);
+    assert_eq!(evidence.own(), None);
+    assert_eq!(evidence.reported(STARTED, &evidence), None);
+    let nothing = fixture.evidence(&Position {
+        base_ref: Some("refs/heads/absent".to_owned()),
+        base_oid: None,
+    });
+    assert_eq!(evidence.reported(NOT_STARTED, &nothing.unwrap()), None);
+
+    // The file had been edited and not committed: no commit's parent
+    // holds what the request expected, so the parent is not asked.
+    let edited = ExpectedPathObservation::from_bytes(b"edited by hand\n");
+    let evidence = evidence_against(&fixture, &position, &edited);
+    assert_eq!(evidence.own(), Some(again));
+
+    // A create expects no file: its commit is the one that added it.
+    let created = commit(
+        &fixture.repository,
+        "refs/heads/created",
+        Some(fixture.base),
+        "tickets/new.md",
+        "intended\n",
+    );
+    let removed_then_added = path_evidence(
+        fixture.root(),
+        &Position {
+            base_ref: Some("refs/heads/created".to_owned()),
+            base_oid: Some(fixture.base),
+        },
+        "tickets/new.md",
+        &ExpectedPathObservation::Missing,
+        &|bytes| bytes == b"intended\n",
+    )
+    .unwrap();
+    assert_eq!(removed_then_added.own(), Some(created));
+}
+
+#[test]
+fn a_range_widened_to_the_whole_branch_shows_no_commit_of_the_request_s() {
+    let fixture = fixture();
+    // The branch's history: the intended content, long ago, and then what
+    // the request was accepted against.
+    let old = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "intended\n",
+    );
+    let accepted_at = commit(&fixture.repository, BRANCH, Some(old), PATH, "current\n");
+    let expected = ExpectedPathObservation::from_bytes(b"current\n");
+    let recorded = Position {
+        base_ref: Some(BRANCH.to_owned()),
+        base_oid: Some(accepted_at),
+    };
+    let bounded = evidence_against(&fixture, &recorded, &expected);
+    assert_eq!(bounded.own(), None);
+    assert!(!bounded.superseded());
+
+    // The tip is amended: the recorded commit is no longer an ancestor,
+    // and the range is all of the branch.
+    let tree = fixture
+        .repository
+        .find_commit(accepted_at)
+        .unwrap()
+        .tree()
+        .unwrap();
+    let signature = Signature::new("Test", "test@example.invalid", &Time::new(9, 0)).unwrap();
+    let amended = fixture
+        .repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "amended",
+            &tree,
+            &[&fixture.repository.find_commit(old).unwrap()],
+        )
+        .unwrap();
+    fixture
+        .repository
+        .reference(BRANCH, amended, true, "amend")
+        .unwrap();
+    let widened = evidence_against(&fixture, &recorded, &expected);
+    // The old commit left the path as intended and is not the request's.
+    assert_eq!(widened.own(), None);
+    assert_eq!(widened.reported(STARTED, &widened), None);
+    // The newest change in all of history is not what the request
+    // intends, and the tip still holds what it expected: nothing foreign
+    // stands at the path.
+    assert!(!widened.superseded());
+
+    // The request then commits: that commit was not there before.
+    let made = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(amended),
+        PATH,
+        "intended\n",
+    );
+    let after = evidence_against(&fixture, &recorded, &expected);
+    assert_eq!(after.own(), None);
+    assert_eq!(after.reported(STARTED, &widened), Some(made));
+
+    // A foreign change at the tip is still a foreign change.
+    commit(&fixture.repository, BRANCH, Some(made), PATH, "foreign\n");
+    assert!(evidence_against(&fixture, &recorded, &expected).superseded());
 }

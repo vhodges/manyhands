@@ -2282,10 +2282,12 @@ pub(in super::super) fn lookup_operation(
         RemoteOperationPhase::Completed => JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work,
+            checkpointed: true,
         },
         RemoteOperationPhase::Cancelled => JournalRow::Final {
             kind: FinalKind::Cancelled,
             owes_work,
+            checkpointed: true,
         },
     })
 }

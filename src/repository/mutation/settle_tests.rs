@@ -8,7 +8,11 @@ fn stopped(journal: JournalRow) -> Standing {
 }
 
 fn ended(kind: FinalKind, owes_work: bool) -> Standing {
-    stopped(JournalRow::Final { kind, owes_work })
+    stopped(JournalRow::Final {
+        kind,
+        owes_work,
+        checkpointed: true,
+    })
 }
 
 #[test]
@@ -88,6 +92,7 @@ fn a_re_entry_that_stopped_before_its_domain_call_keeps_what_an_earlier_attempt_
         JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work: false,
+            checkpointed: true,
         },
     ] {
         assert_eq!(

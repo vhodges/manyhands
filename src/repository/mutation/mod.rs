@@ -785,10 +785,12 @@ impl Settlement {
                 JournalRow::Final {
                     kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
                     owes_work: _,
+                    checkpointed: _,
                 } => Self::Finish,
                 JournalRow::Final {
                     kind: FinalKind::Completed,
                     owes_work: _,
+                    checkpointed: _,
                 }
                 | JournalRow::Absent
                 | JournalRow::Pending(_) => {

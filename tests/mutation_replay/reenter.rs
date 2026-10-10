@@ -1404,3 +1404,152 @@ fn a_retry_that_cannot_read_git_changes_nothing_and_claims_nothing() {
     assert_finished_with_its_commit(&world, REQUEST_1, &again, 1, "the next retry");
     assert_eq!(again.effects.commit_oid, Some(commit.to_string()));
 }
+
+fn assert_no_op_without_a_commit(envelope: &Envelope<MutationDataDto>, what: &str) {
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied),
+        "{what}"
+    );
+    assert_eq!(envelope.effects.write, WriteEffect::Unchanged, "{what}");
+    assert_eq!(
+        envelope.effects.checkpoint,
+        CheckpointEffect::Unchanged,
+        "{what}"
+    );
+    assert_eq!(envelope.effects.commit_oid, None, "{what}");
+}
+
+#[test]
+fn a_save_that_changed_nothing_does_not_take_a_later_commit_of_the_same_content() {
+    // The first request asks for what the file already holds. It runs, as
+    // a no-op, and its output is lost.
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    // Other requests save something else and then the same content again.
+    world.reopen();
+    let other = world.execute(REQUEST_3, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(other.outcome, Outcome::Success);
+    let again = world.execute(
+        "01ARZ3NDEKTSV4RRFFQ69G5FX4",
+        world.save(TICKET_A, &world.token(TICKET_A)),
+    );
+    assert_eq!(again.outcome, Outcome::Success);
+    let tip = world.branch_tip(TICKET_A);
+    assert_eq!(world.branch_commits(TICKET_A), 3);
+
+    // That commit left the file as the first request intends, and it was
+    // not made from the state the first request was accepted against.
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&retry, "the retry");
+    assert_eq!(world.branch_tip(TICKET_A), tip);
+    assert_eq!(world.branch_commits(TICKET_A), 3);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.result.unwrap().outcome, Outcome::Noop);
+}
+
+const UNIDENTIFIED_HOME: &str = "MANYHANDS_UNIDENTIFIED_HOME";
+
+/// Runs in a process of its own: where libgit2 looks for configuration is
+/// process-wide, and this points every level but the repository's at an
+/// empty directory so that no identity is found.
+#[test]
+fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit() {
+    let Some(home) = std::env::var_os(UNIDENTIFIED_HOME) else {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "reenter::a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit",
+                "--nocapture",
+            ])
+            .env(UNIDENTIFIED_HOME, home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    for level in [
+        git2::ConfigLevel::System,
+        git2::ConfigLevel::Global,
+        git2::ConfigLevel::XDG,
+        git2::ConfigLevel::ProgramData,
+    ] {
+        // This exact-test child runs nothing else, so no other use of
+        // libgit2 overlaps the change.
+        unsafe { git2::opts::set_search_path(level, &home).unwrap() };
+    }
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let mut local = git2::Repository::open(&world.root)
+        .unwrap()
+        .config()
+        .unwrap()
+        .open_level(git2::ConfigLevel::Local)
+        .unwrap();
+    local.remove("user.name").unwrap();
+    local.remove("user.email").unwrap();
+
+    // The first request stops for want of an identity. The domain
+    // completes its row, having written nothing, and the output is lost.
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    // The step the journal kept is the context's, not a checkpoint's.
+    let step: String = crate::support::items::index(world.data.path())
+        .query_row(
+            "SELECT completed_step FROM operation_records WHERE action = 'save_ticket'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(step, "worktree_observed");
+    let operation_id = world.record(REQUEST_1).unwrap().operations[0]
+        .operation_id
+        .to_string();
+    assert_eq!(
+        world.journal_row(&operation_id),
+        JournalRow::Final {
+            kind: manyhands::repository::request_store::FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        },
+        "the row never reached a checkpoint"
+    );
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+    assert!(!world.worktree_source(TICKET_A).contains(TITLE));
+
+    // An identity is set and another request saves the same content.
+    world.set_local_config("user.name", "Manyhands Test");
+    world.set_local_config("user.email", "manyhands-test@example.invalid");
+    world.reopen();
+    let second = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(second.outcome, Outcome::Success);
+    let tip = world.branch_tip(TICKET_A);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    // The commit was made from exactly the state the first request was
+    // accepted against, and leaves the file as it intends. Only the
+    // journal says the first request never reached a checkpoint.
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&retry, "the retry");
+    assert_eq!(world.branch_tip(TICKET_A), tip);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}

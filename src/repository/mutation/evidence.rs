@@ -14,6 +14,8 @@ use std::path::Path;
 
 use git2::{Oid, Repository};
 
+use super::super::ExpectedPathObservation;
+
 /// The branch a request commits to and where it stood at acceptance. For
 /// an item with no editing context yet the branch does not exist, and the
 /// commit is primary's head, which the context will be created from.
@@ -50,26 +52,53 @@ impl Position {
     }
 }
 
-/// The commits in range, newest first.
-fn range(repository: &Repository, position: &Position) -> Result<Vec<Oid>, git2::Error> {
+/// The commits a request's evidence is looked for among.
+struct Range {
+    /// Newest first.
+    commits: Vec<Oid>,
+    /// The branch's tip, when the branch exists.
+    tip: Option<Oid>,
+    /// The recorded commit, when it bounds the range: it is the tip or an
+    /// ancestor of it. Without it the range is the whole branch, which
+    /// holds history older than the request.
+    base: Option<Oid>,
+}
+
+fn range_of(repository: &Repository, position: &Position) -> Result<Range, git2::Error> {
+    let nothing = Range {
+        commits: Vec::new(),
+        tip: None,
+        base: None,
+    };
     let Some(base_ref) = position.base_ref.as_deref() else {
-        return Ok(Vec::new());
+        return Ok(nothing);
     };
     let tip = match repository.refname_to_id(base_ref) {
         Ok(tip) => tip,
         // The branch was never created: nothing was committed to it.
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(nothing),
         Err(error) => return Err(error),
     };
     let mut walk = repository.revwalk()?;
     walk.set_sorting(git2::Sort::TOPOLOGICAL)?;
     walk.push(tip)?;
+    let mut bound = None;
     if let Some(base) = position.base_oid
         && (base == tip || is_ancestor(repository, base, tip)?)
     {
         walk.hide(base)?;
+        bound = Some(base);
     }
-    walk.collect()
+    Ok(Range {
+        commits: walk.collect::<Result<_, _>>()?,
+        tip: Some(tip),
+        base: bound,
+    })
+}
+
+/// The commits in range, newest first.
+fn range(repository: &Repository, position: &Position) -> Result<Vec<Oid>, git2::Error> {
+    range_of(repository, position).map(|range| range.commits)
 }
 
 /// Whether the recorded commit `base` is an ancestor of `tip`.
@@ -110,9 +139,23 @@ fn changed_path(repository: &Repository, commit: Oid, path: &Path) -> Result<boo
     Ok(before != after)
 }
 
+/// What is at `path` in `commit`, as a request's expectation states it:
+/// the digest of the file's bytes, or that no file is there.
+fn observed_at(
+    repository: &Repository,
+    commit: &git2::Commit<'_>,
+    path: &Path,
+) -> Result<ExpectedPathObservation, git2::Error> {
+    Ok(match blob_at(commit, path)? {
+        Some(blob) => ExpectedPathObservation::from_bytes(repository.find_blob(blob)?.content()),
+        None => ExpectedPathObservation::Missing,
+    })
+}
+
 /// What Git shows of a request's path since the request was accepted: the
 /// commits in range, and of those the ones that changed the path, each
-/// with whether it left the path as the request intended.
+/// with whether it left the path as the request intended and whether it
+/// changed it from the state the request was accepted against.
 ///
 /// Re-entry reads this before and after its domain call. It is never a
 /// guess: a range, commit or file that could not be read is `Unreadable`.
@@ -122,6 +165,23 @@ pub(crate) struct PathEvidence {
     range: Vec<Oid>,
     /// The commits in range that changed the path, newest first.
     changes: Vec<PathChange>,
+    /// The range is the whole branch: nothing was recorded, or the
+    /// recorded commit is no longer an ancestor of the branch. Such a
+    /// range holds commits older than the request. It can show that the
+    /// path was changed from elsewhere; it cannot show a commit to be the
+    /// request's own.
+    widened: bool,
+    /// The file was committed when the request was accepted: what the
+    /// recorded commit holds at the path is what the request expected.
+    /// Then the request's own commit is one that changed the path from
+    /// exactly that state. When it was not (the file had been edited and
+    /// not committed), no commit's parent holds the expected state, and
+    /// the parent is not asked.
+    anchored: bool,
+    /// The branch's tip still holds at the path what the request
+    /// expected: whatever history shows, the file has not been changed
+    /// from elsewhere.
+    tip_as_expected: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,11 +189,15 @@ struct PathChange {
     commit: Oid,
     /// Whether the commit left the path as the request intended.
     intended: bool,
+    /// Whether the commit's first parent held at the path what the
+    /// request expected.
+    from_expected: bool,
 }
 
 impl PathEvidence {
-    /// The evidence of a range that holds exactly `changes`, newest first,
-    /// each with whether it left the path as intended.
+    /// The evidence of a bounded range that holds exactly `changes`,
+    /// newest first, each with whether it left the path as intended, for
+    /// a request whose file was not committed when it was accepted.
     #[cfg(test)]
     pub(crate) fn of_changes_for_testing(changes: &[(Oid, bool)]) -> Self {
         Self {
@@ -143,79 +207,111 @@ impl PathEvidence {
                 .map(|(commit, intended)| PathChange {
                     commit: *commit,
                     intended: *intended,
+                    from_expected: false,
                 })
                 .collect(),
+            widened: false,
+            anchored: false,
+            tip_as_expected: false,
         }
     }
 
-    /// The commit that is the request's own, if an attempt of the request
-    /// committed: the oldest in range that left the path as intended. A
-    /// later commit of the same content was made over a path that already
-    /// held it, or over someone else's change, and is not the request's.
-    pub(crate) fn own(&self) -> Option<Oid> {
+    /// The commits that can be the request's own, oldest first: each left
+    /// the path as intended and, when the file was committed at
+    /// acceptance, changed it from exactly the state the request was
+    /// accepted against. A commit of the same content made over anything
+    /// else, by another request or by hand, is not the request's.
+    fn candidates(&self) -> impl Iterator<Item = Oid> + '_ {
         self.changes
             .iter()
             .rev()
-            .find(|change| change.intended)
+            .filter(|change| change.intended && (!self.anchored || change.from_expected))
             .map(|change| change.commit)
     }
 
-    /// Whether the newest commit that changed the path left it as
-    /// something the request did not intend: the path was changed from
-    /// elsewhere, after the request's own commit if it made one.
+    /// The commit that is the request's own, if an attempt of the request
+    /// committed: the oldest candidate in range. None from a range widened
+    /// to the whole branch.
+    pub(crate) fn own(&self) -> Option<Oid> {
+        if self.widened {
+            return None;
+        }
+        self.candidates().next()
+    }
+
+    /// Whether the path was changed from elsewhere: the newest commit in
+    /// range that changed it left it as something the request did not
+    /// intend, and the branch's tip no longer holds what the request
+    /// expected. While the tip holds that, nothing foreign stands at the
+    /// path, whatever older history a widened range shows.
     pub(crate) fn superseded(&self) -> bool {
-        self.changes.first().is_some_and(|change| !change.intended)
+        !self.tip_as_expected && self.changes.first().is_some_and(|change| !change.intended)
     }
 
     /// The commit a call reports, given this evidence read after its
     /// domain call and `before` read ahead of it.
     ///
-    /// A commit is reported only if it is in range and left the path as
-    /// intended, and one of two things holds. `started`: before the call
-    /// the operation's journal row was pending or final, so an earlier
-    /// attempt of this request had started, and the commit is the oldest
-    /// such. Or the commit was not there before the call, so this call
-    /// made it. Otherwise no commit is the request's: identical content
-    /// that was there before a request that had not started is someone
-    /// else's.
-    pub(crate) fn reported(&self, started: bool, before: &Self) -> Option<Oid> {
-        self.changes
-            .iter()
-            .rev()
-            .filter(|change| change.intended)
-            .map(|change| change.commit)
-            .find(|commit| started || !before.range.contains(commit))
+    /// A commit is reported only if it can be the request's own (see
+    /// `candidates`), and one of two things holds. `committing`: before
+    /// the call the operation's journal row showed that an earlier attempt
+    /// of this request may have committed, and the range is bounded by the
+    /// recorded commit; the commit is then the oldest candidate. Or the
+    /// commit was not there before the call, so this call made it.
+    /// Otherwise no commit is the request's: identical content that was
+    /// there before is someone else's.
+    pub(crate) fn reported(&self, committing: bool, before: &Self) -> Option<Oid> {
+        self.candidates()
+            .find(|commit| (committing && !self.widened) || !before.range.contains(commit))
     }
 }
 
-/// Reads what Git shows of `path` since `position`. `intended` decides
+/// Reads what Git shows of `path` since `position`. `expected` is what the
+/// request expected at the path when it was accepted; `intended` decides
 /// from a file's bytes whether they are what the request intends.
 pub(crate) fn path_evidence(
     root: &Path,
     position: &Position,
     path: &str,
+    expected: &ExpectedPathObservation,
     intended: &dyn Fn(&[u8]) -> bool,
 ) -> Result<PathEvidence, Unreadable> {
     let read = || -> Result<PathEvidence, git2::Error> {
         let repository = Repository::open(root)?;
         let path = Path::new(path);
-        let range = range(&repository, position)?;
+        let Range { commits, tip, base } = range_of(&repository, position)?;
+        let holds_expected = |commit: Oid| -> Result<bool, git2::Error> {
+            Ok(observed_at(&repository, &repository.find_commit(commit)?, path)? == *expected)
+        };
         let mut changes = Vec::new();
-        for commit in &range {
+        for commit in &commits {
             if !changed_path(&repository, *commit, path)? {
                 continue;
             }
-            let blob = blob_at(&repository.find_commit(*commit)?, path)?;
+            let found = repository.find_commit(*commit)?;
             changes.push(PathChange {
                 commit: *commit,
-                intended: match blob {
+                intended: match blob_at(&found, path)? {
                     Some(blob) => intended(repository.find_blob(blob)?.content()),
                     // The commit removed the file.
                     None => false,
                 },
+                from_expected: match found.parent(0) {
+                    Ok(parent) => observed_at(&repository, &parent, path)? == *expected,
+                    // A root commit changed the path from nothing.
+                    Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                        *expected == ExpectedPathObservation::Missing
+                    }
+                    Err(error) => return Err(error),
+                },
             });
         }
-        Ok(PathEvidence { range, changes })
+        Ok(PathEvidence {
+            range: commits,
+            changes,
+            widened: tip.is_some() && base.is_none(),
+            anchored: base.map(holds_expected).transpose()?.unwrap_or(false),
+            tip_as_expected: tip.map(holds_expected).transpose()?.unwrap_or(false),
+        })
     };
     read().map_err(|_| Unreadable)
 }
