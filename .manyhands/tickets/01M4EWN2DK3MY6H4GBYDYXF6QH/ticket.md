@@ -28,8 +28,7 @@ does not.
 ## Fix
 
 Implemented on 2026-10-09 after Wave 02 Cycle 06 landed (main `5e4fad6`,
-merged into this branch). Not yet reviewed by the product owner, pushed or
-merged.
+merged into this branch). Not yet merged.
 
 - Each call tracks whether it has begun a durable write it has not undone
   (`CallEffects` in `src/repository.rs`). When a call returns an error, its
@@ -38,6 +37,11 @@ merged.
 - A closed row is kept, marked `rejected`, so its ID stays bound to its
   target: reusing the ID for another target is still `OperationMismatch`. A
   repeat of the same ID and target begins again as a new call.
+- A refresh may borrow any operation ID; it does not reset a rejected row.
+- Product-owner ruling, 2026-10-09: the public lookup shows such an
+  operation as `completed` with the step `rejected` and no next action.
+  This is documented in `schemas/v1/operation.schema.json` and on the
+  result field, and pinned by a contract test.
 - Covered: `prepare_context`, the two saves, `submit_comment`,
   `add_remote`, `remove_remote`, `set_publication_remote`, `enable`,
   `create_and_enable`, including the return sites Cycle 06 added.
@@ -55,12 +59,30 @@ merged.
   leaves its row could be provoked; its failures are inside one SQLite
   transaction). Refresh and rebuild are untouched.
 
-Evidence: `tests/journal_rejection.rs`, 15 tests. The 12 that provoke a
-rejection all failed with `RecoveryRequired` on the old code. The four
-required Devenv checks and the CLI smoke test pass: 1240 tests, 0 failed.
-An independent review of the first version found the completed-row replay
-and lease problems that the points above correct; the corrected version has
-not been reviewed again.
+Evidence: `tests/journal_rejection.rs`, 18 tests. The 12 that provoke a
+rejection all failed with `RecoveryRequired` on the old code. The two
+repeat tests each fail when their guard is removed. The four required
+Devenv checks and the CLI smoke test pass: 1243 tests, 0 failed.
+
+Two independent reviews. The first found a repeat treated as a replay and a
+lease released before settlement; both were corrected. The second found no
+path that closes a row with an effect outstanding, and raised the refresh
+reset, a repeat test that did not discriminate, and the lookup reading, all
+addressed above. The changes made after the second review were not reviewed
+again.
+
+Known and left, all from the second review:
+
+- On a resumed row the older rule still applies: a call that wrote a file
+  and failed to record the step, followed by a repeat of the same ID that
+  is cleanly rejected, closes the row with the file written. Unchanged from
+  main.
+- A Git failure inside the first write call itself (a stale lock file)
+  leaves the row pending although nothing was written.
+- If closing the row fails, the caller sees that error and not the
+  rejection.
+- `create_and_enable` marks an effect for the injected interruption before
+  initialization, solely so an existing test keeps its expectation.
 
 Not settled here (see "To Decide On This Ticket"): a process killed
 mid-operation, a kill between a configuration write and its commit, and the

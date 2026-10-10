@@ -422,3 +422,95 @@ fn an_enablement_that_restored_its_writes_does_not_block_the_repository() {
         None
     );
 }
+
+#[test]
+fn a_repeat_of_a_rejected_operation_is_a_new_call_not_a_replay() {
+    assert_repeat_is_a_new_call(false);
+}
+
+#[test]
+fn a_refresh_under_the_rejected_id_does_not_turn_the_repeat_into_a_replay() {
+    assert_repeat_is_a_new_call(true);
+}
+
+fn assert_repeat_is_a_new_call(refresh_between: bool) {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let request = document_request(&fixture.root);
+    // With the editing context already there, the repeat records no step
+    // before its write.
+    let mut context = request.target.clone();
+    context.operation_id = support::new_operation_id();
+    assert_eq!(outcome(enabled.service.prepare_context(context)), None);
+    detach(&fixture);
+    assert_eq!(
+        rejection(enabled.service.save_document(request.clone())),
+        RepositoryErrorKind::DetachedHead
+    );
+    fixture.repository.set_head("refs/heads/main").unwrap();
+    if refresh_between {
+        let _ =
+            enabled
+                .service
+                .refresh_repository(manyhands::repository::RefreshRepositoryRequest {
+                    root: fixture.root.clone(),
+                    operation_id: request.target.operation_id,
+                });
+    }
+
+    // The repeat writes its file and then fails to record the step. A new
+    // call keeps its row for that; a replay of a closed row would not.
+    let failing = support::FailOnce::at(
+        manyhands::repository::FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+    )
+    .open_service(enabled.data_directory.path());
+    assert_eq!(
+        rejection(failing.save_document(request.clone())),
+        RepositoryErrorKind::Sqlite
+    );
+
+    let service = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    assert!(
+        !service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty(),
+        "a written file keeps its journal row"
+    );
+    assert_eq!(
+        probe_remote(&service, &fixture.root),
+        Some(RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(outcome(service.save_document(request)), None);
+    assert_eq!(probe_remote(&service, &fixture.root), None);
+}
+
+#[test]
+fn a_rejected_operation_reads_as_completed_and_rejected() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let request = document_request(&fixture.root);
+    let operation_id = request.target.operation_id;
+    detach(&fixture);
+    assert_eq!(
+        rejection(enabled.service.save_document(request)),
+        RepositoryErrorKind::DetachedHead
+    );
+    fixture.repository.set_head("refs/heads/main").unwrap();
+
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let operation = enabled.service.show_operation(&repo, operation_id).unwrap();
+
+    assert_eq!(operation.state, "completed");
+    assert_eq!(operation.completed_step.as_deref(), Some("rejected"));
+    assert_eq!(operation.next_action, None);
+    assert!(
+        enabled
+            .service
+            .list_operations(&repo)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}

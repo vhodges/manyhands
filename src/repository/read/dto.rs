@@ -778,6 +778,10 @@ pub struct OperationDto {
     /// The last step a local or remote operation recorded as done, and
     /// null when it recorded none. Always null for a key-material
     /// operation, whose `state` is that step.
+    ///
+    /// A local operation that is `completed` with the step `rejected` was
+    /// refused and changed nothing. Asking for it again under the same ID
+    /// begins it anew.
     pub completed_step: Option<String>,
     /// Null when nothing is left to do. Also null for a remote operation
     /// that holds the reservation, whose store does not say whether

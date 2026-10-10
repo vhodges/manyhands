@@ -382,7 +382,8 @@ fn begin_or_reconcile(
         return Err(recovery_required(operation, root));
     }
     if let Some((id, _, _, _, _, completed_step)) = existing {
-        if completed_step.as_deref() == Some(REJECTED_STEP) {
+        // A refresh may borrow any operation ID; it must not erase the marker.
+        if completed_step.as_deref() == Some(REJECTED_STEP) && action != "refresh" {
             // The earlier call left nothing behind, so this one begins again.
             // Its row was kept so that the ID stays bound to its target.
             transaction
