@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::ffi::OsStrExt,
+        unix::{ffi::OsStrExt, fs::MetadataExt},
     },
 };
 
@@ -28,6 +28,11 @@ use crate::canonical;
 mod coordination;
 mod discovery;
 pub mod keys;
+#[cfg(unix)]
+mod native_resolution;
+#[cfg(windows)]
+#[path = "repository/native_resolution/windows.rs"]
+mod native_resolution;
 mod read;
 mod recovery;
 mod remote;
@@ -50,11 +55,14 @@ pub use keys::{
 pub use read::*;
 use recovery::{
     IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
-    claim_indexing, owns_indexing, pending_for_root, record_owned_persisted_context,
-    record_persisted_context as record_recovery_context, touch_indexing, transition_indexing,
+    claim_indexing, discard_operation, owns_indexing, pending_for_root,
+    record_owned_persisted_context, record_persisted_context as record_recovery_context,
+    touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, ObservePublicationRemoteRequest, PollingInterval, PublishPendingReason,
+    AutomaticBackoff, ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation,
+    ConflictPathToken, EphemeralSynchronizationConflictSides, ExpectedConfiguration,
+    ObservePublicationRemoteRequest, PollingInterval, PublishPendingReason, RedactedConflictBytes,
     RemoteContextSnapshot, RemoteContextState, RemoteObservationError, RemoteObservationOutcome,
     RemoteOperationAction, RemoteOperationInspection, RemoteOperationPhase,
     RemoteOperationPriority, RemoteOperationSafePoint, RemoteOperationTarget,
@@ -62,8 +70,10 @@ pub use remote::{
     RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
     RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
     RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
-    RemoteSnapshot, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
-    SynchronizationTarget, SynchronizeRemoteRequest,
+    RemoteSnapshot, ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
+    SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
+    SynchronizationOutcome, SynchronizationResult, SynchronizationStage, SynchronizationTarget,
+    SynchronizeRemoteRequest,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -79,10 +89,16 @@ const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
 #[cfg(unix)]
-type OwnedPathHook = (PathBuf, OwnedPathBoundary, Box<dyn FnOnce() + Send>);
+type OwnedPathHook = (
+    Option<PathBuf>,
+    PathBuf,
+    OwnedPathBoundary,
+    Box<dyn FnOnce() + Send>,
+);
 #[cfg(unix)]
-static OWNED_PATH_HOOK: std::sync::OnceLock<Mutex<Option<OwnedPathHook>>> =
-    std::sync::OnceLock::new();
+type OwnedPathHooks = Mutex<Vec<OwnedPathHook>>;
+#[cfg(unix)]
+static OWNED_PATH_HOOK: std::sync::OnceLock<OwnedPathHooks> = std::sync::OnceLock::new();
 
 #[cfg(unix)]
 #[doc(hidden)]
@@ -90,6 +106,8 @@ static OWNED_PATH_HOOK: std::sync::OnceLock<Mutex<Option<OwnedPathHook>>> =
 pub enum OwnedPathBoundary {
     Read,
     Replace,
+    TempWritten,
+    TempVerified,
     Remove,
 }
 
@@ -678,6 +696,13 @@ pub enum FailurePoint {
     BeforeIndexTransactionCommit,
     AfterIndexClaim,
     BeforeCorruptCacheReplacement,
+    ResolutionAfterPathWrite,
+    ResolutionAfterCandidatePrepared,
+    ResolutionAfterRefTransition,
+    ResolutionAfterCheckpointObservation,
+    ResolutionBeforeMetadataRetirement,
+    ResolutionAfterIndexLockRetirement,
+    ResolutionAfterMetadataCleanup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1269,13 +1294,17 @@ impl RepositoryService {
             target.operation_id,
             &authoring_context_target(&target),
         )?;
-        let outcome = match self.prepare_context_unlocked(target, Some(record)) {
+        let effects = CallEffects::default();
+        let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
             Ok(outcome) => outcome,
             Err(error) => {
-                if self.is_definite_authoring_rejection(record, operation, &root, &error)? {
-                    self.complete_lifecycle(&root, operation, record)?;
-                }
-                return Err(error);
+                return self.finish_authoring_lifecycle(
+                    &root,
+                    operation,
+                    record,
+                    &effects,
+                    Err(error),
+                );
             }
         };
         let authoritative =
@@ -1307,6 +1336,7 @@ impl RepositoryService {
         &self,
         target: AuthoringTarget,
         record: Option<RecoveryRecord>,
+        effects: &CallEffects,
     ) -> Result<ContextProvisionOutcome, RepositoryError> {
         let operation = RepositoryOperation::PrepareContext;
         self.require_index_available(operation, Some(&target.root))?;
@@ -1441,6 +1471,7 @@ impl RepositoryService {
                     .head()
                     .and_then(|head| head.peel_to_commit())
                     .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?;
+                effects.begin();
                 self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
                 let reference = repository
                     .branch(&branch, &head, false)
@@ -1455,6 +1486,7 @@ impl RepositoryService {
         };
         let mut options = WorktreeAddOptions::new();
         options.reference(Some(&reference));
+        effects.begin();
         if self.should_inject(
             FailurePoint::AfterContextBranchBeforeWorktreeGitFailure,
             operation,
@@ -1506,6 +1538,12 @@ impl RepositoryService {
             source_target_path.as_path(),
             request.destination_path.as_path(),
         ];
+        self.reject_pending_synchronization_target(
+            &root,
+            &request.target.kind,
+            &request.target.item_id,
+            operation,
+        )?;
         let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
@@ -1513,6 +1551,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -1524,11 +1563,14 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
             if !matches!(context.kind, AuthoringKind::Document) {
                 return Err(authoring_error(
                     operation,
@@ -1537,6 +1579,7 @@ impl RepositoryService {
                     "document saves require a document target",
                 ));
             }
+            self.reject_pending_synchronization_merge(&context, operation)?;
             let repository = Repository::open(&context.worktree).map_err(|error| {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
@@ -1746,17 +1789,16 @@ impl RepositoryService {
             }
             let will_write_destination =
                 !destination_exists || source.as_deref() == Some(destination.as_path());
-            let source_in_head = if moving && !source_present {
+            if moving && !source_present {
                 validate_head_document_source(
                     &repository,
                     source.as_ref().expect("move has a source"),
                     &context,
                     operation,
-                )?
-            } else {
-                false
-            };
+                )?;
+            }
             if will_write_destination {
+                effects.begin();
                 ensure_safe_owned_parent(
                     &context.worktree,
                     &destination,
@@ -1796,6 +1838,7 @@ impl RepositoryService {
                             &context,
                         )?;
                     }
+                    effects.begin();
                     self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                     remove_owned_file(&context.worktree, source, operation, &context.root)?;
                     self.advance_lifecycle(
@@ -1806,6 +1849,7 @@ impl RepositoryService {
                     )?;
                 }
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -1814,8 +1858,7 @@ impl RepositoryService {
                     operation: RepositoryOperation::SaveDocument,
                     subject: &format!("Checkpoint document {}", context.item_id),
                     added_paths: &[destination.as_path()],
-                    removed_source: (source_present || source_in_head)
-                        .then(|| source.as_deref().expect("move has a source")),
+                    removed_source: moving.then(|| source.as_deref().expect("move has a source")),
                 },
             )?;
             self.advance_lifecycle(
@@ -1857,7 +1900,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -1882,6 +1927,12 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveTicket;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
+        self.reject_pending_synchronization_target(
+            &root,
+            &request.target.kind,
+            &request.target.item_id,
+            operation,
+        )?;
         let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
@@ -1889,6 +1940,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -1900,11 +1952,14 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
             if !matches!(context.kind, AuthoringKind::Ticket) {
                 return Err(authoring_error(
                     operation,
@@ -1913,6 +1968,7 @@ impl RepositoryService {
                     "ticket saves require a ticket target",
                 ));
             }
+            self.reject_pending_synchronization_merge(&context, operation)?;
             let repository = Repository::open(&context.worktree).map_err(|error| {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
             })?;
@@ -2060,6 +2116,7 @@ impl RepositoryService {
                 true
             };
             if write {
+                effects.begin();
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                 write_owned_document(
@@ -2076,6 +2133,7 @@ impl RepositoryService {
                     "authoring_destination_observed",
                 )?;
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -2126,7 +2184,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -2156,6 +2216,12 @@ impl RepositoryService {
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
+        self.reject_pending_synchronization_target(
+            &root,
+            &request.target.kind,
+            &request.target.item_id,
+            operation,
+        )?;
         let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
@@ -2163,6 +2229,7 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        let effects = CallEffects::default();
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
                 return Err(authoring_error(
@@ -2181,11 +2248,15 @@ impl RepositoryService {
                     operation_id: request.target.operation_id,
                 },
                 Some(record),
+                &effects,
             )? {
                 ContextProvisionOutcome::Created(context)
                 | ContextProvisionOutcome::Reused(context)
                 | ContextProvisionOutcome::IndexPending { context } => context,
             };
+            // A whole editing context is reusable by any later operation.
+            effects.undone();
+            self.reject_pending_synchronization_merge(&context, operation)?;
             let publication = comment_publication_state(
                 read_configuration_for(&context.root, operation)?,
                 operation,
@@ -2349,6 +2420,7 @@ impl RepositoryService {
                 return Ok(CommentSubmissionOutcome::IdentityRequired { context });
             };
             if !exists {
+                effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
                 write_owned_document(
@@ -2365,6 +2437,7 @@ impl RepositoryService {
                     "authoring_destination_observed",
                 )?;
             }
+            effects.begin();
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -2419,7 +2492,9 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, operation, record)?;
                 Ok(value)
             }
-            Err(error) => self.finish_authoring_lifecycle(&root, operation, record, Err(error)),
+            Err(error) => {
+                self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
+            }
         }
     }
 
@@ -2558,17 +2633,56 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(operation, root))
     }
 
+    /// Closes the row a call began and left nothing behind for, so a repeat
+    /// of the same operation ID begins again instead of replaying.
+    fn discard_lifecycle(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+    ) -> Result<(), RepositoryError> {
+        if record.id == 0 {
+            return Ok(());
+        }
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        discard_operation(&connection, record.id)
+            .map_err(|error| error.for_operation(operation, root))
+    }
+
+    /// Closes the row a rejected call began, unless that call left an effect.
+    fn settle_rejected_lifecycle<T>(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+        result: Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
+        if result.is_err() && effects.leave_nothing_behind(record) {
+            self.discard_lifecycle(root, operation, record)?;
+        }
+        result
+    }
+
     fn finish_authoring_lifecycle<T>(
         &self,
         root: &Path,
         operation: RepositoryOperation,
         record: RecoveryRecord,
+        effects: &CallEffects,
         result: Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
         match result {
             Ok(value) => {
                 self.complete_lifecycle(root, operation, record)?;
                 Ok(value)
+            }
+            Err(error) if effects.leave_nothing_behind(record) => {
+                self.discard_lifecycle(root, operation, record)?;
+                Err(error)
             }
             Err(error)
                 if self.is_definite_authoring_rejection(record, operation, root, &error)? =>
@@ -2666,6 +2780,7 @@ impl RepositoryService {
             added_paths,
             removed_source,
         } = spec;
+        self.reject_pending_synchronization_merge(context, operation)?;
         let head = repository
             .head()
             .and_then(|head| head.peel_to_commit())
@@ -2697,6 +2812,9 @@ impl RepositoryService {
             .write_tree_to(repository)
             .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
         if tree_oid == head_tree.id() {
+            // Also repair a stale owned entry left by an earlier failed index
+            // write. Git is authoritative; index repair must not fail the save.
+            let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
             return match self.mark_checkpoint_refresh(&context.root, operation) {
                 Ok(()) => Ok(LocalCheckpoint::NoChange),
                 Err(()) => Ok(LocalCheckpoint::RefreshPending {
@@ -2724,12 +2842,72 @@ impl RepositoryService {
                 &[&head],
             )
             .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
+        // The isolated index is the exact snapshot just committed. Do not read
+        // worktree files again: an edit made since the commit must stay unstaged.
+        // A foreign index.lock (or other write failure) leaves the commit intact
+        // and can be repaired by a later save, including a no-change save.
+        // This runs before handing off the save's existing authoring lease.
+        let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
         Ok(
             match self.mark_checkpoint_refresh(&context.root, operation) {
                 Ok(()) => LocalCheckpoint::Checkpointed { commit_oid },
                 Err(()) => LocalCheckpoint::RefreshPending { commit_oid },
             },
         )
+    }
+
+    fn reject_pending_synchronization_merge(
+        &self,
+        context: &ItemContext,
+        operation: RepositoryOperation,
+    ) -> Result<(), RepositoryError> {
+        self.reject_pending_synchronization_target(
+            &context.root,
+            &context.kind,
+            &context.item_id,
+            operation,
+        )
+    }
+
+    fn reject_pending_synchronization_target(
+        &self,
+        root: &Path,
+        kind: &AuthoringKind,
+        item_id: &canonical::ItemId,
+        operation: RepositoryOperation,
+    ) -> Result<(), RepositoryError> {
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
+        let root_path = registry_root_key(root, operation)?;
+        let repository_id = connection
+            .query_row(
+                "SELECT id FROM repositories WHERE root_path=?1",
+                [root_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        let Some(repository_id) = repository_id else {
+            return Ok(());
+        };
+        if remote::state::has_pending_context_conflict(
+            &connection,
+            repository_id,
+            authoring_kind_segment(kind),
+            &item_id.to_string(),
+        )
+        .map_err(|error| error.for_operation(operation, root))?
+        {
+            return Err(authoring_error(
+                operation,
+                root,
+                RepositoryErrorKind::RecoveryRequired,
+                "an outstanding synchronization merge owns this authoring context",
+            ));
+        }
+        Ok(())
     }
 
     fn mark_checkpoint_refresh(
@@ -3033,7 +3211,7 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::AddRemote)?;
         registry_root_key(&root, RepositoryOperation::AddRemote)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             RepositoryOperation::AddRemote,
@@ -3044,6 +3222,34 @@ impl RepositoryService {
                 Some(&request.url),
             ),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.add_remote_recorded(
+            request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::AddRemote,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn add_remote_recorded(
+        &self,
+        request: AddRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<RemoteOutcome, RepositoryError> {
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
                 if record.is_pending {
@@ -3053,7 +3259,7 @@ impl RepositoryService {
                         RepositoryOperation::AddRemote,
                         record,
                         request.operation_id,
-                        _lease,
+                        held_lease(lease),
                     )? {
                         Ok(if changed {
                             RemoteOutcome::Changed
@@ -3091,6 +3297,7 @@ impl RepositoryService {
                 ));
             }
         }
+        effects.begin();
         repository
             .remote(&request.name, &request.url)
             .map_err(|error| {
@@ -3112,7 +3319,7 @@ impl RepositoryService {
             RepositoryOperation::AddRemote,
             record,
             request.operation_id,
-            _lease,
+            held_lease(lease),
         )? {
             Ok(RemoteOutcome::Changed)
         } else {
@@ -3132,13 +3339,42 @@ impl RepositoryService {
         let (repository, root) =
             canonical_repository_root(selected, RepositoryOperation::RemoveRemote)?;
         registry_root_key(&root, RepositoryOperation::RemoveRemote)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             RepositoryOperation::RemoveRemote,
             request.operation_id,
             &remote_target_matcher(RepositoryOperation::RemoveRemote, name, None),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.remove_remote_recorded(
+            &request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::RemoveRemote,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn remove_remote_recorded(
+        &self,
+        request: &RemoveRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<RemoteOutcome, RepositoryError> {
+        let name = &request.name;
         let configuration = read_configuration_for(&root, RepositoryOperation::RemoveRemote)?;
         if matches!(configuration, ConfigurationInspection::Valid(ref config) if config.publication_remote.as_deref() == Some(name))
         {
@@ -3161,7 +3397,7 @@ impl RepositoryService {
                         RepositoryOperation::RemoveRemote,
                         record,
                         request.operation_id,
-                        _lease,
+                        held_lease(lease),
                     )? {
                         Ok(if changed {
                             RemoteOutcome::Changed
@@ -3189,6 +3425,7 @@ impl RepositoryService {
                 ));
             }
         }
+        effects.begin();
         repository.remote_delete(name).map_err(|error| {
             RepositoryError::git(RepositoryOperation::RemoveRemote, Some(root.clone()), error)
         })?;
@@ -3208,7 +3445,7 @@ impl RepositoryService {
             RepositoryOperation::RemoveRemote,
             record,
             request.operation_id,
-            _lease,
+            held_lease(lease),
         )? {
             Ok(RemoteOutcome::Changed)
         } else {
@@ -3225,13 +3462,36 @@ impl RepositoryService {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
-        let (_lease, record) = self.begin_lifecycle(
+        let (lease, record) = self.begin_lifecycle(
             &repository,
             &root,
             operation,
             request.operation_id,
             request.name.as_deref().unwrap_or(""),
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.set_publication_remote_recorded(
+            request,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(&root, operation, record, &effects, result)
+    }
+
+    fn set_publication_remote_recorded(
+        &self,
+        request: SetPublicationRemoteRequest,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<PublicationRemoteOutcome, RepositoryError> {
+        let operation = RepositoryOperation::SetPublicationRemote;
         let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
@@ -3310,7 +3570,7 @@ impl RepositoryService {
                     operation,
                     record,
                     request.operation_id,
-                    _lease,
+                    held_lease(lease),
                 )? {
                     Ok(if changed {
                         PublicationRemoteOutcome::Changed { commit_oid }
@@ -3351,6 +3611,7 @@ impl RepositoryService {
         let path = root.join(canonical::CONFIG_PATH);
         let before = std::fs::read(&path)
             .map_err(|error| RepositoryError::io(operation, Some(root.clone()), error))?;
+        effects.begin();
         replace_bytes_atomically(&path, source.as_bytes(), &root)
             .map_err(|error| error.for_operation(operation, &root))?;
         self.advance_lifecycle(
@@ -3406,6 +3667,7 @@ impl RepositoryService {
                         },
                     ));
                 }
+                effects.undone();
                 return Err(error);
             }
         };
@@ -3417,7 +3679,7 @@ impl RepositoryService {
                     operation,
                     record,
                     request.operation_id,
-                    _lease,
+                    held_lease(lease),
                 )? {
                     Ok(PublicationRemoteOutcome::Changed { commit_oid })
                 } else {
@@ -3525,12 +3787,45 @@ impl RepositoryService {
                         )
                 )
             });
-        self.begin_lifecycle_record(
+        let record = self.begin_lifecycle_record(
             &root,
             RepositoryOperation::CreateAndEnable,
             request.operation_id,
             &request.primary_branch,
         )?;
+        let mut bootstrap = Some(bootstrap);
+        let effects = CallEffects::default();
+        let result = self.create_and_enable_recorded(
+            CreateRepositoryRequest {
+                root: request.root,
+                primary_branch: request.primary_branch,
+                identity: None,
+                operation_id: request.operation_id,
+            },
+            identity,
+            root.clone(),
+            &mut bootstrap,
+            resumes_create,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(
+            &root,
+            RepositoryOperation::CreateAndEnable,
+            record,
+            &effects,
+            result,
+        )
+    }
+
+    fn create_and_enable_recorded(
+        &self,
+        request: CreateRepositoryRequest,
+        identity: CommitIdentity,
+        root: PathBuf,
+        bootstrap: &mut Option<BootstrapLease>,
+        resumes_create: bool,
+        effects: &CallEffects,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         if resumes_create && Repository::open(&root).is_ok() {
             let repository = Repository::open(&root).map_err(|error| {
                 RepositoryError::git(
@@ -3546,7 +3841,7 @@ impl RepositoryService {
                 request.operation_id,
                 &request.primary_branch,
             )?;
-            drop(bootstrap);
+            drop(bootstrap.take());
             drop(lease);
             return self
                 .enable(EnableRepositoryRequest {
@@ -3627,6 +3922,8 @@ impl RepositoryService {
             )?;
             validate_creation_target(&root)?;
             if injected {
+                // The hook stands for an interruption, which leaves its row.
+                effects.begin();
                 return Err(RepositoryError::new(
                     RepositoryOperation::CreateAndEnable,
                     Some(root.clone()),
@@ -3636,6 +3933,7 @@ impl RepositoryService {
             }
             let mut options = RepositoryInitOptions::new();
             options.initial_head(&request.primary_branch);
+            effects.begin();
             Repository::init_opts(&root, &options).map_err(|error| {
                 RepositoryError::git(
                     RepositoryOperation::CreateAndEnable,
@@ -3675,7 +3973,7 @@ impl RepositoryService {
                 request.operation_id,
                 &request.primary_branch,
             )?;
-            drop(bootstrap);
+            drop(bootstrap.take());
             drop(lease);
             self.enable(EnableRepositoryRequest {
                 root: root.clone(),
@@ -3724,12 +4022,66 @@ impl RepositoryService {
             request.operation_id,
             &request.primary_branch,
         )?;
+        let mut lease = Some(lease);
+        let effects = CallEffects::default();
+        let result = self.enable_recorded(
+            request,
+            identity_config,
+            repository,
+            root.clone(),
+            &mut lease,
+            record,
+            &effects,
+        );
+        self.settle_rejected_lifecycle(&root, RepositoryOperation::Enable, record, &effects, result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enable_recorded(
+        &self,
+        request: EnableRepositoryRequest,
+        identity_config: &mut impl IdentityConfigProvider,
+        repository: Repository,
+        root: PathBuf,
+        lease: &mut Option<RepositoryLease>,
+        record: RecoveryRecord,
+        effects: &CallEffects,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         let requested_config =
             canonical_configuration(&request.primary_branch, &root, RepositoryOperation::Enable)?;
-        let unborn = repository.is_empty().map_err(|error| {
-            RepositoryError::git(RepositoryOperation::Enable, Some(root.clone()), error)
-        })?;
-        if !unborn {
+        let unborn = match repository.head() {
+            Ok(_) => false,
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => true,
+            Err(error) => {
+                return Err(RepositoryError::git(
+                    RepositoryOperation::Enable,
+                    Some(root.clone()),
+                    error,
+                ));
+            }
+        };
+        if unborn {
+            // An unborn HEAD can coexist with other branches. Only create the
+            // confirmed primary when it is absent; rollback owns no existing ref.
+            match repository.find_reference(&format!("refs/heads/{}", request.primary_branch)) {
+                Ok(_) => {
+                    return Err(RepositoryError::new(
+                        RepositoryOperation::Enable,
+                        Some(root),
+                        RepositoryErrorKind::WrongCheckedOutBranch,
+                        "the requested primary branch is not checked out at the repository root",
+                    ));
+                }
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                Err(error) => {
+                    return Err(RepositoryError::git(
+                        RepositoryOperation::Enable,
+                        Some(root.clone()),
+                        error,
+                    ));
+                }
+            }
+        } else {
             let branch = checked_out_branch(&repository, &root, RepositoryOperation::Enable)?;
             if branch != request.primary_branch {
                 return Err(RepositoryError::new(
@@ -3807,7 +4159,7 @@ impl RepositoryService {
                         RepositoryOperation::Enable,
                         record,
                         request.operation_id,
-                        lease,
+                        held_lease(lease),
                     )? {
                         Ok(EnableRepositoryOutcome::AlreadyEnabled)
                     } else {
@@ -3834,7 +4186,7 @@ impl RepositoryService {
                         RepositoryOperation::Enable,
                         record,
                         request.operation_id,
-                        lease,
+                        held_lease(lease),
                     )? {
                         Ok(EnableRepositoryOutcome::AlreadyEnabled)
                     } else {
@@ -3890,6 +4242,7 @@ impl RepositoryService {
             read_bytes_if_exists(&local_config_path, RepositoryOperation::Enable, &root)?;
         let mut created_manyhands_directory = false;
         let result = (|| {
+            effects.begin();
             if write_identity {
                 write_local_identity(&repository, &root, &identity)?;
             }
@@ -3975,7 +4328,10 @@ impl RepositoryService {
                     )),
                 );
                 return match rollback {
-                    Ok(()) => Err(original),
+                    Ok(()) => {
+                        effects.undone();
+                        Err(original)
+                    }
                     Err(failures) => Err(rollback_incomplete(&root, original, *failures)),
                 };
             }
@@ -3993,7 +4349,7 @@ impl RepositoryService {
                     RepositoryOperation::Enable,
                     record,
                     request.operation_id,
-                    lease,
+                    held_lease(lease),
                 )? {
                     Ok(EnableRepositoryOutcome::Enabled { commit_oid })
                 } else {
@@ -4234,10 +4590,27 @@ impl RepositoryService {
         boundary: OwnedPathBoundary,
         hook: impl FnOnce() + Send + 'static,
     ) {
-        *OWNED_PATH_HOOK
-            .get_or_init(|| Mutex::new(None))
+        OWNED_PATH_HOOK
+            .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
-            .expect("test owned-path hook lock") = Some((relative, boundary, Box::new(hook)));
+            .expect("test owned-path hook lock")
+            .push((None, relative, boundary, Box::new(hook)));
+    }
+
+    #[cfg(unix)]
+    #[doc(hidden)]
+    pub fn set_owned_path_hook_for_root_for_testing(
+        &self,
+        root: PathBuf,
+        relative: PathBuf,
+        boundary: OwnedPathBoundary,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        OWNED_PATH_HOOK
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .expect("test owned-path hook lock")
+            .push((Some(root), relative, boundary, Box::new(hook)));
     }
 
     pub fn remove_registration(
@@ -4317,6 +4690,35 @@ impl RepositoryService {
             RemoveRegistrationOutcome::Removed
         })
     }
+}
+
+/// Whether the current call has begun a durable write that it has not undone.
+///
+/// A rejected call that began its own journal row and left nothing behind
+/// completes that row, so the rejection does not block later operations. The
+/// error kind and the recorded step cannot answer this: the same kinds are
+/// returned before and after a write, and a step may fail to persist.
+#[derive(Default)]
+struct CallEffects(std::cell::Cell<bool>);
+
+impl CallEffects {
+    fn begin(&self) {
+        self.0.set(true);
+    }
+
+    fn undone(&self) {
+        self.0.set(false);
+    }
+
+    fn leave_nothing_behind(&self, record: RecoveryRecord) -> bool {
+        record.is_new && !self.0.get()
+    }
+}
+
+fn held_lease<T>(lease: &mut Option<T>) -> T {
+    lease
+        .take()
+        .expect("the lease is handed off at most once per call")
 }
 
 fn checkpoint_after_refresh(checkpoint: LocalCheckpoint) -> LocalCheckpoint {
@@ -5083,10 +5485,24 @@ fn persist_context(
             }
         };
         let stored_path = path.and_then(|path| {
-            path.strip_prefix(&observed.context.worktree)
-                .ok()
-                .unwrap_or(path)
-                .to_str()
+            let relative = path
+                .strip_prefix(&observed.context.worktree)
+                .unwrap_or(path);
+            // Match canonical source collection: join native components,
+            // preserving literal Unix backslashes and invalid UTF-8 bytes.
+            let canonical = if relative.is_absolute() {
+                // An out-of-context absolute path is not a relative cache
+                // path. Preserve it for strict rejection by the reader.
+                relative.as_os_str().to_owned()
+            } else {
+                relative
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .join(std::ffi::OsStr::new("/"))
+            };
+            // Diagnostic paths are optional: an unrepresentable native
+            // path must not suppress the problem or readable contexts.
+            canonical.to_str().map(str::to_owned)
         });
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, stored_path, code, guidance, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
@@ -5924,22 +6340,22 @@ fn canonical_document_probe(item_id: &canonical::ItemId) -> String {
 }
 
 #[cfg(unix)]
-fn run_owned_path_hook(relative: &Path, boundary: OwnedPathBoundary) {
+fn run_owned_path_hook(root: &Path, relative: &Path, boundary: OwnedPathBoundary) {
     let hook = OWNED_PATH_HOOK.get().and_then(|installed| {
         let mut installed = installed.lock().expect("test owned-path hook lock");
-        if installed
-            .as_ref()
-            .is_some_and(|(path, installed_boundary, _)| {
-                path == relative && *installed_boundary == boundary
+        installed
+            .iter()
+            .position(|(expected_root, path, installed_boundary, _)| {
+                expected_root
+                    .as_ref()
+                    .is_none_or(|expected_root| expected_root == root)
+                    && path == relative
+                    && *installed_boundary == boundary
             })
-        {
-            installed.take()
-        } else {
-            None
-        }
+            .map(|position| installed.remove(position))
     });
     // Remove the hook before calling it so a panic cannot leak it into another test.
-    if let Some((_, _, hook)) = hook {
+    if let Some((_, _, _, hook)) = hook {
         hook();
     }
 }
@@ -5976,28 +6392,8 @@ fn owned_parent_directory(
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<std::fs::File, RepositoryError> {
-    let root_name = CString::new(root.as_os_str().as_bytes()).map_err(|_| {
-        authoring_error(
-            operation,
-            repository_root,
-            RepositoryErrorKind::InvalidPath,
-            "root cannot contain NUL",
-        )
-    })?;
-    let root_fd = unsafe {
-        libc::open(
-            root_name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if root_fd < 0 {
-        return Err(RepositoryError::io(
-            operation,
-            Some(repository_root.to_owned()),
-            std::io::Error::last_os_error(),
-        ));
-    }
-    let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    let mut directory = native_resolution::open_directory(root)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
     let parent = relative.parent().ok_or_else(|| {
         authoring_error(
             operation,
@@ -6198,13 +6594,42 @@ fn guarded_file_within(
 }
 
 #[cfg(unix)]
-fn owned_file_bytes(
+pub(crate) fn owned_file_bytes(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
     repository_root: &Path,
 ) -> Result<Option<Vec<u8>>, RepositoryError> {
-    run_owned_path_hook(relative, OwnedPathBoundary::Read);
+    owned_file_bytes_with_mode_policy(root, relative, operation, repository_root, false)
+}
+
+/// Resolution images must be regular and non-executable on the same no-follow
+/// descriptor used to read their bytes, not a separate pathname metadata check.
+pub(crate) fn owned_resolution_file_bytes(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    #[cfg(unix)]
+    {
+        owned_file_bytes_with_mode_policy(root, relative, operation, repository_root, true)
+    }
+    #[cfg(not(unix))]
+    {
+        owned_file_bytes(root, relative, operation, repository_root)
+    }
+}
+
+#[cfg(unix)]
+fn owned_file_bytes_with_mode_policy(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+    require_non_executable: bool,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    run_owned_path_hook(root, relative, OwnedPathBoundary::Read);
     let parent_path = relative.parent().ok_or_else(|| {
         authoring_error(
             operation,
@@ -6213,16 +6638,149 @@ fn owned_file_bytes(
             "an owned path needs a parent directory",
         )
     })?;
-    if !root.join(parent_path).exists() {
-        return Ok(None);
+    let mut parent = native_resolution::open_directory(root)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    for component in parent_path.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths must be relative",
+            ));
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::InvalidPath,
+                "owned paths cannot contain NUL",
+            )
+        })?;
+        parent = match native_resolution::open_directory_at(&parent, &name) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(RepositoryError::io(
+                    operation,
+                    Some(repository_root.to_owned()),
+                    error,
+                ));
+            }
+        };
     }
-    let parent = owned_parent_directory(root, relative, false, operation, repository_root)?;
     let leaf = owned_leaf(relative, operation, repository_root)?;
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
             leaf.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+        return Ok(None);
+    }
+    if fd < 0 {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path must be a regular non-symlink file",
+        ));
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let metadata = file
+        .metadata()
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    if !metadata.is_file() || (require_non_executable && metadata.mode() & 0o111 != 0) {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::InvalidPath,
+            "an owned path must be a regular non-symlink file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    Ok(Some(bytes))
+}
+
+#[cfg(windows)]
+pub(crate) fn owned_file_bytes(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    native_resolution::read_owned(root, relative)
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn owned_file_bytes(
+    _root: &Path,
+    _relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<Vec<u8>>, RepositoryError> {
+    // Resolution must not fall back to path-based reads on platforms without
+    // an equivalent descriptor-relative no-follow primitive.
+    Err(authoring_error(
+        operation,
+        repository_root,
+        RepositoryErrorKind::ExternalChange,
+        "safe owned-file resolution is unavailable on this platform",
+    ))
+}
+
+fn owned_prewrite_digest(bytes: Option<&[u8]>) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"manyhands-resolution-prewrite-v1\0");
+    match bytes {
+        Some(bytes) => {
+            digest.update(&[1]);
+            digest.update(&(bytes.len() as u64).to_be_bytes());
+            digest.update(bytes);
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
+    *digest.finalize().as_bytes()
+}
+
+#[cfg(unix)]
+fn replace_owned_bytes(
+    root: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    run_owned_path_hook(root, relative, OwnedPathBoundary::Replace);
+    replace_owned_bytes_after_hook(root, relative, bytes, operation, repository_root)
+}
+
+#[cfg(unix)]
+struct OwnedFileImage {
+    bytes: Vec<u8>,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+fn owned_file_image_at(
+    parent: &std::fs::File,
+    leaf: &CString,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<Option<OwnedFileImage>, RepositoryError> {
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
@@ -6251,22 +6809,125 @@ fn owned_file_bytes(
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
-    Ok(Some(bytes))
+    Ok(Some(OwnedFileImage {
+        bytes,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }))
 }
 
 #[cfg(unix)]
-fn replace_owned_bytes(
-    root: &Path,
-    relative: &Path,
-    bytes: &[u8],
+fn owned_image_matches_at(
+    parent: &std::fs::File,
+    leaf: &CString,
+    expected: &OwnedFileImage,
     operation: RepositoryOperation,
     repository_root: &Path,
-) -> Result<(), RepositoryError> {
-    run_owned_path_hook(relative, OwnedPathBoundary::Replace);
-    let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
-    let leaf = owned_leaf(relative, operation, repository_root)?;
-    let temp = CString::new(format!(".manyhands-write-{}", std::process::id()))
-        .expect("fixed temporary name");
+) -> Result<bool, RepositoryError> {
+    Ok(
+        owned_file_image_at(parent, leaf, operation, repository_root)?.is_some_and(|observed| {
+            observed.device == expected.device
+                && observed.inode == expected.inode
+                && observed.bytes == expected.bytes
+        }),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn renameat2(
+    source_parent: &std::fs::File,
+    source: &CString,
+    destination_parent: &std::fs::File,
+    destination: &CString,
+    flags: libc::c_uint,
+) -> std::io::Result<()> {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            source_parent.as_raw_fd(),
+            source.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination.as_ptr(),
+            flags,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn renameat2(
+    source_parent: &std::fs::File,
+    source: &CString,
+    destination_parent: &std::fs::File,
+    destination: &CString,
+    flags: libc::c_uint,
+) -> std::io::Result<()> {
+    let flags = match flags {
+        1 => libc::RENAME_EXCL,
+        2 => libc::RENAME_SWAP,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid rename mode",
+            ));
+        }
+    };
+    let result = unsafe {
+        libc::renameatx_np(
+            source_parent.as_raw_fd(),
+            source.as_ptr(),
+            destination_parent.as_raw_fd(),
+            destination.as_ptr(),
+            flags,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn renameat2(
+    _source_parent: &std::fs::File,
+    _source: &CString,
+    _destination_parent: &std::fs::File,
+    _destination: &CString,
+    _flags: libc::c_uint,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic guarded replacement is unavailable",
+    ))
+}
+
+#[cfg(unix)]
+fn unique_owned_temp_name() -> CString {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    CString::new(format!(
+        ".manyhands-write-{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ))
+    .expect("fixed temporary name")
+}
+
+#[cfg(unix)]
+fn write_owned_temp(
+    parent: &std::fs::File,
+    bytes: &[u8],
+    retain_on_error: bool,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(CString, OwnedFileImage), RepositoryError> {
+    let temp = unique_owned_temp_name();
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -6284,14 +6945,190 @@ fn replace_owned_bytes(
     }
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-        let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp.as_ptr(), 0) };
+        if !retain_on_error {
+            let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp.as_ptr(), 0) };
+        }
         return Err(RepositoryError::io(
             operation,
             Some(repository_root.to_owned()),
             error,
         ));
     }
-    drop(file);
+    let metadata = file
+        .metadata()
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))?;
+    Ok((
+        temp,
+        OwnedFileImage {
+            bytes: bytes.to_vec(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        },
+    ))
+}
+
+#[cfg(unix)]
+fn owned_resolution_temp_directory(
+    root: &Path,
+    relative: &Path,
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<std::fs::File, RepositoryError> {
+    let Ok(repository) = git2::Repository::open(root) else {
+        // This low-level helper also supports non-repository test callers.
+        // They retain rather than clean up guarded leaves beside the target;
+        // real synchronization always uses the private Git directory below.
+        return owned_parent_directory(root, relative, true, operation, repository_root);
+    };
+    native_resolution::open_directory(repository.path())
+        .map_err(|error| RepositoryError::io(operation, Some(repository_root.to_owned()), error))
+}
+
+#[cfg(unix)]
+fn replace_owned_bytes_if_digest(
+    root: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    expected_prewrite_digest: [u8; 32],
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
+    let leaf = owned_leaf(relative, operation, repository_root)?;
+    let expected = owned_file_image_at(&parent, &leaf, operation, repository_root)?;
+    if owned_prewrite_digest(expected.as_ref().map(|image| image.bytes.as_slice()))
+        != expected_prewrite_digest
+    {
+        return Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::ExternalChange,
+            "owned file changed before guarded replacement",
+        ));
+    }
+    // The hook is intentionally after validating the descriptor image and
+    // before the atomic directory-fd install, which is the relevant CAS race.
+    run_owned_path_hook(root, relative, OwnedPathBoundary::Replace);
+    // Put guarded temporary leaves in Git's private directory. An exchanged
+    // old worktree image or suspicious source can then be retained without
+    // becoming an untracked worktree file, and no guarded path unlinks it.
+    let temp_parent = owned_resolution_temp_directory(root, relative, operation, repository_root)?;
+    let (temp, written) = write_owned_temp(&temp_parent, bytes, true, operation, repository_root)?;
+    match expected {
+        Some(expected) => {
+            // Check the target again after all pre-install work.
+            if !owned_image_matches_at(&parent, &leaf, &expected, operation, repository_root)? {
+                return Err(authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::ExternalChange,
+                    "owned file changed before guarded replacement",
+                ));
+            }
+            // This hook deliberately runs after the temporary source is fully
+            // written and synced, immediately before its atomic exchange.
+            run_owned_path_hook(root, relative, OwnedPathBoundary::TempWritten);
+            if !owned_image_matches_at(&parent, &leaf, &expected, operation, repository_root)? {
+                return Err(authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::ExternalChange,
+                    "owned file changed before guarded replacement",
+                ));
+            }
+            renameat2(&temp_parent, &temp, &parent, &leaf, 2).map_err(|error| {
+                RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+            })?;
+            // Both names are read back through no-follow descriptors. Never
+            // infer the install from rename success: the source can have been
+            // replaced or modified after it was synced.
+            let installed =
+                owned_image_matches_at(&parent, &leaf, &written, operation, repository_root)?;
+            let displaced =
+                owned_image_matches_at(&temp_parent, &temp, &expected, operation, repository_root)?;
+            if !(installed && displaced) {
+                // Persist the exchanged names before returning the fail-closed
+                // result. Do not unlink or exchange either name here: at
+                // least one may be external and no rollback is safe without
+                // replacing it.
+                parent.sync_all().map_err(|error| {
+                    RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+                })?;
+                return Err(authoring_error(
+                    operation,
+                    repository_root,
+                    RepositoryErrorKind::ExternalChange,
+                    "owned file changed during guarded replacement",
+                ));
+            }
+            // Testable final cleanup boundary: a temp replacement here must
+            // survive because guarded cleanup never pathname-unlinks it.
+            run_owned_path_hook(root, relative, OwnedPathBoundary::TempVerified);
+            // The exchanged former image is deliberately retained under its
+            // private Git-directory name. A later substitution can never be
+            // deleted by cleanup after this verification.
+            temp_parent
+                .sync_all()
+                .and_then(|()| parent.sync_all())
+                .map_err(|error| {
+                    RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+                })
+        }
+        None => {
+            // The same post-temp hook covers the expected-missing CAS case.
+            run_owned_path_hook(root, relative, OwnedPathBoundary::TempWritten);
+            match renameat2(&temp_parent, &temp, &parent, &leaf, 1) {
+                Ok(()) => {
+                    let installed = owned_image_matches_at(
+                        &parent,
+                        &leaf,
+                        &written,
+                        operation,
+                        repository_root,
+                    )?;
+                    parent.sync_all().map_err(|error| {
+                        RepositoryError::io(operation, Some(repository_root.to_owned()), error)
+                    })?;
+                    if installed {
+                        Ok(())
+                    } else {
+                        Err(authoring_error(
+                            operation,
+                            repository_root,
+                            RepositoryErrorKind::ExternalChange,
+                            "owned file changed during guarded replacement",
+                        ))
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(authoring_error(
+                        operation,
+                        repository_root,
+                        RepositoryErrorKind::ExternalChange,
+                        "owned file appeared before guarded replacement",
+                    ))
+                }
+                Err(error) => Err(RepositoryError::io(
+                    operation,
+                    Some(repository_root.to_owned()),
+                    error,
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn replace_owned_bytes_after_hook(
+    root: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    let parent = owned_parent_directory(root, relative, true, operation, repository_root)?;
+    let leaf = owned_leaf(relative, operation, repository_root)?;
+    let (temp, _) = write_owned_temp(&parent, bytes, false, operation, repository_root)?;
     if unsafe {
         libc::renameat(
             parent.as_raw_fd(),
@@ -6341,7 +7178,7 @@ fn owned_file_exists(
     }
 }
 
-fn observe_owned_regular_file(
+pub(crate) fn observe_owned_regular_file(
     root: &Path,
     relative: &Path,
     operation: RepositoryOperation,
@@ -6458,7 +7295,7 @@ fn ensure_owned_file_removable(
 ) -> Result<(), RepositoryError> {
     #[cfg(unix)]
     {
-        run_owned_path_hook(relative, OwnedPathBoundary::Remove);
+        run_owned_path_hook(root, relative, OwnedPathBoundary::Remove);
         return owned_file_bytes(root, relative, operation, repository_root)?.map_or_else(
             || {
                 Err(authoring_error(
@@ -6532,7 +7369,7 @@ fn read_owned_item(
     })
 }
 
-fn write_owned_document(
+pub(crate) fn write_owned_document(
     root: &Path,
     relative: &Path,
     bytes: &[u8],
@@ -6548,6 +7385,59 @@ fn write_owned_document(
         let _ = owned_file_exists(root, relative, operation, repository_root)?;
         replace_bytes_atomically(&path, bytes, repository_root)
             .map_err(|error| error.for_operation(operation, repository_root))
+    }
+}
+
+/// Replace an owned regular file only if its no-follow descriptor image still
+/// equals the caller's durable pre-write observation.
+pub(crate) fn write_owned_document_if_prewrite_digest(
+    root: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    expected_prewrite_digest: [u8; 32],
+    operation: RepositoryOperation,
+    repository_root: &Path,
+) -> Result<(), RepositoryError> {
+    #[cfg(unix)]
+    return replace_owned_bytes_if_digest(
+        root,
+        relative,
+        bytes,
+        expected_prewrite_digest,
+        operation,
+        repository_root,
+    );
+    #[cfg(windows)]
+    {
+        let repository = git2::Repository::open(root).map_err(|error| {
+            RepositoryError::git(operation, Some(repository_root.to_owned()), error)
+        })?;
+        native_resolution::replace_owned(
+            root,
+            relative,
+            repository.path(),
+            bytes,
+            expected_prewrite_digest,
+        )
+        .map_err(|error| {
+            authoring_error(
+                operation,
+                repository_root,
+                RepositoryErrorKind::ExternalChange,
+                error,
+            )
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (root, relative, bytes, expected_prewrite_digest);
+        // Do not silently downgrade durable resolution to path-based writes.
+        Err(authoring_error(
+            operation,
+            repository_root,
+            RepositoryErrorKind::ExternalChange,
+            "safe guarded resolution is unavailable on this platform",
+        ))
     }
 }
 
@@ -6766,6 +7656,104 @@ fn remove_owned_file(
             RepositoryError::io(operation, Some(repository_root.to_owned()), error)
         })
     }
+}
+
+struct OwnedIndexLock {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    published: bool,
+}
+
+impl Drop for OwnedIndexLock {
+    fn drop(&mut self) {
+        // Close before unlinking on Windows. Only remove the lock we created.
+        drop(self.file.take());
+        if !self.published {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn refresh_owned_index(
+    repository: &Repository,
+    committed_index: &Index,
+    added_paths: &[&Path],
+    removed_source: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let index_path = repository.path().join("index");
+    let lock_path = repository.path().join("index.lock");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)?;
+    let mut lock = OwnedIndexLock {
+        path: lock_path,
+        file: Some(file),
+        published: false,
+    };
+
+    // Take Git's lock before loading the live snapshot so cooperating Git
+    // writers cannot stage unrelated changes between the read and publication.
+    // Serialize a detached index: repository-backed writes may zero unrelated
+    // racy entries' stat fields. Never replace the live contents with read_tree.
+    let index_modified = std::fs::metadata(&index_path)?.modified()?;
+    let scratch = tempfile::tempdir_in(repository.path())?;
+    let scratch_index = scratch.path().join("index");
+    std::fs::copy(&index_path, &scratch_index)?;
+    let mut index = Index::open(&scratch_index)?;
+    let mut changed = false;
+    if let Some(source) = removed_source
+        && (0..=3).any(|stage| index.get_path(source, stage).is_some())
+    {
+        index.remove_path(source)?;
+        changed = true;
+    }
+    for path in added_paths {
+        let entry = committed_index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("the committed owned entry is missing"))?;
+        if index.iter().any(|current| {
+            (current.path.starts_with(&entry.path)
+                && current.path.get(entry.path.len()) == Some(&b'/'))
+                || (entry.path.starts_with(&current.path)
+                    && entry.path.get(current.path.len()) == Some(&b'/'))
+        }) {
+            // A staged ancestor/descendant is not ours to displace. Leave the
+            // entire live index intact rather than publish a partial repair.
+            return Err(git2::Error::from_str(
+                "an unrelated staged path collides with the owned entry",
+            )
+            .into());
+        }
+        let conflicted = (1..=3).any(|stage| index.get_path(path, stage).is_some());
+        let matches = index
+            .get_path(path, 0)
+            .is_some_and(|current| current.id == entry.id && current.mode == entry.mode)
+            && !conflicted;
+        if !matches {
+            if conflicted {
+                index.conflict_remove(path)?;
+            }
+            index.add(&entry)?;
+            changed = true;
+        }
+    }
+    if changed {
+        index.write()?;
+        let bytes = std::fs::read(&scratch_index)?;
+        let file = lock.file.as_mut().expect("the index lock is open");
+        file.write_all(&bytes)?;
+        // Advancing the index timestamp could make an unchanged cached stat
+        // entry stop being racy, hiding an unrelated same-stat worktree edit.
+        file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        file.sync_all()?;
+        drop(lock.file.take());
+        std::fs::rename(&lock.path, &index_path)?;
+        lock.published = true;
+    }
+    Ok(())
 }
 
 fn add_owned_blob(
@@ -7238,10 +8226,15 @@ fn collect_canonical_source(
         Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return Ok(()),
         Err(error) => return Err(RepositoryError::io(operation, Some(root.to_owned()), error)),
     };
-    let relative = path
-        .strip_prefix(root)
-        .expect("source is below its root")
-        .to_owned();
+    let relative = path.strip_prefix(root).expect("source is below its root");
+    // Match discovery: canonical paths use '/' even on Windows. Join native
+    // components without rewriting a literal backslash in a Unix filename.
+    let relative = PathBuf::from(
+        relative
+            .iter()
+            .collect::<Vec<_>>()
+            .join(std::ffi::OsStr::new("/")),
+    );
     sources.push((relative, source));
     Ok(())
 }
@@ -7399,7 +8392,45 @@ fn branch_checked_out_in_another_worktree(
             .find_worktree(name)
             .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
         let path = worktree.path();
-        if expected.as_deref() == Some(path) {
+        // libgit2 can register a plain native path while the validated intended
+        // location is canonical (verbatim on Windows). Only an existing path
+        // resolving to that location is ours; absent/unavailable paths refuse.
+        let registered = path.canonicalize().map_err(|error| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                error,
+            )
+        })?;
+        if expected.as_deref() == Some(registered.as_path()) {
+            // Representation equivalence cannot make an untrusted root alias
+            // ours. Check the registered spelling too before exempting it from
+            // the other-worktree guard; later context validation stays intact.
+            for ancestor in path.ancestors() {
+                let metadata = std::fs::symlink_metadata(ancestor).map_err(|error| {
+                    RepositoryError::new(
+                        operation,
+                        Some(root.to_owned()),
+                        RepositoryErrorKind::MismatchedAuthoringContext,
+                        error,
+                    )
+                })?;
+                let redirected = metadata.file_type().is_symlink();
+                #[cfg(windows)]
+                let redirected = {
+                    use std::os::windows::fs::MetadataExt;
+                    redirected || metadata.file_attributes() & 0x400 != 0
+                };
+                if redirected || !metadata.is_dir() {
+                    return Err(RepositoryError::new(
+                        operation,
+                        Some(root.to_owned()),
+                        RepositoryErrorKind::MismatchedAuthoringContext,
+                        "the registered authoring worktree path must contain only real directories",
+                    ));
+                }
+            }
             continue;
         }
         let linked = Repository::open(path).map_err(|error| {
@@ -7747,7 +8778,7 @@ fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile
 // observation does. Making it sound is a native obligation.
 #[cfg(not(unix))]
 fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile>> {
-    use std::io::ErrorKind;
+    use std::io::{ErrorKind, Read};
 
     let path = root.join(canonical::CONFIG_PATH);
     for (checked, is_file) in [(root.join(".manyhands"), false), (path.clone(), true)] {
@@ -8761,6 +9792,115 @@ fn committed_configuration_blob_oid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_missing_file_install_rejects_a_renamed_temp_source() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("docs")).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let relative = PathBuf::from("docs/document.md");
+        let external = b"external file substituted for guarded temporary source\n".to_vec();
+        let docs = root.path().join("docs");
+        let hook_external = external.clone();
+        service.set_owned_path_hook_for_root_for_testing(
+            root.path().to_owned(),
+            relative.clone(),
+            OwnedPathBoundary::TempWritten,
+            move || {
+                let temp = std::fs::read_dir(&docs)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.file_name().is_some_and(|name| {
+                            name.to_string_lossy().starts_with(".manyhands-write-")
+                        })
+                    })
+                    .expect("guarded writer created its temporary source");
+                let replacement = docs.join("external-temp-replacement");
+                std::fs::write(&replacement, hook_external).unwrap();
+                std::fs::rename(replacement, temp).unwrap();
+            },
+        );
+        let error = write_owned_document_if_prewrite_digest(
+            root.path(),
+            &relative,
+            b"owned result\n",
+            owned_prewrite_digest(None),
+            RepositoryOperation::RepositorySnapshot,
+            root.path(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+        assert_eq!(std::fs::read(root.path().join(relative)).unwrap(), external);
+    }
+
+    #[test]
+    fn owned_index_refresh_in_primary_checkout_uses_committed_blobs_not_later_edits() {
+        let directory = tempfile::tempdir().unwrap();
+        // Guarded readers require the same physical root that public saves
+        // resolve, including on macOS where the temporary path uses /var.
+        let root = create_born_repository(directory.path())
+            .canonicalize()
+            .unwrap();
+        let repository = Repository::open(&root).unwrap();
+        let relative = Path::new("owned.md");
+        std::fs::write(root.join(relative), b"committed\n").unwrap();
+        let parent = repository.head().unwrap().peel_to_commit().unwrap();
+        let mut committed = Index::new().unwrap();
+        committed.read_tree(&parent.tree().unwrap()).unwrap();
+        add_owned_blob(
+            &mut committed,
+            &repository,
+            &root,
+            relative,
+            RepositoryOperation::SaveDocument,
+            &root,
+        )
+        .unwrap();
+        let tree = repository
+            .find_tree(committed.write_tree_to(&repository).unwrap())
+            .unwrap();
+        let signature = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "owned",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+
+        std::fs::write(root.join(relative), b"edited after commit\n").unwrap();
+        std::fs::write(root.join("other.md"), b"unrelated staged\n").unwrap();
+        let mut live = repository.index().unwrap();
+        live.add_path(Path::new("other.md")).unwrap();
+        live.write().unwrap();
+        let unrelated_before = format!("{:?}", live.get_path(Path::new("other.md"), 0).unwrap());
+
+        refresh_owned_index(&repository, &committed, &[relative], None).unwrap();
+        let reopened = Repository::open(&root).unwrap();
+        let index = reopened.index().unwrap();
+        assert_eq!(
+            index.get_path(relative, 0).unwrap().id,
+            tree.get_path(relative).unwrap().id()
+        );
+        assert_eq!(
+            reopened.status_file(relative).unwrap(),
+            git2::Status::WT_MODIFIED
+        );
+        assert_eq!(
+            format!("{:?}", index.get_path(Path::new("other.md"), 0).unwrap()),
+            unrelated_before
+        );
+        assert_eq!(
+            std::fs::read(root.join(relative)).unwrap(),
+            b"edited after commit\n"
+        );
+    }
 
     #[test]
     fn repository_service_is_sync() {

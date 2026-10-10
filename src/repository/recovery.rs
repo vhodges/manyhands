@@ -277,9 +277,12 @@ fn begin_or_reconcile(
             return Err(super::remote::state::recovery_required());
         }
     }
+    // A context synchronization owns only its exact authoring kind/item. Other
+    // contexts may continue authoring; the matching context is rejected again
+    // before any owned write by RepositoryService's checkpoint guard.
     let remote_active: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling'))",
-        [root_path], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
+        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if remote_active {
         return Err(super::remote::state::recovery_required());
     }
@@ -379,6 +382,24 @@ fn begin_or_reconcile(
         return Err(recovery_required(operation, root));
     }
     if let Some((id, _, _, _, _, completed_step)) = existing {
+        // A refresh may borrow any operation ID; it must not erase the marker.
+        if completed_step.as_deref() == Some(REJECTED_STEP) && action != "refresh" {
+            // The earlier call left nothing behind, so this one begins again.
+            // Its row was kept so that the ID stays bound to its target.
+            transaction
+                .execute(
+                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2 WHERE id = ?1",
+                    params![id, now()],
+                )
+                .map_err(RepositoryError::sqlite)?;
+            transaction.commit().map_err(RepositoryError::sqlite)?;
+            return Ok(RecoveryRecord {
+                id,
+                is_new: true,
+                is_pending: false,
+                completed_step: None,
+            });
+        }
         transaction.commit().map_err(RepositoryError::sqlite)?;
         return Ok(RecoveryRecord {
             id,
@@ -430,6 +451,23 @@ fn authoring_observation_step(step: &str) -> Option<&'static str> {
 
 fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
     existing == requested || (existing == "create_and_enable" && requested == "enable")
+}
+
+const REJECTED_STEP: &str = "rejected";
+
+/// Closes the row of a call that was rejected and left nothing behind. The row
+/// no longer blocks the repository, and a repeat of its ID begins again.
+pub(super) fn discard_operation(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<(), RepositoryError> {
+    connection
+        .execute(
+            "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3 WHERE id = ?1",
+            params![record_id, REJECTED_STEP, now()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(())
 }
 
 pub(super) fn advance_after_observation(

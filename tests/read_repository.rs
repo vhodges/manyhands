@@ -1,6 +1,7 @@
 //! Target resolution and the repository, identity and remote reads.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -1092,6 +1093,81 @@ fn a_configuration_that_cannot_be_opened_is_inaccessible() {
     assert_git_transport_uninitialized();
 }
 
+/// Git metadata uses forward slashes on Windows; native path display does
+/// not. Preserve UNC roots and leave literal Unix backslashes untouched.
+fn git_metadata_path_text(path: &str, windows: bool) -> String {
+    if !windows {
+        return path.to_owned();
+    }
+    let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    };
+    path.replace('\\', "/")
+}
+
+#[test]
+fn manual_git_metadata_paths_name_the_intended_worktree() {
+    let fixture = support::born_repository();
+    let outside = tempfile::tempdir().unwrap();
+    let linked = outside.path().join("linked");
+    linked_worktree(&fixture, "linked", &linked);
+    let metadata = fixture.repository.path().join("worktrees/linked/gitdir");
+    assert_eq!(git_metadata_path_text(r"\\?\C:\.git", true), "C:/.git");
+    assert_eq!(
+        git_metadata_path_text(r"\\?\UNC\server\share\.git", true),
+        "//server/share/.git"
+    );
+
+    // Exercise Git's actual dirname parser on every runner, even when the
+    // synthetic Windows paths cannot be opened on the host filesystem.
+    for (input, expected) in [
+        (r"C:\fixture\fabricated\.git", "C:/fixture/fabricated"),
+        (r"C:\fixture/fabricated\.git", "C:/fixture/fabricated"),
+        (r"\\?\C:\fixture\fabricated\.git", "C:/fixture/fabricated"),
+        (
+            r"\\server\share\fabricated\.git",
+            "//server/share/fabricated",
+        ),
+        (
+            r"\\?\UNC\server\share\fabricated\.git",
+            "//server/share/fabricated",
+        ),
+        (r"\\?\UNC\server\share\.git", "//server/share/"),
+    ] {
+        fs::write(
+            &metadata,
+            format!("{}\n", git_metadata_path_text(input, true)),
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.repository.find_worktree("linked").unwrap().path(),
+            Path::new(expected),
+            "Git must identify the intended directory for {input:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let literal = outside.path().join(r"literal\backslash");
+        fs::create_dir(&literal).unwrap();
+        fs::write(
+            &metadata,
+            format!(
+                "{}\n",
+                git_metadata_path_text(literal.join(".git").to_str().unwrap(), false)
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical(fixture.repository.find_worktree("linked").unwrap().path()),
+            canonical(&literal),
+            "Unix backslashes must remain literal filename characters"
+        );
+    }
+    assert_git_transport_uninitialized();
+}
+
 // A directory can claim a registered repository's Git directory as its
 // common directory without that repository ever having made it a worktree.
 #[test]
@@ -1107,17 +1183,26 @@ fn a_directory_the_owner_does_not_list_as_a_worktree_is_not_a_repository() {
     fs::write(administrative.join("HEAD"), "ref: refs/heads/main\n").unwrap();
     fs::write(
         administrative.join("commondir"),
-        format!("{}\n", owner_git.to_str().unwrap()),
+        format!(
+            "{}\n",
+            git_metadata_path_text(owner_git.to_str().unwrap(), cfg!(windows))
+        ),
     )
     .unwrap();
     fs::write(
         administrative.join("gitdir"),
-        format!("{}\n", fabricated.join(".git").to_str().unwrap()),
+        format!(
+            "{}\n",
+            git_metadata_path_text(fabricated.join(".git").to_str().unwrap(), cfg!(windows))
+        ),
     )
     .unwrap();
     fs::write(
         fabricated.join(".git"),
-        format!("gitdir: {}\n", administrative.to_str().unwrap()),
+        format!(
+            "gitdir: {}\n",
+            git_metadata_path_text(administrative.to_str().unwrap(), cfg!(windows))
+        ),
     )
     .unwrap();
     // Git itself takes the directory for a worktree of the registered
@@ -1125,27 +1210,79 @@ fn a_directory_the_owner_does_not_list_as_a_worktree_is_not_a_repository() {
     let opened = Repository::open(&fabricated).unwrap();
     assert!(opened.is_worktree());
     assert_eq!(canonical(opened.commondir()), owner_git);
+    assert_eq!(canonical(opened.path()), canonical(&administrative));
+    assert_eq!(
+        canonical(opened.workdir().unwrap()),
+        canonical(&fabricated),
+        "Git must identify the intended physical ghost before resolution is tested"
+    );
+    assert_ne!(canonical(&fabricated), canonical(&fixture.root));
+
+    let linked = outside.path().join("linked");
+    linked_worktree(&fixture, "linked", &linked);
+    let listed = fixture.repository.worktrees().unwrap();
+    assert!(listed.iter().flatten().all(|name| {
+        canonical(fixture.repository.find_worktree(name).unwrap().path()) != canonical(&fabricated)
+    }));
+    let subdirectory = fixture.root.join("nested");
+    fs::create_dir(&subdirectory).unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let ghost_snapshot = || {
+        [&fabricated, &administrative].map(|directory| {
+            fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), fs::read(entry.path()).unwrap())
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+    };
+    let ghost_before = ghost_snapshot();
 
     let error = enabled.service.resolve_repository(&fabricated).unwrap_err();
 
     assert_eq!(error.code(), ResultCode::NotRepository);
     assert_eq!(error.scope.repository, Some(path_string(&fabricated)));
     assert_eq!(recovery(&error), json!([]));
-    assert_eq!(
-        enabled
-            .service
-            .inspect_repository(&fabricated)
-            .unwrap_err()
-            .code(),
-        ResultCode::NotRepository
-    );
+    let inspected = enabled.service.inspect_repository(&fabricated).unwrap_err();
+    assert_eq!(inspected.code(), ResultCode::NotRepository);
+    assert_eq!(inspected.scope.repository, Some(path_string(&fabricated)));
+    assert_eq!(recovery(&inspected), json!([]));
     // A worktree the owner made still resolves to it.
-    let linked = outside.path().join("linked");
-    linked_worktree(&fixture, "linked", &linked);
     assert_eq!(
         enabled.service.resolve_repository(&linked).unwrap(),
         enabled.service.resolve_repository(&fixture.root).unwrap()
     );
+    assert_eq!(
+        enabled.service.inspect_repository(&linked).unwrap().root,
+        path_string(&fixture.root)
+    );
+    for error in [
+        enabled
+            .service
+            .resolve_repository(&subdirectory)
+            .unwrap_err(),
+        enabled
+            .service
+            .inspect_repository(&subdirectory)
+            .unwrap_err(),
+    ] {
+        assert_eq!(error.code(), ResultCode::NotRepositoryRoot);
+        assert_eq!(error.scope.repository, Some(path_string(&fixture.root)));
+        assert_eq!(
+            recovery(&error),
+            json!([{
+                "action": "repo.inspect",
+                "operation_id": null,
+                "arguments": {"root": path_string(&fixture.root)},
+            }])
+        );
+    }
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+    assert_eq!(support::repository_git_file_bytes(&fixture), git_before);
+    assert_eq!(ghost_snapshot(), ghost_before);
     assert_git_transport_uninitialized();
 }
 

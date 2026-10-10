@@ -25,6 +25,136 @@ fn owned_path_hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .expect("owned-path hook test lock")
 }
 
+#[cfg(unix)]
+fn repository_with_symlinked_parent() -> (tempfile::TempDir, support::TestRepository) {
+    let mut fixture = support::born_repository();
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("parent-alias");
+    std::os::unix::fs::symlink(
+        fixture.root.parent().unwrap().canonicalize().unwrap(),
+        &parent,
+    )
+    .unwrap();
+    fixture.root = parent.join(fixture.root.file_name().unwrap());
+    assert_ne!(fixture.root, fixture.root.canonicalize().unwrap());
+    (directory, fixture)
+}
+
+#[test]
+fn fixture_repositories_declare_local_lf_checkout_policy() {
+    for fixture in [support::born_repository(), support::unborn_repository()] {
+        let local = Config::open(&fixture.repository.path().join("config")).unwrap();
+        assert!(!local.get_bool("core.autocrlf").unwrap());
+        assert!(
+            !fixture
+                .repository
+                .config()
+                .unwrap()
+                .get_bool("core.autocrlf")
+                .unwrap()
+        );
+    }
+    let fixture = support::born_repository();
+    assert_eq!(
+        support::commit_tree_path(
+            &fixture.repository,
+            support::head_commit(&fixture.repository).unwrap(),
+            "fixture.txt"
+        ),
+        Some(b"fixture\n".to_vec())
+    );
+    let linked = fixture.root.join("lf-checkout");
+    fixture
+        .repository
+        .worktree("lf-checkout", &linked, None)
+        .unwrap();
+    assert_eq!(fs::read(linked.join("fixture.txt")).unwrap(), b"fixture\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_worktree_helpers_compare_physical_paths_without_losing_names_or_count() {
+    let fixture = support::born_repository();
+    let worktree = fixture.root.join("registered");
+    fixture
+        .repository
+        .worktree("registered", &worktree, None)
+        .unwrap();
+    let alias = fixture.root.join("registered-alias");
+    std::os::unix::fs::symlink(&worktree, &alias).unwrap();
+    // Git metadata may name an existing filesystem alias rather than its canonical spelling.
+    fs::write(
+        fixture
+            .repository
+            .commondir()
+            .join("worktrees/registered/gitdir"),
+        format!("{}\n", alias.join(".git").display()),
+    )
+    .unwrap();
+    let raw = fixture
+        .repository
+        .find_worktree("registered")
+        .unwrap()
+        .path()
+        .to_owned();
+    assert_ne!(raw, worktree.canonicalize().unwrap());
+    assert_eq!(
+        raw.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    assert_eq!(
+        worktree_paths(&fixture.repository),
+        vec![worktree.canonicalize().unwrap()]
+    );
+    assert_eq!(
+        registered_worktrees(&fixture.repository),
+        vec![("registered".to_owned(), worktree.canonicalize().unwrap())]
+    );
+    assert_eq!(
+        support::open_linked_worktree(&alias)
+            .worktree
+            .canonicalize()
+            .unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+    assert!(support::repository_and_worktree_snapshot(&fixture) == before);
+    assert!(support::repository_git_file_bytes(&fixture) == git_before);
+}
+
+#[test]
+fn registered_worktree_helpers_keep_missing_registrations_in_the_exact_set() {
+    let fixture = support::born_repository();
+    let existing = fixture.root.join("existing");
+    let missing = fixture.root.join("missing");
+    fixture
+        .repository
+        .worktree("existing", &existing, None)
+        .unwrap();
+    fixture
+        .repository
+        .worktree("missing", &missing, None)
+        .unwrap();
+    fs::remove_dir_all(&missing).unwrap();
+    let missing_git_path = fixture
+        .repository
+        .find_worktree("missing")
+        .unwrap()
+        .path()
+        .to_owned();
+    let mut expected_paths = vec![existing.canonicalize().unwrap(), missing_git_path.clone()];
+    expected_paths.sort();
+    assert_eq!(worktree_paths(&fixture.repository), expected_paths);
+    assert_eq!(
+        registered_worktrees(&fixture.repository),
+        vec![
+            ("existing".to_owned(), existing.canonicalize().unwrap()),
+            ("missing".to_owned(), missing_git_path),
+        ]
+    );
+}
+
 #[test]
 fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
     let fixture = support::born_repository();
@@ -46,7 +176,17 @@ fn fixture_enabled_repository_keeps_its_service_data_directory_alive() {
 
 #[test]
 fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
-    let fixture = support::born_repository();
+    assert_linked_worktree_snapshot(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_linked_worktree_snapshot_exposes_live_checked_out_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_linked_worktree_snapshot(fixture);
+}
+
+fn assert_linked_worktree_snapshot(fixture: support::TestRepository) {
     let worktree = fixture.root.join(".manyhands/worktrees/document-context");
     fs::create_dir_all(worktree.parent().unwrap()).unwrap();
     fixture
@@ -56,7 +196,10 @@ fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
 
     let snapshot = support::open_linked_worktree(&worktree);
 
-    assert_eq!(snapshot.worktree, worktree);
+    assert_eq!(
+        snapshot.worktree.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
     assert_eq!(snapshot.head_branch, "document-context");
     assert_eq!(
         Some(snapshot.head_commit),
@@ -75,7 +218,17 @@ fn fixture_linked_worktree_snapshot_exposes_live_checked_out_state() {
 
 #[test]
 fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
-    let fixture = support::born_repository();
+    assert_document_context_location(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_document_context_uses_its_deterministic_location() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_document_context_location(fixture);
+}
+
+fn assert_document_context_location(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(
@@ -113,6 +266,8 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
         context.worktree,
         fixture
             .root
+            .canonicalize()
+            .unwrap()
             .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV")
     );
     assert_eq!(
@@ -123,7 +278,17 @@ fn prepare_context_creates_a_document_context_at_its_deterministic_location() {
 
 #[test]
 fn context_ticket_create_uses_its_deterministic_branch_and_worktree() {
-    let fixture = support::born_repository();
+    assert_ticket_context_location(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_ticket_context_uses_its_deterministic_branch_and_worktree() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_ticket_context_location(fixture);
+}
+
+fn assert_ticket_context_location(fixture: support::TestRepository) {
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
 
@@ -148,6 +313,8 @@ fn context_ticket_create_uses_its_deterministic_branch_and_worktree() {
         context.worktree,
         fixture
             .root
+            .canonicalize()
+            .unwrap()
             .join(".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW")
     );
 }
@@ -205,6 +372,120 @@ fn context_edit_creates_a_worktree_from_the_primary_target() {
     assert_eq!(
         fs::read_to_string(context.worktree.join("docs/fixture.md")).unwrap(),
         support::document_source()
+    );
+}
+
+#[test]
+fn context_edit_with_local_autocrlf_true_observes_exact_crlf_and_preserves_document_body() {
+    let fixture = support::born_repository();
+    let mut local = Config::open(&fixture.repository.path().join("config")).unwrap();
+    local.set_bool("core.autocrlf", true).unwrap();
+    let lf = concat!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\n",
+        "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Fixture document\n",
+        "future_key: retained\n---\nExact body\nSecond line\n"
+    );
+    let crlf = concat!(
+        "---\r\nmanyhands_managed: true\r\nmanyhands_kind: document\r\n",
+        "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\r\ntitle: Fixture document\r\n",
+        "future_key: retained\r\n---\r\nExact body\r\nSecond line\r\n"
+    );
+    commit_source(&fixture, "docs/filtered.md", lf);
+    assert_eq!(
+        support::commit_tree_path(
+            &fixture.repository,
+            support::head_commit(&fixture.repository).unwrap(),
+            "docs/filtered.md"
+        ),
+        Some(lf.as_bytes().to_vec())
+    );
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("docs/filtered.md")).unwrap(),
+        lf.as_bytes()
+    );
+    assert_eq!(
+        fs::read(context.worktree.join("docs/filtered.md")).unwrap(),
+        crlf.as_bytes()
+    );
+    let observed =
+        expected_context_observation(&fixture.root, &support::document_id(), "docs/filtered.md");
+    assert_eq!(
+        observed,
+        ExpectedPathObservation::from_bytes(crlf.as_bytes())
+    );
+    assert_ne!(observed, ExpectedPathObservation::from_bytes(lf.as_bytes()));
+
+    let body = "Exact body\r\nSecond line\r\n";
+    let mut stale = document_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        Some("docs/filtered.md"),
+        "docs/filtered.md",
+        "Edited",
+        body,
+    );
+    stale.expected_source = Some(ExpectedPathObservation::from_bytes(lf.as_bytes()));
+    let before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let error = document_error(enabled.service.save_document(stale));
+    assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+    assert!(support::repository_and_worktree_snapshot(&fixture) == before);
+    assert!(support::repository_git_file_bytes(&fixture) == git_before);
+    assert_eq!(operation_record_rows(&enabled.service), records_before);
+
+    let (saved, commit) = saved_checkpoint(
+        enabled
+            .service
+            .save_document(document_request(
+                &fixture.root,
+                ContextIntent::Edit,
+                Some("docs/filtered.md"),
+                "docs/filtered.md",
+                "Edited",
+                body,
+            ))
+            .unwrap(),
+    );
+    assert_eq!(saved.worktree, context.worktree);
+    let edited = fs::read_to_string(saved.worktree.join("docs/filtered.md")).unwrap();
+    let manyhands::canonical::CanonicalItem::Document(document) =
+        manyhands::canonical::parse_item(std::path::Path::new("docs/filtered.md"), &edited)
+            .unwrap()
+    else {
+        panic!("expected document");
+    };
+    assert_eq!(document.body, body);
+    assert_eq!(document.title, "Edited");
+    assert_eq!(
+        document.unknown.get(serde_yaml::Value::from("future_key")),
+        Some(&serde_yaml::Value::from("retained"))
+    );
+    // Checkout applies Git filters; the owned-file checkpoint stores authored bytes exactly.
+    let committed =
+        support::commit_tree_path(&fixture.repository, commit, "docs/filtered.md").unwrap();
+    assert_eq!(committed, edited.as_bytes());
+    assert!(local.get_bool("core.autocrlf").unwrap());
+    assert!(
+        Repository::open(&saved.worktree)
+            .unwrap()
+            .config()
+            .unwrap()
+            .get_bool("core.autocrlf")
+            .unwrap()
     );
 }
 
@@ -382,14 +663,46 @@ fn context_rejects_a_non_utf8_registered_worktree_name_without_mutation() {
         .unwrap();
     let worktrees_directory = fixture.repository.commondir().join("worktrees");
     let invalid_name = std::ffi::OsString::from_vec(b"non-utf8-\xff".to_vec());
-    fs::rename(
+    let configuration_path = fixture.root.join(".manyhands/config.toml");
+    let filesystem_state_before =
+        context_state(&fixture, &enabled.service, Some(&configuration_path));
+    let snapshot_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_files_before = support::repository_git_file_bytes(&fixture);
+    let records_before = operation_record_rows(&enabled.service);
+    let names_before = registered_worktree_names(&fixture.repository);
+
+    if let Err(error) = fs::rename(
         worktrees_directory.join("registered"),
         worktrees_directory.join(&invalid_name),
-    )
-    .unwrap();
-    let configuration_path = fixture.root.join(".manyhands/config.toml");
+    ) {
+        match error.raw_os_error() {
+            Some(libc::EILSEQ) if cfg!(target_os = "macos") => {}
+            _ => panic!("invalid-byte worktree fixture rename failed unexpectedly: {error}"),
+        }
+        // APFS can reject the invalid bytes before the application can inspect them.
+        // This branch proves filesystem rejection and nonmutation, not the application guard.
+        assert_context_state(
+            &fixture,
+            &enabled.service,
+            Some(&configuration_path),
+            &filesystem_state_before,
+        );
+        assert_eq!(
+            support::repository_and_worktree_snapshot(&fixture),
+            snapshot_before
+        );
+        assert_eq!(
+            support::repository_git_file_bytes(&fixture),
+            git_files_before
+        );
+        assert_eq!(operation_record_rows(&enabled.service), records_before);
+        assert_eq!(registered_worktree_names(&fixture.repository), names_before);
+        return;
+    }
+
     let before = context_state(&fixture, &enabled.service, Some(&configuration_path));
     let worktree_names_before = registered_worktree_names(&fixture.repository);
+    assert!(worktree_names_before.contains(&b"non-utf8-\xff".to_vec()));
 
     let error = context_error(enabled.service.prepare_context(target(
         &fixture.root,
@@ -494,7 +807,6 @@ fn document_edit_rejects_a_symlinked_reused_context_without_touching_external_re
         "Edited body\n",
     ));
 
-    fs::remove_file(&context.worktree).unwrap();
     let error = document_error(result);
     assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
     assert_context_state(&fixture, &enabled.service, None, &before);
@@ -505,6 +817,14 @@ fn document_edit_rejects_a_symlinked_reused_context_without_touching_external_re
         fs::read(external.root.join("fixture.txt")).unwrap(),
         external_fixture
     );
+    assert!(
+        fs::symlink_metadata(&context.worktree)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&context.worktree).unwrap(), external.root);
+    fs::remove_file(&context.worktree).unwrap();
 }
 
 #[test]
@@ -1958,18 +2278,9 @@ fn document_move_recovery_accepts_matching_source_and_destination_pair() {
         &saved.branch,
         support::head_commit(&Repository::open(&saved.worktree).unwrap()).unwrap(),
         vec![None, Some(expected.clone().into_bytes())],
-        statuses_with_owned_checkpoint_delta(
+        statuses_without_owned_paths(
             &pre_state.statuses,
-            &[
-                (
-                    "docs/source.md",
-                    git2::Status::INDEX_NEW | git2::Status::WT_DELETED,
-                ),
-                (
-                    "docs/destination.md",
-                    git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-                ),
-            ],
+            &["docs/source.md", "docs/destination.md"],
         ),
     );
 
@@ -2043,18 +2354,9 @@ fn document_move_recovery_completes_source_only_and_destination_only_states() {
             &saved.branch,
             oid,
             vec![None, Some(expected.clone().into_bytes())],
-            statuses_with_owned_checkpoint_delta(
+            statuses_without_owned_paths(
                 &pre_state.statuses,
-                &[
-                    (
-                        "docs/source.md",
-                        git2::Status::INDEX_NEW | git2::Status::WT_DELETED,
-                    ),
-                    (
-                        "docs/destination.md",
-                        git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-                    ),
-                ],
+                &["docs/source.md", "docs/destination.md"],
             ),
         );
         assert!(!saved.worktree.join("docs/source.md").exists());
@@ -2262,13 +2564,7 @@ fn recovery_document_before_item_write_preserves_absent_destination_for_retry() 
         &context.branch,
         oid,
         vec![Some(canonical_document("Title", "Body\n").into_bytes())],
-        statuses_with_owned_checkpoint_delta(
-            &before.statuses,
-            &[(
-                "docs/new.md",
-                git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-            )],
-        ),
+        statuses_without_owned_paths(&before.statuses, &["docs/new.md"]),
     );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
@@ -2331,13 +2627,7 @@ fn recovery_document_before_item_write_preserves_existing_owned_bytes_for_retry(
         &context.branch,
         oid,
         vec![Some(canonical_document("Changed", "Body\n").into_bytes())],
-        statuses_with_owned_checkpoint_delta(
-            &before.statuses,
-            &[(
-                "docs/edit.md",
-                git2::Status::INDEX_MODIFIED | git2::Status::WT_MODIFIED,
-            )],
-        ),
+        statuses_without_owned_paths(&before.statuses, &["docs/edit.md"]),
     );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
@@ -2425,19 +2715,7 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
         &context.branch,
         commit_oid,
         vec![None, Some(expected.clone().into_bytes())],
-        statuses_with_owned_checkpoint_delta(
-            &before.statuses,
-            &[
-                (
-                    "docs/source.md",
-                    git2::Status::INDEX_NEW | git2::Status::WT_DELETED,
-                ),
-                (
-                    "docs/destination.md",
-                    git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-                ),
-            ],
-        ),
+        statuses_without_owned_paths(&before.statuses, &["docs/source.md", "docs/destination.md"]),
     );
     assert!(!source.exists());
     assert_eq!(fs::read_to_string(&destination).unwrap(), expected);
@@ -2461,7 +2739,7 @@ fn recovery_document_move_before_item_write_preserves_both_paths_then_checkpoint
     assert_eq!(worktree_paths(&fixture.repository), before.worktrees);
     assert!(context.worktree.join("unrelated.txt").is_file());
     assert_eq!(registry_count(&enabled.service), before.registry_count);
-    assert_eq!(support::index_bytes(&repository), before.index);
+    assert_ne!(support::index_bytes(&repository), before.index);
     assert_eq!(
         statuses_excluding(&repository, &["docs/source.md", "docs/destination.md"]),
         unrelated_before
@@ -2677,13 +2955,7 @@ fn recovery_document_before_checkpoint_commit_preserves_written_file_for_exact_r
         &context.branch,
         oid,
         vec![Some(canonical_document("Title", "Body\n").into_bytes())],
-        statuses_with_owned_checkpoint_delta(
-            &before.statuses,
-            &[(
-                "docs/new.md",
-                git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-            )],
-        ),
+        statuses_without_owned_paths(&before.statuses, &["docs/new.md"]),
     );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
@@ -2761,10 +3033,7 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
         &checkpoint_failure,
         commit_oid,
         vec![Some(canonical_document("Title", "Body\n").into_bytes())],
-        vec![(
-            Some("docs/new.md".to_owned()),
-            git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-        )],
+        vec![],
     );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
@@ -2804,6 +3073,398 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
 }
 
 #[test]
+fn save_index_first_save_is_clean_in_a_repository_enabled_from_an_unborn_branch() {
+    let fixture = support::unborn_repository();
+    let mut config = fixture.repository.config().unwrap();
+    config.set_str("user.name", "Fixture").unwrap();
+    config
+        .set_str("user.email", "fixture@example.invalid")
+        .unwrap();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let primary_index = support::index_bytes(&fixture.repository);
+    let (context, oid) = saved_checkpoint(
+        enabled
+            .service
+            .save_ticket(ticket_request(
+                &fixture.root,
+                ContextIntent::Create,
+                "First",
+                "Body\n",
+            ))
+            .unwrap(),
+    );
+    let linked = Repository::open(&context.worktree).unwrap();
+    assert!(status_entries(&linked).is_empty());
+    assert_eq!(
+        linked.index().unwrap().write_tree().unwrap(),
+        linked.find_commit(oid).unwrap().tree_id()
+    );
+    assert_eq!(support::index_bytes(&fixture.repository), primary_index);
+}
+
+#[test]
+fn save_index_lock_failure_keeps_the_commit_and_nochange_save_repairs_the_index() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Ticket,
+                support::ticket_id(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    let before_index = support::index_bytes(&repository);
+    let lock = repository.path().join("index.lock");
+    fs::write(&lock, b"foreign lock").unwrap();
+    let operation_id = support::new_operation_id();
+    let request = || {
+        ticket_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Create,
+            "Title",
+            "Body\n",
+            operation_id,
+        )
+    };
+    let (_, oid) = saved_checkpoint(enabled.service.save_ticket(request()).unwrap());
+    assert_eq!(support::head_commit(&repository), Some(oid));
+    assert_eq!(support::index_bytes(&repository), before_index);
+    assert_eq!(fs::read(&lock).unwrap(), b"foreign lock");
+    assert!(!status_entries(&repository).is_empty());
+    fs::remove_file(lock).unwrap();
+    assert!(matches!(
+        enabled.service.save_ticket(request()).unwrap(),
+        SaveOutcome::Saved {
+            checkpoint: LocalCheckpoint::NoChange,
+            ..
+        }
+    ));
+    assert_eq!(support::head_commit(&repository), Some(oid));
+    assert!(status_entries(&Repository::open(&context.worktree).unwrap()).is_empty());
+}
+
+#[test]
+fn save_index_nochange_move_repairs_both_paths_after_a_lock_failure() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/source.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    let lock = repository.path().join("index.lock");
+    fs::write(&lock, b"foreign lock").unwrap();
+    let operation_id = support::new_operation_id();
+    let request = || {
+        document_request_with_operation_id(
+            &fixture.root,
+            ContextIntent::Edit,
+            Some("docs/source.md"),
+            "docs/destination.md",
+            "Moved",
+            "Body\n",
+            operation_id,
+        )
+    };
+    let (_, oid) = saved_checkpoint(enabled.service.save_document(request()).unwrap());
+    fs::remove_file(lock).unwrap();
+    assert!(matches!(
+        enabled.service.save_document(request()).unwrap(),
+        SaveOutcome::Saved {
+            checkpoint: LocalCheckpoint::NoChange,
+            ..
+        }
+    ));
+    let repository = Repository::open(&context.worktree).unwrap();
+    assert_eq!(support::head_commit(&repository), Some(oid));
+    assert!(
+        repository
+            .index()
+            .unwrap()
+            .get_path(std::path::Path::new("docs/source.md"), 0)
+            .is_none()
+    );
+    assert!(status_entries(&repository).is_empty());
+}
+
+#[test]
+fn save_index_collision_preserves_unrelated_staged_ancestor_and_descendant() {
+    for ancestor in [false, true] {
+        let fixture = support::born_repository();
+        let enabled = support::enabled_repository(&fixture);
+        clean_configuration_index(&fixture);
+        let context = context_from(
+            enabled
+                .service
+                .prepare_context(target(
+                    &fixture.root,
+                    AuthoringKind::Document,
+                    support::document_id(),
+                    ContextIntent::Create,
+                ))
+                .unwrap(),
+        );
+        let repository = Repository::open(&context.worktree).unwrap();
+        let staged = if ancestor {
+            "docs"
+        } else {
+            "docs/new.md/child"
+        };
+        let staged_path = context.worktree.join(staged);
+        fs::create_dir_all(staged_path.parent().unwrap()).unwrap();
+        fs::write(&staged_path, b"unrelated staged\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(std::path::Path::new(staged)).unwrap();
+        index.write().unwrap();
+        if ancestor {
+            fs::remove_file(staged_path).unwrap();
+        } else {
+            fs::remove_dir_all(context.worktree.join("docs/new.md")).unwrap();
+        }
+        let before_index = support::index_bytes(&repository);
+        let (_, oid) = saved_checkpoint(
+            enabled
+                .service
+                .save_document(document_request(
+                    &fixture.root,
+                    ContextIntent::Create,
+                    None,
+                    "docs/new.md",
+                    "Title",
+                    "Body\n",
+                ))
+                .unwrap(),
+        );
+        assert_eq!(support::head_commit(&repository), Some(oid));
+        // Repair cannot represent both the committed file and the unrelated
+        // staged collision. Keep the index untouched and the commit successful.
+        assert_eq!(support::index_bytes(&repository), before_index);
+    }
+}
+
+#[test]
+fn save_index_preserves_unrelated_racy_stat_fields() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    let mut index = git2::Index::open(&repository.path().join("index")).unwrap();
+    let mut entry = index
+        .get_path(std::path::Path::new("fixture.txt"), 0)
+        .unwrap();
+    entry.mtime = git2::IndexTime::new(i32::MAX, 0);
+    entry.file_size = 8;
+    index.add(&entry).unwrap();
+    for (path, flags, extended) in [
+        ("assume-unchanged.txt", 0x8000, 0),
+        ("skip-worktree.txt", 0x4000, 0x4000),
+    ] {
+        let mut flagged = index
+            .get_path(std::path::Path::new("fixture.txt"), 0)
+            .unwrap();
+        flagged.path = path.as_bytes().to_vec();
+        flagged.flags = flags;
+        flagged.flags_extended = extended;
+        index.add(&flagged).unwrap();
+    }
+    index.write().unwrap();
+    fs::write(context.worktree.join("fixture.txt"), b"changed\n").unwrap();
+    let unrelated = index_entries_excluding(
+        &Repository::open(&context.worktree).unwrap(),
+        &[std::path::Path::new("docs/new.md")],
+    );
+    saved_checkpoint(
+        enabled
+            .service
+            .save_document(document_request(
+                &fixture.root,
+                ContextIntent::Create,
+                None,
+                "docs/new.md",
+                "Title",
+                "Body\n",
+            ))
+            .unwrap(),
+    );
+    assert_eq!(
+        index_entries_excluding(
+            &Repository::open(&context.worktree).unwrap(),
+            &[std::path::Path::new("docs/new.md")]
+        ),
+        unrelated
+    );
+}
+
+#[test]
+fn save_index_keeps_unrelated_stat_matching_edits_visible_as_racy() {
+    let fixture = support::born_repository();
+    fixture
+        .repository
+        .config()
+        .unwrap()
+        .set_bool("core.trustctime", false)
+        .unwrap();
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Create,
+            ))
+            .unwrap(),
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    let index_path = repository.path().join("index");
+    let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let times = || std::fs::FileTimes::new().set_modified(modified);
+    let mut index = git2::Index::open(&index_path).unwrap();
+    let mut entry = index
+        .get_path(std::path::Path::new("fixture.txt"), 0)
+        .unwrap();
+    entry.mtime = git2::IndexTime::new(1_700_000_000, 0);
+    index.add(&entry).unwrap();
+    index.write().unwrap();
+    fs::write(context.worktree.join("fixture.txt"), b"changed\n").unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(context.worktree.join("fixture.txt"))
+        .unwrap()
+        .set_times(times())
+        .unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&index_path)
+        .unwrap()
+        .set_times(times())
+        .unwrap();
+    let unrelated = index_entries_excluding(
+        &Repository::open(&context.worktree).unwrap(),
+        &[std::path::Path::new("docs/new.md")],
+    );
+    assert_eq!(
+        Repository::open(&context.worktree)
+            .unwrap()
+            .status_file(std::path::Path::new("fixture.txt"))
+            .unwrap(),
+        git2::Status::WT_MODIFIED
+    );
+    saved_checkpoint(
+        enabled
+            .service
+            .save_document(document_request(
+                &fixture.root,
+                ContextIntent::Create,
+                None,
+                "docs/new.md",
+                "Title",
+                "Body\n",
+            ))
+            .unwrap(),
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    assert_eq!(
+        repository
+            .status_file(std::path::Path::new("fixture.txt"))
+            .unwrap(),
+        git2::Status::WT_MODIFIED
+    );
+    assert_eq!(
+        index_entries_excluding(&repository, &[std::path::Path::new("docs/new.md")]),
+        unrelated
+    );
+}
+
+#[test]
+fn save_index_repairs_owned_conflicts_on_checkpointed_and_nochange_saves() {
+    for nochange in [false, true] {
+        let fixture = support::born_repository();
+        let enabled = support::enabled_repository(&fixture);
+        clean_configuration_index(&fixture);
+        let (context, _) = saved_checkpoint(
+            enabled
+                .service
+                .save_ticket(ticket_request(
+                    &fixture.root,
+                    ContextIntent::Create,
+                    "Title",
+                    "Body\n",
+                ))
+                .unwrap(),
+        );
+        let repository = Repository::open(&context.worktree).unwrap();
+        support::conflict_worktree(&repository, &context.worktree);
+        let mut index = repository.index().unwrap();
+        let mut owned = index.get_path(&ticket_relative_path(), 0).unwrap();
+        index.remove(&ticket_relative_path(), 0).unwrap();
+        for stage in 1..=3 {
+            owned.flags = (owned.flags & !0x3000) | (stage << 12);
+            index.add(&owned).unwrap();
+        }
+        index.write().unwrap();
+        let unrelated = index_entries_excluding(&repository, &[&ticket_relative_path()]);
+        let outcome = enabled
+            .service
+            .save_ticket(ticket_request(
+                &fixture.root,
+                ContextIntent::Edit,
+                if nochange { "Title" } else { "Edited" },
+                "Body\n",
+            ))
+            .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                SaveOutcome::Saved {
+                    checkpoint: LocalCheckpoint::NoChange,
+                    ..
+                }
+            ) == nochange
+        );
+        let repository = Repository::open(&context.worktree).unwrap();
+        assert_eq!(
+            repository.status_file(&ticket_relative_path()).unwrap(),
+            git2::Status::CURRENT
+        );
+        assert_eq!(
+            index_entries_excluding(&repository, &[&ticket_relative_path()]),
+            unrelated
+        );
+        assert!(repository.index().unwrap().has_conflicts());
+    }
+}
+
+#[test]
 fn document_checkpoint_preserves_unrelated_linked_worktree_git_state() {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
@@ -2829,7 +3490,7 @@ fn document_checkpoint_preserves_unrelated_linked_worktree_git_state() {
     index.write().unwrap();
     fs::write(context.worktree.join("untracked.txt"), "untracked\n").unwrap();
     fs::remove_file(context.worktree.join(".manyhands/config.toml")).unwrap();
-    let before_index = support::index_bytes(&repository).unwrap();
+    let before_index = index_entries_excluding(&repository, &[std::path::Path::new("docs/new.md")]);
     let before_status = unrelated_status_entries(&repository);
     assert!(
         before_status
@@ -2852,7 +3513,16 @@ fn document_checkpoint_preserves_unrelated_linked_worktree_git_state() {
     );
 
     let repository = Repository::open(&context.worktree).unwrap();
-    assert_eq!(support::index_bytes(&repository).unwrap(), before_index);
+    assert_eq!(
+        index_entries_excluding(&repository, &[std::path::Path::new("docs/new.md")]),
+        before_index
+    );
+    assert_eq!(
+        repository
+            .status_file(std::path::Path::new("docs/new.md"))
+            .unwrap(),
+        git2::Status::CURRENT
+    );
     assert_eq!(unrelated_status_entries(&repository), before_status);
     assert!(repository.index().unwrap().has_conflicts());
     assert_eq!(
@@ -3295,10 +3965,7 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
         &checkpoint_failure,
         commit_oid,
         vec![Some(canonical_ticket("Title", "Body\n").into_bytes())],
-        vec![(
-            Some(ticket_relative_path().display().to_string()),
-            git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-        )],
+        vec![],
     );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
@@ -3446,12 +4113,9 @@ fn recovery_ticket_write_and_checkpoint_failures_preserve_retryable_state() {
             &context.branch,
             commit_oid,
             vec![Some(canonical_ticket("Title", "Body\n").into_bytes())],
-            statuses_with_owned_checkpoint_delta(
+            statuses_without_owned_paths(
                 &before.statuses,
-                &[(
-                    &ticket_relative_path().display().to_string(),
-                    git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-                )],
+                &[ticket_relative_path().to_str().unwrap()],
             ),
         );
         assert_eq!(support::head_commit(&repository), Some(commit_oid));
@@ -3471,7 +4135,7 @@ fn recovery_ticket_write_and_checkpoint_failures_preserve_retryable_state() {
             fs::read_to_string(&path).unwrap(),
             canonical_ticket("Title", "Body\n")
         );
-        assert_eq!(after_retry.index, before.index);
+        assert_ne!(after_retry.index, before.index);
         assert_eq!(
             statuses_excluding(&repository, &[ticket_relative_path().to_str().unwrap()]),
             unrelated_before
@@ -3645,7 +4309,7 @@ fn ticket_checkpoint_preserves_unrelated_live_index_and_worktree_state() {
     index.write().unwrap();
     fs::write(context.worktree.join("untracked.txt"), "untracked\n").unwrap();
     fs::remove_file(context.worktree.join(".manyhands/config.toml")).unwrap();
-    let before_index = support::index_bytes(&repository).unwrap();
+    let before_index = index_entries_excluding(&repository, &[&ticket_relative_path()]);
     let before_status = status_entries(&repository);
 
     let (_, commit_oid) = saved_checkpoint(
@@ -3660,7 +4324,14 @@ fn ticket_checkpoint_preserves_unrelated_live_index_and_worktree_state() {
             .unwrap(),
     );
     let repository = Repository::open(&context.worktree).unwrap();
-    assert_eq!(support::index_bytes(&repository).unwrap(), before_index);
+    assert_eq!(
+        index_entries_excluding(&repository, &[&ticket_relative_path()]),
+        before_index
+    );
+    assert_eq!(
+        repository.status_file(&ticket_relative_path()).unwrap(),
+        git2::Status::CURRENT
+    );
     assert!(repository.index().unwrap().has_conflicts());
     assert_eq!(
         status_entries(&repository)
@@ -4047,7 +4718,8 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
         .add_path(std::path::Path::new("unrelated.txt"))
         .unwrap();
     index.write().unwrap();
-    let before_index = support::index_bytes(&repository).unwrap();
+    let relative = comment_relative_path(&support::document_id(), &support::root_comment_id());
+    let before_index = index_entries_excluding(&repository, &[&relative]);
     let path = comment_path(&context, &support::root_comment_id());
     enabled
         .service
@@ -4084,7 +4756,7 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
         panic!("comment commit must retain refresh recovery");
     };
     assert_eq!(
-        support::index_bytes(&Repository::open(&context.worktree).unwrap()).unwrap(),
+        index_entries_excluding(&Repository::open(&context.worktree).unwrap(), &[&relative]),
         before_index
     );
     let after_failure = rejection_state(&fixture, &enabled.service, &context, &[&path]);
@@ -4093,7 +4765,7 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
         after_failure.registered_worktrees,
         before.registered_worktrees
     );
-    assert_eq!(after_failure.index, before.index);
+    assert_ne!(after_failure.index, before.index);
     assert_eq!(after_failure.commit_count, before.commit_count + 1);
     assert_eq!(after_failure.registry_rows, before.registry_rows);
     assert_checkpoint_completion_delta(
@@ -4102,14 +4774,13 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
         &context.branch,
         commit_oid,
         after_failure.files.clone(),
-        statuses_with_owned_checkpoint_delta(
+        statuses_without_owned_paths(
             &before.statuses,
-            &[(
-                &comment_relative_path(&support::document_id(), &support::root_comment_id())
-                    .display()
-                    .to_string(),
-                git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-            )],
+            &[
+                comment_relative_path(&support::document_id(), &support::root_comment_id())
+                    .to_str()
+                    .unwrap(),
+            ],
         ),
     );
     let outcome = enabled.service.submit_comment(request()).unwrap();
@@ -4258,16 +4929,13 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
         &context.branch,
         commit_oid,
         after_failure.files.clone(),
-        statuses_with_owned_checkpoint_delta(
+        statuses_without_owned_paths(
             &before_checkpoint.statuses,
-            &[(
-                &comment_relative.display().to_string(),
-                git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-            )],
+            &[comment_relative.to_str().unwrap()],
         ),
     );
     assert!(path.is_file());
-    assert_eq!(after_retry.index, before_checkpoint.index);
+    assert_ne!(after_retry.index, before_checkpoint.index);
     assert_eq!(
         statuses_excluding(
             &Repository::open(&context.worktree).unwrap(),
@@ -4463,14 +5131,13 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
         &context.branch,
         commit_oid,
         retry_state.files.clone(),
-        statuses_with_owned_checkpoint_delta(
+        statuses_without_owned_paths(
             &before.statuses,
-            &[(
-                &comment_relative_path(&support::document_id(), &support::root_comment_id())
-                    .display()
-                    .to_string(),
-                git2::Status::INDEX_DELETED | git2::Status::WT_NEW,
-            )],
+            &[
+                comment_relative_path(&support::document_id(), &support::root_comment_id())
+                    .to_str()
+                    .unwrap(),
+            ],
         ),
     );
     assert!(
@@ -4729,7 +5396,7 @@ fn assert_linked_checkpoint_delta(
 ) {
     assert_eq!(after.head, commit_oid);
     assert_eq!(after.commit_count, before.commit_count + 1);
-    assert_eq!(after.index, before.index);
+    assert_ne!(after.index, before.index);
     assert_eq!(after.statuses, statuses);
     assert_eq!(after.files, files);
 }
@@ -4772,7 +5439,7 @@ fn assert_checkpoint_completion_delta(
     assert_eq!(after.branches, expected_branches);
     assert_eq!(after.worktrees, before.worktrees);
     assert_eq!(after.registered_worktrees, before.registered_worktrees);
-    assert_eq!(after.index, before.index);
+    assert_ne!(after.index, before.index);
     assert_eq!(after.statuses, statuses);
     assert_eq!(after.head, commit_oid);
     assert_eq!(after.commit_count, before.commit_count + 1);
@@ -4781,26 +5448,15 @@ fn assert_checkpoint_completion_delta(
     assert_eq!(after.registry_rows, before.registry_rows);
 }
 
-fn statuses_with_owned_checkpoint_delta(
+fn statuses_without_owned_paths(
     before: &[(Option<String>, git2::Status)],
-    owned: &[(&str, git2::Status)],
+    owned: &[&str],
 ) -> Vec<(Option<String>, git2::Status)> {
-    let mut expected = before
+    before
         .iter()
-        .filter(|(path, _)| {
-            !owned
-                .iter()
-                .any(|(owned_path, _)| path.as_deref() == Some(*owned_path))
-        })
+        .filter(|(path, _)| !owned.contains(&path.as_deref().unwrap_or_default()))
         .cloned()
-        .collect::<Vec<_>>();
-    expected.extend(
-        owned
-            .iter()
-            .map(|(path, status)| (Some((*path).to_owned()), *status)),
-    );
-    expected.sort_by(|left, right| left.0.cmp(&right.0));
-    expected
+        .collect()
 }
 
 fn reference_state(repository: &Repository) -> Vec<(String, bool, Option<git2::Oid>)> {
@@ -4831,6 +5487,23 @@ fn assert_registry_refresh_is_the_only_row_change(before: &[RegistryRow], after:
         assert_eq!(before.refresh_required, 0);
         assert_eq!(after.refresh_required, 1);
     }
+}
+
+fn index_entries_excluding(repository: &Repository, owned: &[&std::path::Path]) -> Vec<String> {
+    repository
+        .index()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            !owned
+                .iter()
+                .any(|path| entry.path == path.as_os_str().as_encoded_bytes())
+        })
+        // IndexEntry's Debug includes every field, including stat data, flags,
+        // and conflict stages. Compare entries rather than the whole index,
+        // whose checksum and owned entries necessarily change after a save.
+        .map(|entry| format!("{entry:?}"))
+        .collect()
 }
 
 fn status_entries(repository: &Repository) -> Vec<(Option<String>, git2::Status)> {
@@ -5366,7 +6039,7 @@ fn worktree_paths(repository: &Repository) -> Vec<std::path::PathBuf> {
         .unwrap()
         .iter()
         .flatten()
-        .map(|name| repository.find_worktree(name).unwrap().path().to_owned())
+        .map(|name| physical_worktree_path(repository.find_worktree(name).unwrap().path()))
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -5381,12 +6054,21 @@ fn registered_worktrees(repository: &Repository) -> Vec<(String, std::path::Path
         .map(|name| {
             (
                 name.to_owned(),
-                repository.find_worktree(name).unwrap().path().to_owned(),
+                physical_worktree_path(repository.find_worktree(name).unwrap().path()),
             )
         })
         .collect::<Vec<_>>();
     worktrees.sort();
     worktrees
+}
+
+fn physical_worktree_path(path: &std::path::Path) -> std::path::PathBuf {
+    match path.canonicalize() {
+        Ok(physical) => physical,
+        // Stale registrations remain in the exact set, with their Git spelling intact.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_owned(),
+        Err(error) => panic!("registered worktree path cannot be resolved: {error}"),
+    }
 }
 
 fn commit_count(repository: &Repository) -> usize {
@@ -5848,7 +6530,17 @@ fn stale_document_edit_preserves_external_replacement() {
 
 #[test]
 fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_document_move_source(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_document_move_source_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_document_move_source(fixture);
+}
+
+fn assert_stale_document_move_source(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -5884,7 +6576,7 @@ fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state()
     let error = document_error(enabled.service.save_document(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -5903,7 +6595,17 @@ fn stale_document_move_source_preserves_pre_save_repository_and_worktree_state()
 
 #[test]
 fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_document_move_destination(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_document_move_destination_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_document_move_destination(fixture);
+}
+
+fn assert_stale_document_move_destination(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/source.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -5939,7 +6641,7 @@ fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_st
     let error = document_error(enabled.service.save_document(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveDocument);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -5964,7 +6666,17 @@ fn stale_document_move_destination_preserves_pre_save_repository_and_worktree_st
 
 #[test]
 fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_ticket_edit(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_ticket_edit_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_ticket_edit(fixture);
+}
+
+fn assert_stale_ticket_edit(fixture: support::TestRepository) {
     commit_source(
         &fixture,
         &ticket_relative_path().display().to_string(),
@@ -6000,7 +6712,7 @@ fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
     let error = document_error(enabled.service.save_ticket(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SaveTicket);
     assert_eq!(diagnostic.item_id, support::ticket_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -6018,7 +6730,17 @@ fn stale_ticket_edit_preserves_pre_save_repository_and_worktree_state() {
 
 #[test]
 fn stale_comment_creation_preserves_pre_save_repository_and_worktree_state() {
-    let fixture = support::born_repository();
+    assert_stale_comment_creation(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_stale_comment_creation_preserves_state() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_stale_comment_creation(fixture);
+}
+
+fn assert_stale_comment_creation(fixture: support::TestRepository) {
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
@@ -6054,7 +6776,7 @@ fn stale_comment_creation_preserves_pre_save_repository_and_worktree_state() {
     let error = comment_error(enabled.service.submit_comment(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.operation, RepositoryOperation::SubmitComment);
     assert_eq!(diagnostic.item_id, support::document_id());
     assert_eq!(diagnostic.context, context.worktree);
@@ -6334,7 +7056,17 @@ fn document_same_id_different_move_source_is_an_operation_mismatch() {
 
 #[test]
 fn externally_populated_missing_document_destination_is_redacted_external_change() {
-    let fixture = support::born_repository();
+    assert_populated_missing_document_destination(support::born_repository());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_parent_populated_missing_document_destination_is_redacted_external_change() {
+    let (_alias_directory, fixture) = repository_with_symlinked_parent();
+    assert_populated_missing_document_destination(fixture);
+}
+
+fn assert_populated_missing_document_destination(fixture: support::TestRepository) {
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
     let item_id = support::document_id();
@@ -6371,7 +7103,7 @@ fn externally_populated_missing_document_destination_is_redacted_external_change
 
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().expect("external-change diagnostic");
-    assert_eq!(diagnostic.root, fixture.root);
+    assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
     assert_eq!(diagnostic.item_id, item_id);
     assert_eq!(diagnostic.context, context.worktree);
     assert_eq!(diagnostic.path, std::path::PathBuf::from("docs/new.md"));

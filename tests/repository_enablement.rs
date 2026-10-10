@@ -4,13 +4,18 @@ use manyhands::{
     repository::{
         AddRemoteRequest, CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
         EnableRepositoryOutcome, EnableRepositoryRequest, FailurePoint, IdentityInspection,
-        PublicationRemoteOutcome, REGISTRY_FILE, RegistryConnectionPhase, RemoteOutcome,
-        RemoveRegistrationOutcome, RemoveRegistrationRequest, RemoveRemoteRequest,
+        PublicationRemoteOutcome, REGISTRY_FILE, RecoveryInspection, RegistryConnectionPhase,
+        RemoteOutcome, RemoveRegistrationOutcome, RemoveRegistrationRequest, RemoveRemoteRequest,
         RepositoryErrorKind, RepositoryOperation, RepositoryService, SetPublicationRemoteRequest,
     },
 };
-use rusqlite::Connection;
-use std::{process::Command, sync::mpsc, thread, time::Duration};
+use rusqlite::{Connection, OptionalExtension};
+use std::{
+    process::Command,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 mod support;
 
@@ -79,6 +84,7 @@ fn registry_row(
     data: &std::path::Path,
     root: &std::path::Path,
 ) -> Option<(String, String, i64, i64)> {
+    let root = fixture_root_key(root);
     Connection::open(data.join(REGISTRY_FILE))
         .unwrap()
         .query_row(
@@ -87,7 +93,21 @@ fn registry_row(
             [root.to_str().unwrap()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
-        .ok()
+        .optional()
+        .expect("registry row query succeeds")
+}
+
+fn fixture_root_key(root: &std::path::Path) -> std::path::PathBuf {
+    match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => root
+            .parent()
+            .expect("fixture target has a parent")
+            .canonicalize()
+            .expect("fixture target parent exists")
+            .join(root.file_name().expect("fixture target has a leaf")),
+        Err(error) => panic!("cannot resolve fixture root: {error}"),
+    }
 }
 
 fn enable_request(root: &std::path::Path, primary_branch: &str) -> EnableRepositoryRequest {
@@ -225,6 +245,32 @@ fn assert_registry_matches_head(data: &std::path::Path, fixture: &support::TestR
 
 fn failing_service(data: &std::path::Path, point: FailurePoint) -> RepositoryService {
     support::FailOnce::at(point).open_service(data)
+}
+
+fn assert_pending_lifecycle(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    operation_id: manyhands::repository::OperationId,
+    operation: RepositoryOperation,
+    completed_step: Option<&str>,
+) {
+    assert_eq!(
+        service.recovery_inspection(root).unwrap(),
+        vec![RecoveryInspection::Pending {
+            operation_id,
+            operation,
+            root: fixture_root_key(root),
+            item_id: None,
+            context: None,
+            completed_step: completed_step.map(str::to_owned),
+            next_action: operation,
+        }]
+    );
+}
+
+/// A failure whose writes were all restored leaves nothing to finish.
+fn assert_no_pending_lifecycle(service: &RepositoryService, root: &std::path::Path) {
+    assert_eq!(service.recovery_inspection(root).unwrap(), vec![]);
 }
 
 #[test]
@@ -550,10 +596,19 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "problems",
             "registry_migrations",
             "remote_context_states",
+            "remote_identity_confirmations",
+            "remote_integration_merge_metadata",
+            "remote_integration_steps",
+            "remote_integration_windows",
             "remote_observation_batches",
             "remote_operation_records",
             "remote_polling_state",
+            "remote_publication_attempts",
             "remote_ref_observations",
+            "remote_resolution_attempts",
+            "remote_resolution_index_artifacts",
+            "remote_resolution_paths",
+            "remote_resolution_ref_log_artifacts",
             "repositories",
             "shared_ssh_keys",
             "ssh_host_pins",
@@ -825,8 +880,48 @@ fn registry_migration_is_idempotent() {
 
 #[test]
 fn registry_open_waits_for_a_brief_database_lock() {
-    const PHASE_TIMEOUT: Duration = Duration::from_secs(1);
+    assert_registry_open_waits_for_a_brief_database_lock(|_| {});
+}
+
+#[test]
+fn registry_open_waits_for_a_gated_slow_wal_phase_after_lock_release() {
+    let (paused_sent, paused_received) = mpsc::channel();
+    let (release_sent, release_received) = mpsc::channel();
+    let gate_thread = thread::spawn(move || {
+        let paused = paused_received.recv_timeout(Duration::from_secs(10));
+        // Hold the observer gate beyond the former one-second phase budget.
+        // This is an intentional absence probe, not a startup scheduling sleep.
+        let still_paused = paused_received.recv_timeout(Duration::from_millis(1_100));
+        let released = release_sent.send(());
+        paused.unwrap();
+        assert!(matches!(still_paused, Err(mpsc::RecvTimeoutError::Timeout)));
+        released.unwrap();
+    });
+
+    assert_registry_open_waits_for_a_brief_database_lock(move |phase| {
+        if phase == RegistryConnectionPhase::AfterWal {
+            paused_sent.send(()).unwrap();
+            release_received
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+        }
+    });
+    gate_thread.join().unwrap();
+}
+
+fn assert_registry_open_waits_for_a_brief_database_lock(
+    mut observer: impl FnMut(RegistryConnectionPhase) + Send + 'static,
+) {
+    // One watchdog covers SQLite's five-second busy budget plus startup work;
+    // phase notifications describe ordering, not a one-second latency promise.
+    const OPEN_WATCHDOG: Duration = Duration::from_secs(10);
     const LOCKED_WINDOW: Duration = Duration::from_millis(25);
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum OpenEvent {
+        Phase(RegistryConnectionPhase),
+        Completed(Result<(), RepositoryErrorKind>),
+    }
 
     let data = tempfile::tempdir().unwrap();
     RepositoryService::open_at(data.path()).unwrap();
@@ -836,35 +931,49 @@ fn registry_open_waits_for_a_brief_database_lock() {
         .pragma_update(None, "journal_mode", "DELETE")
         .unwrap();
     lock_connection.execute_batch("BEGIN EXCLUSIVE").unwrap();
-    let (phases_sent, phases_received) = mpsc::channel();
-    let (result_sent, result_received) = mpsc::sync_channel(1);
+    let (events_sent, events_received) = mpsc::channel();
     let worker_data_directory = data.path().to_path_buf();
+    let deadline = Instant::now() + OPEN_WATCHDOG;
 
     let open_thread = thread::spawn(move || {
         let result = RepositoryService::open_at_with_registry_phase_observer(
             &worker_data_directory,
             |phase| {
-                let _ = phases_sent.send(phase);
+                observer(phase);
+                let _ = events_sent.send(OpenEvent::Phase(phase));
             },
         );
-        let _ = result_sent.send(result);
+        let _ = events_sent.send(OpenEvent::Completed(
+            result.map(|_| ()).map_err(|error| error.kind),
+        ));
     });
 
-    let before_wal = phases_received.recv_timeout(PHASE_TIMEOUT);
-    let while_locked = phases_received.recv_timeout(LOCKED_WINDOW);
+    let before_wal =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let while_locked = events_received.recv_timeout(LOCKED_WINDOW);
     let lock_released = lock_connection.execute_batch("COMMIT");
+    // Close the connection even if COMMIT failed, releasing its lock before any
+    // assertion or worker join (including a missing BeforeWal notification).
     drop(lock_connection);
 
-    let after_wal = phases_received.recv_timeout(PHASE_TIMEOUT);
-    let worker_result = result_received.recv_timeout(PHASE_TIMEOUT);
+    let after_wal =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let worker_result =
+        events_received.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     let worker_joined = open_thread.join();
 
     lock_released.unwrap();
-    assert_eq!(before_wal.unwrap(), RegistryConnectionPhase::BeforeWal);
+    assert_eq!(
+        before_wal.unwrap(),
+        OpenEvent::Phase(RegistryConnectionPhase::BeforeWal)
+    );
     assert!(matches!(while_locked, Err(mpsc::RecvTimeoutError::Timeout)));
-    assert_eq!(after_wal.unwrap(), RegistryConnectionPhase::AfterWal);
+    assert_eq!(
+        after_wal.unwrap(),
+        OpenEvent::Phase(RegistryConnectionPhase::AfterWal)
+    );
     worker_joined.unwrap();
-    worker_result.unwrap().unwrap();
+    assert_eq!(worker_result.unwrap(), OpenEvent::Completed(Ok(())));
 }
 
 #[test]
@@ -2421,6 +2530,119 @@ fn remove_registration_rejects_missing_and_file_roots_without_deleting_existing_
 }
 
 #[test]
+fn enable_unborn_head_main_ignores_a_different_initial_branch_default() {
+    assert_enable_unborn_main_with_master_default("main");
+}
+
+#[test]
+fn enable_unborn_head_main_repoints_to_confirmed_trunk_despite_initial_branch_default() {
+    assert_enable_unborn_main_with_master_default("trunk");
+}
+
+fn assert_enable_unborn_main_with_master_default(primary_branch: &str) {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("main");
+    let repository = Repository::init_opts(root.path(), &options).unwrap();
+    Config::open(&repository.path().join("config"))
+        .unwrap()
+        .set_str("init.defaultBranch", "master")
+        .unwrap();
+    assert_eq!(
+        repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert_eq!(repository.references().unwrap().count(), 0);
+    let service = RepositoryService::open_at(data.path()).unwrap();
+
+    let outcome = service
+        .enable(EnableRepositoryRequest {
+            root: root.path().to_owned(),
+            primary_branch: primary_branch.to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Unborn Author".to_owned(),
+                email: "unborn@example.invalid".to_owned(),
+            }),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
+
+    let EnableRepositoryOutcome::Enabled { commit_oid } = outcome else {
+        panic!("expected a first initialization commit");
+    };
+    assert_eq!(repository.head().unwrap().shorthand(), Some(primary_branch));
+    assert_eq!(support::head_commit(&repository), Some(commit_oid));
+    assert_eq!(
+        repository.find_commit(commit_oid).unwrap().parent_count(),
+        0
+    );
+    assert_eq!(repository.references().unwrap().count(), 1);
+    assert_eq!(
+        repository
+            .config()
+            .unwrap()
+            .get_string("init.defaultBranch")
+            .unwrap(),
+        "master"
+    );
+    assert_eq!(
+        canonical::parse_repository_config(
+            std::str::from_utf8(&head_configuration(&repository)).unwrap()
+        )
+        .unwrap()
+        .primary_branch,
+        primary_branch
+    );
+    assert_eq!(registry_row_count(data.path()), 1);
+}
+
+#[test]
+fn enable_unborn_head_refuses_an_existing_requested_primary_without_mutation() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    let primary_commit = support::head_commit(&fixture.repository).unwrap();
+    fixture.repository.set_head("refs/heads/unborn").unwrap();
+    let mut index = fixture.repository.index().unwrap();
+    index.clear().unwrap();
+    index.write().unwrap();
+    std::fs::remove_file(fixture.root.join("fixture.txt")).unwrap();
+    assert_eq!(
+        fixture.repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert!(fixture.repository.statuses(None).unwrap().is_empty());
+    let before = repository_snapshot(&fixture.repository, &fixture.root);
+    let index_before = support::index_bytes(&fixture.repository);
+
+    let error = service
+        .enable(EnableRepositoryRequest {
+            root: fixture.root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Unborn Author".to_owned(),
+                email: "unborn@example.invalid".to_owned(),
+            }),
+            operation_id: support::operation_id(),
+        })
+        .unwrap_err();
+
+    assert_eq!(
+        repository_snapshot(&fixture.repository, &fixture.root),
+        before
+    );
+    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    assert_eq!(error.kind, RepositoryErrorKind::WrongCheckedOutBranch);
+    assert_eq!(
+        fixture.repository.refname_to_id("refs/heads/main").unwrap(),
+        primary_commit
+    );
+    assert!(!fixture.root.join(canonical::CONFIG_PATH).exists());
+    assert_eq!(registry_row_count(data.path()), 0);
+}
+
+#[test]
 fn enable_unborn_trunk_creates_its_first_commit_without_master() {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
@@ -2502,9 +2724,12 @@ fn enable_unborn_untracked_worktree_rejects_without_mutation() {
 
 #[test]
 fn enable_unborn_configuration_obstacle_rolls_back_all_precommit_mutations() {
+    assert_unborn_configuration_obstacle_rolls_back(support::unborn_repository());
+}
+
+fn assert_unborn_configuration_obstacle_rolls_back(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
-    let fixture = support::unborn_repository();
     let mut config = fixture.repository.config().unwrap();
     config.set_str("user.name", "Configured Author").unwrap();
     config
@@ -2529,7 +2754,7 @@ fn enable_unborn_configuration_obstacle_rolls_back_all_precommit_mutations() {
 
     assert_eq!(error.kind, RepositoryErrorKind::Io);
     assert_eq!(error.operation, RepositoryOperation::Enable);
-    assert_eq!(error.root.as_deref(), Some(fixture.root.as_path()));
+    assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
     assert_eq!(
         repository_snapshot(&fixture.repository, &fixture.root),
         before
@@ -3024,8 +3249,16 @@ fn enable_existing_valid_configuration_needs_no_identity_and_writes_no_identity_
 
 #[test]
 fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
+    assert_recovery_before_configuration_write(support::unborn_repository());
+}
+
+fn assert_recovery_before_configuration_write(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
-    let fixture = support::unborn_repository();
+    let mut config = Config::open(&fixture.repository.path().join("config")).unwrap();
+    config.set_str("user.name", "Recovery Author").unwrap();
+    config
+        .set_str("user.email", "recovery@example.invalid")
+        .unwrap();
     std::fs::write(
         fixture.repository.path().join("info/exclude"),
         b"before\r\n",
@@ -3048,6 +3281,8 @@ fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
 
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+    assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(
         repository_snapshot(&fixture.repository, &fixture.root),
         repository_before
@@ -3088,12 +3323,26 @@ fn recovery_before_configuration_write_restores_unborn_state_then_retries() {
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(registry_row_count(data.path()), 1);
     assert_registry_matches_head(data.path(), &fixture);
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
+    assert_recovery_before_initialization_commit(support::unborn_repository());
+}
+
+fn assert_recovery_before_initialization_commit(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
-    let fixture = support::unborn_repository();
+    let mut config = Config::open(&fixture.repository.path().join("config")).unwrap();
+    config.set_str("user.name", "Recovery Author").unwrap();
+    config
+        .set_str("user.email", "recovery@example.invalid")
+        .unwrap();
     std::fs::write(
         fixture.repository.path().join("info/exclude"),
         b"before\r\n",
@@ -3116,6 +3365,8 @@ fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
 
     assert_eq!(error.operation, RepositoryOperation::Enable);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+    assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(
         repository_snapshot(&fixture.repository, &fixture.root),
         repository_before
@@ -3156,15 +3407,40 @@ fn recovery_before_initialization_commit_restores_unborn_state_then_retries() {
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(registry_row_count(data.path()), 1);
     assert_registry_matches_head(data.path(), &fixture);
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn recovery_before_repository_initialization_removes_only_owned_target_then_retries() {
     let data = tempfile::tempdir().unwrap();
-    let parent = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let created = parent.path().join("created");
     let existing = parent.path().join("existing");
     std::fs::create_dir(&existing).unwrap();
+
+    // Observe this backend's installed template before the app runs. Git
+    // distributions ship different comments; all of their bytes must survive.
+    let mut options = git2::RepositoryInitOptions::new();
+    options.initial_head("main");
+    let probe = Repository::init_opts(parent.path().join("template-probe"), &options).unwrap();
+    let template = support::exclude_bytes(&probe).unwrap_or_default();
+    drop(probe);
+    let delimiter: &[u8] = match template.iter().position(|byte| *byte == b'\n') {
+        Some(offset) if offset > 0 && template[offset - 1] == b'\r' => b"\r\n",
+        _ => b"\n",
+    };
+    let mut owned_line = b".manyhands/worktrees/".to_vec();
+    owned_line.extend_from_slice(delimiter);
+    let mut expected_exclude = template;
+    if !expected_exclude.is_empty() && !expected_exclude.ends_with(b"\n") {
+        expected_exclude.extend_from_slice(delimiter);
+    }
+    expected_exclude.extend_from_slice(&owned_line);
 
     for root in [&created, &existing] {
         let service = failing_service(data.path(), FailurePoint::BeforeRepositoryInitialization);
@@ -3207,7 +3483,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
                 .into_bytes()
         );
         let exclude = support::exclude_bytes(&repository).unwrap();
-        assert!(exclude.ends_with(b".manyhands/worktrees/\n"));
+        assert!(exclude.ends_with(&owned_line));
         assert_eq!(
             exclude
                 .windows(b".manyhands/worktrees/".len())
@@ -3215,12 +3491,7 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
                 .count(),
             1
         );
-        if root == &created {
-            assert_eq!(
-                exclude,
-                b"# File patterns to ignore; see `git help ignore` for more information.\n# Lines that start with '#' are comments.\n.manyhands/worktrees/\n"
-            );
-        }
+        assert_eq!(exclude, expected_exclude);
         let registry = registry_row(data.path(), root).unwrap();
         assert_eq!(registry.0, "accessible");
         assert_eq!(registry.2, 0);
@@ -3233,8 +3504,11 @@ fn recovery_before_repository_initialization_removes_only_owned_target_then_retr
 
 #[test]
 fn recovery_before_publication_configuration_commit_restores_config_and_live_index() {
+    assert_recovery_before_publication_configuration_commit(support::born_repository());
+}
+
+fn assert_recovery_before_publication_configuration_commit(fixture: support::TestRepository) {
     let data = tempfile::tempdir().unwrap();
-    let fixture = support::born_repository();
     let setup = RepositoryService::open_at(data.path()).unwrap();
     setup.enable(enable_request(&fixture.root, "main")).unwrap();
     setup
@@ -3254,6 +3528,11 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
     let commits_before = commit_count(&fixture.repository);
     let remotes_before = remote_names(&fixture.repository);
     let registry_before = registry_row(data.path(), &fixture.root);
+    assert!(
+        registry_before.is_some(),
+        "enabled fixture has a canonical registration"
+    );
+    let repository_before = repository_snapshot(&fixture.repository, &fixture.root);
     let service = failing_service(
         data.path(),
         FailurePoint::BeforePublicationConfigurationCommit,
@@ -3270,11 +3549,17 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
 
     assert_eq!(error.operation, RepositoryOperation::SetPublicationRemote);
     assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+    assert_eq!(error.root, Some(fixture_root_key(&fixture.root)));
+    assert_no_pending_lifecycle(&service, &fixture.root);
     assert_eq!(support::tracked_configuration(&fixture.root), config_before);
     assert_eq!(support::index_bytes(&fixture.repository), index_before);
     assert_eq!(commit_count(&fixture.repository), commits_before);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(registry_row(data.path(), &fixture.root), registry_before);
+    assert_eq!(
+        repository_snapshot(&fixture.repository, &fixture.root),
+        repository_before
+    );
     assert_eq!(
         canonical::parse_repository_config(
             std::str::from_utf8(&support::tracked_configuration(&fixture.root).unwrap()).unwrap()
@@ -3322,12 +3607,24 @@ fn recovery_before_publication_configuration_commit_restores_config_and_live_ind
         head_configuration_oid(&fixture.repository).to_string()
     );
     assert_eq!(registry.2, 0);
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_registration() {
+    assert_recovery_before_registry_write(support::born_repository(), support::born_repository());
+}
+
+fn assert_recovery_before_registry_write(
+    fixture: support::TestRepository,
+    publication_fixture: support::TestRepository,
+) {
     let data = tempfile::tempdir().unwrap();
-    let fixture = support::born_repository();
     let service = failing_service(data.path(), FailurePoint::BeforeRegistryWrite);
     let operation_id = support::operation_id();
 
@@ -3346,6 +3643,15 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     assert!(support::tracked_configuration(&fixture.root).is_some());
     assert_eq!(commit_count(&fixture.repository), 2);
     assert_eq!(registry_row_count(data.path()), 0);
+    assert_pending_lifecycle(
+        &service,
+        &fixture.root,
+        operation_id,
+        RepositoryOperation::Enable,
+        Some("initialization_committed"),
+    );
+    let pending_repository = repository_snapshot(&fixture.repository, &fixture.root);
+    let pending_index = support::index_bytes(&fixture.repository);
 
     assert_eq!(
         service
@@ -3360,9 +3666,19 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(commit_count(&fixture.repository), 2);
     assert_eq!(registry_row_count(data.path()), 1);
+    assert_eq!(
+        repository_snapshot(&fixture.repository, &fixture.root),
+        pending_repository
+    );
+    assert_eq!(support::index_bytes(&fixture.repository), pending_index);
+    assert!(
+        service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
 
     let publication_data = tempfile::tempdir().unwrap();
-    let publication_fixture = support::born_repository();
     let setup = RepositoryService::open_at(publication_data.path()).unwrap();
     setup
         .enable(enable_request(&publication_fixture.root, "main"))
@@ -3401,6 +3717,15 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
     let pending_remotes = remote_names(&publication_fixture.repository);
     let pending_registry =
         registry_row(publication_data.path(), &publication_fixture.root).unwrap();
+    let pending_repository =
+        repository_snapshot(&publication_fixture.repository, &publication_fixture.root);
+    assert_pending_lifecycle(
+        &publication_service,
+        &publication_fixture.root,
+        publication_operation_id,
+        RepositoryOperation::SetPublicationRemote,
+        Some("publication_committed"),
+    );
     assert_eq!(
         head_configuration(&publication_fixture.repository),
         pending_config
@@ -3449,4 +3774,102 @@ fn recovery_before_registry_write_preserves_authoritative_commit_then_retries_re
         pending_remotes
     );
     assert_eq!(registry_row_count(publication_data.path()), 1);
+    assert_eq!(
+        repository_snapshot(&publication_fixture.repository, &publication_fixture.root),
+        pending_repository
+    );
+    assert!(
+        publication_service
+            .recovery_inspection(&publication_fixture.root)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn enablement_rollback_and_recovery_with_symlink_parent_use_canonical_roots() {
+    fn alias(mut fixture: support::TestRepository) -> (tempfile::TempDir, support::TestRepository) {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("parent-alias");
+        std::os::unix::fs::symlink(
+            fixture.root.parent().unwrap().canonicalize().unwrap(),
+            &parent,
+        )
+        .unwrap();
+        fixture.root = parent.join(fixture.root.file_name().unwrap());
+        assert_ne!(fixture.root, fixture.root.canonicalize().unwrap());
+        (directory, fixture)
+    }
+
+    let (_alias, fixture) = alias(support::unborn_repository());
+    assert_unborn_configuration_obstacle_rolls_back(fixture);
+    let (_alias, fixture) = alias(support::unborn_repository());
+    assert_recovery_before_configuration_write(fixture);
+    let (_alias, fixture) = alias(support::unborn_repository());
+    assert_recovery_before_initialization_commit(fixture);
+    let (_alias, fixture) = alias(support::born_repository());
+    assert_recovery_before_publication_configuration_commit(fixture);
+    let (_alias, fixture) = alias(support::born_repository());
+    let (_publication_alias, publication_fixture) = alias(support::born_repository());
+    assert_recovery_before_registry_write(fixture, publication_fixture);
+
+    let parent = tempfile::tempdir().unwrap();
+    let alias_parent = parent.path().join("parent-alias");
+    let real_parent = parent.path().join("real-parent");
+    std::fs::create_dir(&real_parent).unwrap();
+    std::os::unix::fs::symlink(&real_parent, &alias_parent).unwrap();
+    for existed in [false, true] {
+        let data = tempfile::tempdir().unwrap();
+        let root = alias_parent.join(if existed { "existing" } else { "created" });
+        if existed {
+            std::fs::create_dir(&root).unwrap();
+        }
+        let key = real_parent
+            .canonicalize()
+            .unwrap()
+            .join(root.file_name().unwrap());
+        assert_eq!(fixture_root_key(&root), key);
+        let service = failing_service(data.path(), FailurePoint::BeforeRepositoryInitialization);
+        let operation_id = support::operation_id();
+        let error = service
+            .create_and_enable(create_request_with_operation_id(
+                &root,
+                "main",
+                operation_id,
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+        assert_eq!(root.exists(), existed);
+        if existed {
+            assert!(std::fs::read_dir(&root).unwrap().next().is_none());
+        }
+        assert_eq!(registry_row_count(data.path()), 0);
+        assert_eq!(registry_row(data.path(), &root), None);
+        let record: (String, String, Option<String>) = Connection::open(data.path().join(REGISTRY_FILE)).unwrap()
+            .query_row("SELECT root_path, state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+                [operation_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        assert_eq!(
+            record,
+            (key.to_str().unwrap().to_owned(), "created".to_owned(), None)
+        );
+        assert!(matches!(
+            service
+                .create_and_enable(create_request_with_operation_id(
+                    &root,
+                    "main",
+                    operation_id
+                ))
+                .unwrap(),
+            EnableRepositoryOutcome::Enabled { .. }
+        ));
+        let repository = Repository::open(&root).unwrap();
+        assert_eq!(commit_count(&repository), 1);
+        assert_eq!(repository.head().unwrap().shorthand(), Some("main"));
+        assert_eq!(
+            registry_row(data.path(), &root).unwrap().1,
+            head_configuration_oid(&repository).to_string()
+        );
+        assert!(service.recovery_inspection(&root).unwrap().is_empty());
+    }
 }

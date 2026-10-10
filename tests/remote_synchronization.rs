@@ -67,6 +67,26 @@ const CASES: &[ssh_harness::Case] = &[
     ("ignored_context_noncolliding_control", || {
         ignored_noncolliding(true)
     }),
+    ("fixture_push_waits_for_receiver_receipt", || {
+        fixture_push_waits_for_receiver_receipt(false)
+    }),
+    ("fixture_push_waits_for_duplicate_receiver_receipt", || {
+        fixture_push_waits_for_receiver_receipt(true)
+    }),
+    ("fixture_receiver_controller_timeout_joins_worker", || {
+        fixture_receiver_controller_cleanup(false)
+    }),
+    ("fixture_receiver_controller_unwind_joins_worker", || {
+        fixture_receiver_controller_cleanup(true)
+    }),
+    (
+        "fixture_noop_push_needs_no_receiver_update",
+        fixture_noop_push,
+    ),
+    (
+        "fixture_rejected_push_is_not_a_success_receipt",
+        fixture_rejected_push,
+    ),
     (
         "synchronization_raw_capture_privacy",
         synchronization_raw_capture_privacy,
@@ -124,6 +144,30 @@ const CASES: &[ssh_harness::Case] = &[
         "context_virtual_primary_divergence_preservation",
         context_virtual_primary_divergence_preservation,
     ),
+    (
+        "primary_conflict_is_retained_and_inspectable",
+        primary_conflict_is_retained_and_inspectable,
+    ),
+    (
+        "binary_primary_conflict_side_read_is_refused",
+        binary_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "symlink_primary_conflict_side_read_is_refused",
+        symlink_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "mixed_mode_primary_conflict_side_read_is_refused",
+        mixed_mode_primary_conflict_side_read_is_refused,
+    ),
+    (
+        "worktree_symlink_is_never_followed_during_conflict_side_read",
+        worktree_symlink_is_never_followed_during_conflict_side_read,
+    ),
+    (
+        "context_stage_is_retained_when_primary_conflicts",
+        context_stage_is_retained_when_primary_conflicts,
+    ),
     ("remote_change_during_fetch", remote_change_during_fetch),
     (
         "verified_context_immediate_deletion",
@@ -140,6 +184,63 @@ const CASES: &[ssh_harness::Case] = &[
     (
         "post_accept_persistence_exact_restart",
         post_accept_persistence_exact_restart,
+    ),
+    (
+        "merge_candidate_race_continues_through_appended_publication",
+        merge_candidate_race_continues_through_appended_publication,
+    ),
+    (
+        "merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt",
+        merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt,
+    ),
+    ("merge_candidate_publication_stop_at_settlement", || {
+        merge_candidate_publication_stop(PublicationStop::Settlement)
+    }),
+    ("merge_candidate_publication_stop_at_window_append", || {
+        merge_candidate_publication_stop(PublicationStop::Window)
+    }),
+    ("merge_candidate_continuation_cancel_before_push", || {
+        merge_candidate_continuation_intervention(false)
+    }),
+    (
+        "merge_candidate_continuation_takeover_after_push_return",
+        || merge_candidate_continuation_intervention(true),
+    ),
+    (
+        "merge_candidate_publication_stop_at_stage_observation",
+        || merge_candidate_publication_stop(PublicationStop::Stage),
+    ),
+    ("merge_candidate_publication_stop_at_prepared", || {
+        merge_candidate_publication_stop(PublicationStop::Prepared)
+    }),
+    ("merge_candidate_publication_stop_at_returned", || {
+        merge_candidate_publication_stop(PublicationStop::Returned)
+    }),
+    ("merge_candidate_publication_stop_at_verified", || {
+        merge_candidate_publication_stop(PublicationStop::Verified)
+    }),
+    ("merge_candidate_publication_stop_at_classification", || {
+        merge_candidate_publication_stop(PublicationStop::Classification)
+    }),
+    (
+        "merge_candidate_ambiguous_acceptance_exact_restart",
+        merge_candidate_ambiguous_acceptance_exact_restart,
+    ),
+    (
+        "merge_candidate_accepted_then_advanced_is_contained_without_push",
+        merge_candidate_accepted_then_advanced_is_contained_without_push,
+    ),
+    (
+        "merge_candidate_context_deleted_after_push_is_not_recreated",
+        merge_candidate_context_deleted_after_push_is_not_recreated,
+    ),
+    (
+        "merge_candidate_endpoint_change_fences_continuation",
+        merge_candidate_endpoint_change_fences_continuation,
+    ),
+    (
+        "merge_candidate_push_only_divergence_is_never_inferred_from_fetch",
+        merge_candidate_push_only_divergence_is_never_inferred_from_fetch,
     ),
     (
         "published_index_pending_refresh_only",
@@ -197,10 +298,36 @@ fn push_peer(
     fixture: &SshRemoteFixture,
     reference: &str,
 ) -> Result<(), FixtureError> {
+    // Snapshot the receiver and cursor before sending, not after report-status.
+    // This helper supports one ordinary ref update, never a forced/multi-ref push.
+    let before = fixture.receive_updates().len();
+    let receiver = fixed(git2::Repository::open_bare(fixture.repository_path()))?;
+    let old = match receiver.refname_to_id(reference) {
+        Ok(oid) => oid,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => git2::Oid::zero(),
+        Err(_) => return Err(FixtureError),
+    };
+    let new = fixed(repo.refname_to_id(reference))?;
+    if old == new {
+        // The owned receiver already has this OID. libgit2 can still send an
+        // old==new command, whose audit is not an accepted ref update. Avoid
+        // creating that late no-op record or waiting for nonexistent success.
+        return Ok(());
+    }
     let mut remote = fixed(repo.remote_anonymous(&fixture.url()))?;
     let mut options = git2::PushOptions::new();
     options.remote_callbacks(callbacks(fixture));
-    fixed(remote.push(&[&format!("{reference}:{reference}")], Some(&mut options)))
+    fixed(remote.push(&[&format!("{reference}:{reference}")], Some(&mut options)))?;
+    fixture.fixture_push_transport_returned()?;
+    fixture.wait_for_receive_update(
+        before,
+        &ReceiveUpdate {
+            reference: reference.into(),
+            old_oid: old,
+            new_oid: new,
+            accepted: true,
+        },
+    )
 }
 fn commit(
     repo: &git2::Repository,
@@ -208,9 +335,18 @@ fn commit(
     name: &str,
     bytes: &[u8],
 ) -> Result<git2::Oid, FixtureError> {
+    commit_with_mode(repo, parent, name, bytes, 0o100644)
+}
+fn commit_with_mode(
+    repo: &git2::Repository,
+    parent: git2::Oid,
+    name: &str,
+    bytes: &[u8],
+    mode: i32,
+) -> Result<git2::Oid, FixtureError> {
     let parent = fixed(repo.find_commit(parent))?;
     let mut builder = fixed(repo.treebuilder(Some(&fixed(parent.tree())?)))?;
-    fixed(builder.insert(name, fixed(repo.blob(bytes))?, 0o100644))?;
+    fixed(builder.insert(name, fixed(repo.blob(bytes))?, mode))?;
     let tree = fixed(repo.find_tree(fixed(builder.write())?))?;
     let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
     fixed(repo.commit(None, &sig, &sig, "owned fixture child", &tree, &[&parent]))
@@ -341,6 +477,7 @@ impl World {
             operation_id: OperationId::new(),
             target,
             restart: false,
+            confirmed_identity: None,
             approval: Some(HostApproval {
                 authority: SshAuthority {
                     host: "127.0.0.1".into(),
@@ -406,10 +543,6 @@ impl World {
             }
             _ => return Err(FixtureError),
         };
-        let repo = fixed(git2::Repository::open(&context.worktree))?;
-        let mut index = fixed(repo.index())?;
-        fixed(index.read_tree(&fixed(fixed(repo.head())?.peel_to_tree())?))?;
-        fixed(index.write())?;
         // This is forbidden in synchronization rows/errors, but intentional in
         // discovery context/registry path columns and original Git administration.
         self.paths
@@ -618,8 +751,16 @@ fn context_first_current_fast_forward_local_ahead() -> Result<(), FixtureError> 
     let main_before = primary_image(&w.root)?;
     let first = fixed(repo.refname_to_id(CONTEXT))?;
     let n = w.server.receive_updates().len();
+    // Public save followed immediately by public synchronization, without an
+    // intervening fixture index refresh (01M4GD0KKXW684QBA49F6EX3WE).
+    let synchronized = w.sync(w.context_request());
+    assert!(!matches!(
+        synchronized,
+        Err(SynchronizationError::WorktreeNotClean { .. })
+    ));
+    assert!(synchronized.is_ok(), "{synchronized:?}");
     outcome(
-        fixed(w.sync(w.context_request()))?,
+        fixed(synchronized)?,
         true,
         w.context_request().target,
         first,
@@ -900,17 +1041,21 @@ fn context_dirty_wrong_detached_preservation() -> Result<(), FixtureError> {
 fn primary_divergence_preservation() -> Result<(), FixtureError> {
     let w = World::new()?;
     let repo = w.repo()?;
-    advance(&repo, "refs/heads/main", "local-divergent")?;
-    advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
-    let before = physical(&w.root, &w.root)?;
     let n = w.server.receive_updates().len();
-    assert!(matches!(
-        w.sync(w.primary()),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(physical(&w.root, &w.root)?, before);
-    assert_eq!(w.server.receive_updates().len(), n);
+    let result = fixed(w.sync(w.primary()))?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    let merge = fixed(repo.find_commit(oid))?;
+    assert_eq!(merge.parent_count(), 2);
+    assert_eq!(fixed(merge.parent_id(0))?, local);
+    assert_eq!(fixed(merge.parent_id(1))?, incoming);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
     Ok(())
 }
 fn context_remote_divergence_preservation() -> Result<(), FixtureError> {
@@ -921,7 +1066,7 @@ fn context_virtual_primary_divergence_preservation() -> Result<(), FixtureError>
 }
 fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
     let mut w = World::new()?;
-    let context = w.context()?;
+    let _context = w.context()?;
     fixed(w.sync(w.context_request()))?;
     let server = w.bare()?;
     let base = fixed(server.refname_to_id("refs/heads/main"))?;
@@ -937,19 +1082,311 @@ fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
         let primary = commit(&server, base, "primary-divergent", b"primary-divergent")?;
         fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
     }
-    let before = physical(&w.root, &context.worktree)?;
-    let primary = physical(&w.root, &w.root)?;
+    let primary = if virtual_primary {
+        Some(fixed(server.refname_to_id("refs/heads/main"))?)
+    } else {
+        None
+    };
     let n = w.server.receive_updates().len();
-    assert!(matches!(
-        w.sync(w.context_request()),
-        Err(SynchronizationError::MergeRequired { .. })
-    ));
-    assert_eq!(physical(&w.root, &context.worktree)?, before);
-    assert_eq!(physical(&w.root, &w.root)?, primary);
-    assert_eq!(fixed(w.repo()?.refname_to_id(CONTEXT))?, local);
-    assert_eq!(w.server.receive_updates().len(), n);
+    let result = fixed(w.sync(w.context_request()))?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    let repository = w.repo()?;
+    let merge = fixed(repository.find_commit(oid))?;
+    assert_eq!(merge.parent_count(), 2);
+    assert_eq!(
+        fixed(merge.parent_id(0))?,
+        if virtual_primary { remote } else { local }
+    );
+    assert_eq!(fixed(merge.parent_id(1))?, primary.unwrap_or(remote));
+    assert_eq!(fixed(w.bare()?.refname_to_id(CONTEXT))?, oid);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
     Ok(())
 }
+fn primary_conflict_is_retained_and_inspectable() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local_base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, local_base, "conflict", b"local conflict")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let incoming_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(&w.peer, incoming_base, "conflict", b"incoming conflict")?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    let receives = w.server.receive_updates().len();
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending {
+            operation_id: actual,
+            stage: SynchronizationStage::Primary,
+            ..
+        }) if actual == operation_id
+    ));
+    drop(repo);
+    let mut repo = w.repo()?;
+    assert_eq!(fixed(repo.head())?.target(), Some(local));
+    assert!(fixed(repo.index())?.has_conflicts());
+    let mut merge_heads = Vec::new();
+    fixed(repo.mergehead_foreach(|oid| {
+        merge_heads.push(*oid);
+        true
+    }))?;
+    assert_eq!(merge_heads, vec![incoming]);
+    assert!(fixed(std::fs::read_to_string(w.root.join("conflict")))?.contains("<<<<<<<"));
+    assert_eq!(w.server.receive_updates().len(), receives);
+
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.local_parent, local);
+    assert_eq!(inspection.incoming_parent, incoming);
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(!format!("{inspection:?}").contains("<<<<<<<"));
+    let sides = fixed(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+    )?;
+    assert!(sides.local.is_some() && sides.incoming.is_some());
+    assert!(!format!("{sides:?}").contains("conflict"));
+    fixed(std::fs::write(
+        w.root.join(".manyhands/config.toml"),
+        "format_version = 1\nprimary_branch = \"main\"\n# stale\n",
+    ))?;
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalChange)
+    ));
+    Ok(())
+}
+
+fn binary_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_BINARY_CANARY\0")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_BINARY_CANARY\0",
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("BINARY_CANARY"));
+    Ok(())
+}
+
+fn symlink_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit_with_mode(&repo, base, "fixture.txt", b"LOCAL_LINK_CANARY", 0o120000)?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit_with_mode(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_LINK_CANARY",
+        0o120000,
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("LINK_CANARY"));
+    Ok(())
+}
+
+fn mixed_mode_primary_conflict_side_read_is_refused() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_REGULAR_CANARY\n")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit_with_mode(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_LINK_CANARY",
+        0o120000,
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    assert!(matches!(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+        Err(SynchronizationError::ExternalResolutionRequired { .. })
+    ));
+    assert!(!format!("{inspection:?}").contains("REGULAR_CANARY"));
+    assert!(!format!("{inspection:?}").contains("LINK_CANARY"));
+    Ok(())
+}
+
+fn worktree_symlink_is_never_followed_during_conflict_side_read() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, base, "fixture.txt", b"LOCAL_REGULAR_CANARY\n")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let peer_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(
+        &w.peer,
+        peer_base,
+        "fixture.txt",
+        b"INCOMING_REGULAR_CANARY\n",
+    )?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let request = w.primary();
+    let operation_id = request.operation_id;
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.paths.len(), 1);
+    let sentinel = w.root.join("outside-conflict-canary");
+    fixed(std::fs::write(&sentinel, b"EXTERNAL_SYMLINK_CANARY"))?;
+    let conflict_path = w.root.join("fixture.txt");
+    fixed(std::fs::remove_file(&conflict_path))?;
+    owned_symlink(&sentinel, &conflict_path, false)?;
+    let sides = fixed(
+        w.service
+            .read_synchronization_conflict(&inspection.paths[0].token),
+    )?;
+    assert!(sides.current.is_none());
+    assert!(!format!("{sides:?}").contains("EXTERNAL_SYMLINK_CANARY"));
+    Ok(())
+}
+
+fn context_stage_is_retained_when_primary_conflicts() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let context = w.context()?;
+    fixed(w.sync(w.context_request()))?;
+    let server = w.bare()?;
+    let base = fixed(server.refname_to_id("refs/heads/main"))?;
+    let context_old = fixed(server.refname_to_id(CONTEXT))?;
+    let context_next = commit(&server, context_old, "conflict", b"context side")?;
+    fixed(server.reference(CONTEXT, context_next, true, "fixture"))?;
+    let primary = commit(&server, base, "conflict", b"primary side")?;
+    fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
+    let request = w.context_request();
+    let operation_id = request.operation_id;
+    let receives = w.server.receive_updates().len();
+    assert!(matches!(
+        w.sync(request),
+        Err(SynchronizationError::ConflictPending {
+            operation_id: actual,
+            stage: SynchronizationStage::Primary,
+            ..
+        }) if actual == operation_id
+    ));
+    let repository = w.repo()?;
+    assert_eq!(fixed(repository.refname_to_id(CONTEXT))?, context_next);
+    let context_repo = fixed(git2::Repository::open(&context.worktree))?;
+    assert_eq!(fixed(context_repo.head())?.target(), Some(context_next));
+    assert!(fixed(context_repo.index())?.has_conflicts());
+    assert!(fixed(std::fs::read_to_string(context.worktree.join("conflict")))?.contains("<<<<<<<"));
+    assert_eq!(w.server.receive_updates().len(), receives);
+    let inspection = fixed(
+        w.service
+            .inspect_synchronization_recovery(&w.root, operation_id),
+    )?;
+    assert_eq!(inspection.stage, SynchronizationStage::Primary);
+    assert_eq!(inspection.local_parent, context_next);
+    assert_eq!(inspection.incoming_parent, primary);
+    Ok(())
+}
+
 fn remote_change_during_fetch() -> Result<(), FixtureError> {
     let w = World::new()?;
     let bare_path = w.server.repository_path().to_owned();
@@ -1127,6 +1564,968 @@ fn acceptance_restart(disconnect: bool) -> Result<(), FixtureError> {
     );
     w.privacy()?;
     fixed(diagnostic.execute_batch("ROLLBACK"))?;
+    Ok(())
+}
+type AttemptRow = (
+    i64,
+    String,
+    Option<String>,
+    String,
+    Option<i64>,
+    Option<String>,
+    String,
+);
+fn publication_attempts(w: &World) -> Result<Vec<AttemptRow>, FixtureError> {
+    let db = w.db()?;
+    let mut statement = fixed(db.prepare("SELECT number,previous_oid,previous_advertised_oid,previous_disposition,window_number,candidate_oid,phase FROM remote_publication_attempts ORDER BY number"))?;
+    let rows = fixed(statement.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        ))
+    }))?;
+    fixed(rows.collect::<Result<Vec<_>, _>>())
+}
+/// sync_checkpoint, local_oid, push_oid, authoritative_oid.
+type LegacyPush = (String, Option<String>, Option<String>, Option<String>);
+/// The legacy envelope's checkpoint, local OID and Push intent columns.
+fn legacy_push(w: &World, operation: OperationId) -> Result<LegacyPush, FixtureError> {
+    fixed(w.db()?.query_row(
+        "SELECT sync_checkpoint,local_oid,push_oid,authoritative_oid FROM remote_operation_records WHERE operation_ulid=?1",
+        [operation.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ))
+}
+fn merge_commits(repo: &git2::Repository) -> Result<usize, FixtureError> {
+    let mut count = 0;
+    for oid in commit_inventory(repo)? {
+        if fixed(repo.find_commit(oid))?.parent_count() == 2 {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+fn parents(repo: &git2::Repository, oid: git2::Oid) -> Result<Vec<git2::Oid>, FixtureError> {
+    Ok(fixed(repo.find_commit(oid))?.parent_ids().collect())
+}
+/// A merge candidate loses the receive race twice. Each deliberate invocation
+/// reconciles the newest immutable Push intent first, integrates exactly one
+/// new window, makes exactly one push attempt and never regenerates, resets or
+/// force-pushes an earlier merge. The legacy intent is never overwritten.
+fn merge_candidate_race_continues_through_appended_publication() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let first_race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, first_race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, first_race);
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), n + 1);
+    assert_eq!(
+        updates[n],
+        ReceiveUpdate {
+            reference: "refs/heads/main".into(),
+            old_oid: incoming,
+            new_oid: merged,
+            accepted: false
+        }
+    );
+    let legacy = legacy_push(&w, req.operation_id)?;
+    assert_eq!(
+        legacy,
+        (
+            "push_prepared".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            None
+        )
+    );
+    assert!(publication_attempts(&w)?.is_empty());
+    assert_eq!(merge_commits(&repo)?, 1);
+    // An ordinary duplicate is typed Recovery with no network or local effect.
+    let before = physical(&w.root, &w.root)?;
+    let auth = w.server.accepted_keys().len();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(w.server.accepted_keys().len(), auth);
+    assert_eq!(physical(&w.root, &w.root)?, before);
+    // First deliberate retry: the continuation itself loses another race.
+    let mut restart = req.clone();
+    restart.restart = true;
+    let advertisements = w.server.receive_advertisements();
+    let second_race = commit(&server, first_race, "race-two", b"race-two")?;
+    w.server.race_primary_update(first_race, second_race)?;
+    assert!(matches!(
+        w.sync(restart.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let continued = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, continued)?, [merged, first_race]);
+    assert_eq!(merge_commits(&repo)?, 2);
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, second_race);
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), n + 2);
+    assert_eq!(
+        updates[n + 1],
+        ReceiveUpdate {
+            reference: "refs/heads/main".into(),
+            old_oid: first_race,
+            new_oid: continued,
+            accepted: false
+        }
+    );
+    // Bounded: this invocation observed the Push endpoint, but no
+    // refetch/merge/push loop chased the racing remote (compared below with
+    // the single successful pass, which additionally verifies its push).
+    let raced_advertisements = w.server.receive_advertisements() - advertisements;
+    assert!(raced_advertisements > 0);
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![(
+            1,
+            merged.to_string(),
+            Some(first_race.to_string()),
+            "displaced".into(),
+            Some(2),
+            Some(continued.to_string()),
+            "prepared".into()
+        )]
+    );
+    assert!(fixed(repo.statuses(None))?.is_empty());
+    // Second deliberate retry: reconcile attempt 1, append attempt 2, publish.
+    let advertisements = w.server.receive_advertisements();
+    let result = fixed(w.sync(restart.clone()))?;
+    assert!(raced_advertisements <= w.server.receive_advertisements() - advertisements);
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(parents(&repo, oid)?, [continued, second_race]);
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(merge_commits(&repo)?, 3);
+    one_update(&w.server, n + 2, "refs/heads/main", second_race, oid);
+    assert_eq!(
+        legacy_push(&w, req.operation_id)?,
+        (
+            "discovery_pending".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(oid.to_string())
+        )
+    );
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![
+            (
+                1,
+                merged.to_string(),
+                Some(first_race.to_string()),
+                "displaced".into(),
+                Some(2),
+                Some(continued.to_string()),
+                "prepared".into()
+            ),
+            (
+                2,
+                continued.to_string(),
+                Some(second_race.to_string()),
+                "displaced".into(),
+                Some(3),
+                Some(oid.to_string()),
+                "verified".into()
+            )
+        ]
+    );
+    let steps: Vec<(i64, String, String)> = {
+        let db = w.db()?;
+        let mut statement = fixed(db.prepare(
+            "SELECT window_number,phase,result_oid FROM remote_integration_steps ORDER BY window_number",
+        ))?;
+        let rows =
+            fixed(statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))?;
+        fixed(rows.collect::<Result<Vec<_>, _>>())?
+    };
+    assert_eq!(
+        steps,
+        vec![
+            (1, "applied".into(), merged.to_string()),
+            (2, "applied".into(), continued.to_string()),
+            (3, "applied".into(), oid.to_string())
+        ]
+    );
+    w.privacy()?;
+    // Authority replays without transport, integration or another push.
+    let auth = w.server.accepted_keys().len();
+    outcome(
+        fixed(w.sync(req.clone()))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    outcome(
+        fixed(w.sync(restart))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    assert_eq!(w.server.accepted_keys().len(), auth);
+    assert_eq!(w.server.receive_updates().len(), n + 3);
+    assert_eq!(merge_commits(&repo)?, 3);
+    Ok(())
+}
+/// The continuation's own push is accepted but its status never arrives. The
+/// next invocation proves it from the Push advertisement and verifies that
+/// same attempt: no second attempt row, no second push, no further merge.
+fn merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    assert!(w.sync(restart.clone()).is_err());
+    assert!(w.server.receive_status_withheld());
+    w.server.clear_fault();
+    let continued = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, continued)?, [merged, race]);
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        continued
+    );
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), n + 2);
+    assert_eq!(
+        updates[n + 1],
+        ReceiveUpdate {
+            reference: "refs/heads/main".into(),
+            old_oid: race,
+            new_oid: continued,
+            accepted: true
+        }
+    );
+    let pending = publication_attempts(&w)?;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].5, Some(continued.to_string()));
+    assert_ne!(pending[0].6, "verified");
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    let before = physical(&w.root, &w.root)?;
+    let commits = commit_inventory(&w.bare()?)?;
+    outcome(
+        fixed(w.sync(restart))?,
+        true,
+        SynchronizationTarget::Primary,
+        continued,
+    );
+    assert_eq!(w.server.receive_updates().len(), n + 2);
+    assert_eq!(commit_inventory(&w.bare()?)?, commits);
+    assert_eq!(physical(&w.root, &w.root)?, before);
+    assert_eq!(merge_commits(&repo)?, 2);
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![(
+            1,
+            merged.to_string(),
+            Some(race.to_string()),
+            "displaced".into(),
+            Some(2),
+            Some(continued.to_string()),
+            "verified".into()
+        )]
+    );
+    assert_eq!(
+        legacy_push(&w, req.operation_id)?,
+        (
+            "discovery_pending".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(continued.to_string())
+        )
+    );
+    Ok(())
+}
+/// Every durable integration and publication evidence row together with the
+/// legacy envelope's checkpoint and Push columns, as one fixed-size digest.
+fn recorded_evidence(w: &World, operation: OperationId) -> Result<[u8; 32], FixtureError> {
+    let db = w.db()?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(format!("{:?}", legacy_push(w, operation)?).as_bytes());
+    for table in [
+        "remote_integration_windows",
+        "remote_integration_steps",
+        "remote_integration_merge_metadata",
+        "remote_publication_attempts",
+        "remote_observation_batches",
+        "remote_ref_observations",
+    ] {
+        let mut statement = fixed(db.prepare(&format!("SELECT * FROM {table} ORDER BY 1,2")))?;
+        let columns = statement.column_count();
+        let mut rows = fixed(statement.query([]))?;
+        hash.update(table.as_bytes());
+        while let Some(row) = fixed(rows.next())? {
+            for column in 0..columns {
+                hash.update(format!(" {:?}", fixed(row.get_ref(column))?).as_bytes());
+            }
+            hash.update(b"\n");
+        }
+    }
+    Ok(*hash.finalize().as_bytes())
+}
+/// HEAD and primary-branch ref logs of the local clone, as one digest.
+fn ref_logs(repo: &git2::Repository) -> Result<[u8; 32], FixtureError> {
+    let mut hash = blake3::Hasher::new();
+    for name in ["logs/HEAD", "logs/refs/heads/main"] {
+        hash.update(&fixed(std::fs::read(repo.path().join(name)))?);
+        hash.update(&[0]);
+    }
+    Ok(*hash.finalize().as_bytes())
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PublicationStop {
+    Settlement,
+    Window,
+    Stage,
+    Prepared,
+    Returned,
+    Verified,
+    Classification,
+}
+/// The continuation of a displaced merge candidate stops at one durable
+/// transition of its publication attempt: the settlement that opens it, the
+/// append of the continuation's window, the observation of its merge stage,
+/// then `prepared`, `returned`, `verified`, and the classification that follows.
+/// Deliberate restarts with no network then leave every evidence row, ref, ref
+/// log, index and worktree byte exactly as the stop left them. Once the
+/// network is back, one restart converges on a single published continuation:
+/// one merge of the recorded parents, one accepted push, one attempt row.
+fn merge_candidate_publication_stop(stop: PublicationStop) -> Result<(), FixtureError> {
+    use PublicationStop as Stop;
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    let db = w.db()?;
+    fixed(db.execute_batch(match stop {
+        Stop::Settlement => "CREATE TRIGGER publication_stop BEFORE INSERT ON remote_publication_attempts BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Window => "CREATE TRIGGER publication_stop BEFORE INSERT ON remote_integration_windows WHEN NEW.number=2 BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Stage => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_integration_steps WHEN NEW.phase='applied' AND NEW.window_number=2 BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Prepared => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='prepared' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Returned => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='returned' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Verified => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_publication_attempts WHEN NEW.phase='verified' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+        Stop::Classification => "CREATE TRIGGER publication_stop BEFORE UPDATE ON remote_operation_records WHEN NEW.sync_checkpoint='discovery_pending' BEGIN SELECT RAISE(ABORT,'fixed failure'); END",
+    }))?;
+    assert!(matches!(
+        w.sync(restart.clone()),
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    fixed(db.execute_batch("DROP TRIGGER publication_stop"))?;
+    // Exactly the effects that precede the stopped transition exist.
+    let pushed = matches!(stop, Stop::Returned | Stop::Verified | Stop::Classification);
+    let stopped_head = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let stopped = publication_attempts(&w)?;
+    if matches!(stop, Stop::Settlement | Stop::Window) {
+        // No continuation merge exists yet; the window stop already settled.
+        assert_eq!(stopped.len(), usize::from(stop == Stop::Window));
+        if let Some(open) = stopped.first() {
+            assert_eq!((open.5.as_deref(), open.6.as_str()), (None, "open"));
+        }
+        assert_eq!(stopped_head, merged);
+        assert_eq!(merge_commits(&repo)?, 1);
+    } else {
+        assert_eq!(parents(&repo, stopped_head)?, [merged, race]);
+        assert_eq!(merge_commits(&repo)?, 2);
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(
+            stopped[0].6,
+            match stop {
+                Stop::Stage | Stop::Prepared => "open",
+                Stop::Returned => "prepared",
+                Stop::Verified => "returned",
+                _ => "verified",
+            }
+        );
+        assert_eq!(
+            stopped[0].5,
+            (!matches!(stop, Stop::Stage | Stop::Prepared)).then(|| stopped_head.to_string())
+        );
+    }
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        if pushed { stopped_head } else { race }
+    );
+    assert_eq!(
+        w.server.receive_updates().len(),
+        n + 1 + usize::from(pushed)
+    );
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    // No network: each restart is a new process that reaches the same state.
+    let mut evidence = recorded_evidence(&w, req.operation_id)?;
+    let before = physical(&w.root, &w.root)?;
+    let logs = ref_logs(&repo)?;
+    let commits = commit_inventory(&w.bare()?)?;
+    let local_commits = commit_inventory(&repo)?;
+    let updates = w.server.receive_updates();
+    w.server.disconnect_at(FixtureBoundary::Handshake);
+    for round in 0..3 {
+        let offline = fixed(RepositoryService::open_at(&w.data()))?;
+        assert!(matches!(
+            offline.synchronize_remote(restart.clone(), &mut SessionCredentials::new(Provider)),
+            Err(SynchronizationError::Transport(_))
+        ));
+        let recorded = recorded_evidence(&w, req.operation_id)?;
+        if stop == Stop::Stage && round == 0 {
+            // Local-first: the first restart records the stage effect that
+            // already happened, without the network and without touching Git.
+            assert!(recorded != evidence);
+            evidence = recorded;
+        }
+        assert!(recorded == evidence);
+        assert!(physical(&w.root, &w.root)? == before);
+        assert!(ref_logs(&repo)? == logs);
+        assert_eq!(commit_inventory(&repo)?, local_commits);
+        assert_eq!(commit_inventory(&w.bare()?)?, commits);
+        assert_eq!(w.server.receive_updates(), updates);
+    }
+    w.server.clear_fault();
+    w.privacy()?;
+    let online = fixed(RepositoryService::open_at(&w.data()))?;
+    let result =
+        fixed(online.synchronize_remote(restart.clone(), &mut SessionCredentials::new(Provider)))?;
+    ssh_privacy::clean(format!("{result:?}").as_bytes(), &w.probes)?;
+    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(parents(&repo, oid)?, [merged, race]);
+    if !matches!(stop, Stop::Settlement | Stop::Window) {
+        // The stopped continuation is published as it was, never regenerated.
+        assert_eq!(oid, stopped_head);
+        assert!(ref_logs(&repo)? == logs);
+    }
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(merge_commits(&repo)?, 2);
+    // One push of the continuation in total, across the stop and the restarts.
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), n + 2);
+    assert_eq!(
+        updates[n + 1],
+        ReceiveUpdate {
+            reference: "refs/heads/main".into(),
+            old_oid: race,
+            new_oid: oid,
+            accepted: true
+        }
+    );
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![(
+            1,
+            merged.to_string(),
+            Some(race.to_string()),
+            "displaced".into(),
+            Some(2),
+            Some(oid.to_string()),
+            "verified".into()
+        )]
+    );
+    assert_eq!(
+        legacy_push(&w, req.operation_id)?,
+        (
+            "discovery_pending".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(oid.to_string())
+        )
+    );
+    let steps: Vec<(i64, String, String)> = {
+        let mut statement = fixed(db.prepare(
+            "SELECT window_number,phase,result_oid FROM remote_integration_steps ORDER BY window_number",
+        ))?;
+        let rows =
+            fixed(statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))?;
+        fixed(rows.collect::<Result<Vec<_>, _>>())?
+    };
+    assert_eq!(
+        steps,
+        vec![
+            (1, "applied".into(), merged.to_string()),
+            (2, "applied".into(), oid.to_string())
+        ]
+    );
+    w.privacy()?;
+    // Authority replays without transport, integration or another push.
+    let auth = w.server.accepted_keys().len();
+    outcome(
+        fixed(w.sync(req.clone()))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    outcome(
+        fixed(w.sync(restart))?,
+        true,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    assert_eq!(w.server.accepted_keys().len(), auth);
+    assert_eq!(w.server.receive_updates().len(), n + 2);
+    assert_eq!(merge_commits(&repo)?, 2);
+    Ok(())
+}
+/// A second party intervenes on the attempt route of the public entry point.
+/// A cancellation that becomes durable with the attempt's push intent is
+/// honoured at the BeforePush boundary: nothing is pushed and, with no
+/// conflict pending, the operation is terminal as in Cycle 05. A takeover that
+/// becomes durable with the returned push fences the old owner at the
+/// AfterPushReturn boundary; the next deliberate restart proves that one push
+/// from the Push advertisement and verifies the same attempt. A trigger cannot
+/// run a second service, so each intervention is its durable effect.
+fn merge_candidate_continuation_intervention(takeover: bool) -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    let db = w.db()?;
+    fixed(db.execute_batch(if takeover {
+        "CREATE TRIGGER intervention AFTER UPDATE ON remote_publication_attempts WHEN NEW.phase='returned' BEGIN UPDATE remote_operation_records SET owner_epoch=owner_epoch+1; END"
+    } else {
+        "CREATE TRIGGER intervention AFTER UPDATE ON remote_publication_attempts WHEN NEW.phase='prepared' BEGIN UPDATE remote_operation_records SET cancel_requested=1; END"
+    }))?;
+    let stopped = w.sync(restart.clone());
+    fixed(db.execute_batch("DROP TRIGGER intervention"))?;
+    let continued = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, continued)?, [merged, race]);
+    let attempts = publication_attempts(&w)?;
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].5, Some(continued.to_string()));
+    assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+    let before = physical(&w.root, &w.root)?;
+    if !takeover {
+        assert!(matches!(stopped, Err(SynchronizationError::Interrupted)));
+        assert_eq!(attempts[0].6, "prepared");
+        // Nothing was pushed, and the same ID only replays the interruption.
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, race);
+        let auth = w.server.accepted_keys().len();
+        for _ in 0..2 {
+            assert!(matches!(
+                w.sync(restart.clone()),
+                Err(SynchronizationError::Interrupted)
+            ));
+        }
+        assert_eq!(w.server.accepted_keys().len(), auth);
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert_eq!(publication_attempts(&w)?, attempts);
+        assert!(physical(&w.root, &w.root)? == before);
+        assert_eq!(merge_commits(&repo)?, 2);
+        return Ok(());
+    }
+    assert!(matches!(
+        stopped,
+        Err(SynchronizationError::Repository(RepositoryError {
+            kind: RepositoryErrorKind::RecoveryRequired,
+            ..
+        }))
+    ));
+    // The push happened once; the fenced owner recorded nothing after it.
+    assert_eq!(attempts[0].6, "returned");
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        continued
+    );
+    one_update(&w.server, n + 1, "refs/heads/main", race, continued);
+    let later = fixed(RepositoryService::open_at(&w.data()))?;
+    let result = fixed(later.synchronize_remote(restart, &mut SessionCredentials::new(Provider)))?;
+    ssh_privacy::clean(format!("{result:?}").as_bytes(), &w.probes)?;
+    w.privacy()?;
+    outcome(result, true, SynchronizationTarget::Primary, continued);
+    assert_eq!(w.server.receive_updates().len(), n + 2);
+    assert_eq!(merge_commits(&repo)?, 2);
+    assert!(physical(&w.root, &w.root)? == before);
+    let verified = publication_attempts(&w)?;
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0].6, "verified");
+    assert_eq!(verified[0].5, Some(continued.to_string()));
+    Ok(())
+}
+/// Ambiguous acceptance of a MERGE candidate: the receiver took the push but
+/// the status never arrived. Restart proves it from the Push advertisement and
+/// neither pushes again nor makes another merge or publication attempt.
+fn merge_candidate_ambiguous_acceptance_exact_restart() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    assert!(w.sync(req.clone()).is_err());
+    assert!(w.server.receive_status_withheld());
+    w.server.clear_fault();
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, merged);
+    one_update(&w.server, n, "refs/heads/main", incoming, merged);
+    let before = physical(&w.root, &w.root)?;
+    let commits = commit_inventory(&w.bare()?)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    outcome(
+        fixed(w.sync(restart))?,
+        true,
+        SynchronizationTarget::Primary,
+        merged,
+    );
+    assert_eq!(w.server.receive_updates().len(), n + 1);
+    assert_eq!(commit_inventory(&w.bare()?)?, commits);
+    assert_eq!(physical(&w.root, &w.root)?, before);
+    assert_eq!(merge_commits(&repo)?, 1);
+    assert!(publication_attempts(&w)?.is_empty());
+    assert_eq!(
+        legacy_push(&w, req.operation_id)?,
+        (
+            "discovery_pending".into(),
+            Some(merged.to_string()),
+            Some(merged.to_string()),
+            Some(merged.to_string())
+        )
+    );
+    Ok(())
+}
+/// The ambiguous merge push was accepted and another writer then built on it.
+/// The old intent is recorded as contained; the continuation fast-forwards to
+/// the advertised descendant and is already current without any push.
+fn merge_candidate_accepted_then_advanced_is_contained_without_push() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    assert!(w.sync(req.clone()).is_err());
+    w.server.clear_fault();
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    let server = w.bare()?;
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, merged);
+    let ahead = commit(&server, merged, "after-accept", b"after-accept")?;
+    fixed(server.reference("refs/heads/main", ahead, true, "fixture"))?;
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    outcome(
+        fixed(w.sync(restart))?,
+        false,
+        SynchronizationTarget::Primary,
+        ahead,
+    );
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, ahead);
+    assert!(fixed(repo.statuses(None))?.is_empty());
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, ahead);
+    assert_eq!(w.server.receive_updates().len(), n + 1);
+    assert_eq!(merge_commits(&repo)?, 1);
+    assert_eq!(
+        publication_attempts(&w)?,
+        vec![(
+            1,
+            merged.to_string(),
+            Some(ahead.to_string()),
+            "contained".into(),
+            Some(2),
+            Some(ahead.to_string()),
+            "verified".into()
+        )]
+    );
+    let after = legacy_push(&w, req.operation_id)?;
+    assert_eq!((&after.1, &after.2), (&legacy.1, &legacy.2));
+    assert_eq!(after.3, Some(ahead.to_string()));
+    Ok(())
+}
+/// A context merge candidate was pushed ambiguously and the remote context was
+/// then deleted. Publication never recreates it: typed error, merge intact,
+/// no push, no appended attempt.
+fn merge_candidate_context_deleted_after_push_is_not_recreated() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let context = w.context()?;
+    fixed(w.sync(w.context_request()))?;
+    let server = w.bare()?;
+    let base = fixed(server.refname_to_id("refs/heads/main"))?;
+    let local = fixed(server.refname_to_id(CONTEXT))?;
+    let remote = commit(&server, base, "remote-context", b"remote-context")?;
+    fixed(server.reference(CONTEXT, remote, true, "fixture"))?;
+    let n = w.server.receive_updates().len();
+    let req = w.context_request();
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    assert!(w.sync(req.clone()).is_err());
+    w.server.clear_fault();
+    let repository = w.repo()?;
+    let merged = fixed(repository.refname_to_id(CONTEXT))?;
+    assert_eq!(parents(&repository, merged)?, [local, remote]);
+    one_update(&w.server, n, CONTEXT, remote, merged);
+    fixed(fixed(w.bare()?.find_reference(CONTEXT))?.delete())?;
+    let before = physical(&w.root, &context.worktree)?;
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    for _ in 0..2 {
+        assert!(matches!(
+            w.sync(restart.clone()),
+            Err(SynchronizationError::RemoteContextDeleted)
+        ));
+        assert_eq!(physical(&w.root, &context.worktree)?, before);
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert!(w.bare()?.find_reference(CONTEXT).is_err());
+        assert!(publication_attempts(&w)?.is_empty());
+        assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+        assert_eq!(fixed(repository.refname_to_id(CONTEXT))?, merged);
+    }
+    Ok(())
+}
+/// After a merge candidate's Push intent, the publication endpoint changes.
+/// The old generation's intent is never reconciled against, or continued on,
+/// a different endpoint.
+fn merge_candidate_endpoint_change_fences_continuation() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let repo = w.repo()?;
+    let server = w.bare()?;
+    // Trust a second destination up front, so that a later switch to it could
+    // only be refused by the configuration-generation fence.
+    let destination = SshRemoteFixture::start()?;
+    destination.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &w.server.allowed_client_public_key(),
+    ))?);
+    w.probes.push(destination.url().into_bytes());
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    fixed(w.service.verify_ssh_transport(
+        VerifySshTransportRequest {
+            root: w.root.clone(),
+            direction: SshDirection::Push,
+            approval: Some(HostApproval {
+                authority: SshAuthority {
+                    host: "127.0.0.1".into(),
+                    port: destination.address().port(),
+                },
+                expected: None,
+                presented: destination.host_identity(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    fixed(repo.remote_set_pushurl("origin", None))?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let race = commit(&server, incoming, "race-one", b"race-one")?;
+    w.server.race_primary_update(incoming, race)?;
+    let n = w.server.receive_updates().len();
+    let req = w.primary();
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let before = physical(&w.root, &w.root)?;
+    let legacy = legacy_push(&w, req.operation_id)?;
+    let authenticated = destination.accepted_keys().len();
+    let mut restart = req.clone();
+    restart.restart = true;
+    for _ in 0..2 {
+        // The generation fence itself: a fenced owner, never a transport,
+        // host-approval or push outcome.
+        assert!(matches!(
+            w.sync(restart.clone()),
+            Err(SynchronizationError::Repository(error))
+                if error.kind == RepositoryErrorKind::RecoveryRequired
+        ));
+        // Refused before any connection: the already trusted destination saw
+        // no authentication, so this is the fence and not a transport failure.
+        assert_eq!(destination.accepted_keys().len(), authenticated);
+        let generations: (i64, i64) = fixed(w.db()?.query_row(
+            "SELECT (SELECT configuration_generation FROM remote_operation_records WHERE operation_ulid=?1),(SELECT configuration_generation FROM remote_polling_state)",
+            [req.operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ))?;
+        assert!(generations.0 < generations.1);
+        assert_eq!(physical(&w.root, &w.root)?, before);
+        assert_eq!(w.server.receive_updates().len(), n + 1);
+        assert!(destination.receive_updates().is_empty());
+        assert!(publication_attempts(&w)?.is_empty());
+        assert_eq!(legacy_push(&w, req.operation_id)?, legacy);
+        assert_eq!(merge_commits(&repo)?, 1);
+    }
+    Ok(())
+}
+/// Fetch and Push are distinct endpoints. A merge candidate built from the
+/// Fetch tip is refused by a Push endpoint holding push-only history; that
+/// history is downloaded for ancestry only and is never merged, and no retry
+/// regenerates the merge or infers that the two endpoints agree.
+fn merge_candidate_push_only_divergence_is_never_inferred_from_fetch() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let destination = SshRemoteFixture::start()?;
+    destination.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &w.server.allowed_client_public_key(),
+    ))?);
+    let repo = w.repo()?;
+    let push = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+    let source_odb = fixed(repo.odb())?;
+    let target_odb = fixed(push.odb())?;
+    let mut objects = Vec::new();
+    fixed(source_odb.foreach(|oid| {
+        objects.push(*oid);
+        true
+    }))?;
+    for oid in objects {
+        let object = fixed(source_odb.read(oid))?;
+        assert_eq!(fixed(target_odb.write(object.kind(), object.data()))?, oid);
+    }
+    let base = w.server.commit_id();
+    fixed(push.reference("refs/heads/main", base, true, "owned shared ancestry"))?;
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    w.probes.push(destination.url().into_bytes());
+    fixed(w.service.verify_ssh_transport(
+        VerifySshTransportRequest {
+            root: w.root.clone(),
+            direction: SshDirection::Fetch,
+            approval: w.primary().approval,
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    fixed(w.service.verify_ssh_transport(
+        VerifySshTransportRequest {
+            root: w.root.clone(),
+            direction: SshDirection::Push,
+            approval: Some(HostApproval {
+                authority: SshAuthority {
+                    host: "127.0.0.1".into(),
+                    port: destination.address().port(),
+                },
+                expected: None,
+                presented: destination.host_identity(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
+    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let push_only = commit(&push, base, "push-only", b"push-only")?;
+    fixed(push.reference("refs/heads/main", push_only, true, "fixture"))?;
+    assert!(repo.find_commit(push_only).is_err());
+    let fetch_updates = w.server.receive_updates().len();
+    let mut req = w.primary();
+    req.approval = None;
+    assert!(matches!(
+        w.sync(req.clone()),
+        Err(SynchronizationError::PushRejected)
+    ));
+    let merged = fixed(repo.refname_to_id("refs/heads/main"))?;
+    assert_eq!(parents(&repo, merged)?, [local, incoming]);
+    assert!(repo.find_commit(push_only).is_ok());
+    assert!(!fixed(repo.graph_descendant_of(merged, push_only))?);
+    let before = physical(&w.root, &w.root)?;
+    let mut restart = req.clone();
+    restart.restart = true;
+    for _ in 0..2 {
+        assert!(matches!(
+            w.sync(restart.clone()),
+            Err(SynchronizationError::PushRejected)
+        ));
+        assert_eq!(physical(&w.root, &w.root)?, before);
+        assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, merged);
+        assert_eq!(merge_commits(&repo)?, 1);
+        assert!(destination.receive_updates().is_empty());
+        assert_eq!(w.server.receive_updates().len(), fetch_updates);
+        assert_eq!(fixed(push.refname_to_id("refs/heads/main"))?, push_only);
+        assert_eq!(
+            fixed(repo.refname_to_id("refs/remotes/origin/main"))?,
+            incoming
+        );
+        assert!(publication_attempts(&w)?.is_empty());
+        assert_eq!(
+            fixed(
+                w.db()?
+                    .query_row("SELECT count(*) FROM remote_integration_steps", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+            )?,
+            1
+        );
+    }
+    w.privacy()?;
     Ok(())
 }
 fn published_index_pending_refresh_only() -> Result<(), FixtureError> {
@@ -1679,5 +3078,179 @@ fn ignored_noncolliding(context: bool) -> Result<(), FixtureError> {
     );
     assert!(fixed(std::fs::read(workdir.join("safety-control")))? == BODY.as_bytes());
     assert_eq!(w.server.receive_updates(), updates);
+    Ok(())
+}
+
+fn fixture_push_waits_for_receiver_receipt(duplicate: bool) -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let reference = "refs/heads/main";
+    persistent_ignore(&repo)?;
+    fixed(std::fs::write(
+        w.root.join("safety-control"),
+        BODY.as_bytes(),
+    ))?;
+    let before = w.server.receive_updates();
+    let old = if duplicate {
+        // Re-send the same old/new pair as the setup push. Its earlier receipt
+        // must not satisfy the new push's wait.
+        let old = w.server.commit_id();
+        fixed(
+            w.bare()?
+                .reference(reference, old, true, "owned duplicate receipt"),
+        )?;
+        old
+    } else {
+        fixed(repo.refname_to_id(reference))?
+    };
+    let (w, next) = fixture_push_with_audit_controller(w, old, duplicate, || Ok(()))?;
+    let updates = w.server.receive_updates();
+    assert!(updates.len() == before.len() + 1, "exactly one new receipt");
+    assert!(
+        updates.last()
+            == Some(&ReceiveUpdate {
+                reference: reference.into(),
+                old_oid: old,
+                new_oid: next,
+                accepted: true,
+            }),
+        "exact accepted receiver receipt"
+    );
+    outcome(
+        fixed(w.sync(w.primary()))?,
+        false,
+        SynchronizationTarget::Primary,
+        next,
+    );
+    assert_eq!(fixed(repo.refname_to_id(reference))?, next);
+    assert_eq!(
+        fixed(fixed(repo.index())?.write_tree())?,
+        fixed(repo.find_commit(next))?.tree_id()
+    );
+    assert!(fixed(std::fs::read(w.root.join("safety-control")))? == BODY.as_bytes());
+    assert_eq!(w.server.receive_updates(), updates);
+    Ok(())
+}
+
+fn fixture_push_with_audit_controller(
+    w: World,
+    old: git2::Oid,
+    duplicate: bool,
+    after_held: impl FnOnce() -> Result<(), FixtureError>,
+) -> Result<(World, git2::Oid), FixtureError> {
+    use std::{sync::mpsc, time::Duration};
+    let reference = "refs/heads/main";
+    let (events, progress) = mpsc::channel();
+    std::thread::scope(|scope| {
+        // Keep the hold inside the scope closure: every error and unwind drops it
+        // before scope auto-joins the worker. A cancelled controller must not detach
+        // the World owner or join while its receipt publication is still held.
+        let hold = w.server.hold_receive_audit(events.clone())?;
+        let worker = scope.spawn(move || {
+            let result = if duplicate {
+                push_peer(&w.peer, &w.server, reference)
+                    .and_then(|()| fixed(w.peer.refname_to_id(reference)))
+            } else {
+                incoming_owned_paths(&w, old, reference, false)
+            };
+            let _ = events.send(ReceiveAuditEvent::HelperReturned);
+            (w, result)
+        });
+        let mut held = false;
+        let mut transport_returned = false;
+        let mut receipt_waiting = false;
+        while !(held && transport_returned && receipt_waiting) {
+            match fixed(progress.recv_timeout(Duration::from_secs(10)))? {
+                ReceiveAuditEvent::PublicationHeld => held = true,
+                ReceiveAuditEvent::TransportReturned => transport_returned = true,
+                ReceiveAuditEvent::ReceiptWaiting => receipt_waiting = true,
+                ReceiveAuditEvent::HelperReturned => {
+                    panic!("fixture push returned before receiver receipt publication")
+                }
+            }
+        }
+        // No timing sleep: the real report-status returned, the ref effect is proven,
+        // and the helper acknowledged waiting for evidence still held by this gate.
+        after_held()?;
+        hold.release()?;
+        let (w, next) = fixed(worker.join())?;
+        Ok((w, next?))
+    })
+}
+
+fn fixture_receiver_controller_cleanup(unwind: bool) -> Result<(), FixtureError> {
+    use std::{panic::AssertUnwindSafe, sync::mpsc, time::Duration};
+    let w = World::new()?;
+    let old = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let roots = [
+        w.directory.path().to_path_buf(),
+        w.server.root().to_path_buf(),
+    ];
+    let reached = std::sync::atomic::AtomicBool::new(false);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        fixture_push_with_audit_controller(w, old, false, || {
+            reached.store(true, Ordering::SeqCst);
+            if unwind {
+                panic!("forced receiver audit controller unwind");
+            }
+            // A live sender with no message makes this controller timeout exact;
+            // it does not change the transport or receipt-wait deadlines.
+            let (_sender, receiver) = mpsc::channel::<()>();
+            fixed(receiver.recv_timeout(Duration::ZERO))
+        })
+    }));
+    assert!(reached.load(Ordering::SeqCst), "publication gate reached");
+    assert!(
+        if unwind {
+            result.is_err()
+        } else {
+            matches!(result, Ok(Err(FixtureError)))
+        },
+        "forced controller failure observed"
+    );
+    assert!(
+        roots.iter().all(|root| !root.exists()),
+        "worker joined and fixture teardown finished before controller exit"
+    );
+    Ok(())
+}
+
+fn fixture_noop_push() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let before = w.server.receive_updates();
+    let oid = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    outcome(
+        fixed(w.sync(w.primary()))?,
+        false,
+        SynchronizationTarget::Primary,
+        oid,
+    );
+    assert_eq!(w.server.receive_updates(), before);
+    Ok(())
+}
+
+fn fixture_rejected_push() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let reference = "refs/heads/main";
+    let before = w.server.receive_updates().len();
+    let old = fixed(w.bare()?.refname_to_id(reference))?;
+    let new = advance(&w.peer, reference, "owned-rejected-update")?;
+    w.server.reject_primary_updates(true)?;
+    assert!(
+        push_peer(&w.peer, &w.server, reference).is_err(),
+        "receiver rejection is not helper success"
+    );
+    w.server.wait_for_receive_update(
+        before,
+        &ReceiveUpdate {
+            reference: reference.into(),
+            old_oid: old,
+            new_oid: new,
+            accepted: false,
+        },
+    )?;
+    assert_eq!(fixed(w.bare()?.refname_to_id(reference))?, old);
+    assert!(w.server.receive_updates().len() == before + 1);
     Ok(())
 }

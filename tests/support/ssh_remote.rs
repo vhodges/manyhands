@@ -11,10 +11,10 @@ use std::{
     net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch};
 
@@ -25,6 +25,24 @@ pub struct AdvertisementHold {
 }
 pub(super) struct AdvertisementGate {
     pub reached: std::sync::mpsc::Sender<()>,
+    pub release: tokio::sync::oneshot::Receiver<()>,
+}
+/// Fixed labels shared by the gated receiver-receipt regression and its worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiveAuditEvent {
+    PublicationHeld,
+    TransportReturned,
+    ReceiptWaiting,
+    HelperReturned,
+}
+pub struct ReceiveAuditHold(tokio::sync::oneshot::Sender<()>);
+impl ReceiveAuditHold {
+    pub fn release(self) -> Result<(), FixtureError> {
+        fixed(self.0.send(()))
+    }
+}
+pub(super) struct ReceiveAuditGate {
+    pub events: std::sync::mpsc::Sender<ReceiveAuditEvent>,
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
 impl AdvertisementHold {
@@ -113,10 +131,13 @@ pub(super) struct Shared {
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
+    pub receive_audit_hold: Mutex<Option<ReceiveAuditGate>>,
+    pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
-    pub receive_race: Mutex<Option<(git2::Oid, git2::Oid)>>,
+    pub receive_race: Mutex<Option<(String, git2::Oid, git2::Oid)>>,
     pub receive_updates: Mutex<Vec<ReceiveUpdate>>,
+    pub receive_updates_changed: Condvar,
     pub receive_advertisements: AtomicUsize,
     pub repository: PathBuf,
     pub upload: GitHelper,
@@ -145,6 +166,33 @@ pub struct SshRemoteFixture {
 }
 
 impl SshRemoteFixture {
+    /// Hold the next proven ref effect after forwarding report-status but before
+    /// publishing its receipt. Dropping the controller refuses accepted evidence.
+    pub fn hold_receive_audit(
+        &self,
+        events: std::sync::mpsc::Sender<ReceiveAuditEvent>,
+    ) -> Result<ReceiveAuditHold, FixtureError> {
+        let mut hold = fixed(self.shared.receive_audit_hold.lock())?;
+        let mut receipt_events = fixed(self.shared.receive_receipt_events.lock())?;
+        if hold.is_some() || receipt_events.is_some() {
+            return Err(FixtureError);
+        }
+        let (release, released) = tokio::sync::oneshot::channel();
+        *receipt_events = Some(events.clone());
+        *hold = Some(ReceiveAuditGate {
+            events,
+            release: released,
+        });
+        Ok(ReceiveAuditHold(release))
+    }
+
+    pub fn fixture_push_transport_returned(&self) -> Result<(), FixtureError> {
+        if let Some(events) = fixed(self.shared.receive_receipt_events.lock())?.as_ref() {
+            fixed(events.send(ReceiveAuditEvent::TransportReturned))?;
+        }
+        Ok(())
+    }
+
     pub fn hold_advertisement(&self) -> Result<AdvertisementHold, FixtureError> {
         let mut gate = fixed(self.shared.advertisement_hold.lock())?;
         if gate.is_some() {
@@ -241,10 +289,13 @@ impl SshRemoteFixture {
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
+            receive_audit_hold: Mutex::new(None),
+            receive_receipt_events: Mutex::new(None),
             hostile: Mutex::new(None),
             receive_status_withheld: AtomicBool::new(false),
             receive_race: Mutex::new(None),
             receive_updates: Mutex::new(Vec::new()),
+            receive_updates_changed: Condvar::new(),
             receive_advertisements: AtomicUsize::new(0),
             repository: repo_path,
             upload: helpers.0,
@@ -279,18 +330,62 @@ impl SshRemoteFixture {
         expected: git2::Oid,
         competing: git2::Oid,
     ) -> Result<(), FixtureError> {
+        self.race_update("refs/heads/main", expected, competing)
+    }
+    /// The same single competing write for any one owned branch.
+    pub fn race_update(
+        &self,
+        reference: &str,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
         let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
         fixed(repo.find_commit(competing))?;
-        if fixed(repo.refname_to_id("refs/heads/main"))? != expected
+        if fixed(repo.refname_to_id(reference))? != expected
             || self.shared.receive_race.lock().unwrap().is_some()
         {
             return Err(FixtureError);
         }
-        *self.shared.receive_race.lock().unwrap() = Some((expected, competing));
+        *self.shared.receive_race.lock().unwrap() = Some((reference.into(), expected, competing));
         Ok(())
     }
     pub fn receive_updates(&self) -> Vec<ReceiveUpdate> {
         self.shared.receive_updates.lock().unwrap().clone()
+    }
+    /// Await the exact receipt appended after a cursor captured before the push.
+    /// Existing identical receipts and rejected commands cannot prove success.
+    pub fn wait_for_receive_update(
+        &self,
+        after: usize,
+        expected: &ReceiveUpdate,
+    ) -> Result<(), FixtureError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut updates = fixed(self.shared.receive_updates.lock())?;
+        loop {
+            let tail = updates.get(after..).ok_or(FixtureError)?;
+            if let Some(update) = tail.iter().find(|update| {
+                update.reference == expected.reference
+                    && update.old_oid == expected.old_oid
+                    && update.new_oid == expected.new_oid
+            }) {
+                return if update.accepted == expected.accepted {
+                    Ok(())
+                } else {
+                    Err(FixtureError)
+                };
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(FixtureError)?;
+            if let Some(events) = fixed(self.shared.receive_receipt_events.lock())?.take() {
+                fixed(events.send(ReceiveAuditEvent::ReceiptWaiting))?;
+            }
+            (updates, _) = fixed(
+                self.shared
+                    .receive_updates_changed
+                    .wait_timeout(updates, remaining),
+            )?;
+        }
     }
     pub fn receive_advertisements(&self) -> usize {
         self.shared.receive_advertisements.load(Ordering::SeqCst)
