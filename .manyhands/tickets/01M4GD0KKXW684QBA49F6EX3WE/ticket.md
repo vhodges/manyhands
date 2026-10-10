@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M4GD0KKXW684QBA49F6EX3WE"
 title: "Save must leave the Git index current for the paths it commits"
 type: "defect"
-status: "open"
+status: "closed"
+closed_at: "2026-10-10T03:34:03Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 ---
@@ -58,7 +60,7 @@ Kept out of Cycle 06 because it changes Wave 01 save behaviour.
   index refreshes in `tests/remote_synchronization.rs` and the Cycle 06 sync
   tests so they prove the real path.
 
-## Implementation outcome — ready for review
+## Implementation outcome
 
 Implemented locally on the ticket branch rebased onto main at `5e4fad6`.
 Public save_ticket followed immediately by synchronize_remote failed with
@@ -99,7 +101,28 @@ remaining integration/SSH/doc-test suites. One existing opt-in characterization
 is ignored by default. Local review findings were reproduced and addressed;
 final read-only review reported no remaining findings.
 
-Ticket remains open pending owner review approval. Publishing requires owner
-authorization and force-with-lease because the already-pushed ticket commit was
-rebased. After this fix merges, record its merged commit in the Cycle 07
+## Native verification and approved closure
+
+Published implementation `2215834` with the owner's explicit force-with-lease
+authorization. Initial native run `38011242974` passed both Linux and both
+Windows targets; macOS found an aliased temporary-root setup error in the new
+primary-index test. Test-only follow-up `7950995` canonicalizes that fixture
+root, matching public saves. The failing case passed locally, including a
+symlinked TMPDIR run; subsequent full-suite verification ran in CI per owner
+direction.
+
+[Build run 38017652008](https://github.com/vhodges/manyhands/actions/runs/38017652008)
+completed successfully on exact source
+`7950995334cc1578b37039179aceef6e5353944f`, with all five targets green:
+
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+- `x86_64-pc-windows-msvc`
+- `aarch64-pc-windows-msvc`
+- `aarch64-apple-darwin`
+
+The owner approved closing this ticket on its branch, pushing the closure, and
+opening a PR once native CI was green. That condition is satisfied; the ticket
+is closed on the branch so it merges closed. Merge and worktree cleanup remain
+the owner's. After this fix merges, record its merged commit in the Cycle 07
 (`01K7F6H9J2N4Q6S8V0X2Z4B6DF`) entry gate before starting that Cycle.
