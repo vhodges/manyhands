@@ -3,10 +3,11 @@ mod support;
 use std::{fs, path::PathBuf, str::FromStr};
 
 use manyhands::canonical::{
-    CONFIG_PATH, CanonicalItem, ItemId, RELATIONSHIP_KEYS, RelationshipProblem,
-    RelationshipProblemCode, RepositoryConfig, Ticket, TicketRelationships, ValidationCode,
-    is_valid_slug, normalized_slug, ordered_comment_threads, parse_item, parse_repository_config,
-    serialize_item, serialize_repository_config, ticket_relationships, validate_context,
+    CONFIG_PATH, CanonicalItem, InitialsProblem, ItemId, RELATIONSHIP_KEYS, RelationshipProblem,
+    RelationshipProblemCode, RepositoryConfig, SlugSettingsProblem, Ticket, TicketRelationships,
+    ValidationCode, compose_slug, derive_initials, is_valid_slug, normalize_initials,
+    normalized_slug, ordered_comment_threads, parse_item, parse_repository_config, serialize_item,
+    serialize_repository_config, short_code, slug_settings, ticket_relationships, validate_context,
 };
 use std::path::Path;
 
@@ -1466,4 +1467,150 @@ fn a_document_keeps_the_relationship_keys_as_ordinary_unknown_metadata() {
     };
     assert!(document.unknown.contains_key("slug"));
     assert!(document.unknown.contains_key("deps"));
+}
+
+fn slug_vectors() -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slug_v1/vectors.json");
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn short_codes_match_the_independently_computed_vectors() {
+    let vectors = slug_vectors();
+    assert!(!vectors["method"].as_str().unwrap().is_empty());
+    let cases = vectors["codes"].as_array().unwrap();
+    assert!(cases.len() >= 8);
+    for case in cases {
+        let ulid = case["ulid"].as_str().unwrap();
+        for length in 5..=8 {
+            assert_eq!(
+                short_code(ulid, length),
+                case["codes"][length.to_string()].as_str().unwrap(),
+                "{ulid} at length {length}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_longer_short_code_begins_with_the_shorter_one() {
+    for case in slug_vectors()["codes"].as_array().unwrap() {
+        let ulid = case["ulid"].as_str().unwrap();
+        for length in 6..=8 {
+            assert!(short_code(ulid, length).starts_with(&short_code(ulid, 5)));
+            assert_eq!(short_code(ulid, length).len(), length);
+        }
+    }
+}
+
+#[test]
+fn initials_follow_the_vectors() {
+    let vectors = slug_vectors();
+    let cases = vectors["initials"].as_array().unwrap();
+    assert!(cases.len() >= 8);
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        assert_eq!(
+            derive_initials(name).as_deref(),
+            case["initials"].as_str(),
+            "{name:?}"
+        );
+    }
+}
+
+#[test]
+fn normalize_initials_lowercases_and_accepts_two_or_three_characters() {
+    assert_eq!(normalize_initials("VH").as_deref(), Ok("vh"));
+    assert_eq!(normalize_initials("aB9").as_deref(), Ok("ab9"));
+}
+
+#[test]
+fn normalize_initials_rejects_everything_else() {
+    for text in ["v", "abcd", "", "v.", "a b", "é1", "vé", "-ab", "v\n"] {
+        assert_eq!(
+            normalize_initials(text),
+            Err(InitialsProblem::Invalid),
+            "{text:?}"
+        );
+    }
+}
+
+fn config_with(extra: &str) -> RepositoryConfig {
+    parse_repository_config(&format!(
+        "format_version = 1\nprimary_branch = \"main\"\n{extra}"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn slug_settings_default_to_no_prefix_and_five_characters() {
+    assert_eq!(slug_settings(&config_with("")), Ok((None, 5)));
+}
+
+#[test]
+fn slug_settings_accept_a_valid_prefix_and_each_length() {
+    for length in 5..=8 {
+        let config = config_with(&format!(
+            "ticket_slug_prefix = \"mh2\"\nticket_slug_code_length = {length}\n"
+        ));
+        assert_eq!(
+            slug_settings(&config),
+            Ok((Some("mh2".to_string()), length))
+        );
+    }
+    assert_eq!(
+        slug_settings(&config_with("ticket_slug_prefix = \"12345678\"\n")),
+        Ok((Some("12345678".to_string()), 5))
+    );
+}
+
+#[test]
+fn slug_settings_reject_an_invalid_prefix() {
+    for value in [
+        "\"toolongpre\"",
+        "\"MH\"",
+        "\"\"",
+        "\"m-h\"",
+        "7",
+        "[\"mh\"]",
+    ] {
+        let config = config_with(&format!("ticket_slug_prefix = {value}\n"));
+        assert_eq!(
+            slug_settings(&config),
+            Err(SlugSettingsProblem::InvalidPrefix),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn slug_settings_reject_an_invalid_code_length() {
+    for value in ["4", "9", "6.5", "\"6\"", "true", "-6"] {
+        let config = config_with(&format!("ticket_slug_code_length = {value}\n"));
+        assert_eq!(
+            slug_settings(&config),
+            Err(SlugSettingsProblem::InvalidCodeLength),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn composed_slugs_are_valid_short_codes() {
+    let vectors = slug_vectors();
+    for case in vectors["codes"].as_array().unwrap() {
+        let ulid = case["ulid"].as_str().unwrap();
+        for length in 5..=8 {
+            let code = short_code(ulid, length);
+            for prefix in [None, Some("mh"), Some("12345678")] {
+                for initials in ["vh", "a9z"] {
+                    let slug = compose_slug(prefix, initials, &code);
+                    assert!(is_valid_slug(&slug), "{slug}");
+                    assert!(slug.ends_with(&format!("-{code}")));
+                }
+            }
+        }
+    }
+    assert_eq!(compose_slug(Some("mh"), "vh", "k9x2b"), "mh-vh-k9x2b");
+    assert_eq!(compose_slug(None, "vh", "k9x2b"), "vh-k9x2b");
 }

@@ -282,6 +282,115 @@ pub fn normalized_slug(value: &str) -> Option<String> {
     is_valid_slug(&slug).then_some(slug)
 }
 
+/// The key in `RepositoryConfig::unknown` that holds the short code prefix.
+pub const SLUG_PREFIX_KEY: &str = "ticket_slug_prefix";
+/// The key in `RepositoryConfig::unknown` that holds the code length.
+pub const SLUG_CODE_LENGTH_KEY: &str = "ticket_slug_code_length";
+/// The code length when the configuration sets none.
+pub const DEFAULT_SLUG_CODE_LENGTH: usize = 5;
+
+/// Why the repository's short code settings cannot be used.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlugSettingsProblem {
+    /// `ticket_slug_prefix` is not a string of one to eight lowercase
+    /// letters or digits.
+    InvalidPrefix,
+    /// `ticket_slug_code_length` is not an integer from 5 to 8.
+    InvalidCodeLength,
+}
+
+/// Why a text is not usable as initials.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialsProblem {
+    /// Not two or three ASCII letters or digits.
+    Invalid,
+}
+
+/// The short code for a ticket: the leading `length * 5` bits of the BLAKE3
+/// hash of the ULID's 26 ASCII characters, most significant bit first, five
+/// bits per character, in the lowercase Crockford alphabet. A longer code
+/// begins with every shorter one. `length` is meant to be 5 to 8, as
+/// `slug_settings` returns it; the hash supplies at most 51 characters.
+pub fn short_code(ulid_text: &str, length: usize) -> String {
+    const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    let hash = blake3::hash(ulid_text.as_bytes());
+    let bytes = hash.as_bytes();
+    (0..length.min(bytes.len() * 8 / 5))
+        .map(|index| {
+            let first = index * 5;
+            // Five bits starting at bit `first`, which span at most two bytes.
+            let window = u16::from(bytes[first / 8]) << 8
+                | bytes.get(first / 8 + 1).copied().map_or(0, u16::from);
+            let value = (window >> (11 - first % 8)) & 0x1f;
+            char::from(ALPHABET[usize::from(value)])
+        })
+        .collect()
+}
+
+/// Initials from a name: the first character of the first and of the last
+/// whitespace-separated word, or the first two characters of a one-word
+/// name, lowercased. `None` when that is not two ASCII letters or digits;
+/// nothing is transliterated.
+pub fn derive_initials(name: &str) -> Option<String> {
+    let mut words = name.split_whitespace();
+    let first = words.next()?;
+    let candidate: String = match words.next_back() {
+        Some(last) => [first.chars().next()?, last.chars().next()?]
+            .into_iter()
+            .collect(),
+        None => first.chars().take(2).collect(),
+    };
+    normalize_initials(&candidate).ok()
+}
+
+/// `text` lowercased when it is two or three ASCII letters or digits.
+pub fn normalize_initials(text: &str) -> Result<String, InitialsProblem> {
+    let valid =
+        (2..=3).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_alphanumeric());
+    if valid {
+        Ok(text.to_ascii_lowercase())
+    } else {
+        Err(InitialsProblem::Invalid)
+    }
+}
+
+/// The short code prefix and code length a repository configures. An absent
+/// prefix is `None` and an absent length is 5. The values live in the
+/// configuration's unknown keys, so a bad one does not stop the
+/// configuration from parsing; it is reported here, when a slug is composed.
+pub fn slug_settings(
+    config: &RepositoryConfig,
+) -> Result<(Option<String>, usize), SlugSettingsProblem> {
+    let prefix = match config.unknown.get(SLUG_PREFIX_KEY) {
+        None => None,
+        Some(toml::Value::String(prefix))
+            if (1..=8).contains(&prefix.len())
+                && prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()) =>
+        {
+            Some(prefix.clone())
+        }
+        Some(_) => return Err(SlugSettingsProblem::InvalidPrefix),
+    };
+    let length = match config.unknown.get(SLUG_CODE_LENGTH_KEY) {
+        None => DEFAULT_SLUG_CODE_LENGTH,
+        Some(toml::Value::Integer(length @ 5..=8)) => *length as usize,
+        Some(_) => return Err(SlugSettingsProblem::InvalidCodeLength),
+    };
+    Ok((prefix, length))
+}
+
+/// Joins the parts of a short code with hyphens. The parts are expected to
+/// be valid already; `is_valid_slug` is the check.
+pub fn compose_slug(prefix: Option<&str>, initials: &str, code: &str) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix}-{initials}-{code}"),
+        None => format!("{initials}-{code}"),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: ItemId,
