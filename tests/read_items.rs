@@ -3986,8 +3986,14 @@ fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
     assert!(saved.contains("title: Renamed\n"), "{saved}");
     assert!(saved.contains("other: kept\n"), "{saved}");
     // The same values, each key written once. The flow list became a block
-    // list: the serializer keeps values, not formatting.
-    assert_eq!(relationships_in(&file, TICKET_A), before);
+    // list in the canonical order, sorted by ID: the serializer keeps
+    // values, not formatting or the order a list was written in.
+    let canonical = TicketRelationships {
+        deps: vec![item_id(TICKET_B), item_id(TICKET_C)],
+        ..before.clone()
+    };
+    assert_ne!(canonical, before);
+    assert_eq!(relationships_in(&file, TICKET_A), canonical);
     let lines = relationship_lines(&file);
     assert_eq!(
         lines,
@@ -3995,8 +4001,8 @@ fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
             format!("slug: {SLUG}"),
             format!("parent: {TICKET_B}"),
             "deps:".to_owned(),
-            format!("- {TICKET_C}"),
             format!("- {TICKET_B}"),
+            format!("- {TICKET_C}"),
         ]
     );
 
@@ -4009,7 +4015,7 @@ fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
         "Renamed again",
     );
     assert_eq!(relationship_lines(&file), lines);
-    assert_eq!(relationships_in(&file, TICKET_A), before);
+    assert_eq!(relationships_in(&file, TICKET_A), canonical);
 
     // And the index, which each save refreshed, read them from that file.
     let repo = enabled.service.resolve_repository(root).unwrap();
@@ -4024,8 +4030,8 @@ fn the_existing_ticket_save_keeps_hand_written_relationship_fields() {
     assert_eq!(
         a.deps,
         [
-            dependency(TICKET_C, DependencyState::Unresolved),
             dependency(TICKET_B, DependencyState::Unresolved),
+            dependency(TICKET_C, DependencyState::Unresolved),
         ]
     );
     assert_eq!(
