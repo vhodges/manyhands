@@ -56,7 +56,8 @@ impl RepositoryService {
     }
 
     /// Where the operation `operation_id` stands in the journal of its
-    /// family: absent, pending with its state and step, or completed.
+    /// family: absent, pending in a state or phase, or final in some way
+    /// and owing work or not. `JournalRow::in_flight` is what settling asks.
     ///
     /// A local or remote operation is looked up under the root `scope`
     /// names; a key-material operation belongs to the application,
@@ -168,6 +169,6 @@ pub mod request_store {
             ConfirmationRecord, InsertRequestOutcome, NewConfirmation, NewRequest,
             RequestOperation, RequestRecord, RequestResult,
         },
-        recovery::JournalRow,
+        recovery::{FinalKind, JournalRow, PendingOperation},
     };
 }

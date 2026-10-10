@@ -9,7 +9,8 @@ use super::{
     merge::{ConfirmedCommitIdentity, IntegrationStage},
 };
 use crate::repository::{
-    ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation, recovery::JournalRow,
+    ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    recovery::{FinalKind, JournalRow, PendingOperation},
 };
 use crate::results::ResultCode;
 use crate::{canonical::ItemId, repository::AuthoringKind};
@@ -2235,39 +2236,36 @@ fn stored_phase(stored: &str) -> Option<RemoteOperationPhase> {
 /// repository on disk, and it does not audit the row as `read_operation`
 /// does. A root with no registration has no remote operations.
 ///
-/// An operation has something in flight, and is reported as pending:
-///
-/// - in a phase that holds the registration's reservation;
-/// - when it was interrupted or it failed, because it stopped with work
-///   that only a call under its ID takes up again, a pending merge
-///   conflict among it;
-/// - when its phase has ended and its index hand-off is still pending or
-///   its reconciliation is recorded as required, because Git may hold
-///   what it started.
-///
-/// Otherwise a completed or cancelled operation is reported as completed.
+/// An operation is pending in a phase that holds the registration's
+/// reservation, and when it was interrupted or it failed: it then stopped
+/// with work that only a call under its ID takes up again, a pending
+/// merge conflict among it. A completed or a cancelled operation is
+/// final, and owes work while its index hand-off is pending or its
+/// reconciliation is recorded as required, because Git may hold what it
+/// started.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(in super::super) fn lookup_operation(
     connection: &Connection,
     root_path: &str,
     operation_id: crate::repository::OperationId,
 ) -> Result<JournalRow, ReadError> {
-    let row: Option<(String, Option<String>, bool, bool)> = connection
+    let row: Option<(String, bool, bool)> = connection
         .query_row(
-            "SELECT operation.phase, operation.completed_step, operation.index_pending,
+            "SELECT operation.phase, operation.index_pending,
                     operation.reconciliation_required
                FROM remote_operation_records operation
                JOIN repositories repository ON repository.id = operation.repository_id
               WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
             params![root_path, operation_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((state, step, index_pending, reconciliation_required)) = row else {
+    let Some((stored, index_pending, reconciliation_required)) = row else {
         return Ok(JournalRow::Absent);
     };
-    let phase = stored_phase(&state).ok_or_else(|| ReadError::new(ResultCode::InternalError))?;
-    let in_flight = match phase {
+    let phase = stored_phase(&stored).ok_or_else(|| ReadError::new(ResultCode::InternalError))?;
+    let owes_work = index_pending || reconciliation_required;
+    Ok(match phase {
         RemoteOperationPhase::Reserved
         | RemoteOperationPhase::Advertising
         | RemoteOperationPhase::Persisting
@@ -2278,16 +2276,17 @@ pub(in super::super) fn lookup_operation(
         | RemoteOperationPhase::PushPrepared
         | RemoteOperationPhase::PushReturned
         | RemoteOperationPhase::PushVerified
-        | RemoteOperationPhase::Reconciling => true,
-        RemoteOperationPhase::Interrupted | RemoteOperationPhase::Failed => true,
-        RemoteOperationPhase::Completed | RemoteOperationPhase::Cancelled => {
-            index_pending || reconciliation_required
-        }
-    };
-    Ok(if in_flight {
-        JournalRow::Pending { state, step }
-    } else {
-        JournalRow::Completed { state }
+        | RemoteOperationPhase::Reconciling
+        | RemoteOperationPhase::Interrupted
+        | RemoteOperationPhase::Failed => JournalRow::Pending(PendingOperation::Remote { phase }),
+        RemoteOperationPhase::Completed => JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work,
+        },
+        RemoteOperationPhase::Cancelled => JournalRow::Final {
+            kind: FinalKind::Cancelled,
+            owes_work,
+        },
     })
 }
 

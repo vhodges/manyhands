@@ -7,12 +7,14 @@ use std::{path::Path, sync::Arc};
 use manyhands::{
     repository::{
         AddRemoteRequest, ConfirmationId, ExpectedPathObservation, LeaseKind, OperationFamily,
-        OperationId, RemoveRegistrationOutcome, RemoveRegistrationRequest, RepositoryService,
-        RequestDto, RequestId, RequestOperationDto, RequestResultDto, RequestState,
+        OperationId, RemoteOperationPhase, RemoveRegistrationOutcome, RemoveRegistrationRequest,
+        RepositoryService, RequestDto, RequestId, RequestOperationDto, RequestResultDto,
+        RequestState,
+        keys::KeyMaterialPhase,
         request_store::{
-            ConfirmationRecord, DigestSalt, FieldValue, InsertRequestOutcome, IntentDigest,
-            JournalRow, NewConfirmation, NewRequest, RequestOperation, RequestRecord,
-            RequestResult, ScopeKey,
+            ConfirmationRecord, DigestSalt, FieldValue, FinalKind, InsertRequestOutcome,
+            IntentDigest, JournalRow, NewConfirmation, NewRequest, PendingOperation,
+            RequestOperation, RequestRecord, RequestResult, ScopeKey,
         },
     },
     results::{
@@ -1326,16 +1328,35 @@ fn the_privacy_scan_finds_a_sentinel_in_every_request_store() {
     );
 }
 
-fn pending(state: &str, step: Option<&str>) -> JournalRow {
-    JournalRow::Pending {
+fn pending_local(state: &str, step: Option<&str>) -> JournalRow {
+    JournalRow::Pending(PendingOperation::Local {
         state: state.to_owned(),
         step: step.map(str::to_owned),
+    })
+}
+
+fn pending_remote(phase: RemoteOperationPhase) -> JournalRow {
+    JournalRow::Pending(PendingOperation::Remote { phase })
+}
+
+fn pending_key(phase: KeyMaterialPhase) -> JournalRow {
+    JournalRow::Pending(PendingOperation::KeyMaterial { phase })
+}
+
+/// A row that has ended and owes nothing.
+fn ended(kind: FinalKind) -> JournalRow {
+    JournalRow::Final {
+        kind,
+        owes_work: false,
     }
 }
 
-fn completed(state: &str) -> JournalRow {
-    JournalRow::Completed {
-        state: state.to_owned(),
+/// A row that has ended and still owes its index hand-off or a
+/// reconciliation.
+fn owing(kind: FinalKind) -> JournalRow {
+    JournalRow::Final {
+        kind,
+        owes_work: true,
     }
 }
 
@@ -1358,6 +1379,25 @@ impl World {
 }
 
 #[test]
+fn settlement_asks_one_question_of_a_journal_row() {
+    assert!(!JournalRow::Absent.in_flight());
+    assert!(pending_local("created", None).in_flight());
+    assert!(pending_remote(RemoteOperationPhase::Interrupted).in_flight());
+    assert!(pending_key(KeyMaterialPhase::Reserved).in_flight());
+    for kind in [
+        FinalKind::Completed,
+        FinalKind::Cancelled,
+        FinalKind::RetainedForInspection,
+    ] {
+        assert!(!ended(kind).in_flight(), "{kind:?}");
+        assert!(owing(kind).in_flight(), "{kind:?}");
+        // What a row came to is told apart from whether it owes work.
+        assert_ne!(owing(kind), ended(kind));
+        assert!(matches!(owing(kind), JournalRow::Final { kind: found, .. } if found == kind));
+    }
+}
+
+#[test]
 fn the_journal_lookup_reads_a_local_operation() {
     let world = world();
     assert_eq!(
@@ -1374,7 +1414,7 @@ fn the_journal_lookup_reads_a_local_operation() {
     );
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        pending("created", None)
+        pending_local("created", None)
     );
 
     world.set_local(
@@ -1384,18 +1424,18 @@ fn the_journal_lookup_reads_a_local_operation() {
     );
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        pending("authoring", Some("authoring_destination_observed"))
+        pending_local("authoring", Some("authoring_destination_observed"))
     );
 
     world.set_local(OPERATION_A, "completed", Some("authoritative_observed"));
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        completed("completed")
+        ended(FinalKind::Completed)
     );
     world.set_local(OPERATION_A, "completed", None);
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        completed("completed")
+        ended(FinalKind::Completed)
     );
 
     // Each journal answers for its own rows only.
@@ -1456,16 +1496,15 @@ fn the_journal_lookup_reads_a_local_row_closed_as_rejected_as_absent() {
         stored,
         ("completed".to_owned(), Some("rejected".to_owned()))
     );
-    assert_eq!(
-        world.journal_row(OperationFamily::Local, OPERATION_A),
-        JournalRow::Absent
-    );
+    let row = world.journal_row(OperationFamily::Local, OPERATION_A);
+    assert_eq!(row, JournalRow::Absent);
+    assert!(!row.in_flight());
 
     // Only `completed` with that step is a closed row.
     world.set_local(OPERATION_A, "created", Some("rejected"));
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        pending("created", Some("rejected"))
+        pending_local("created", Some("rejected"))
     );
 }
 
@@ -1493,35 +1532,55 @@ fn the_journal_lookup_reads_a_synchronization_bound_locally() {
     );
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        pending("indexing", None)
+        pending_local("indexing", None)
     );
 
     world.set_local(OPERATION_A, "completed", None);
     assert_eq!(
         world.journal_row(OperationFamily::Local, OPERATION_A),
-        completed("completed")
+        ended(FinalKind::Completed)
     );
 }
 
-/// Every phase of a remote operation, and whether an operation in it has
-/// something in flight.
-const REMOTE_PHASES: [(&str, bool); 15] = [
-    ("reserved", true),
-    ("advertising", true),
-    ("persisting", true),
-    ("fetch_prepared", true),
-    ("fetch_observed", true),
-    ("local_prepared", true),
-    ("local_fast_forwarded", true),
-    ("push_prepared", true),
-    ("push_returned", true),
-    ("push_verified", true),
-    ("reconciling", true),
-    // Stopped, with work only this operation ID can take up again.
-    ("interrupted", true),
-    ("failed", true),
-    ("completed", false),
-    ("cancelled", false),
+/// What the lookup says of a remote operation in a phase, when the row
+/// owes nothing: pending in that phase, or ended in some way.
+fn remote_standing(phase: RemoteOperationPhase) -> (&'static str, Result<(), FinalKind>) {
+    match phase {
+        RemoteOperationPhase::Reserved => ("reserved", Ok(())),
+        RemoteOperationPhase::Advertising => ("advertising", Ok(())),
+        RemoteOperationPhase::Persisting => ("persisting", Ok(())),
+        RemoteOperationPhase::FetchPrepared => ("fetch_prepared", Ok(())),
+        RemoteOperationPhase::FetchObserved => ("fetch_observed", Ok(())),
+        RemoteOperationPhase::LocalPrepared => ("local_prepared", Ok(())),
+        RemoteOperationPhase::LocalFastForwarded => ("local_fast_forwarded", Ok(())),
+        RemoteOperationPhase::PushPrepared => ("push_prepared", Ok(())),
+        RemoteOperationPhase::PushReturned => ("push_returned", Ok(())),
+        RemoteOperationPhase::PushVerified => ("push_verified", Ok(())),
+        RemoteOperationPhase::Reconciling => ("reconciling", Ok(())),
+        // Stopped, with work only this operation ID can take up again.
+        RemoteOperationPhase::Interrupted => ("interrupted", Ok(())),
+        RemoteOperationPhase::Failed => ("failed", Ok(())),
+        RemoteOperationPhase::Completed => ("completed", Err(FinalKind::Completed)),
+        RemoteOperationPhase::Cancelled => ("cancelled", Err(FinalKind::Cancelled)),
+    }
+}
+
+const REMOTE_PHASES: [RemoteOperationPhase; 15] = [
+    RemoteOperationPhase::Reserved,
+    RemoteOperationPhase::Advertising,
+    RemoteOperationPhase::Persisting,
+    RemoteOperationPhase::Completed,
+    RemoteOperationPhase::Interrupted,
+    RemoteOperationPhase::Cancelled,
+    RemoteOperationPhase::Failed,
+    RemoteOperationPhase::FetchPrepared,
+    RemoteOperationPhase::FetchObserved,
+    RemoteOperationPhase::LocalPrepared,
+    RemoteOperationPhase::LocalFastForwarded,
+    RemoteOperationPhase::PushPrepared,
+    RemoteOperationPhase::PushReturned,
+    RemoteOperationPhase::PushVerified,
+    RemoteOperationPhase::Reconciling,
 ];
 
 #[test]
@@ -1551,46 +1610,45 @@ fn the_journal_lookup_reads_a_synchronization_in_the_remote_journal() {
             .unwrap();
     };
 
-    for (phase, in_flight) in REMOTE_PHASES {
-        set(&format!("phase = '{phase}', completed_step = NULL"));
-        let expected = if in_flight {
-            pending(phase, None)
-        } else {
-            completed(phase)
-        };
-        assert_eq!(
-            world.journal_row(OperationFamily::Remote, OPERATION_A),
-            expected,
-            "{phase}"
-        );
+    // Every phase, owing nothing and then owing a reconciliation.
+    for phase in REMOTE_PHASES {
+        let (stored, standing) = remote_standing(phase);
+        for owes in [false, true] {
+            set(&format!(
+                "phase = '{stored}', completed_step = 'after_fetch',
+                 reconciliation_required = {}",
+                i32::from(owes)
+            ));
+            let row = world.journal_row(OperationFamily::Remote, OPERATION_A);
+            let expected = match standing {
+                // A pending row is pending whatever else it owes.
+                Ok(()) => pending_remote(phase),
+                Err(kind) if owes => owing(kind),
+                Err(kind) => ended(kind),
+            };
+            assert_eq!(row, expected, "{stored}, owes: {owes}");
+            assert_eq!(row.in_flight(), standing.is_ok() || owes, "{stored}");
+        }
     }
 
-    // A pending row carries the last safe point it recorded.
-    set("phase = 'interrupted', completed_step = 'after_fetch'");
+    // A cancelled row that owes work is still a cancelled row, and is
+    // told apart from a pending one.
+    set("phase = 'cancelled', reconciliation_required = 1");
+    let cancelled = world.journal_row(OperationFamily::Remote, OPERATION_A);
+    assert_eq!(cancelled, owing(FinalKind::Cancelled));
+    assert!(!matches!(cancelled, JournalRow::Pending(_)));
+    set("phase = 'cancelled', reconciliation_required = 0");
     assert_eq!(
         world.journal_row(OperationFamily::Remote, OPERATION_A),
-        pending("interrupted", Some("after_fetch"))
+        ended(FinalKind::Cancelled)
     );
 
-    // A row whose phase has ended still has something in flight while Git
-    // may hold what it started.
-    for phase in ["completed", "cancelled"] {
-        set(&format!(
-            "phase = '{phase}', completed_step = NULL, reconciliation_required = 1"
-        ));
-        assert_eq!(
-            world.journal_row(OperationFamily::Remote, OPERATION_A),
-            pending(phase, None),
-            "{phase}"
-        );
-    }
-
-    // And so does a synchronization that completed and has not yet handed
-    // what it published to the index.
+    // A synchronization that completed and has not yet handed what it
+    // published to the index owes that hand-off.
     operations::insert_remote_index_pending(data, OPERATION_B);
     assert_eq!(
         world.journal_row(OperationFamily::Remote, OPERATION_B),
-        pending("completed", Some("before_discovery"))
+        owing(FinalKind::Completed)
     );
 
     assert_eq!(
@@ -1615,6 +1673,24 @@ fn the_journal_lookup_reads_a_synchronization_in_the_remote_journal() {
     );
 }
 
+/// What the lookup says of a key-material operation in a phase.
+fn key_standing(phase: KeyMaterialPhase) -> (&'static str, &'static str, Result<(), FinalKind>) {
+    match phase {
+        KeyMaterialPhase::Reserved => ("generate", "reserved", Ok(())),
+        KeyMaterialPhase::PrivateWritten => ("generate", "private-written", Ok(())),
+        KeyMaterialPhase::PairWritten => ("generate", "pair-written", Ok(())),
+        KeyMaterialPhase::Prepared => ("delete", "prepared", Ok(())),
+        KeyMaterialPhase::PrivateRemoved => ("delete", "private-removed", Ok(())),
+        KeyMaterialPhase::FilesRemoved => ("delete", "files-removed", Ok(())),
+        KeyMaterialPhase::Completed => ("generate", "completed", Err(FinalKind::Completed)),
+        KeyMaterialPhase::RetainedForInspection => (
+            "generate",
+            "retained-for-inspection",
+            Err(FinalKind::RetainedForInspection),
+        ),
+    }
+}
+
 #[test]
 fn the_journal_lookup_reads_a_key_operation() {
     let world = world();
@@ -1636,35 +1712,45 @@ fn the_journal_lookup_reads_a_key_operation() {
             .unwrap();
     };
 
-    for (id, phases) in [
-        (OPERATION_A, ["reserved", "private-written", "pair-written"]),
-        (
-            OPERATION_B,
-            ["prepared", "private-removed", "files-removed"],
-        ),
+    for phase in [
+        KeyMaterialPhase::Reserved,
+        KeyMaterialPhase::PrivateWritten,
+        KeyMaterialPhase::PairWritten,
+        KeyMaterialPhase::Prepared,
+        KeyMaterialPhase::PrivateRemoved,
+        KeyMaterialPhase::FilesRemoved,
+        KeyMaterialPhase::Completed,
+        KeyMaterialPhase::RetainedForInspection,
     ] {
-        for phase in phases {
-            set(id, phase, None);
-            assert_eq!(
-                world.journal_row(OperationFamily::KeyMaterial, id),
-                pending(&phase.replace('-', "_"), None),
-                "{phase}"
-            );
+        let (action, stored, standing) = key_standing(phase);
+        let id = if action == "generate" {
+            OPERATION_A
+        } else {
+            OPERATION_B
+        };
+        // Whether the operation failed changes nothing.
+        for failure in [None, Some("storage-unavailable")] {
+            set(id, stored, failure);
+            let row = world.journal_row(OperationFamily::KeyMaterial, id);
+            let expected = match standing {
+                Ok(()) => pending_key(phase),
+                Err(kind) => ended(kind),
+            };
+            assert_eq!(row, expected, "{stored}");
+            assert_eq!(row.in_flight(), standing.is_ok(), "{stored}");
         }
-        // A phase that has ended has nothing in flight, whether or not the
-        // operation failed.
-        for (phase, failure) in [
-            ("completed", None),
-            ("completed", Some("source-missing")),
-            ("retained-for-inspection", Some("storage-unavailable")),
-        ] {
-            set(id, phase, failure);
-            assert_eq!(
-                world.journal_row(OperationFamily::KeyMaterial, id),
-                completed(&phase.replace('-', "_")),
-                "{phase}"
-            );
-        }
+    }
+
+    // A deletion ends in the same two ways.
+    for (stored, kind) in [
+        ("completed", FinalKind::Completed),
+        ("retained-for-inspection", FinalKind::RetainedForInspection),
+    ] {
+        set(OPERATION_B, stored, None);
+        assert_eq!(
+            world.journal_row(OperationFamily::KeyMaterial, OPERATION_B),
+            ended(kind)
+        );
     }
 
     // A key operation belongs to the application, whatever scope asks.
@@ -1677,7 +1763,7 @@ fn the_journal_lookup_reads_a_key_operation() {
                 operations::operation_id(OPERATION_A),
             )
             .unwrap(),
-        completed("retained_for_inspection")
+        ended(FinalKind::RetainedForInspection)
     );
 }
 
@@ -1726,15 +1812,15 @@ fn the_journal_lookup_works_for_a_root_that_no_longer_exists() {
 
     assert_eq!(
         lookup(OperationFamily::Local, &scope, OPERATION_A),
-        pending("authoring", None)
+        pending_local("authoring", None)
     );
     assert_eq!(
         lookup(OperationFamily::Remote, &scope, OPERATION_B),
-        pending("interrupted", None)
+        pending_remote(RemoteOperationPhase::Interrupted)
     );
     assert_eq!(
         lookup(OperationFamily::Local, &unregistered, OPERATION_C),
-        pending("created", Some("initialization_committed"))
+        pending_local("created", Some("initialization_committed"))
     );
     assert_eq!(
         lookup(OperationFamily::Remote, &unregistered, OPERATION_C),
@@ -1786,7 +1872,7 @@ fn the_journal_lookup_reports_what_it_cannot_read() {
 
     // The lookup holds no lock once it has answered.
     world.set_local(OPERATION_A, "authoring", None);
-    assert_eq!(lookup(), Ok(pending("authoring", None)));
+    assert_eq!(lookup(), Ok(pending_local("authoring", None)));
     drop(
         RepositoryService::hold_lease_for_testing(
             &world.fixture.root,

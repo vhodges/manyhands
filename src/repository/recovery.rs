@@ -4,8 +4,8 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use super::{
-    OperationId, ReadError, RecoveryInspection, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation,
+    OperationId, ReadError, RecoveryInspection, RemoteOperationPhase, RepositoryError,
+    RepositoryErrorKind, RepositoryOperation, keys::KeyMaterialPhase,
 };
 use crate::results::ResultCode;
 
@@ -477,20 +477,71 @@ pub(super) fn discard_operation(
 /// lookup of its own, by operation ID, that needs no registration and no
 /// repository on disk.
 ///
-/// `state` is the journal's own name for where the operation stands, in
-/// lower_snake_case: a local operation's state, or a remote or
-/// key-material operation's phase. `step` is the last step a local or
-/// remote operation recorded as done.
+/// This is what settling a request asks of a journal. The question "is
+/// anything in flight?" is `in_flight`; which way a row ended is `kind`.
+/// The two are separate: a row can have ended and still owe work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JournalRow {
     /// The journal holds no row for the ID, or holds the row of a call
-    /// that was rejected and left nothing behind.
+    /// that was rejected and left nothing behind. Nothing is in flight:
+    /// a record whose request failed is deleted, and its ID is free.
     Absent,
-    /// Something is in flight: the operation has work that only a call
-    /// under its ID takes up again.
-    Pending { state: String, step: Option<String> },
-    /// The operation ended and nothing is in flight.
-    Completed { state: String },
+    /// The operation has not ended. It has work that only a call under
+    /// its ID takes up again, so the record stays `accepted`.
+    Pending(PendingOperation),
+    /// The operation ended, in the way `kind` says: the domain will not
+    /// change what it came to under this ID.
+    ///
+    /// `owes_work` is set when the row has nevertheless left something to
+    /// be done under its ID: a remote operation whose index hand-off is
+    /// pending or whose reconciliation is recorded as required. Such a
+    /// row is in flight for settlement, exactly as a pending one is, and
+    /// is still told apart from one: a cancelled row that owes work is
+    /// `Final { kind: Cancelled, owes_work: true }`.
+    Final { kind: FinalKind, owes_work: bool },
+}
+
+/// Where an operation that has not ended stands, in its journal's terms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingOperation {
+    /// The local journal has no enumeration of its states: `state` and
+    /// `step` are its own names, in lower_snake_case, as it stores them.
+    /// `step` is the last step the operation recorded as done.
+    Local { state: String, step: Option<String> },
+    /// Never `Completed` or `Cancelled`, which are final. `Interrupted`
+    /// and `Failed` are pending: the operation stopped with work that a
+    /// call under its ID takes up again, a merge conflict among it.
+    Remote { phase: RemoteOperationPhase },
+    /// Never `Completed` or `RetainedForInspection`, which are final.
+    KeyMaterial { phase: KeyMaterialPhase },
+}
+
+/// The way an operation ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinalKind {
+    /// It ran to its end. Any journal.
+    Completed,
+    /// A remote operation that was cancelled. It is never given its
+    /// reservation back, so the result is final for its ID.
+    Cancelled,
+    /// A key-material operation whose files were kept for inspection.
+    /// Nothing continues it, so the result is final for its ID.
+    RetainedForInspection,
+}
+
+impl JournalRow {
+    /// The settlement question: is anything in flight under this
+    /// operation ID? True for a pending row and for a final row that
+    /// still owes work; false for an absent row and for a final row that
+    /// owes none. A failed request's record is deleted only when this is
+    /// false.
+    pub const fn in_flight(&self) -> bool {
+        match self {
+            Self::Absent => false,
+            Self::Pending(_) => true,
+            Self::Final { owes_work, .. } => *owes_work,
+        }
+    }
 }
 
 /// The longest state or step name a local operation is taken to have.
@@ -536,11 +587,15 @@ pub(super) fn lookup_operation(
         return Err(ReadError::new(ResultCode::InternalError));
     }
     Ok(if state != "completed" {
-        JournalRow::Pending { state, step }
+        JournalRow::Pending(PendingOperation::Local { state, step })
     } else if step.as_deref() == Some(REJECTED_STEP) {
         JournalRow::Absent
     } else {
-        JournalRow::Completed { state }
+        // A local operation that completed owes nothing more.
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+        }
     })
 }
 
