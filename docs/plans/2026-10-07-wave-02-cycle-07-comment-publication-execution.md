@@ -175,3 +175,80 @@ choices"): forwarding an optional identity confirmation, and not reusing a
 terminally cancelled child. Ticket stays
 open; no implementation, pull request, native CI dispatch, merge, closure or
 cleanup is authorized by this checkpoint.
+
+## Task 0: Implementation Entry Checkpoint — 2026-10-10
+
+The owner's hand-off authorizes Task 0 rebase, implementation of Tasks 1–6,
+local commits, local gates and canonical ticket comments. Execution remains
+direct and sequential, with independent read-only review per task. Publishing
+the rebased branch (force-with-lease pinned to the original published HEAD),
+later pushes, CI dispatch, PR, closure, merge and cleanup require separate
+authorization. The owner subsequently approved the validated creation timestamp
+field already required by the design when asked to reconcile it with the
+hand-off's narrower persistence list. This is a narrowly scoped timestamp
+exception; bodies, body hashes, secrets, endpoints and arbitrary paths remain
+excluded from new recovery metadata and diagnostics.
+
+### Base and dependencies
+
+- Ticket worktree clean before rebase; main had unrelated untracked
+  `.superpowers/`, left untouched. No other ticket worktree or branch changed.
+- Fresh `git fetch origin main`: `f87ce81001f75ff6fc21192b71019b0bcaef6ea6`.
+- Original published ticket HEAD:
+  `59f27a94b1358bdc7172d10610ae08969b09ff90`.
+- Rebase completed without conflicts; new planning HEAD:
+  `424c60f03037761db9bbbeec4c9c53a53b607daa`. Ancestry check passed;
+  post-rebase worktree clean. No push performed.
+- Re-read rebased AGENTS, Cycle, design, plan, ledger, ticket/comments and
+  merged Cycle 06 Task 7 evidence. The remote production modules are unchanged
+  since the approved amendment's base `5e4fad6`; confirmed identity, child-keyed
+  resolution, repository-wide publication conflict block, recoverable conflict
+  cancellation and terminal cancellation rulings remain applicable.
+- PR #16 (`842fd16`, implementation `2215834`) is an ancestor of this branch.
+  `devenv shell -- cargo test --locked --test remote_synchronization
+  context_first_current_fast_forward_local_ahead` passed: one real-SSH case.
+  It invokes public save then public synchronization without fixture index repair.
+
+### Compatibility review
+
+Independent read-only code review at `424c60f` found no blocking behavioral
+incompatibility from PRs #15/#16. The reviewer inspected code, approved documents,
+operation schemas/read DTOs, rejection regressions and remote identity/replay
+guards; it did not run Rust or change files.
+
+| Finding | Classification | Implementation consequence |
+| --- | --- | --- |
+| PR #15 keeps an effect-free rejected local row as completed/rejected; same-ID same-target reuse resets that row to a new call, while mismatch checks run first | Compatible lifecycle refinement | Rejected-row reset does not reset compound identity: lookup existing binding independently of `RecoveryRecord.is_new`; retain the child across rejection, refresh, reopen and exact retry. Pin this in Task 2 tests. |
+| Written/uncertain effects remain pending; completed/rejected is not checkpoint proof | Existing contract | Do not start a child or invent a receipt from journal status. Prove immutable Git evidence; preserve Saved on every post-checkpoint failure. |
+| A rejected parent ID still occupies local identity and cannot become a remote ID | Existing guard | Generated child uniqueness includes every local row, rejected rows included, plus remote and binding identities. |
+| PR #16 refreshes only committed owned live-index entries, including no-change repair, preserving unrelated entries | Prerequisite satisfied | No index-refresh workaround; foreign lock/collision still maps to saved-local publication recovery. |
+| Additional normal submit caller: `tests/journal_rejection.rs:250` | Caller-list correction | Migrate with `tests/local_authoring.rs`, `tests/recovery_foundation_gate.rs`, `tests/remote_merge_recovery.rs` and `src/repository/remote/sync_tests.rs`. No desktop or CLI submit caller exists. |
+| Wave 03 DTO/schema explains completed/rejected; action name unchanged | Documentation correction | Preserve `submit_comment` operation identity and rejection read semantics. Retiring SyncDeferred changes no published schema. |
+
+The conflict-block amendment describes publication of every context. Existing
+local authoring still refuses a write inside the context owned by a pending
+merge; composition preserves that guard rather than weakening Cycle 06.
+
+### Baseline evidence
+
+All commands from the ticket worktree via Devenv at unchanged `424c60f`:
+
+| Gate | Result |
+| --- | --- |
+| `cargo check --all-features --locked` | PASS |
+| `cargo fmt --check` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `cargo test --all-features --locked` | PASS on rerun with 3,600,000 ms tool budget |
+| `cargo run --locked --bin manyhands-cli` | PASS; no window |
+
+The first full test attempt hit the 1,200,000 ms tool limit during the SSH
+synchronization suite after 38 passing cases. No test failure was reported;
+the next case (`remote_change_during_fetch`) passed in isolation. The rerun
+completed all suites, including lib 468, local authoring 131, journal rejection
+18, foundation recovery 51, real-SSH merge recovery 25, remote observation 15,
+synchronization 63, SSH fixture 31, transport 105 and doctests 9. One existing
+read-characterization test is intentionally ignored. No existing baseline
+failure found. Full rerun output is in the session tool log
+`tool_125cf44d8001yWWQ9isW7Y6AJm`; interrupted attempt in
+`tool_125c05f8b001DT1z27ko2T9hSl`. Native evidence for this Cycle remains pending
+authorized publication/dispatch. No Rust, Cargo, lockfile or CI edit at Task 0.

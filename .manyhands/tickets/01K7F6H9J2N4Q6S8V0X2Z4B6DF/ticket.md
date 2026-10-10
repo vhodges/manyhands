@@ -22,12 +22,14 @@ item-context synchronization action.
 - [x] Record planning/rebase and skill-based self-review checkpoints as comments.
 - [x] User approval of Cycle, design, and implementation plan (2026-10-07).
 - [x] Rebase onto merged Cycle 06 and amend the plan against it (2026-10-09).
-- [ ] Ticket `01M4GD0KKXW684QBA49F6EX3WE` (save leaves the Git index current) merged to the base.
-- [ ] Explicit implementation authorization after dependency gates pass.
+- [x] Ticket `01M4GD0KKXW684QBA49F6EX3WE` (save leaves the Git index current) merged to the base (PR #16, `842fd16`).
+- [x] Explicit implementation authorization after dependency gates pass (owner hand-off, 2026-10-10).
 
 The user approved the planning documents on 2026-10-07 and authorized the
-approval-state updates and local planning commit. Implementation remains
-unauthorized and dependency-gated; this ticket stays open. The
+approval-state updates and local planning commit. The 2026-10-10 hand-off
+authorizes Task 0 rebase, Tasks 1–6 implementation, local commits, local gates
+and ticket comments. Task 0 dependency and baseline checks pass; this ticket
+stays open. The
 [execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-execution.md)
 records the decision matrix, internal rulings and verification/lifecycle gates.
 
@@ -36,8 +38,9 @@ records the decision matrix, internal rulings and verification/lifecycle gates.
 Wave 02 implementation is blocked until every Wave 02 entry-gate prerequisite
 is approved and Wave 01 verification evidence is current. Cycle 06's approved,
 reviewed merge/conflict implementation is present on the base since 2026-10-09
-(main `5e4fad6`). The index ticket above must also be merged, because comment
-submission synchronizes directly after a checkpoint. No Cycle 06 work will be
+(main `5e4fad6`). The index ticket above is merged into the refreshed base
+`f87ce81`; the public save → synchronize real-SSH check passes without an
+index refresh. No Cycle 06 work will be
 duplicated here. Native evidence remains pending
 separately authorized execution or explicit owner deferral.
 
