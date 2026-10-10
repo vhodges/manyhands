@@ -935,27 +935,19 @@ fn another_body(world: &World, token: &str) -> Mutation {
 
 #[test]
 fn a_changed_reuse_after_an_unsettled_commit_is_partial_with_that_commit() {
-    let world = World::new();
+    // The process dies after the domain committed and completed its row
+    // and before the record is settled.
+    let world = failing_at(FailurePoint::BeforeRequestSettlement);
     let token = world.token(TICKET_A);
-    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-    assert_eq!(first.outcome, Outcome::Success);
-    // The process died after the domain committed and completed its row and
-    // before the record was settled. No fault point reaches that yet, so
-    // the record is put back as accepted through the store.
-    items::index(world.data.path())
-        .execute(
-            "UPDATE request_records SET state = 'accepted', outcome = NULL, code = NULL,
-                 effect_write = NULL, effect_checkpoint = NULL, effect_discovery = NULL,
-                 effect_publication = NULL, effect_integration = NULL, effect_cleanup = NULL,
-                 commit_oid = NULL, result_data = NULL, finished_at = NULL",
-            [],
-        )
-        .unwrap();
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    let commit = world.branch_tip(TICKET_A).map(|tip| tip.to_string());
+    assert!(commit.is_some(), "the save committed");
     let record = world.record(REQUEST_1).expect("a record");
     assert_eq!(record.state, RequestState::Accepted);
     assert!(
         !world
-            .journal_row(&first.operation_id.clone().unwrap())
+            .journal_row(&record.operations[0].operation_id.to_string())
             .in_flight()
     );
 
@@ -970,7 +962,7 @@ fn a_changed_reuse_after_an_unsettled_commit_is_partial_with_that_commit() {
     );
     assert_eq!(mismatch.effects.write, WriteEffect::Written);
     assert_eq!(mismatch.effects.checkpoint, CheckpointEffect::Committed);
-    assert_eq!(mismatch.effects.commit_oid, first.effects.commit_oid);
+    assert_eq!(mismatch.effects.commit_oid, commit);
     assert_eq!(world.record(REQUEST_1), Some(record));
     assert_eq!(world.branch_commits(TICKET_A), 1);
 }

@@ -25,7 +25,8 @@ use crate::results::{
 };
 
 use super::{
-    OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService, keys,
+    FailurePoint, OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService,
+    keys,
     keys::{SessionCredentialProvider, SessionCredentials},
     recovery::{self, FinalKind, JournalRow},
     remote,
@@ -501,10 +502,45 @@ impl RepositoryService {
     /// Makes the binding's domain call for an accepted request and settles
     /// its record from what the call left.
     fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
+        self.called(reply, accepted, || reply.binding.run(self, accepted))
+    }
+
+    /// Makes a domain call, `call`, for an accepted request and settles its
+    /// record from what the call left.
+    ///
+    /// The two fault points stand in for a process that died: at either,
+    /// the call ends with its record exactly as it was, and what it
+    /// returns is not a result of the request.
+    fn called(
+        &self,
+        reply: &Reply<'_>,
+        accepted: &Accepted,
+        call: impl FnOnce() -> Ran,
+    ) -> Envelope<MutationDataDto> {
+        let died = |point| {
+            self.dies_at(point, accepted)
+                .then(|| reply.envelope(Answer::stopped(ResultCode::InternalError), None, false))
+        };
+        if let Some(envelope) = died(FailurePoint::BeforeRequestDomainCall) {
+            return envelope;
+        }
         // The cache guard is not held here: the record functions release
         // it before they return, and the domain call takes it itself.
-        let ran = reply.binding.run(self, accepted);
+        let ran = call();
+        if let Some(envelope) = died(FailurePoint::BeforeRequestSettlement) {
+            return envelope;
+        }
         self.settled(reply, accepted, ran)
+    }
+
+    /// Whether a test has this call end at `point`.
+    fn dies_at(&self, point: FailurePoint, accepted: &Accepted) -> bool {
+        self.should_inject(
+            point,
+            RepositoryOperation::Read,
+            Path::new(accepted.scope.as_str()),
+        )
+        .unwrap_or(false)
     }
 
     /// The envelope of what a call found or did, with its record settled
@@ -679,11 +715,12 @@ impl RepositoryService {
         };
         let before = binding.reenter(self, &accepted);
         let reply = Reply { binding, identity };
-        let ran = match before {
-            Ok(before) => binding.rerun(self, &accepted, &before),
-            Err(ran) => ran,
-        };
-        Some(self.settled(&reply, &accepted, ran))
+        Some(match before {
+            Ok(before) => self.called(&reply, &accepted, || {
+                binding.rerun(self, &accepted, &before)
+            }),
+            Err(ran) => self.settled(&reply, &accepted, ran),
+        })
     }
 }
 

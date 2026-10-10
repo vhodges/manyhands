@@ -788,6 +788,13 @@ pub enum FailurePoint {
     ResolutionBeforeMetadataRetirement,
     ResolutionAfterIndexLockRetirement,
     ResolutionAfterMetadataCleanup,
+    /// The mutation boundary, after a request is accepted or entered again
+    /// and before its domain call: the call ends there as a process that
+    /// died would leave it, with its record untouched.
+    BeforeRequestDomainCall,
+    /// The mutation boundary, after the domain call and before the record
+    /// is settled: the result is discarded and the record left as it was.
+    BeforeRequestSettlement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

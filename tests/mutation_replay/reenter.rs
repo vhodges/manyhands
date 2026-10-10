@@ -198,3 +198,147 @@ fn a_retry_completes_a_save_interrupted_at_each_fault_point() {
         }
     }
 }
+
+/// A world whose first accepted request loses its output: the domain call
+/// runs, and the result is discarded before the record is settled, as a
+/// process that died there would leave it.
+fn losing_output() -> World {
+    failing_at(FailurePoint::BeforeRequestSettlement)
+}
+
+/// Asserts that the request's record is as a dead process leaves it:
+/// accepted, with no result, and its operation completed.
+fn assert_output_lost(world: &World, request_id: &str, lost: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        (lost.outcome, lost.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(lost.effects.commit_oid, None);
+    let record = world.record(request_id).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
+    assert_eq!(record.result, None);
+    assert!(matches!(
+        world.journal_row(&record.operations[0].operation_id.to_string()),
+        JournalRow::Final {
+            owes_work: false,
+            ..
+        }
+    ));
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_retry_after_lost_output_reports_the_commit_and_makes_none() {
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    assert_eq!(world.branch_commits(TICKET_A), 1, "the save committed");
+    let commit = world.branch_tip(TICKET_A).unwrap();
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit), "no second commit");
+}
+
+#[test]
+fn a_retry_after_lost_output_and_another_save_reports_the_first_commit() {
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    let first_commit = world.branch_tip(TICKET_A).unwrap();
+
+    // Another request saves the ticket with other content.
+    world.reopen();
+    let second = world.execute(REQUEST_2, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(second.outcome, Outcome::Success);
+    let second_commit = world.branch_tip(TICKET_A).unwrap();
+    assert_ne!(second_commit, first_commit);
+    let saved = world.worktree_source(TICKET_A);
+    assert!(saved.contains("An earlier body."));
+
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.effects.write, WriteEffect::Written);
+    assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(retry.effects.discovery, DiscoveryEffect::Current);
+    assert_eq!(retry.effects.commit_oid, Some(first_commit.to_string()));
+    assert!(recovery_actions(&retry).is_empty());
+    // The later save is still what the branch and the file hold.
+    assert_eq!(world.branch_tip(TICKET_A), Some(second_commit));
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+    assert_eq!(world.worktree_source(TICKET_A), saved);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.result.unwrap().effects, retry.effects);
+
+    // And again, from the record.
+    let replay = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(replay.effects, retry.effects);
+    assert_eq!(world.worktree_source(TICKET_A), saved);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_retry_after_the_lost_output_of_a_save_that_changed_nothing_is_a_no_op() {
+    // `false`: the ticket's first save, of what its file already holds.
+    // `true`: the same content saved twice, so an earlier commit on the
+    // branch holds exactly what the request intends.
+    for committed_before in [false, true] {
+        let what = format!("committed before: {committed_before}");
+        let mut world = World::new();
+        let mut commits = 0;
+        if committed_before {
+            let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+            assert_eq!(earlier.outcome, Outcome::Success, "{what}");
+            commits = 1;
+        }
+        world.service =
+            FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+        let token = world.token(TICKET_A);
+        let draft = if committed_before {
+            World::draft(TITLE, BODY)
+        } else {
+            World::unchanged_draft()
+        };
+        let save = |world: &World| {
+            Mutation::TicketSave(TicketSaveInput {
+                draft: draft.clone(),
+                ..world.save_input(TICKET_A, &token)
+            })
+        };
+        let lost = world.execute(REQUEST_1, save(&world));
+        assert_output_lost(&world, REQUEST_1, &lost);
+        assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
+
+        world.reopen();
+        let retry = world.execute(REQUEST_1, save(&world));
+        assert_eq!(
+            (retry.outcome, retry.code),
+            (Outcome::Noop, ResultCode::AlreadyApplied),
+            "{what}"
+        );
+        assert_eq!(retry.effects.write, WriteEffect::Unchanged, "{what}");
+        assert_eq!(
+            retry.effects.checkpoint,
+            CheckpointEffect::Unchanged,
+            "{what}"
+        );
+        assert_eq!(
+            retry.effects.discovery,
+            DiscoveryEffect::NotRequested,
+            "{what}"
+        );
+        assert_eq!(retry.effects.commit_oid, None, "{what}");
+        assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
+        let record = world.record(REQUEST_1).expect("a record");
+        assert_eq!(record.state, RequestState::Finished, "{what}");
+        assert_eq!(record.result.unwrap().outcome, Outcome::Noop, "{what}");
+    }
+}
