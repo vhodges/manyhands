@@ -612,6 +612,16 @@ impl RepositoryService {
                     },
                 );
             }
+            // "Nothing in flight" is read from the journal row, and a call
+            // of the request that was accepted and has not yet begun its
+            // row shows none. A second call that enters in that window and
+            // stops with no row deletes the record under the first, which
+            // then does its work and finds no record to settle. That is a
+            // known limit and it is safe: the first call's caller has its
+            // result, no effect is repeated, and the next call of the
+            // request has no record, so it is treated as new and answered
+            // by the already-applied rule, which writes nothing and claims
+            // no commit.
             Settlement::Delete => {
                 let _ = self.delete_request(accepted.request_id, accepted.attempt);
             }

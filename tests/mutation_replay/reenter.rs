@@ -1647,3 +1647,401 @@ fn an_older_commit_of_the_same_content_is_not_reported_after_the_branch_was_rese
         Some(RequestState::Finished)
     );
 }
+
+/// Starts the save on another thread, with a service of its own, and
+/// holds it after the request is accepted and before its domain call.
+/// Returns the thread and what lets it go on.
+fn first_call_held_before_the_domain(
+    world: &World,
+    token: &str,
+) -> (
+    std::thread::JoinHandle<Envelope<MutationDataDto>>,
+    std::sync::mpsc::Sender<()>,
+) {
+    use std::sync::mpsc;
+
+    let (accepted, is_accepted) = mpsc::channel::<()>();
+    let (go, gone) = mpsc::channel::<()>();
+    let service = manyhands::repository::RepositoryService::open_at(world.data.path()).unwrap();
+    service.set_request_hook_for_testing(move || {
+        accepted.send(()).unwrap();
+        gone.recv().unwrap();
+    });
+    let root = world.root.clone();
+    let token = token.to_owned();
+    let thread = std::thread::spawn(move || {
+        crate::support::mutation::execute_with(&service, REQUEST_1, save_at(&root, &token))
+    });
+    is_accepted.recv().unwrap();
+    (thread, go)
+}
+
+/// The known limit of settling from the journal row alone: a call that
+/// re-enters while the first call has not yet begun its row finds nothing
+/// in flight. The backstop is the already-applied rule.
+#[test]
+fn a_record_deleted_under_a_first_call_that_had_not_begun_is_answered_as_already_applied() {
+    use crate::support::hold_lease_in_child;
+    use manyhands::repository::LeaseKind;
+
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let (first, go) = first_call_held_before_the_domain(&world, &token);
+
+    // An unrelated operation holds the repository lease. The second call
+    // of the request reads no journal row, cannot take the lease, and
+    // still finds no row: nothing is in flight, so the record is deleted.
+    let lease = hold_lease_in_child(&world.root, world.data.path(), LeaseKind::Repository);
+    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (second.outcome, second.code),
+        (Outcome::Error, ResultCode::Busy)
+    );
+    assert_eq!(second.effects, Effects::not_requested());
+    assert!(world.record(REQUEST_1).is_none(), "the record is deleted");
+    lease.release();
+
+    // The first call then runs. Its caller gets its commit; there is no
+    // record left for it to settle.
+    go.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap();
+    assert_eq!(first.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // A later retry is a request no record holds. What it asks for is
+    // there and committed: nothing is written and no commit is claimed.
+    let source = world.worktree_source(TICKET_A);
+    let later = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_no_op_without_a_commit(&later, "the later retry");
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(world.worktree_source(TICKET_A), source);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_second_call_that_runs_before_the_first_reaches_the_domain_commits_and_finishes() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let (first, go) = first_call_held_before_the_domain(&world, &token);
+
+    // The second call enters the record, finds nothing begun, and does
+    // the work itself.
+    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &second, 1, "the second call");
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 2);
+    let commit = second.effects.commit_oid.clone();
+
+    // The first call's save then finds everything done under its
+    // operation ID. It made no commit and says so; the record is the
+    // second call's and is not changed.
+    go.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_no_op_without_a_commit(&first, "the first call");
+    assert_eq!(first.operation_id, second.operation_id);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!((record.state, record.attempt), (RequestState::Finished, 2));
+    assert_eq!(record.result.unwrap().effects.commit_oid, commit);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_third_call_finishes_what_a_killed_second_call_committed() {
+    // The first call writes and stops.
+    let mut world = failing_at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.outcome, Outcome::Partial);
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+
+    // The second re-enters, commits, and its process is killed before it
+    // settles the record.
+    killed_at(&world, &token, FailurePoint::BeforeRequestSettlement);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    world.reopen();
+    let third = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &third, 1, "the third call");
+    assert_eq!(third.effects.commit_oid, Some(commit));
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
+}
+
+#[test]
+fn a_hand_off_that_keeps_failing_keeps_the_commit_and_the_record() {
+    let mut world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending);
+    let commit = first.effects.commit_oid.clone().expect("a commit");
+
+    // The hand-off fails twice more.
+    for attempt in [2, 3] {
+        world.service = FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
+            .open_service(world.data.path());
+        let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        assert_eq!(
+            (retry.outcome, retry.code, retry.failure_class()),
+            (
+                Outcome::Partial,
+                ResultCode::DiscoveryPending,
+                Some(FailureClass::Incomplete)
+            ),
+            "attempt {attempt}"
+        );
+        assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
+        assert_eq!(retry.effects.discovery, DiscoveryEffect::Pending);
+        assert_eq!(retry.effects.commit_oid, Some(commit.clone()));
+        assert_eq!(recovery_actions(&retry), ["operation.resume"]);
+        assert_eq!(world.branch_commits(TICKET_A), 1, "attempt {attempt}");
+        let record = world.record(REQUEST_1).expect("the record stays");
+        assert_eq!(
+            (record.state, record.attempt),
+            (RequestState::Accepted, attempt)
+        );
+    }
+
+    world.reopen();
+    let last = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &last, 1, "the last retry");
+    assert_eq!(last.effects.commit_oid, Some(commit));
+}
+
+#[test]
+fn a_rejected_attempt_that_died_before_its_record_was_deleted_leaves_nothing_on_the_retry() {
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    let token = world.token(TICKET_A);
+
+    // Between the boundary's check and the domain's, someone edits the
+    // file. The domain rejects the save and closes its row; the process
+    // dies before the record is deleted.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let file = world
+        .worktree(TICKET_A)
+        .join(crate::support::items::ticket_path(TICKET_A));
+    world
+        .service
+        .set_request_hook_for_testing(move || std::fs::write(&file, foreign_source()).unwrap());
+    let died = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation_id = record.operations[0].operation_id.to_string();
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // The same input again: rejected again, and this time nothing is left.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_external_change(&retry, "the retry");
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.request_rows(), 1, "only the earlier request's");
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(world.worktree_source(TICKET_A), foreign_source());
+
+    // The request ID is free: with a fresh read it runs.
+    let fresh = world.execute(REQUEST_1, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(
+        (fresh.outcome, fresh.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}
+
+#[test]
+fn a_re_entry_that_cannot_set_up_its_call_keeps_the_record_of_a_request_that_committed() {
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    let commit = world.branch_tip(TICKET_A).unwrap();
+
+    // The repository cannot be resolved for a while: its Git directory is
+    // away. The index, with the record and the journal, is where it was.
+    let git = world.root.join(".git");
+    let away = world.root.join(".git-away");
+    std::fs::rename(&git, &away).unwrap();
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    std::fs::rename(&away, &git).unwrap();
+    assert_ne!(retry.outcome, Outcome::Success);
+    assert_ne!(retry.outcome, Outcome::Noop);
+    assert_eq!(retry.code, ResultCode::NotRepository);
+    assert_eq!(retry.effects, Effects::not_requested());
+    // The request committed and its operation is complete: nothing is in
+    // flight, and the record stays all the same, because this call
+    // learned nothing of what the request did.
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(record.result, None);
+
+    // The next retry finishes it with its commit.
+    world.reopen();
+    let again = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &again, 1, "the next retry");
+    assert_eq!(again.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
+}
+
+#[test]
+fn a_retry_during_which_git_becomes_unreadable_claims_nothing() {
+    // The first attempt committed and stopped before its hand-off.
+    let mut world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending);
+    let commit = world.branch_tip(TICKET_A).unwrap();
+
+    // The file as it was committed when the request was accepted: the
+    // evidence reads it to tell the request's own commit, and the save,
+    // which finds its file written and committed, never opens it.
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let blob = repository
+        .find_commit(world.primary_head())
+        .unwrap()
+        .tree()
+        .unwrap()
+        .get_path(std::path::Path::new(&crate::support::items::ticket_path(
+            TICKET_A,
+        )))
+        .unwrap()
+        .id()
+        .to_string();
+    let object = repository
+        .path()
+        .join("objects")
+        .join(&blob[..2])
+        .join(&blob[2..]);
+    drop(repository);
+    let intact = std::fs::read(&object).unwrap();
+    let mut permissions = std::fs::metadata(&object).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&object, permissions).unwrap();
+
+    // The retry reads its journal row and its evidence, which are fine.
+    // Then, before its domain call, the committed file's object stops
+    // being one: the evidence cannot be read after the call.
+    world.reopen();
+    {
+        let object = object.clone();
+        world.service.set_request_hook_for_testing(move || {
+            std::fs::write(&object, b"not an object").unwrap()
+        });
+    }
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&retry), ["request.retry"]);
+    // The save itself ran to its end: its row and its hand-off are
+    // complete. Only what the request committed could not be read.
+    assert!(
+        !world
+            .journal_row(&first.operation_id.clone().unwrap())
+            .in_flight()
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(record.result, None);
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit));
+
+    std::fs::write(&object, intact).unwrap();
+    world.reopen();
+    let again = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &again, 1, "the next retry");
+    assert_eq!(again.effects.commit_oid, Some(commit.to_string()));
+}
+
+/// Pins what a retry returns once the branch the request committed to is
+/// gone, and its commit with it. Neither case is a no-op: nothing holds
+/// what the request asked for, committed.
+#[test]
+fn a_retry_after_lost_output_and_the_deletion_of_the_context_branch() {
+    // `false`: only the branch is deleted, and the worktree is left with
+    // its head pointing at nothing. `true`: the whole editing context is
+    // removed, worktree and branch.
+    for whole in [false, true] {
+        let what = format!("the whole context removed: {whole}");
+        let mut world = losing_output();
+        let token = world.token(TICKET_A);
+        let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        assert_output_lost(&world, REQUEST_1, &lost);
+        let first_commit = world.branch_tip(TICKET_A).unwrap();
+
+        let repository = git2::Repository::open(&world.root).unwrap();
+        if whole {
+            std::fs::remove_dir_all(world.worktree(TICKET_A)).unwrap();
+            for name in repository.worktrees().unwrap().iter().flatten() {
+                repository
+                    .find_worktree(name)
+                    .unwrap()
+                    .prune(Some(
+                        git2::WorktreePruneOptions::new()
+                            .working_tree(true)
+                            .valid(true),
+                    ))
+                    .unwrap();
+            }
+        }
+        repository
+            .find_reference(&format!("refs/heads/{}", World::branch(TICKET_A)))
+            .unwrap()
+            .delete()
+            .unwrap();
+        drop(repository);
+
+        world.reopen();
+        let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        if whole {
+            // The save, called again, makes the context from primary,
+            // finds the file as the request expected it, and writes and
+            // commits: the commit is new and is the request's.
+            assert_eq!(
+                (retry.outcome, retry.code),
+                (Outcome::Success, ResultCode::Ok),
+                "{what}"
+            );
+            assert_eq!(world.branch_commits(TICKET_A), 1, "{what}");
+            let tip = world.branch_tip(TICKET_A).unwrap();
+            assert_ne!(tip, first_commit, "{what}");
+            assert_eq!(retry.effects.commit_oid, Some(tip.to_string()), "{what}");
+            assert!(world.worktree_source(TICKET_A).contains(TITLE), "{what}");
+            let record = world.record(REQUEST_1).expect("a record");
+            assert_eq!(record.state, RequestState::Finished, "{what}");
+        } else {
+            // The save cannot work in a worktree whose branch is gone.
+            // Nothing is claimed; the operation had completed, so nothing
+            // is in flight and the record is deleted.
+            assert_eq!(
+                (retry.outcome, retry.code),
+                (Outcome::Error, ResultCode::InternalError),
+                "{what}"
+            );
+            assert_eq!(retry.effects, Effects::not_requested(), "{what}");
+            assert!(world.record(REQUEST_1).is_none(), "{what}");
+            assert_eq!(world.branch_tip(TICKET_A), None, "{what}");
+            // The file still holds what the request wrote, uncommitted.
+            assert!(world.worktree_source(TICKET_A).contains(TITLE), "{what}");
+        }
+        assert_eq!(world.pending_journal_rows(), 0, "{what}");
+    }
+}
