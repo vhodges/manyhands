@@ -1340,3 +1340,67 @@ fn a_retry_after_a_process_killed_before_it_settled_reports_its_commit() {
     assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
     assert_eq!(retry.effects.commit_oid, Some(commit));
 }
+
+#[test]
+fn a_retry_that_cannot_read_git_changes_nothing_and_claims_nothing() {
+    let mut world = losing_output();
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    let commit = world.branch_tip(TICKET_A).unwrap();
+
+    // The file the request committed cannot be read from Git: its object
+    // is there and is not an object.
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let blob = repository
+        .find_commit(commit)
+        .unwrap()
+        .tree()
+        .unwrap()
+        .get_path(std::path::Path::new(&crate::support::items::ticket_path(
+            TICKET_A,
+        )))
+        .unwrap()
+        .id()
+        .to_string();
+    let object = repository
+        .path()
+        .join("objects")
+        .join(&blob[..2])
+        .join(&blob[2..]);
+    drop(repository);
+    let intact = std::fs::read(&object).unwrap();
+    let mut permissions = std::fs::metadata(&object).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&object, permissions).unwrap();
+    std::fs::write(&object, b"not an object").unwrap();
+
+    // Whether the request committed cannot be told. It is not called a
+    // no-op, which would be stored and replayed for good; no commit is
+    // reported; and the record is neither finished nor deleted.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::InternalError,
+            Some(FailureClass::Internal)
+        )
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&retry), ["request.retry"]);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(record.result, None);
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit));
+
+    // Once Git can be read again the same request is finished with its
+    // commit.
+    std::fs::write(&object, intact).unwrap();
+    world.reopen();
+    let again = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &again, 1, "the next retry");
+    assert_eq!(again.effects.commit_oid, Some(commit.to_string()));
+}
