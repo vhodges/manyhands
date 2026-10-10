@@ -36,7 +36,9 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
   development. Part A (Tasks 1–4) is complete at `d0dbc40` with its
   checkpoint gate and whole-range review; see the ticket comment of
   2026-10-10.
-- [ ] Implementation authorization for Parts B and C.
+- [x] Implementation authorization for Part B: 2026-10-10. CI waits until the
+  Cycle is complete.
+- [ ] Implementation authorization for Part C.
 
 ## Entry Gate
 
