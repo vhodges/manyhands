@@ -1613,6 +1613,87 @@ fn comment_publication_discovery_releases_leases_and_retry_preserves_active_inde
 }
 
 #[test]
+fn comment_publication_retry_without_a_checkpoint_or_binding_never_accepts_a_replacement() {
+    let f = Fixture::new();
+    let request = f.request();
+    let id = request.comment.target.operation_id;
+    let retry = RetryCommentPublicationRequest {
+        root: f.root.path().into(),
+        operation_id: id,
+        approval: None,
+        confirmed_identity: None,
+        restart: false,
+    };
+    assert!(
+        matches!(f.service.retry_comment_publication(retry.clone(),&mut SessionCredentials::new(NoPrompt)),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::BeforeCheckpointCommit,
+    )
+    .unwrap();
+    assert!(
+        failing
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    let path = f.context.worktree.join(format!(
+        ".manyhands/comments/{}/{}.md",
+        f.item, request.comment.comment_id
+    ));
+    let bytes = std::fs::read(&path).unwrap();
+    let head = Repository::open(&f.context.worktree)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target();
+    assert!(
+        matches!(f.service.retry_comment_publication(retry,&mut SessionCredentials::new(NoPrompt)),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        head
+    );
+}
+
+#[test]
+fn comment_publication_cancel_before_unused_child_has_no_effect() {
+    let f = Fixture::new();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert!(
+        !f.service
+            .cancel_comment_publication(f.root.path(), receipt.operation_id)
+            .unwrap()
+    );
+    assert_eq!(
+        f.db()
+            .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+}
+
+#[test]
 fn comment_publication_recorded_receipt_refuses_reset_removed_or_replaced_comment_without_transport()
  {
     for change in [0, 1, 2] {

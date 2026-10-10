@@ -507,3 +507,71 @@ All-target/all-feature locked clippy and fmt pass; `git diff --check` passes.
 No CI dispatch/native-pass claim. Full merge/conflict, cancellation/restart,
 identity-removal/confirmation, collaborator AlreadyCurrent and comprehensive
 transport/crash acceptance remain Tasks 4–5; final gates/review remain Task 6.
+
+## Task 4: Retry and Cancellation — Blocked 2026-10-10
+
+Task review base `b07ca41`. Added public-API acceptance for explicit restart after
+a real SSH disconnect, terminal cancellation followed by a later ordinary context
+synchronization, historical replay against the original committed blob despite
+edited live text/changed Push URL, receiptless/unknown retry refusal and unused
+child cancellation. The previous eight SSH cases plus these three pass (11);
+focused publication library 34 passes. Current all-target/all-feature locked
+clippy and fmt pass. No Task 4 completion/final-gate claim.
+
+### Real SSH blocker: applied-but-unreleased resolution cancellation
+
+The new `conflict_cancel_resolution_retries_original_comment` case is a deliberate
+failing regression of the approved cancellation contract. Actual public sequence:
+
+1. Two clones checkpoint incompatible document titles; B publishes its context.
+2. A compound comment checkpoints locally and receives ConflictPending through
+   its bound child. Parked-parent cancellation is correctly a no-op; deliberate
+   restart still reports ConflictPending.
+3. Resolve by the receipt's child ID, retaining the identical request. Inject
+   `ResolutionBeforeMetadataRetirement`: the resolution commit/checkpoint is
+   durably applied, but owned merge metadata and index/sentinel cleanup remain.
+4. Parent cancellation is accepted; body-free explicit restart reports Saved /
+   pending Interrupted, **but the child journal becomes terminal `cancelled`**.
+   Numeric output category 201 proves that phase; the test requires interrupted
+   and fails. No comment or child is recreated.
+
+Independent read-only diagnosis confirms the defect is in existing Cycle 06:
+`remote/reservation.rs::pending_recovery_stage` recognizes conflict_pending,
+resolution_prepared and commit_prepared, but not an applied resolution whose
+release evidence is unfinished. `acknowledge` therefore takes terminal cancel.
+`remote/state.rs::integration_resolution_released` separately proves that applied
+is not released: the artifact is still published here. Exact resolution
+reacquisition allows only Interrupted/Reconciling, so the terminal child cannot
+finish cleanup through the current public API. New ordinary synchronization is
+not an immediate escape while retained merge metadata/sentinel remain.
+
+This differs from the approved recoverable-stop promise for an owned resolution
+and the Cycle 06 owner ruling for a resolve that failed midway. Existing tests
+cover cancellation at resolution_prepared/commit_prepared, completing resolve
+that clears cancellation, and applied-before-retirement failure without cancel;
+they do not cover this combination. It is not the recorded applying/unrecorded
+conflict exception.
+
+### Proposed bounded repair, awaiting owner scope authorization
+
+Extend the existing recoverable-cancellation predicate, in this operation's
+newest window only, to recognize an applied step with its own recorded resolution
+attempt whose **existing resolution-release proof is not complete**. Preserve
+terminal cancellation for ordinary clean applied merges and completed/released
+resolutions. The same candidate and identical resolution request then finish
+owned cleanup after one acknowledged recoverable stop, followed by normal
+body-free publication retry. Keep the failing public SSH regression and add
+focused predicate/terminal-negative coverage.
+
+This is a change to shared Cycle 06 behavior, beyond this Cycle's delegation-only
+scope. Stop before shared Rust behavior edits. Ask the owner to authorize this
+narrow scope exception here, or a separate prerequisite defect repair. Upon
+authorization, clarify the existing design/Cycle cancellation wording that
+"owned resolution" includes applied-but-unreleased cleanup and qualify the
+Cycle 06 evidence ledger with this newly uncovered combination. No abandonment,
+second bound child, broad cancelled-child revival, merge algorithm or ownership
+bypass is proposed.
+
+Current branch contains the failing regression as a local blocker checkpoint;
+ticket remains open and not review-ready. Task 5 comprehensive acceptance and
+Task 6 final/native gates remain pending. No push, CI dispatch, PR or closure.

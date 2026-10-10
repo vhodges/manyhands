@@ -35,6 +35,22 @@ fn main() {
     ssh_harness::run_with_output_privacy(CASES, &[]);
 }
 const CASES: &[ssh_harness::Case] = &[
+    (
+        "conflict_cancel_resolution_retries_original_comment",
+        conflict_cancel_resolution,
+    ),
+    (
+        "interrupted_child_requires_explicit_restart",
+        interrupted_restart,
+    ),
+    (
+        "terminal_cancel_uses_later_ordinary_context_sync",
+        terminal_cancel,
+    ),
+    (
+        "historical_replay_uses_original_blob_not_current_text",
+        historical_replay,
+    ),
     ("document_root_and_nested_replies", || {
         published_thread(AuthoringKind::Document)
     }),
@@ -774,6 +790,328 @@ fn remote_index_pending() -> Result<(), FixtureError> {
     assert!(!index.local_pending && !index.remote_pending);
     assert_eq!(pair.server.helper_invocations(), calls);
     assert_eq!(pair.server.receive_updates().len(), updates);
+    pair.privacy()
+}
+
+fn retry_request(
+    pair: &Pair,
+    receipt: &CommentReceipt,
+    restart: bool,
+) -> RetryCommentPublicationRequest {
+    RetryCommentPublicationRequest {
+        root: pair.a.root.clone(),
+        operation_id: receipt.operation_id,
+        approval: Some(pair.approval()),
+        confirmed_identity: None,
+        restart,
+    }
+}
+
+fn save_document_title(side: &Side, title: &str) -> Result<git2::Oid, FixtureError> {
+    let item: canonical::ItemId = fixed(DOC.parse())?;
+    fixed(side.service.prepare_context(AuthoringTarget {
+        root: side.root.clone(),
+        kind: AuthoringKind::Document,
+        item_id: item.clone(),
+        intent: ContextIntent::Edit,
+        operation_id: OperationId::new(),
+    }))?;
+    let bytes = fixed(std::fs::read(side.context(&item).join("docs/a.md")))?;
+    let document = match fixed(canonical::parse_item(
+        Path::new("docs/a.md"),
+        fixed(std::str::from_utf8(&bytes))?,
+    ))? {
+        canonical::CanonicalItem::Document(d) => d,
+        _ => return Err(FixtureError),
+    };
+    let result = fixed(side.service.save_document(SaveDocumentRequest {
+        target: AuthoringTarget {
+            root: side.root.clone(),
+            kind: AuthoringKind::Document,
+            item_id: item,
+            intent: ContextIntent::Edit,
+            operation_id: OperationId::new(),
+        },
+        source_path: Some("docs/a.md".into()),
+        destination_path: "docs/a.md".into(),
+        draft: DocumentDraft {
+            title: title.into(),
+            body: document.body,
+        },
+        expected_source: Some(ExpectedPathObservation::from_bytes(&bytes)),
+        expected_destination: ExpectedPathObservation::from_bytes(&bytes),
+    }))?;
+    match result {
+        SaveOutcome::Saved {
+            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            ..
+        } => Ok(commit_oid),
+        _ => Err(FixtureError),
+    }
+}
+
+fn sync_side(
+    pair: &Pair,
+    side: &Side,
+    kind: AuthoringKind,
+    item: canonical::ItemId,
+) -> Result<git2::Oid, FixtureError> {
+    let result = fixed(side.service.synchronize_remote(
+        SynchronizeRemoteRequest {
+            root: side.root.clone(),
+            operation_id: OperationId::new(),
+            target: SynchronizationTarget::Context {
+                kind,
+                item_id: item,
+            },
+            approval: Some(pair.approval()),
+            confirmed_identity: None,
+            restart: false,
+        },
+        &mut SessionCredentials::new(Provider::new(Arc::new(AtomicUsize::new(0)))),
+    ))?;
+    let outcome = match result {
+        SynchronizationResult::Complete(o) => o,
+        SynchronizationResult::IndexPending(i) => i.authoritative,
+    };
+    match outcome {
+        SynchronizationOutcome::Published { oid, .. }
+        | SynchronizationOutcome::AlreadyCurrent { oid, .. } => Ok(oid),
+        _ => Err(FixtureError),
+    }
+}
+
+fn conflict_cancel_resolution() -> Result<(), FixtureError> {
+    let pair = Pair::new(true)?;
+    save_document_title(&pair.a, "Local title")?;
+    let remote = save_document_title(&pair.b, "Remote title")?;
+    assert_eq!(
+        sync_side(&pair, &pair.b, AuthoringKind::Document, fixed(DOC.parse())?)?,
+        remote
+    );
+    let mut session = SessionCredentials::new(Provider::new(Arc::new(AtomicUsize::new(0))));
+    let (receipt, state, _) = saved(fixed(pair.a.service.submit_comment(
+        pair.request(&pair.a, AuthoringKind::Document, None),
+        &mut session,
+    ))?)?;
+    assert!(
+        matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(e)} if matches!(*e,SynchronizationError::ConflictPending {operation_id,..} if operation_id==receipt.synchronization_id))
+    );
+    assert!(!fixed(pair.a.service.cancel_comment_publication(
+        &pair.a.root,
+        receipt.operation_id
+    ))?);
+    let (_, state, _) = saved(fixed(
+        pair.a
+            .service
+            .retry_comment_publication(retry_request(&pair, &receipt, true), &mut session),
+    )?)?;
+    assert!(
+        matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(e)} if matches!(*e,SynchronizationError::ConflictPending {..}))
+    );
+    let resolving = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &pair.a.data,
+        FailurePoint::ResolutionBeforeMetadataRetirement,
+    ))?;
+    let inspection = fixed(
+        resolving.inspect_synchronization_recovery(&pair.a.root, receipt.synchronization_id),
+    )?;
+    let mut resolutions = Vec::new();
+    for path in &inspection.paths {
+        let sides = fixed(resolving.read_synchronization_conflict(&path.token))?;
+        resolutions.push((path.token.clone(), sides.local.ok_or(FixtureError)?));
+    }
+    let request = ResolveSynchronizationRequest::new(
+        pair.a.root.clone(),
+        receipt.synchronization_id,
+        OperationId::new(),
+        inspection.observation,
+        resolutions,
+        None,
+    );
+    assert!(resolving.resolve_synchronization(request.clone()).is_err());
+    assert!(fixed(resolving.cancel_comment_publication(
+        &pair.a.root,
+        receipt.operation_id
+    ))?);
+    let (_, state, _) = saved(fixed(
+        resolving.retry_comment_publication(retry_request(&pair, &receipt, true), &mut session),
+    )?)?;
+    assert!(
+        matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(e)} if matches!(*e,SynchronizationError::Interrupted))
+    );
+    let phase = fixed(pair.a.db()?.query_row(
+        "SELECT phase FROM remote_operation_records WHERE operation_ulid=?1",
+        [receipt.synchronization_id.to_string()],
+        |r| r.get::<_, String>(0),
+    ))?;
+    ssh_harness::observation(&[match phase.as_str() {
+        "cancelled" => 201,
+        "interrupted" => 202,
+        "reconciling" => 203,
+        _ => 204,
+    }]);
+    assert_eq!(phase, "interrupted");
+    assert!(matches!(
+        fixed(resolving.resolve_synchronization(request))?,
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+    ));
+    let (again, state, _) = saved(fixed(
+        resolving.retry_comment_publication(retry_request(&pair, &receipt, true), &mut session),
+    )?)?;
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert_eq!(again.synchronization_id, receipt.synchronization_id);
+    pair.proof(&again, published(state)?)?;
+    pair.privacy()
+}
+
+fn interrupted_restart() -> Result<(), FixtureError> {
+    let pair = Pair::new(true)?;
+    let mut session = SessionCredentials::new(Provider::new(Arc::new(AtomicUsize::new(0))));
+    pair.server.disconnect_at(FixtureBoundary::Advertisement);
+    let (receipt, state, _) = saved(fixed(pair.a.service.submit_comment(
+        pair.request(&pair.a, AuthoringKind::Document, None),
+        &mut session,
+    ))?)?;
+    assert!(matches!(state, CommentPublicationState::Pending { .. }));
+    pair.server.clear_fault();
+    let calls = pair.server.helper_invocations();
+    let (again, state, _) = saved(fixed(
+        pair.a
+            .service
+            .retry_comment_publication(retry_request(&pair, &receipt, false), &mut session),
+    )?)?;
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert!(
+        matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(error)} if matches!(*error,SynchronizationError::RecoveryRequired))
+    );
+    assert_eq!(pair.server.helper_invocations(), calls);
+    let reopened = fixed(RepositoryService::open_at(&pair.a.data))?;
+    let (again, state, _) = saved(fixed(
+        reopened.retry_comment_publication(retry_request(&pair, &receipt, true), &mut session),
+    )?)?;
+    assert_eq!(again.synchronization_id, receipt.synchronization_id);
+    pair.proof(&again, published(state)?)?;
+    assert_eq!(
+        fixed(
+            pair.a
+                .db()?
+                .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+        )?,
+        1
+    );
+    pair.privacy()
+}
+
+fn terminal_cancel() -> Result<(), FixtureError> {
+    let pair = Pair::new(true)?;
+    let request = pair.request(&pair.a, AuthoringKind::Document, None);
+    let root = pair.a.root.clone();
+    let data = pair.a.data.clone();
+    let id = request.comment.target.operation_id;
+    let mut provider = Provider::new(Arc::new(AtomicUsize::new(0)));
+    provider.action = Some(Box::new(move || {
+        assert!(
+            RepositoryService::open_at(&data)
+                .unwrap()
+                .cancel_comment_publication(&root, id)
+                .unwrap()
+        );
+    }));
+    let mut session = SessionCredentials::new(provider);
+    let (receipt, state, _) = saved(fixed(pair.a.service.submit_comment(request, &mut session))?)?;
+    assert!(matches!(state, CommentPublicationState::Pending { .. }));
+    assert_eq!(
+        fixed(pair.a.db()?.query_row(
+            "SELECT phase FROM remote_operation_records WHERE operation_ulid=?1",
+            [receipt.synchronization_id.to_string()],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "cancelled"
+    );
+    let calls = pair.server.helper_invocations();
+    let (_, state, _) = saved(fixed(
+        pair.a
+            .service
+            .retry_comment_publication(retry_request(&pair, &receipt, true), &mut session),
+    )?)?;
+    assert!(
+        matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(e)} if matches!(*e,SynchronizationError::Interrupted))
+    );
+    assert_eq!(pair.server.helper_invocations(), calls);
+    let ordinary = fixed(pair.a.service.synchronize_remote(
+        SynchronizeRemoteRequest {
+            root: pair.a.root.clone(),
+            operation_id: OperationId::new(),
+            target: SynchronizationTarget::Context {
+                kind: receipt.kind,
+                item_id: receipt.item_id.clone(),
+            },
+            approval: Some(pair.approval()),
+            confirmed_identity: None,
+            restart: false,
+        },
+        &mut session,
+    ))?;
+    let outcome = match ordinary {
+        SynchronizationResult::Complete(o) => o,
+        SynchronizationResult::IndexPending(i) => i.authoritative,
+    };
+    let oid = match outcome {
+        SynchronizationOutcome::Published { oid, .. }
+        | SynchronizationOutcome::AlreadyCurrent { oid, .. } => oid,
+        _ => return Err(FixtureError),
+    };
+    pair.proof(&receipt, oid)?;
+    assert_eq!(
+        fixed(pair.a.db()?.query_row(
+            "SELECT COUNT(*) FROM comment_publication_bindings",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    pair.privacy()
+}
+
+fn historical_replay() -> Result<(), FixtureError> {
+    let pair = Pair::new(true)?;
+    let request = pair.request(&pair.a, AuthoringKind::Document, None);
+    let mut session = SessionCredentials::new(Provider::new(Arc::new(AtomicUsize::new(0))));
+    let (receipt, state, _) = saved(fixed(
+        pair.a.service.submit_comment(request.clone(), &mut session),
+    )?)?;
+    let oid = published(state)?;
+    let path = pair.a.context(&receipt.item_id).join(&receipt.comment_path);
+    let original = fixed(std::fs::read_to_string(&path))?;
+    let altered = original.replace(BODY, "edited-current-body-canary\n");
+    fixed(std::fs::write(&path, &altered))?;
+    let calls = pair.server.helper_invocations();
+    let (again, state, _) = saved(fixed(
+        pair.a.service.submit_comment(request.clone(), &mut session),
+    )?)?;
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert_eq!(published(state)?, oid);
+    assert_eq!(fixed(std::fs::read_to_string(&path))?, altered);
+    let mut wrong = request;
+    wrong.comment.body = "edited-current-body-canary\n".into();
+    assert!(pair.a.service.submit_comment(wrong, &mut session).is_err());
+    fixed(
+        pair.a
+            .repo()?
+            .remote_set_pushurl("origin", Some("ssh://fixture@127.0.0.1:1/unavailable")),
+    )?;
+    let (_, state, _) = saved(fixed(
+        pair.a
+            .service
+            .retry_comment_publication(retry_request(&pair, &receipt, false), &mut session),
+    )?)?;
+    assert_eq!(published(state)?, oid);
+    assert_eq!(pair.server.helper_invocations(), calls);
+    pair.proof(&receipt, oid)?;
     pair.privacy()
 }
 
