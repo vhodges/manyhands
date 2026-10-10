@@ -118,7 +118,7 @@ document; a different decision changes the tasks named under
 | Decision | If not as recommended |
 | --- | --- |
 | 1, size | A split moves Part C, or Parts B and C, to a new Cycle; tasks are unchanged. |
-| 2, journal defect | The prerequisite becomes the first task of Part B on this branch. |
+| 2, journal defect | The fix is merged. The abandon question, if decided for, is its own ticket and changes no task here. |
 | 3, effects | Tasks 5, 9, 10, 12, 15 and 16 change, and the envelope schema needs a new version. |
 | 4, folder listing | Task 17 drops the index table, the read and the refresh. |
 | 5, closed tickets | Tasks 7 and 8 drop or narrow the `ticket_closed` guard. |
@@ -128,6 +128,7 @@ document; a different decision changes the tasks named under
 | 9, commands bound | Binding `comment add` and polling adds a task after Task 13. |
 | 10, registry names | Names change in Task 5 only. |
 | 11, native evidence | Task 19 step 1 changes. |
+| 12, synchronization after Cycle 06 | As recommended, Task 13 gains the divergent cases and Task 9 the three new error variants. Binding `conflict resolve` adds a task after Task 13. Dropping the two bindings removes Task 13's synchronization tests and the remote half of Task 14. |
 
 ## File Map And Dependency Order
 
@@ -171,7 +172,7 @@ Before Task 1:
 
 ```sh
 git fetch origin main
-git rebase origin/main        # only while this branch is unpushed
+git merge origin/main         # main was merged, not rebased, on 2026-10-10
 git merge-base --is-ancestor origin/main HEAD
 devenv shell -- cargo check --all-features --locked
 devenv shell -- cargo fmt --check
@@ -186,6 +187,8 @@ Task 1.
 
 Re-check the design's mutation-surface audit against any change to
 `src/repository*`, `src/canonical.rs` or `src/results.rs` since `6cf5d7f`.
+The journal, operation-lookup and synchronization rows were re-read at
+`f87ce81` on 2026-10-10; the rest was not.
 In particular, check whether any of the open F1 follow-up tickets has
 merged; `01M4EHGE4BXGPMCWWA1S1QR0JW` and `01M4EHGE9TMR99VYZC184J9XEC` touch
 refresh and discovery, which Tasks 6 and 17 extend. If a listed function
@@ -193,10 +196,14 @@ moved or changed behavior, update the design before coding.
 
 ## Prerequisite: Journal Rows After A Rejection
 
-Done under defect ticket `01M4EWN2DK3MY6H4GBYDYXF6QH`, with its own short design, and merged to
-main before Part B, if decision 2 is as recommended. Otherwise it is the
-first task of Part B here. Part A does not wait for it. What follows is the
-requirement F2 places on that work, not its design.
+**Done.** Fixed under defect ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` and merged
+to main on 2026-10-10; evidence is `tests/journal_rejection.rs`. No task
+here remains. What follows is the requirement F2 placed on that work, kept
+as written for the record; the design's "The Journal Defect" says what was
+delivered, including where it differs: a closed row is kept and marked
+`rejected`, three assertions in `tests/repository_enablement.rs` were
+changed by product-owner ruling, and `remove_registration` was dropped as
+not reproducible.
 
 **Files:** `src/repository.rs`, `tests/repository_enablement.rs`,
 `tests/local_authoring.rs`, `tests/recovery_foundation_gate.rs`.
@@ -474,6 +481,7 @@ Also **Files:** `src/repository/recovery.rs`,
   accepted record and changes nothing on a finished one.
 - With attempts 1 and 2 entered, a finish or delete by attempt 1 changes
   nothing; by attempt 2 it applies.
+- The journal lookup returns absent for a local row closed as `rejected`.
 - The journal lookup returns absent, pending with its step and completed
   for a local operation, a synchronization (in the remote journal and, for
   one bound locally with no remote, in the local one) and a key operation.
@@ -873,7 +881,9 @@ without changing it; `remote_synchronization` must pass unchanged.
   piece in turn. After they are restored it reports `current` and pushes
   nothing.
 - No publication remote: `blocked` with `publication_remote_required`.
-- A divergent remote is `merge_required`; a remotely deleted context branch
+- A divergent remote: written before Cycle 06 as `merge_required`. The
+  call now merges; the expected results are set by decision 12 before this
+  task starts. A remotely deleted context branch
   is `remote_branch_deleted`; a rejected push is `push_rejected`.
 - **Open case 3, reproduced or refuted.** After each of those three, and
   after `host_approval_required` and `unlock_required`: is the
@@ -882,7 +892,7 @@ without changing it; `remote_synchronization` must pass unchanged.
   does the same request again, or `cancel_request` followed by the same
   request, release it? Pin what happens. Each result carries a
   `request.retry` action. If the reservation is held, record it in the
-  ledger as a finding for Wave 02 Cycle 06 and do not work around it.
+  ledger, raise it as a ticket and do not work around it.
 - A synchronization reported as interrupted is `cancelled` only when its
   row's phase is cancelled.
 - An unknown host is `host_approval_required` with the authority and the
@@ -1189,4 +1199,6 @@ extended; `repair_item`; the `repair_item` journal action in `action_name`,
   behavior is unproven. Each is stated in the design.
 - **Not verified during planning.** No Rust command was run. The design's
   audit is from two readings of the source and two of the mechanisms. The
-  prerequisite's tests are the first reproduction of the journal defect.
+  refresh of 2026-10-10 for the journal fix and Cycle 06 is unreviewed, and
+  the synchronization tasks were not re-planned against Cycle 06; decision
+  12 comes first.

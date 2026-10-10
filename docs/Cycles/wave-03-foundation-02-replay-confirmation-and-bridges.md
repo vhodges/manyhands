@@ -55,19 +55,25 @@ review. Approving them and authorizing implementation are separate gates.
   baseline: the first step of the plan. Not yet run for this Cycle. The same
   checks passed on the F1 branch head, which main now contains, on
   2026-10-08.
-- **A defect in the existing journal blocks Part B of this Cycle.** Many
-  ordinary rejections leave a journal row pending, and a pending row makes
-  every other operation on that repository fail with `RecoveryRequired`.
-  The design lists the paths under "The Journal Defect". It was found by
-  reading the source during planning and has not been reproduced by a test.
-  The product owner asked for defect ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` on 2026-10-08; it is
-  raised on its own branch. Decision 2 confirms it must merge before
-  Part B.
+- **The journal defect found during planning is fixed.** Many ordinary
+  rejections left a journal row pending, and a pending row makes every
+  other operation on that repository fail with `RecoveryRequired`. Defect
+  ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` reproduced it, fixed it and merged
+  to main as pull request 15 on 2026-10-10. Part B is no longer blocked by
+  it. The design's "The Journal Defect" says what the fix does and does not
+  cover.
+- **Refresh of 2026-10-10.** `origin/main` at `f87ce81` was merged into
+  this branch without conflicts. Since `6cf5d7f` main gained Wave 02 Cycle
+  06 (merge and conflict recovery), the index fix
+  `01M4GD0KKXW684QBA49F6EX3WE` and the journal fix. The three documents
+  were updated for them by their author; the updates are not reviewed, and
+  nothing was run. Cycle 06 changes what a synchronization does, which is
+  new decision 12.
 - Seven defect and follow-up tickets raised from F1 are open. Two touch code
   F2 changes: `01M4EHGE4BXGPMCWWA1S1QR0JW` (index refresh atomicity) and
   `01M4EHGE9TMR99VYZC184J9XEC` (discovery entry caps). Neither blocks F2.
 
-Before implementation, fetch and rebase again, repeat the ancestry check and
+Before implementation, fetch and merge again, repeat the ancestry check and
 re-check the audit against any library change that landed in between.
 
 ## Scope
@@ -127,8 +133,10 @@ Not delivered, and who owns each:
 - **Polling policy and `poll once` bindings**: the first of C5 or D6.
 - **Promotion and closure bindings**: the first of C5 or D5, under track
   rule 6.
-- **Conflict resolution and divergent synchronization**: C4 and D5, after
-  Wave 02 Cycle 06.
+- **Conflict resolution and divergent synchronization**: C4 and D5. Wave 02
+  Cycle 06 has since landed and `synchronize_remote` now merges a divergent
+  remote itself, so "clean synchronization only" is no longer something a
+  binding gets for free; see decision 12.
 - **Per-command input schemas**: the CLI Cycle that delivers each verb.
 - **Native execution on Windows and macOS**: see decision 11.
 - **Changing the short-code prefix or code length after enablement.** No RFC
@@ -160,7 +168,8 @@ so they are not lost:
    with nothing in flight leaves no request record and no pending journal
    row; the same or another request can follow at once. Whether something
    is in flight is read from the operation's journal row, never guessed
-   from the error returned. Two existing exceptions are stated in the
+   from the error returned. A row the library closed as `rejected` counts
+   as no row. Two existing exceptions are stated in the
    design: a failed index refresh or rebuild, and a synchronization that
    stopped after it reserved.
 4. **Git and the file system outrank the records.** A stored result that
@@ -223,7 +232,8 @@ so they are not lost:
 
 ## Decisions For The Product Owner
 
-Each has a recommendation. None is decided.
+Each has a recommendation. None is decided, except the first half of
+decision 2. Decision 12 was added on 2026-10-10.
 
 1. **Size.** F2 as the Wave scopes it is larger than F1: the boundary,
    twenty-eight bindings, three new domain operations and the relationship
@@ -233,12 +243,9 @@ Each has a recommendation. None is decided.
    and the bindings for existing operations; (C) the bridges.
    *Alternative:* split at a part boundary into two Cycles, which needs a
    Wave amendment and lets C2 or C3 start on a partial foundation.
-2. **The journal defect.** Ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` is raised. *Recommended:* it is
-   fixed there and merged to main before Part B starts, as the
-   effective-copy defect was before F1. It changes Wave 01 code on many
-   paths, existing tests constrain it, and it deserves its own design and
-   review; Part A does not depend on it. *Alternative:* fix it inside F2 as
-   the first task of Part B.
+2. **The journal defect.** *Decided and done:* fixed on ticket
+   `01M4EWN2DK3MY6H4GBYDYXF6QH` and merged to main on 2026-10-10. The
+   ticket was closed with the rest of this decision still open.
    Three cases remain after the fix, all existing behavior that the
    boundary makes reachable by users; the design lists them. An operation
    killed after its journal row is written blocks the repository until the
@@ -248,11 +255,14 @@ Each has a recommendation. None is decided.
    `remote select` writing the configuration file and committing it leaves
    a dirty worktree that blocks authoring. And a synchronization that stops
    after reserving appears to hold its reservation, blocking local work
-   until the request is retried or cancelled; that one is unconfirmed.
-   *Recommended:* decide on the defect ticket whether the library needs a
-   way to abandon an operation, before C3 makes saves reachable by users,
-   and whether its operations should report what they wrote, which would
-   let the boundary stop inferring it.
+   until the request is retried or cancelled; that one is unconfirmed and
+   was not re-examined after Cycle 06.
+   *Recommended:* decide whether the library needs a way to abandon an
+   operation, before C3 makes saves reachable by users. Ticket
+   `01M4H33R34Z7C7EEKTY1ZCT950` asks the same for a pending merge
+   conflict; the two belong together. The fix tracks what each call wrote
+   but does not report it to the caller, so the boundary still infers it
+   from the journal row.
 3. **Effects for changes that are not canonical content.** Identity, host
    trust, keys, remotes and registration removal fit none of the six
    effects, and the effect values are frozen. *Recommended:* report every
@@ -306,6 +316,22 @@ Each has a recommendation. None is decided.
 11. **Native evidence.** *Recommended:* as F1 decision 5: prove F2 on Linux,
     add its test targets to the native workflow's list, dispatch nothing,
     and carry Windows and macOS execution to G1.
+12. **Synchronization after Cycle 06** (added 2026-10-10). The drafts bind
+    `item sync` and `repo sync` for clean synchronization and leave
+    divergence to C4 and D5. Since Cycle 06, `synchronize_remote` merges a
+    divergent remote itself: it makes merge commits, can ask for a
+    confirmed identity, and can stop with a conflict that blocks every
+    later synchronization of the repository until it is resolved. Three new
+    error variants need result codes whatever is decided, because the
+    mapping is exhaustive. *Recommended:* the two bindings pass divergence
+    through as Cycle 06 built it and report it truthfully (the merge
+    commit, `identity_required`, a conflict-pending code with the
+    operation ID); F2 binds no `conflict resolve` and adds no conflict
+    read, which stay with C4 and D5 as shared-library changes. Task 13
+    grows by the divergent cases. *Alternatives:* bind
+    `conflict resolve` and the conflict reads in F2, a larger Part B; or
+    drop the two synchronization bindings from F2 and move their exit
+    evidence to C4, which needs a Wave amendment.
 
 Smaller rulings the design makes, listed so they can be overruled:
 
@@ -391,7 +417,11 @@ Nothing here has been run.
 | Third review; `keys/generation.rs:154-191` | An interrupted key generation is completed by its next call; treating its first result as final would lose the key. | Settled | Finished only on success or "retained for inspection". |
 | Third review; `repository.rs:4295-4299` | A completed `repo remove`, identity change or host approval whose result was lost would be answered with `external_change`. | Settled | A retry first asks whether the end state already holds. |
 | Third review; `repository.rs:1941-1949` | Content already in place from another request makes the domain report an external change, not a no-op. | Settled | The already-applied rule, stated once and used for late callers, lost records and cache loss. |
-| Third review; `sync.rs:520`, `recovery.rs:280-285` | A synchronization that stops after reserving appears to hold its reservation and block local work. | Open | Stated as open case 3; reproduced in Task 13; reported to Wave 02 Cycle 06 if it holds. |
+| Third review; `sync.rs:520`, `recovery.rs:280-285` | A synchronization that stops after reserving appears to hold its reservation and block local work. | Open | Stated as open case 3; reproduced in Task 13; raised as a ticket if it holds. |
+| Refresh, 2026-10-10; main `f87ce81` | The journal fix keeps a closed row marked `rejected`, so "a journal row exists" no longer means the operation started. | Settled, unreviewed | A `rejected` row counts as no row in settlement, re-entry and the confirmation recheck. |
+| Refresh, 2026-10-10; `sync.rs` at `f87ce81` | `synchronize_remote` now merges a divergent remote and has three new error variants; the drafts assume it refuses. | Decision | Decision 12. |
+
+Source line anchors in this table are at `6cf5d7f` and no longer hold.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,

@@ -58,7 +58,12 @@ Terms used below:
 
 Read from source on 2026-10-08, by one reader and then checked by a second;
 no Rust command was run and nothing here was reproduced by a test. This
-refreshes entry-gate item 3 for what F2 consumes. The provisional
+refreshes entry-gate item 3 for what F2 consumes. On 2026-10-10 the rows
+for the journal, the operation lookup and synchronization were checked
+again at `f87ce81`, after Wave 02 Cycle 06, the index fix
+`01M4GD0KKXW684QBA49F6EX3WE` and the journal fix landed; the other rows and
+every line anchor in this document are still as read at `6cf5d7f`. The
+provisional
 [API audit](../research/wave-03-api-audit.md) predates F1 and Wave 02 Cycle
 05, and its line anchors no longer hold.
 
@@ -66,7 +71,7 @@ refreshes entry-gate item 3 for what F2 consumes. The provisional
 | --- | --- | --- |
 | Operation identity | `OperationId`, a ULID the caller generates. Three journals in the one SQLite file: `operation_records` (local lifecycle), `remote_operation_records` (reservations and synchronization) and `key_material_operations`. Key registry and polling-policy changes have no operation ID. | A request ID and its mapping to operation IDs. Nothing stores a request ID, an input digest or a result today. |
 | Replay | Repeating a call with the same operation ID makes the function reconcile from Git, the file system and its journal row. The journal matches root, action and a target string. | Input matching. A save's target string covers the item and paths, not the title, body or metadata, so a reused operation ID with a different body is not detected. |
-| Journal exclusion | `begin_or_reconcile` refuses a new operation with `RecoveryRequired` while any other row for the repository is not completed. | See [The Journal Defect](#the-journal-defect): many ordinary rejections leave such a row. |
+| Journal exclusion | `begin_or_reconcile` refuses a new operation with `RecoveryRequired` while any other row for the repository is not completed. | Nothing. See [The Journal Defect](#the-journal-defect): ordinary rejections left such a row until the fix of 2026-10-10. |
 | Expected observations | `ExpectedPathObservation`, `Missing` or the BLAKE3 of the file bytes, on the three save requests. `expected_source` on a document save is optional. | The F1 token (`v1:` plus a digest of branch, path and bytes) is a different digest and nothing converts between them. No token exists for an absent path or for repository-level state. |
 | Confirmation | Key deletion only: an in-memory review value plus a `confirmed` flag. `HostApproval` is an exact-match value the caller builds from a prior error. Neither is persisted. | Persisted previews with expiry, for every action the CLI RFC says needs one. |
 | Cancellation | Remote operations only: `cancel_remote_operation` sets a durable flag on an existing reservation. Synchronization honors it at seven of the fourteen named safe points; the others belong to polling. | A way for a caller to ask, including before a reservation exists, and a safe point for local operations. |
@@ -101,13 +106,15 @@ Three facts shape the design more than the rest:
 
 ## The Journal Defect
 
-This is a defect in the existing library, found during this planning. It is
-certain from the source and has not been reproduced by a test.
+This was a defect in the existing library, found during this planning. It
+was reproduced and fixed on ticket `01M4EWN2DK3MY6H4GBYDYXF6QH`, merged to
+main on 2026-10-10 (`tests/journal_rejection.rs`). This section records the
+defect, then what the fix gives F2.
 
 A local operation writes its journal row before most of its checks, and
-several return on an ordinary rejection without completing that row. The
-next operation with a different ID on the same repository is then refused
-with `RecoveryRequired`. Paths that leave a row:
+several returned on an ordinary rejection without completing that row. The
+next operation with a different ID on the same repository was then refused
+with `RecoveryRequired`. Paths that left a row:
 
 - `enable`: an invalid or wrong branch, a dirty or conflicted worktree, an
   invalid configuration, an unavailable remote, an invalid identity, and
@@ -122,27 +129,46 @@ with `RecoveryRequired`. Paths that leave a row:
   context has been created.
 
 `remove_registration` is blocked by the same check, and a refresh can clear a
-row only for a registered repository. Today only tests reach this. Through
-the boundary every user does: one rejected command, retried under a new
-request ID as an interactive caller would, blocks the repository.
+row only for a registered repository.
 
-The fix is ticket `01M4EWN2DK3MY6H4GBYDYXF6QH`. What F2 depends on: when one of the operations
-above returns an error, and the journal row was begun by this call, and
-this call wrote nothing durable or rolled back what it wrote, it completes
-the row. A row stays pending only when an effect was made and work remains.
-Known now, and settled on that ticket (decision 2):
+**What the fix does.** When one of the operations above returns an error,
+the journal row was begun by this call, and this call wrote nothing durable
+or restored everything it wrote, the row is closed. Each call tracks what
+it wrote; the error kind is not consulted. A row stays pending when an
+effect was made and work remains.
 
-- Neither the error kind nor the recorded step says whether the call wrote.
-  The same kinds (busy, SQLite, Git, I/O) are returned before and after a
-  write. The fix needs each call to track what it wrote. If the call also
-  reported that to its caller, the boundary would not have to infer it; the
-  ticket should consider that.
-- Two existing tests require a row to stay pending after a failure inside a
-  standalone `prepare_context`, and three require it after a failed refresh
-  or rebuild. Those stay as they are; the fix does not cover refresh and
-  rebuild. A failed `index refresh` or `index rebuild` therefore still
-  blocks other requests until the same request is retried.
-- `remove_registration` also writes a row and can leave it.
+**What F2 must know about it:**
+
+- A closed row is kept, not deleted. Its state is `completed` and its step
+  is `rejected`, so the operation ID stays bound to its action and target.
+  The public lookup `show_operation` reads it that way, with no next
+  action. Wherever this design asks whether a journal row exists for an
+  operation ID, a `rejected` row counts as none.
+- Repeating a rejected operation ID with the same action and target begins
+  again as a new call. With another target it is `OperationMismatch`. The
+  boundary allocates a new operation ID at each acceptance, so neither
+  reaches a caller.
+- A failed `enable` or `set_publication_remote` that restored everything
+  now closes its row too.
+- The call does not report what it wrote to its caller. The boundary still
+  reads the journal row.
+- Not covered: refresh and rebuild, whose failed rows stay pending by
+  existing tests, so a failed `index refresh` or `index rebuild` still
+  blocks other requests until the same request is retried. A row also
+  stays pending, as before, after a write that was not undone, a failed
+  restore, an initialized repository and a half-created editing context.
+- `remove_registration` was examined and no rejection that leaves its row
+  could be provoked.
+- Two imprecisions remain, both recorded on the ticket. A Git failure
+  inside an operation's first write call (a stale lock file) leaves the row
+  pending although nothing was written, so the boundary reports work in
+  flight where there is none; the retry clears it. And on a row resumed
+  from an earlier attempt the older rule still applies: an attempt that
+  wrote the file and failed to record the step, followed by a retry that is
+  cleanly rejected, closes the row with the file written and uncommitted.
+  The boundary then deletes the record, and the next request for that item
+  is answered by the cache-loss rule: `external_change`, then a fresh save
+  commits it.
 
 Three cases remain open after the fix. All exist today.
 
@@ -161,10 +187,13 @@ Three cases remain open after the fix. All exist today.
    it is active, local operations are refused and other synchronizations
    are busy. The way out is the same request again, or a cancellation
    followed by the same request. This was read from the code and not
-   reproduced; Task 13 reproduces it, and it is reported to the owner of
-   Wave 02 Cycle 06 if it holds.
+   reproduced, and not re-read after Cycle 06 changed synchronization;
+   Task 13 reproduces it, and it is raised as a ticket if it holds. Cycle
+   06 adds a fourth stop of this kind: a pending merge conflict, which
+   blocks every synchronization of the repository until it is resolved
+   (ticket `01M4H33R34Z7C7EEKTY1ZCT950`).
 
-Decision 2 covers the fix and these cases.
+Decision 2 covers these cases.
 
 ## Module Layout
 
@@ -192,7 +221,8 @@ src/repository/bridges/
     folder.rs     create_folder
     repair.rs     repair_item and the Repair context intent
 src/repository/{recovery,remote/state,keys/registry}.rs
-                                    + a lookup of one operation by ID
+                                    + a lookup of one operation by ID,
+                                      unless `show_operation` serves
 src/repository/read/graph.rs        visibility widened for the cycle check
 schemas/v1/                         new and extended schemas
 tests/fixtures/mutation_v1/         golden envelopes and previews
@@ -280,7 +310,7 @@ named below.
 | `document repair`, `ticket repair` | new `repair_item` | Required | |
 | `ticket create`, `ticket save` | `save_ticket_with` | No | Relationships; short code on create. |
 | `ticket slug-assign` | `save_ticket_with` | No | |
-| `item sync`, `repo sync` | `synchronize_remote` | No | Clean synchronization only. |
+| `item sync`, `repo sync` | `synchronize_remote` | No | Drafted as clean synchronization only; since Cycle 06 the call merges a divergent remote. Decision 12. |
 | `index refresh`, `index rebuild` | `refresh_repository`, `rebuild_repository` | No | |
 
 That is twenty-eight commands. The saves prepare their editing context
@@ -296,8 +326,9 @@ Not bound in F2, with the owner:
 - `poll configure`, `poll pause`, `poll resume`, `poll once`: the first of C5
   or D6.
 - `document promote`, `ticket close`: the first of C5 or D5; track rule 6.
-- `conflict resolve` and divergent synchronization: C4 and D5, after Wave 02
-  Cycle 06.
+- `conflict resolve` and the conflict reads: C4 and D5. Cycle 06 has
+  landed; how much of divergent synchronization the two bindings above
+  carry is decision 12.
 - Republishing a remotely deleted item branch: the Wave gives C4 "exact
   republish consent for a remotely deleted branch", but no operation
   republishes one today and no Wave 02 Cycle is named for it.
@@ -461,8 +492,13 @@ the mechanism is changed.
 journal row, never from the kind of error the domain returned: the domain
 returns the same kinds before and after an effect, and returns some
 rejections as successful values. The boundary looks the operation ID up in
-its journal (local, remote or key) through a new lookup that says absent,
-pending with its step, or completed. Every change to the record is
+its journal (local, remote or key) through a lookup that says absent,
+pending with its step, or completed. A local row completed with the step
+`rejected` is reported as absent. `show_operation`, now on main, reads all
+three journals by ID, but it requires the repository to be registered and
+returns a display result; Task 6 decides whether the boundary uses it or
+an internal lookup, which `repo create` and `repo enable` need on a root
+that is not registered. Every change to the record is
 conditional on the record still being `accepted` with this call's
 `attempt`, so a call never settles a record another call has since
 entered. If the lookup itself fails, the record is left as it is.
@@ -473,7 +509,7 @@ entered. If the lookup itself fails, the record is left as it is.
 | A result the domain has made final for this operation ID: a synchronization whose row is cancelled; a key generation whose recovery state is "retained for inspection" | any | Stored and marked `finished`. |
 | `partial`: work remains (discovery or registration pending; a key generation or deletion the domain says can be recovered) | any | Left `accepted`. A retry continues it. |
 | Blocked, an input error, a transient failure or an error | Absent or completed: nothing is in flight | Deleted. The confirmation it accepted, if any, is released in the same transaction; its expiry still runs from its creation. The request ID is free again. |
-| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error means the call wrote something, once the journal fix is in; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome is `partial` only if a push was accepted. |
+| The same | Pending: something is in flight | Left `accepted`. For a local operation, a pending row after an error means the call wrote something, with the one exception stated under The Journal Defect; the outcome is `partial`, with `write: written` and `checkpoint: pending` when the file in the worktree is what the request intended. For a synchronization the effects come from its stored checkpoint, and the outcome is `partial` only if a push was accepted. |
 
 A command with no journal (identity, key registry changes, host approval,
 folder creation) is a single step that either happened or did not; an error
@@ -534,14 +570,16 @@ On re-entry:
    the intent or to the recorded expectation, writes and commits whatever
    remains, or reports no change.
 3. **If the domain reports an external change and no journal row existed
-   for the operation ID before the call,** the earlier attempt never
-   started and the content came from elsewhere. Apply the already-applied
+   for the operation ID before the call, or only a `rejected` one,** the
+   earlier attempt wrote nothing and the content came from elsewhere. Apply
+   the already-applied
    rule: if the content is as intended and committed, the result is a
    no-op with no commit reported.
 4. **Take the commit from the evidence check, made after the call.** A
    commit is reported only if it is in range, left the paths as intended,
-   and a journal row existed for the operation ID. Otherwise the checkpoint
-   is `unchanged` and no commit is reported.
+   and a journal row existed for the operation ID that was not `rejected`
+   when this call returned. Otherwise the checkpoint is `unchanged` and no
+   commit is reported.
 
 Unrelated commits on the same branch (a comment on the item, a developer's
 commit on primary) do not enter into any of this.
@@ -699,7 +737,8 @@ Otherwise the observation is compared again unless the request's operation
 has a recorded step in its journal. The CLI RFC requires that "the service
 rechecks observations before the first effect". A journal row alone is not
 enough: `enable` writes its row before any check, so a row with no step
-means nothing has been done. Once a step is recorded, the request's own
+means nothing has been done, and so does a row closed as `rejected`. Once
+any other step is recorded, the request's own
 work has changed what would be observed, so the comparison is skipped and
 the re-entry rules protect the rest.
 
@@ -1275,8 +1314,8 @@ present exactly on success.
 
 F1 changed no existing public function. F2 changes these:
 
-1. **Journal rows after a rejection**, as described under The Journal
-   Defect. Decision 2 recommends this be its own ticket, merged first.
+1. **Journal rows after a rejection**: done on its own ticket and on main
+   since 2026-10-10. F2 changes nothing here.
 2. `serialize_item` writes a set or valid `deps` sorted and unique. An
    existing ticket with a valid, unsorted `deps` is rewritten on its next
    save that writes. One existing test asserts file order survives and is
@@ -1293,8 +1332,8 @@ F1 changed no existing public function. F2 changes these:
 7. Refresh and rebuild record folders, if decision 4 is as recommended. The
    new table marks repositories stale once.
 8. Each of the three journals gains a lookup of one operation by ID that
-   says absent, pending with its step or phase, or completed. Today the
-   public reads return pending rows only.
+   says absent, pending with its step or phase, or completed, unless
+   `show_operation`, which main now has, can serve; see Settling.
 9. Public enums gain variants: `ContextIntent::Repair`, the `repair_item`
    action, new `RepositoryOperation` variants. Exhaustive matches on them
    inside the crate are extended.

@@ -24,8 +24,10 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 - [x] Create the design and implementation plan. Drafted 2026-10-08 as
   `docs/plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md`
   and `…-implementation.md`; reviewed in two rounds by three independent
-  reviewers; not yet approved. Eleven decisions await the product owner in
-  the Cycle document.
+  reviewers; not yet approved. Refreshed on 2026-10-10 for what landed on
+  main since (Wave 02 Cycle 06, the index fix, the journal fix); the
+  refresh is unreviewed. Twelve decisions await the product owner in the
+  Cycle document; the journal fix half of decision 2 is done.
 - [ ] Product-owner approval of the three documents.
 - [ ] Implementation authorization (a separate gate).
 
@@ -33,7 +35,9 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 Met for planning on 2026-10-08: Wave 02 Cycles 01–05 and F1 are on main at
 `6cf5d7f`. Planning found a defect in the existing operation journal that
-blocks Part B; see the Cycle document, decision 2.
+blocked Part B. It was fixed on ticket `01M4EWN2DK3MY6H4GBYDYXF6QH` and
+merged on 2026-10-10. Main at `f87ce81` was merged into this branch the
+same day.
 
 Wave 02 Cycles 01–05 have review and verification evidence on the main
 branch used for this Cycle before its implementation plan is approved. An
