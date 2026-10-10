@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 F2 Request Replay, Confirmation And Shared Mutation Bridges Implementation Plan"
 date: 2026-10-08
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -39,8 +39,10 @@ author are changes to `canonical` and the existing save paths.
 **Spec:** [Cycle](../Cycles/wave-03-foundation-02-replay-confirmation-and-bridges.md)
 and [design](2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md).
 
-**Status:** Draft for product-owner review, revised three times after
-independent review. The replay rules of Tasks 6 and 7 follow a mechanism
+**Status:** Approved by the product owner on 2026-10-10, with every
+decision in the Cycle document decided. Implementation is not authorized.
+Revised three times after independent review, then refreshed and corrected
+on 2026-10-10. The replay rules of Tasks 6 and 7 follow a mechanism
 that has failed review in its details three times; see the checkpoint after
 Task 7. It assumes the recommended option of each decision in the Cycle
 document; a different decision changes the tasks named under

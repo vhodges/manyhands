@@ -381,8 +381,11 @@ not-yet-created repository root; preview must not initialize a repository as a
 side effect. Use actual Wave 02 preflights and reservations; do not create an
 alternate journal or lock authority. Add the shared bridges: confirmed local
 identity configuration for create/enable, configured-host approval through
-scoped transport verification, folder creation, and marker-only
+scoped transport verification, folder creation and the listing of folders
+under `docs/` (product owner, 2026-10-10), and marker-only
 repair/adoption with stable ID allocation.
+Add a confirmed abandon of a pending local operation, which closes its
+journal record and changes no file (product owner, 2026-10-10).
 Ticket create and save accept `deps` and `parent`, write them in canonical
 form and reject a cycle before any write. Create generates the short code;
 add the explicit short-code assign operation, repository-local initials and

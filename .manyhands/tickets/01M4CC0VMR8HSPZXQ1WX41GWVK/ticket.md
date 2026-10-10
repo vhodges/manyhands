@@ -27,9 +27,11 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
   reviewers; not yet approved. Refreshed on 2026-10-10 for what landed on
   main since (Wave 02 Cycle 06, the index fix, the journal fix); the
   refresh was reviewed once and corrected; the corrections are unreviewed.
-  Thirteen decisions are in the Cycle document. Decided on 2026-10-10:
-  1 (one Cycle, three parts), the journal fix half of 2, and 13.
-- [ ] Product-owner approval of the three documents.
+  Thirteen decisions are in the Cycle document.
+- [x] Product-owner approval of the three documents: 2026-10-10, with all
+  thirteen decisions decided, each as recommended (12 as its fourth
+  option). The last corrections and the abandon section were approved
+  without a further independent review.
 - [ ] Implementation authorization (a separate gate).
 
 ## Entry Gate

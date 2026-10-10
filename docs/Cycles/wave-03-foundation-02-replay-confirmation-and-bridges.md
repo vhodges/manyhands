@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 F2: Request Replay, Confirmation And Shared Mutation Bridges"
 date: 2026-10-08
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -33,8 +33,8 @@ tracked by ticket `01M4CC0VMR8HSPZXQ1WX41GWVK`. The
 authoritative. The
 [design](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md)
 and [implementation plan](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-implementation.md)
-accompany this document. All three are drafts awaiting product-owner
-review. Approving them and authorizing implementation are separate gates.
+accompany this document. The product owner approved all three on
+2026-10-10. Implementation is not authorized; that is a separate gate.
 
 ## Entry Evidence And Dependency Boundary
 
@@ -235,9 +235,10 @@ so they are not lost:
 
 ## Decisions For The Product Owner
 
-Each has a recommendation. Decided on 2026-10-10: decision 1, the first
-half of decision 2, and decisions 12 and 13, which were added that day.
-The rest are open.
+All thirteen were decided by the product owner on 2026-10-10; decisions 12
+and 13 were added that day. Each entry keeps the reasoning it was decided
+on. One part of decision 2 remains: whether a pending merge conflict gets
+an abandon path, which is ticket `01M4H33R34Z7C7EEKTY1ZCT950`.
 
 1. **Size.** *Decided 2026-10-10: one Cycle in three parts.* F2 as the Wave scopes it is larger than F1: the boundary,
    twenty-eight bindings, three new domain operations and the relationship
@@ -266,29 +267,33 @@ The rest are open.
    `01M4H33R34Z7C7EEKTY1ZCT950` asks the same for a pending merge
    conflict; the two belong together. The fix tracks what each call wrote
    but does not report it to the caller, so the boundary still infers it
-   from the journal row.
-3. **Effects for changes that are not canonical content.** Identity, host
+   from the journal row. *Decided 2026-10-10:* an abandon path for local
+   operations, as decision 13.
+3. **Effects for changes that are not canonical content.** *Decided 2026-10-10: as recommended.* Identity, host
    trust, keys, remotes and registration removal fit none of the six
    effects, and the effect values are frozen. *Recommended:* report every
    effect as `not_requested`, put what changed in `data`, and let `outcome`
    say `success`, `noop` or `partial`. A half-finished key deletion is then
    visible only through `outcome` and `data`. *Alternative:* a new effect,
    which is a new contract version.
-4. **Folder listing.** F1 handed "folder creation and its listing" to F2; the
+4. **Folder listing.** *Decided 2026-10-10: as recommended.* The Wave's F2 scope is amended to name
+   the listing. F1 handed "folder creation and its listing" to F2; the
    Wave's F2 scope names only creation; and reads may not list a directory.
    A created empty folder is otherwise invisible. *Recommended:* the indexer
    records directories under `docs/` on primary, and F2 adds a read that
    lists them. This adds an index table and a refresh change, and the Wave
    text is amended. *Alternative:* create only; D1 raises listing as a
    shared-library change when its document tree needs it.
-5. **Writes to a closed ticket.** Nothing stops a save to a lifecycle-closed
+5. **Writes to a closed ticket.** *Decided 2026-10-10: as recommended.* The product owner expects to
+   add short codes to this project's closed tickets by hand, as commits, at
+   some later time; it is not urgent. Nothing stops a save to a lifecycle-closed
    ticket today, and F2 adds another way to write one. *Recommended:* the
    `ticket save` and `ticket slug-assign` bindings refuse a lifecycle-closed
    ticket. Repair stays allowed, as the CLI RFC expects. Loosening later is
    additive. This project's own closed tickets could then not be given a
    short code. *Alternatives:* allow slug assignment on closed tickets; or
    add no guard and leave it to Wave 02 Cycle 10.
-6. **Host approval.** *Recommended:* the approvable host is one the selected
+6. **Host approval.** *Decided 2026-10-10: as recommended.* *Recommended:* the approvable host is one the selected
    publication remote names; the preview is local; the connection happens on
    confirmation, authenticates with the selected key, and the pin is written
    only then. This is stricter than the authentication RFC, which asks only
@@ -297,27 +302,29 @@ The rest are open.
    existing verification does. *Alternative:* a host-key-only connection,
    which is a new transport path in Wave 02's code.
 7. **Creating a repository when only a global identity exists.**
+   *Decided 2026-10-10: as recommended.*
    `repo enable` uses the global identity and writes nothing. The existing
    create operation does not read global configuration. *Recommended:* for
    `repo create` the preview shows the global identity, and confirming it
    writes it to the new repository's local configuration. *Alternative:*
    change the create operation to use the global identity without writing
    it.
-8. **Retention of request records.** No RFC says how long a retry may be
+8. **Retention of request records.** *Decided 2026-10-10: as recommended.* No RFC says how long a retry may be
    answered. *Recommended:* no pruning in F2; rows are small, rejected
    requests leave none, and loss is safe. Add a rule when there is evidence
    it matters.
-9. **Which commands F2 binds.** *Recommended:* the twenty-eight in the
+9. **Which commands F2 binds.** *Decided 2026-10-10: as recommended.* With `operation abandon` from
+   decision 13. *Recommended:* the twenty-eight in the
    design: everything C2, C3 and D1 to D3 consume, plus the two
    synchronization commands the exit evidence needs. `comment add` and the
    polling commands are left to their first consumers, because their final
    shape depends on Wave 02 Cycles 07 and 08. *Alternative:* bind them now
    and accept a result shape that changes later.
-10. **Registry names.** The result codes and recovery actions in the design
+10. **Registry names.** *Decided 2026-10-10: as recommended.* The result codes and recovery actions in the design
     are additions to a closed, published registry. Adding them is already
     non-breaking; the names are what is being approved. They can change
     until F2 merges and not after the CLI ships.
-11. **Native evidence.** *Recommended:* as F1 decision 5: prove F2 on Linux,
+11. **Native evidence.** *Decided 2026-10-10: as recommended.* *Recommended:* as F1 decision 5: prove F2 on Linux,
     add its test targets to the native workflow's list, dispatch nothing,
     and carry Windows and macOS execution to G1.
 12. **Synchronization after Cycle 06** (added 2026-10-10). *Decided
@@ -369,7 +376,7 @@ The rest are open.
     `01M4H33R34Z7C7EEKTY1ZCT950`. This is added scope; the Wave text does
     not name it.
 
-Smaller rulings the design makes, listed so they can be overruled:
+Smaller rulings the design makes. None was overruled at approval:
 
 - `prepare` takes no request ID. A confirmation is single-use and bound to
   the first request that accepts it. A clock set backwards expires it.

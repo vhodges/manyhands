@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 F2 Request Replay, Confirmation And Shared Mutation Bridges Design"
 date: 2026-10-08
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -26,8 +26,11 @@ This design accompanies the
 [Cycle document](../Cycles/wave-03-foundation-02-replay-confirmation-and-bridges.md)
 and the
 [implementation plan](2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-implementation.md).
-It is a draft for product-owner review, revised three times after four
-independent reviews. It authorizes no Rust change.
+The product owner approved it on 2026-10-10, after three revisions, four
+independent reviews of the first drafts, and a fifth of the refresh for
+what landed on main. The corrections made after the fifth review, and the
+section on abandoning an operation, were approved without a further
+review. It authorizes no Rust change.
 
 **How settled this is.** Every review round found blocking errors in how a
 retried request is settled, including in the corrections made for the round
@@ -1021,7 +1024,7 @@ to D6.
 
 ## Abandoning An Operation
 
-Decision 13. Drafted on 2026-10-10 and not reviewed.
+Decision 13. Drafted on 2026-10-10; approved without independent review.
 
 A pending local journal row blocks every other operation on the repository
 until the same operation is repeated with input it accepts. Open cases 1
