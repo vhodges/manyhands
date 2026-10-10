@@ -511,6 +511,16 @@ pub struct TicketWriteOptions {
     /// The short code to write if the file has no `slug` key, or has it as
     /// null. A file with any other `slug` value, valid or not, keeps it,
     /// and the save is not rejected for that.
+    ///
+    /// A create that is tried again finds the file its first attempt
+    /// wrote. When this is set and that file is a ticket with a `slug`
+    /// that is not null, the file's value is adopted, so a different short
+    /// code passed on the retry is ignored. When this is not set, nothing
+    /// is adopted and the retry writes no `slug`.
+    ///
+    /// A retry must therefore set this if and only if the first attempt
+    /// did. Otherwise what the retry would write differs from the file by
+    /// its `slug`, and the retry is refused as an external change.
     pub slug: Option<String>,
 }
 
@@ -2109,9 +2119,22 @@ impl RepositoryService {
                 ContextIntent::Create => {
                     let mut unknown = serde_yaml::Mapping::new();
                     // A create that is tried again keeps the short code its
-                    // first attempt wrote, whatever this attempt passes. A
-                    // file that cannot be read is reported below, where it
-                    // always was.
+                    // first attempt wrote, whatever this attempt passes:
+                    // the file's `slug`, when it is not null, is adopted
+                    // here, and `apply_ticket_write_options` then leaves
+                    // it, since it writes only where there is no `slug`
+                    // key or a null one.
+                    //
+                    // It is adopted only when this attempt passes a short
+                    // code. A retry that passes none where the first
+                    // passed one writes no `slug`, and a retry that passes
+                    // one where the first passed none writes one the file
+                    // lacks: either way the result differs from the file
+                    // and the replay comparison below refuses the retry as
+                    // an external change.
+                    //
+                    // A file that cannot be read is reported below, where
+                    // it always was.
                     if options.slug.is_some()
                         && exists
                         && let Ok(canonical::CanonicalItem::Ticket(written)) =
