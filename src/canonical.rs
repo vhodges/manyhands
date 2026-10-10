@@ -119,8 +119,10 @@ pub struct Ticket {
 
 /// The optional ticket front matter keys that relate one ticket to others
 /// and give it a short code. They are not fields of `Ticket`: they stay in
-/// `Ticket::unknown`, where the serializer keeps them as it keeps any key it
-/// does not define, and `ticket_relationships` reads them from there.
+/// `Ticket::unknown`, and `ticket_relationships` reads them from there. The
+/// serializer keeps their values as it keeps any key it does not define,
+/// except that it writes a `deps` with no problem sorted, and leaves out a
+/// `deps` or `parent` that is null and a `deps` that is empty.
 pub const RELATIONSHIP_KEYS: [&str; 3] = ["slug", "parent", "deps"];
 
 /// Why a relationship value was ignored.
@@ -912,6 +914,7 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
                 ));
             }
             let mut values = ticket.unknown.clone();
+            canonicalize_relationships(&ticket.id, &mut values);
             insert_known(&mut values, "id", ticket.id.to_string());
             insert_known(&mut values, "title", ticket.title.clone());
             insert_known(&mut values, "type", ticket.ticket_type.clone());
@@ -953,6 +956,49 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
     })?;
     let yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml);
     Ok(format!("---\n{yaml}---\n{body}"))
+}
+
+/// Puts a ticket's `deps` and `parent` in the form they are written in,
+/// where `ticket_relationships` reports no problem for them: `deps` sorted
+/// by ID text, and a key that holds no relationship, a null or an empty
+/// list, left out. A `deps` with a problem, a repeated entry included, is
+/// left as it was read, and so is `slug` in every case. The keys that stay
+/// keep their places.
+fn canonicalize_relationships(ticket: &ItemId, values: &mut Mapping) {
+    if values.get("parent").is_some_and(Value::is_null) {
+        values.shift_remove("parent");
+    }
+    let dependencies = match values.get("deps") {
+        Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Sequence(entries)) => {
+            let mut dependencies = Vec::with_capacity(entries.len());
+            for entry in entries {
+                match relationship_target(ticket, entry) {
+                    Ok(dependency) if !dependencies.contains(&dependency) => {
+                        dependencies.push(dependency);
+                    }
+                    _ => return,
+                }
+            }
+            Some(dependencies)
+        }
+        _ => None,
+    };
+    let Some(dependencies) = dependencies else {
+        return;
+    };
+    if dependencies.is_empty() {
+        values.shift_remove("deps");
+        return;
+    }
+    let mut dependencies: Vec<String> = dependencies.iter().map(ItemId::to_string).collect();
+    dependencies.sort();
+    // Inserting over a key keeps its place.
+    insert_known(
+        values,
+        "deps",
+        Value::Sequence(dependencies.into_iter().map(Value::String).collect()),
+    );
 }
 
 fn split_front_matter<'a>(

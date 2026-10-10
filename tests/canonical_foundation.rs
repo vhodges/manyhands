@@ -1430,7 +1430,14 @@ fn relationship_fields_keep_their_values_through_serialization() {
     let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
 
     let reparsed = parsed_ticket(&serialized);
-    assert_eq!(ticket_relationships(&reparsed), before);
+    // The values survive; the dependencies come back in the canonical
+    // order, sorted by ID, and not in the order the file had them.
+    let canonical = TicketRelationships {
+        deps: vec![id(RELATED_FIRST), id(RELATED_SECOND)],
+        ..before.clone()
+    };
+    assert_ne!(canonical, before);
+    assert_eq!(ticket_relationships(&reparsed), canonical);
     assert_eq!(reparsed.title, "Renamed");
     // Each key is written once.
     for key in ["slug:", "parent:", "deps:", "other:"] {
@@ -1454,6 +1461,156 @@ fn relationship_fields_keep_their_values_through_serialization() {
     let unknown = invalid.unknown.clone();
     let serialized = serialize_item(&CanonicalItem::Ticket(invalid)).unwrap();
     assert_eq!(parsed_ticket(&serialized).unknown, unknown);
+}
+
+/// The front matter lines `serialize_item` writes in place of `extra` for a
+/// ticket laid out as the serializer lays one out: `extra` first, then the
+/// fields every ticket has. The parser keeps the order of the other keys
+/// only for a file in that layout.
+fn serialized_extra(extra: &str) -> String {
+    let required = format!(
+        "id: {RELATED_TICKET}\ntitle: Related\ntype: task\nstatus: open\n\
+         manyhands_managed: true\nmanyhands_kind: ticket\n"
+    );
+    let ticket = parsed_ticket(&format!("---\n{extra}{required}---\nBody.\n"));
+    let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+    serialized
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.strip_suffix("---\nBody.\n"))
+        .and_then(|front_matter| front_matter.strip_suffix(required.as_str()))
+        .unwrap_or_else(|| panic!("unexpected layout in {serialized}"))
+        .to_owned()
+}
+
+#[test]
+fn valid_dependencies_are_written_as_a_sorted_block_sequence() {
+    let canonical = format!("deps:\n- {RELATED_PARENT}\n- {RELATED_FIRST}\n- {RELATED_SECOND}\n");
+    for extra in [
+        format!("deps: [{RELATED_SECOND}, {RELATED_PARENT}, {RELATED_FIRST}]\n"),
+        format!("deps:\n  - {RELATED_FIRST}\n  - {RELATED_SECOND}\n  - {RELATED_PARENT}\n"),
+        canonical.clone(),
+    ] {
+        assert_eq!(serialized_extra(&extra), canonical, "{extra:?}");
+    }
+}
+
+#[test]
+fn dependencies_keep_their_place_among_the_other_keys_when_sorted() {
+    assert_eq!(
+        serialized_extra(&format!(
+            "zeta: 1\ndeps: [{RELATED_SECOND}, {RELATED_FIRST}]\nalpha: kept\n"
+        )),
+        format!("zeta: 1\ndeps:\n- {RELATED_FIRST}\n- {RELATED_SECOND}\nalpha: kept\n")
+    );
+}
+
+#[test]
+fn an_empty_or_null_relationship_is_written_by_omitting_the_key() {
+    for extra in ["deps: []\n", "deps: ~\n", "parent: ~\n", "deps:\nparent:\n"] {
+        assert_eq!(
+            serialized_extra(&format!("before: 1\n{extra}after: 2\n")),
+            "before: 1\nafter: 2\n",
+            "{extra:?}"
+        );
+    }
+    // A null short code is not a relationship: it stays for the save that
+    // assigns one.
+    assert_eq!(serialized_extra("slug: ~\n"), "slug: null\n");
+}
+
+#[test]
+fn dependencies_with_a_problem_are_written_as_they_were_read() {
+    for extra in [
+        // A repeated entry.
+        format!("deps: [{RELATED_SECOND}, {RELATED_FIRST}, {RELATED_SECOND}]\n"),
+        // An entry that is not an item ID.
+        format!("deps: [{RELATED_SECOND}, x, {RELATED_FIRST}]\n"),
+        // An entry of the wrong type.
+        format!("deps: [{RELATED_SECOND}, 7, {RELATED_FIRST}]\n"),
+        // The ticket itself.
+        format!("deps: [{RELATED_TICKET}, {RELATED_FIRST}]\n"),
+    ] {
+        let ticket = related_ticket(&extra);
+        assert!(!ticket_relationships(&ticket).problems.is_empty());
+        let unknown = ticket.unknown.clone();
+        let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+        let reparsed = parsed_ticket(&serialized).unknown;
+        assert_eq!(reparsed, unknown, "{extra:?}");
+        // Mapping equality ignores nothing inside a sequence: the entries
+        // are in the order they were read.
+        assert_eq!(reparsed.get("deps"), unknown.get("deps"), "{extra:?}");
+    }
+}
+
+/// A short code and item IDs that a YAML reader takes for numbers when
+/// they are not quoted.
+const NUMERIC_SLUG: &str = "1e-12345";
+const NUMERIC_ID: &str = "01234567890123456789012345";
+const NUMERIC_TICKET: &str = "01234567890123456789012346";
+/// The bytes the serializer emits for them, pinned.
+const NUMERIC_GOLDEN: &str = "---\n\
+slug: '1e-12345'\n\
+parent: '01234567890123456789012345'\n\
+deps:\n\
+- '01234567890123456789012345'\n\
+- 01ARZ3NDEKTSV4RRFFQ69G5FB1\n\
+id: '01234567890123456789012346'\n\
+title: Numbers\n\
+type: task\n\
+status: open\n\
+manyhands_managed: true\n\
+manyhands_kind: ticket\n\
+---\n\
+Body.\n";
+
+#[test]
+fn strings_that_read_as_numbers_are_written_so_that_they_read_back_as_strings() {
+    let mut unknown = serde_yaml::Mapping::new();
+    unknown.insert("slug".into(), NUMERIC_SLUG.into());
+    unknown.insert("parent".into(), NUMERIC_ID.into());
+    unknown.insert(
+        "deps".into(),
+        serde_yaml::Value::Sequence(vec![RELATED_FIRST.into(), NUMERIC_ID.into()]),
+    );
+    let ticket = Ticket {
+        id: id(NUMERIC_TICKET),
+        title: "Numbers".to_owned(),
+        ticket_type: "task".to_owned(),
+        status: "open".to_owned(),
+        project: None,
+        team: None,
+        closed_at: None,
+        closed_by: None,
+        body: "Body.\n".to_owned(),
+        unknown,
+    };
+
+    let serialized = serialize_item(&CanonicalItem::Ticket(ticket)).unwrap();
+
+    assert_eq!(serialized, NUMERIC_GOLDEN);
+    let CanonicalItem::Ticket(reparsed) =
+        parse_item(Path::new(&ticket_path(NUMERIC_TICKET)), &serialized).unwrap()
+    else {
+        panic!("not a ticket");
+    };
+    assert_eq!(reparsed.id, id(NUMERIC_TICKET));
+    assert_eq!(
+        ticket_relationships(&reparsed),
+        TicketRelationships {
+            slug: Some(NUMERIC_SLUG.to_owned()),
+            parent: Some(id(NUMERIC_ID)),
+            deps: vec![id(NUMERIC_ID), id(RELATED_FIRST)],
+            problems: Vec::new(),
+        }
+    );
+    // Unquoted, the same text is a number and not a short code.
+    assert_eq!(
+        related(&format!("slug: {NUMERIC_SLUG}\n")).problems,
+        [relationship_problem(
+            RelationshipProblemCode::InvalidSlug,
+            None
+        )]
+    );
 }
 
 #[test]

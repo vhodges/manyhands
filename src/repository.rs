@@ -142,6 +142,46 @@ fn authoring_write_target(target: &AuthoringTarget, paths: &[&Path]) -> String {
     format!("{}\0{}", authoring_context_target(target), paths)
 }
 
+/// Writes a save's relationship inputs into a ticket's unknown metadata, in
+/// the form the file holds them: `deps` sorted by ID text with each ID
+/// once, `parent` one string, and neither key for a clear or an empty list.
+/// A key that is replaced keeps its place and a new one follows the others.
+///
+/// The short code is written once: only where the metadata has no `slug`
+/// key or has it as null. Any other value, valid or not, stays.
+fn apply_ticket_write_options(unknown: &mut serde_yaml::Mapping, options: TicketWriteOptions) {
+    if let Some(slug) = options.slug
+        && unknown.get("slug").is_none_or(serde_yaml::Value::is_null)
+    {
+        unknown.insert("slug".into(), slug.into());
+    }
+    match options.parent {
+        RelationshipWrite::Unchanged => {}
+        RelationshipWrite::Clear => {
+            unknown.shift_remove("parent");
+        }
+        RelationshipWrite::Set(parent) => {
+            unknown.insert("parent".into(), parent.to_string().into());
+        }
+    }
+    let dependencies = match options.deps {
+        RelationshipWrite::Unchanged => return,
+        RelationshipWrite::Clear => Vec::new(),
+        RelationshipWrite::Set(dependencies) => dependencies,
+    };
+    let mut dependencies: Vec<String> = dependencies.iter().map(ToString::to_string).collect();
+    dependencies.sort();
+    dependencies.dedup();
+    if dependencies.is_empty() {
+        unknown.shift_remove("deps");
+    } else {
+        unknown.insert(
+            "deps".into(),
+            serde_yaml::Value::Sequence(dependencies.into_iter().map(Into::into).collect()),
+        );
+    }
+}
+
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
     matches!(expected, ExpectedPathObservation::Missing)
 }
@@ -441,6 +481,37 @@ pub struct SaveTicketRequest {
     pub target: AuthoringTarget,
     pub draft: TicketDraft,
     pub expected_path: ExpectedPathObservation,
+}
+
+/// What a ticket save does with one relationship key.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum RelationshipWrite<T> {
+    /// The key is carried through as the file has it.
+    #[default]
+    Unchanged,
+    /// The key is removed.
+    Clear,
+    /// The key is written with this value.
+    Set(T),
+}
+
+/// The relationship inputs of `RepositoryService::save_ticket_with`. The
+/// default changes nothing and writes no short code.
+///
+/// The values are written as they are given. Whether a target exists,
+/// whether a relationship closes a cycle and whether the short code follows
+/// the grammar are the caller's to check before the call.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TicketWriteOptions {
+    /// `deps`. A set list is written sorted by ID text, each ID once; an
+    /// empty one removes the key, as `Clear` does.
+    pub deps: RelationshipWrite<Vec<canonical::ItemId>>,
+    /// `parent`.
+    pub parent: RelationshipWrite<canonical::ItemId>,
+    /// The short code to write if the file has no `slug` key, or has it as
+    /// null. A file with any other `slug` value, valid or not, keeps it,
+    /// and the save is not rejected for that.
+    pub slug: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1907,7 +1978,18 @@ impl RepositoryService {
     }
 
     pub fn save_ticket(&self, request: SaveTicketRequest) -> Result<SaveOutcome, RepositoryError> {
-        self.save_ticket_with_effective_config(request, None)
+        self.save_ticket_with(request, TicketWriteOptions::default())
+    }
+
+    /// `save_ticket`, with the ticket's relationships and short code written
+    /// as `options` say. It reads no configuration and no initials, and
+    /// checks no cycle.
+    pub fn save_ticket_with(
+        &self,
+        request: SaveTicketRequest,
+        options: TicketWriteOptions,
+    ) -> Result<SaveOutcome, RepositoryError> {
+        self.save_ticket_with_effective_config(request, options, None)
     }
 
     #[doc(hidden)]
@@ -1916,12 +1998,17 @@ impl RepositoryService {
         request: SaveTicketRequest,
         effective_config: &Config,
     ) -> Result<SaveOutcome, RepositoryError> {
-        self.save_ticket_with_effective_config(request, Some(effective_config))
+        self.save_ticket_with_effective_config(
+            request,
+            TicketWriteOptions::default(),
+            Some(effective_config),
+        )
     }
 
     fn save_ticket_with_effective_config(
         &self,
         request: SaveTicketRequest,
+        options: TicketWriteOptions,
         effective_config: Option<&Config>,
     ) -> Result<SaveOutcome, RepositoryError> {
         let operation = RepositoryOperation::SaveTicket;
@@ -2019,18 +2106,35 @@ impl RepositoryService {
             }
             let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
             let ticket = match intent {
-                ContextIntent::Create => canonical::Ticket {
-                    id: context.item_id.clone(),
-                    title: request.draft.title,
-                    ticket_type: request.draft.ticket_type,
-                    status: request.draft.status,
-                    project: request.draft.project,
-                    team: request.draft.team,
-                    closed_at: None,
-                    closed_by: None,
-                    body: request.draft.body,
-                    unknown: serde_yaml::Mapping::new(),
-                },
+                ContextIntent::Create => {
+                    let mut unknown = serde_yaml::Mapping::new();
+                    // A create that is tried again keeps the short code its
+                    // first attempt wrote, whatever this attempt passes. A
+                    // file that cannot be read is reported below, where it
+                    // always was.
+                    if options.slug.is_some()
+                        && exists
+                        && let Ok(canonical::CanonicalItem::Ticket(written)) =
+                            read_owned_item(&context.worktree, &path, operation, &context.root)
+                        && let Some(slug) = written.unknown.get("slug")
+                        && !slug.is_null()
+                    {
+                        unknown.insert("slug".into(), slug.clone());
+                    }
+                    apply_ticket_write_options(&mut unknown, options);
+                    canonical::Ticket {
+                        id: context.item_id.clone(),
+                        title: request.draft.title,
+                        ticket_type: request.draft.ticket_type,
+                        status: request.draft.status,
+                        project: request.draft.project,
+                        team: request.draft.team,
+                        closed_at: None,
+                        closed_by: None,
+                        body: request.draft.body,
+                        unknown,
+                    }
+                }
                 ContextIntent::Edit => {
                     let canonical::CanonicalItem::Ticket(mut ticket) =
                         read_owned_item(&context.worktree, &path, operation, &context.root)?
@@ -2056,6 +2160,7 @@ impl RepositoryService {
                     ticket.project = request.draft.project;
                     ticket.team = request.draft.team;
                     ticket.body = request.draft.body;
+                    apply_ticket_write_options(&mut ticket.unknown, options);
                     ticket
                 }
             };
