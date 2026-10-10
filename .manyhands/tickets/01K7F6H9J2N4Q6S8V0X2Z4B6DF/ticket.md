@@ -28,8 +28,9 @@ item-context synchronization action.
 The user approved the planning documents on 2026-10-07 and authorized the
 approval-state updates and local planning commit. The 2026-10-10 hand-off
 authorizes Task 0 rebase, Tasks 1–6 implementation, local commits, local gates
-and ticket comments. Task 0 dependency and baseline checks pass; this ticket
-stays open. The
+and ticket comments. Task 0 dependency and baseline checks pass; an affected
+Cycle conflict-scope paragraph awaits owner approval before Rust edits. This
+ticket stays open. The
 [execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-execution.md)
 records the decision matrix, internal rulings and verification/lifecycle gates.
 
@@ -43,6 +44,13 @@ reviewed merge/conflict implementation is present on the base since 2026-10-09
 index refresh. No Cycle 06 work will be
 duplicated here. Native evidence remains pending
 separately authorized execution or explicit owner deferral.
+
+Task 0 found that the Cycle's "saved locally ... for every item" promise during
+a pending conflict needs qualification: Cycle 06 refuses new comments inside
+the context that owns the pending merge before checkpointing. The proposed
+paragraph in the execution ledger preserves that guard and the decided
+saved-local/Busy mapping for checkpointable comments in other contexts. Await
+owner approval of that affected Cycle paragraph before implementation.
 
 ## Exit Evidence
 

@@ -252,3 +252,48 @@ failure found. Full rerun output is in the session tool log
 `tool_125cf44d8001yWWQ9isW7Y6AJm`; interrupted attempt in
 `tool_125c05f8b001DT1z27ko2T9hSl`. Native evidence for this Cycle remains pending
 authorized publication/dispatch. No Rust, Cargo, lockfile or CI edit at Task 0.
+
+### Task 0 follow-up: affected contract wording awaiting owner approval
+
+The PR #15/#16 compatibility review passes, but its final conflict-scope note
+identifies a semantic discrepancy in the approved Cycle's amendment point 2.
+The earlier entry above describes the existing guard; it is not approval to
+correct the stronger promise in the approved Cycle. Task 0 remains blocked
+on owner approval of this affected paragraph before Rust edits.
+
+The approved Cycle (`wave-02-cycle-07-comment-publication.md:159–164`) says:
+"A comment submitted meanwhile is saved locally with publication pending for
+every item, not only the conflicted one." Actual public local authoring rejects
+submission into the context owned by the pending synchronization merge before
+its canonical write (`src/repository.rs:2219–2224`, with a second guard at
+`:2259`). Other contexts can still author; their synchronization gets Busy.
+This is not a change introduced by PR #15/#16, and no relaxation of Cycle 06's
+guard is proposed. It is a correction to a behavioral promise in an approved
+document, rather than a name-only difference.
+
+Runtime evidence: `devenv shell -- cargo test --locked --lib
+review_resolution_releases_parent_after_verified_cleanup_and_replays_original_attempt`
+passes one test. It asserts public `submit_comment` in the matching pending
+context returns `RepositoryErrorKind::RecoveryRequired` before resolution and
+works after the parent's local release (`src/repository/remote/sync_tests.rs:
+2447–2449,2511–2516`). An earlier attempt with `-- --exact` selected zero tests;
+that invocation is not evidence and was corrected by the command above.
+
+**Proposed replacement for Cycle amendment point 2, pending approval:**
+
+> **Repository-wide conflict block.** A pending synchronization conflict in any
+> context makes every other synchronization in the repository return `Busy`,
+> and there is no abandon path yet (ticket `01M4H33R34Z7C7EEKTY1ZCT950`). A
+> comment that can be checkpointed in another writable context is saved locally
+> with publication pending/`Busy`. Existing local authoring refuses a new comment
+> in the context owned by the pending merge before writing/checkpointing it;
+> that pre-checkpoint refusal returns local recovery, not a saved receipt. This
+> Cycle preserves both guards; contract point 6 maps delegated `Busy` after a
+> proven checkpoint to saved-local.
+
+The design replay table already specifies "Another context's conflict is
+pending" and Task 5 already asks for the Busy case in another context. No
+redesign of synchronization, cancellation, binding or conflict resolution is
+requested. The approved Cycle paragraph has not been edited. No Rust edit,
+branch push, CI dispatch, PR or closure performed. Next action: owner approves
+the affected Cycle wording, then apply it and finish Task 0 before Task 1.
