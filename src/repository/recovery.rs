@@ -498,6 +498,7 @@ pub(super) fn migrate_operation_records(
         );
         CREATE INDEX IF NOT EXISTS operation_records_root_path_idx ON operation_records(root_path, observed_at);
         CREATE INDEX IF NOT EXISTS operation_records_pending_root ON operation_records(root_path) WHERE state != 'completed';
+        CREATE INDEX IF NOT EXISTS operation_records_comment_registration_pending ON operation_records(root_path) WHERE completed_step='comment_registration_pending';
         CREATE INDEX IF NOT EXISTS operation_records_id_lookup ON operation_records(operation_ulid) WHERE operation_ulid IS NOT NULL;
          CREATE UNIQUE INDEX IF NOT EXISTS operation_records_root_operation_ulid_idx
              ON operation_records(root_path, operation_ulid) WHERE operation_ulid IS NOT NULL;
@@ -615,7 +616,8 @@ pub(super) fn require_no_pending_local(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<(), RepositoryError> {
-    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND (state!='completed' OR completed_step='comment_registration_pending'))",
+    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')
+        OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending')",
         [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if pending {
         return Err(super::remote::state::recovery_required());

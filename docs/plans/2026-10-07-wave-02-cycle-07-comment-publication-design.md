@@ -301,6 +301,14 @@ per TCP address connect and 30,000 ms per blocking SSH API call; progressing
 multi-call transfers can exceed that duration. Test watchdogs detect hangs but
 are not production timeout evidence.
 
+**Owner-authorized clarification and scope exception — 2026-10-10:** an owned
+resolution includes an applied checkpoint whose existing release proof is not
+complete. The real SSH composition exposed a missing shared Cycle 06 predicate
+case. The owner authorizes repairing that predicate here with the existing
+attempt/release evidence and regression coverage. This does not revive terminal
+cancelled children generally, change clean-merge cancellation, allocate another
+bound child or add merge/abandon policy.
+
 ## Alternatives And Rulings
 
 - **Return `SyncDeferred`, let the UI call sync:** rejected; violates required

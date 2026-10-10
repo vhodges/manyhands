@@ -58,15 +58,16 @@ owner approved that affected paragraph on 2026-10-10; the Task 0 gate is met.
 - [x] Task 1 API/checkpoint extraction and independent review (`82623fa`).
 - [x] Task 2 durable binding/receipt recovery and independent review (`41422f1`).
 - [x] Task 3 context delegation/index mapping and independent review (`b07ca41`).
-- [ ] Task 4 retry/cancellation: blocked on owner authorization of the narrow
-  Cycle 06 applied-but-unreleased resolution cancellation repair in the ledger.
+- [x] Task 4 retry/cancellation and owner-authorized narrow Cycle 06
+  applied-but-unreleased cancellation repair; independent source review.
 - [ ] Task 5 complete real-SSH acceptance and fault/privacy matrix.
 - [ ] Task 6 full local/final review and authorized five-target native evidence.
 
-The public SSH regression proves cancellation after the resolution checkpoint
-but before owned cleanup terminally cancels the child instead of preserving its
-recoverable stop. Scope approval is needed before changing shared Cycle 06
-behavior. The ticket is open and not review-ready.
+The public SSH regression exposed terminal cancellation after the resolution
+checkpoint but before cleanup. The owner-authorized shared predicate repair now
+preserves the recoverable stop, same child/candidate, and terminal clean/released
+negatives. Task 5 comprehensive acceptance and Task 6 final/native gates remain.
+The ticket is open and not review-ready.
 
 ## Exit Evidence
 

@@ -279,7 +279,12 @@ terminal/index-only replay and non-duplicating pending publication recovery.
   during a resolve does not outlive it; `cancel_remote_operation` has no effect
   on a child parked after a released conflict; a terminally cancelled child
   cannot be reused, so the comment stays saved-local and later publishes through
-  an ordinary context synchronization. Test each.
+   an ordinary context synchronization. Test each.
+   **Scope exception approved 2026-10-10:** repair the shared recoverable-cancel
+   predicate for an applied but unreleased owned resolution using existing
+   attempt/release evidence. Add applied-clean-merge and released-resolution
+   terminal negatives, plus the public SSH regression. Other delegation and
+   ownership boundaries remain as approved.
 - [ ] Test local index failure repair then sync, remote index failure then
   discovery-only retry, saved-local cache/receipt failure reporting, and retained
   conflict recovery. Assert original OID/comment/time remain fixed.

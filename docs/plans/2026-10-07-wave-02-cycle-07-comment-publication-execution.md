@@ -575,3 +575,44 @@ bypass is proposed.
 Current branch contains the failing regression as a local blocker checkpoint;
 ticket remains open and not review-ready. Task 5 comprehensive acceptance and
 Task 6 final/native gates remain pending. No push, CI dispatch, PR or closure.
+
+### Bounded repair authorized — 2026-10-10T17:36:53Z
+
+The owner answered "Yes" to the narrow shared predicate repair in this branch,
+focused regression coverage and the corresponding document clarification.
+Applied the approved clarification to the Cycle/design/plan and qualified the
+historical Cycle 06 evidence record. Resume Task 4 at `6605588`. The source repair
+must use existing resolution-attempt/release proof, retain the same child and
+candidate and preserve clean/released terminal negatives. Publication and
+lifecycle permissions are unchanged; no force push or dispatch is authorized.
+
+### Task 4 completion and authorized repair — 2026-10-10T17:58:44Z
+
+Extended the existing predicate using the latest integration window and its two
+fixed slots. An applied step is recoverable only if it has its own resolution
+attempt and the existing release proof is unfinished. Ownership, generation,
+epoch, cancellation acknowledgment, candidate and child identity are unchanged.
+
+Red evidence: added applied resolution stops after checkpoint observation and
+before metadata retirement to the existing cancellation regression; it produced
+Cancelled/request-retained instead of Interrupted/request-cleared. Repaired it
+and proved identical resolution cleanup and expected parents/clean state. The
+new released-artifact negative and existing ordinary clean-applied negatives
+remain terminal. The public two-clone SSH blocker now passes through the same
+child and original comment checkpoint (numeric phase 202 = interrupted).
+
+Independent read-only Task 4 review approves source, fencing and bounded release
+proof with no blocker; retry/cancel/original-blob/historical replay meet scoped
+requirements. Full SSH target **12 passes**; focused cancellation positives and
+terminal negatives pass; clippy all targets/features with warnings denied and
+fmt pass. A full library run reported 502 passes and one bounded-history guard
+failure: Task 3's registration-pending OR scanned 4,000 retained completed rows.
+Split it into two indexed EXISTS checks and added its partial-root index in the
+atomic operation migration. The performance test plus registration/parking
+regressions pass; independent re-review approves equal semantics and atomic
+backward-compatible index creation. Full final-suite proof remains Task 6.
+
+The owner-authorized shared repair is complete. Task 4 is complete; ticket is
+open, not review-ready. Continue Task 5 complete public SSH fault/privacy/
+collaborator/identity/transport acceptance, then Task 6 final local and native
+gates. No push, dispatch or lifecycle authorization inferred.

@@ -172,6 +172,11 @@ merged Cycle 06 code. The contract above stands; these points refine it.
    resolvable. `cancel_remote_operation` has no effect on a child parked after a
    released conflict. Cancellation of a submission never undoes its checkpoint
    and reports whichever of those states the child reached.
+   **Clarified and repair authorized 2026-10-10:** owned resolution includes an
+   applied checkpoint whose existing resolution-release proof is unfinished.
+   The owner permits a narrow shared Cycle 06 predicate repair in this branch;
+   released resolutions and ordinary applied clean merges retain terminal
+   cancellation. No second child or general cancelled-child revival is added.
 4. **Identity at a merge.** `SynchronizeRemoteRequest` now takes an optional
    `confirmed_identity`, and `SynchronizationError::IdentityRequired` carries an
    opaque `ExpectedConfiguration`. Submission already requires a Git identity

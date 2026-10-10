@@ -14215,6 +14215,11 @@ fn cancellation_after_an_interrupted_resolution_is_a_recoverable_stop() {
             FailurePoint::ResolutionAfterCandidatePrepared,
             "commit_prepared",
         ),
+        (FailurePoint::ResolutionBeforeMetadataRetirement, "applied"),
+        (
+            FailurePoint::ResolutionAfterCheckpointObservation,
+            "applied",
+        ),
     ] {
         let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
             "docs/document.md",
@@ -14297,6 +14302,46 @@ fn cancellation_after_an_interrupted_resolution_is_a_recoverable_stop() {
         assert_eq!(step_phase(), "applied");
         assert_eq!(repository.state(), git2::RepositoryState::Clean);
     }
+}
+
+#[test]
+fn cancellation_after_a_fully_released_resolution_stays_terminal() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, _, _) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = ResolveSynchronizationRequest::new(
+        root.path().into(),
+        operation,
+        OperationId::new(),
+        inspection.observation,
+        vec![(
+            inspection.paths[0].token.clone(),
+            RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+        )],
+        None,
+    );
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterIndexLockRetirement);
+    assert!(service.resolve_synchronization(attempt).is_err());
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    service
+        .cancel_remote_operation(root.path(), operation)
+        .unwrap();
+    assert!(matches!(
+        service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Replay(_)
+    ));
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(cancellation_state(&db, operation).0, "cancelled");
 }
 
 /// Cycle 05 cancellation is unchanged for an operation without a pending
