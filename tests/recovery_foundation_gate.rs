@@ -1114,6 +1114,7 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
     assert!(RepositoryService::open_at(data.path()).is_err());
     let connection = Connection::open(&database).unwrap();
     for table in [
+        "comment_publication_bindings",
         "operation_records",
         "operation_record_contexts",
         "registry_migrations",

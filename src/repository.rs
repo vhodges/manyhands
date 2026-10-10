@@ -664,6 +664,8 @@ pub enum RegistryConnectionPhase {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    CommentAfterDestinationPrepared,
+    CommentAfterCheckpointIntent,
     GenerationEntropyUnavailable,
     GenerationAfterReservation,
     GenerationAfterExclusiveCreate,
@@ -2228,6 +2230,16 @@ impl RepositoryService {
             }
             retained_binding =
                 Some(self.bind_comment_publication(&root_repository, &root, &request, record)?);
+            if matches!(
+                record.completed_step,
+                Some(
+                    "comment_checkpoint_intent"
+                        | "authoring_checkpoint_observed"
+                        | "authoritative_observed"
+                )
+            ) {
+                return Err(comment_publication::recovery_error());
+            }
             let context = match self.prepare_context_unlocked(
                 AuthoringTarget {
                     root: request.target.root,
@@ -2255,6 +2267,9 @@ impl RepositoryService {
                 .and_then(|head| head.peel_to_commit())
                 .map_err(|_| comment_publication::recovery_error())?;
             if head.id() != binding.pre_checkpoint_oid {
+                return Err(comment_publication::recovery_error());
+            }
+            if !record.is_new && self.comment_checkpoint_candidate_exists(&root, binding)? {
                 return Err(comment_publication::recovery_error());
             }
             self.reject_pending_synchronization_merge(&context, operation)?;
@@ -2320,6 +2335,14 @@ impl RepositoryService {
                 )?;
             }
             let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
+            if !exists
+                && matches!(
+                    record.completed_step,
+                    Some("comment_destination_prepared" | "authoring_destination_observed")
+                )
+            {
+                return Err(comment_publication::recovery_error());
+            }
             let comment = if exists {
                 let canonical::CanonicalItem::Comment(comment) =
                     read_owned_item(&context.worktree, &path, operation, &context.root)?
@@ -2350,11 +2373,29 @@ impl RepositoryService {
                     id: request.comment_id.clone(),
                     item_id: context.item_id.clone(),
                     parent_id: request.parent_id.clone(),
-                    created_at: OffsetDateTime::now_utc(),
+                    created_at: match retained_binding
+                        .as_ref()
+                        .and_then(|binding| binding.created_at.as_deref())
+                    {
+                        Some(time) => time
+                            .parse::<i128>()
+                            .ok()
+                            .and_then(|time| OffsetDateTime::from_unix_timestamp_nanos(time).ok())
+                            .ok_or_else(comment_publication::recovery_error)?,
+                        None => OffsetDateTime::now_utc(),
+                    },
                     body: request.body.clone(),
                     unknown: serde_yaml::Mapping::new(),
                 }
             };
+            let creation_time = comment.created_at.unix_timestamp_nanos().to_string();
+            if retained_binding
+                .as_ref()
+                .and_then(|binding| binding.created_at.as_deref())
+                .is_some_and(|time| time != creation_time)
+            {
+                return Err(comment_publication::recovery_error());
+            }
             let serialized = canonical::serialize_item(&canonical::CanonicalItem::Comment(comment))
                 .map_err(|problem| {
                     authoring_error(
@@ -2418,6 +2459,17 @@ impl RepositoryService {
             if !exists {
                 effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
+                let binding = retained_binding
+                    .as_mut()
+                    .ok_or_else(comment_publication::recovery_error)?;
+                self.store_comment_creation_time(&root, binding, &creation_time)?;
+                binding.created_at = Some(creation_time.clone());
+                self.advance_lifecycle(&root, operation, record, "comment_destination_prepared")?;
+                self.check_failure(
+                    FailurePoint::CommentAfterDestinationPrepared,
+                    operation,
+                    &root,
+                )?;
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;
                 write_owned_document(
                     &context.worktree,
@@ -2434,6 +2486,12 @@ impl RepositoryService {
                 )?;
             }
             effects.begin();
+            // The existing injected precommit stop is known not to have called
+            // Git. Every later interruption is conservatively an attempted
+            // checkpoint until immutable Git evidence proves the result.
+            self.check_failure(FailurePoint::BeforeCheckpointCommit, operation, &root)?;
+            self.advance_lifecycle(&root, operation, record, "comment_checkpoint_intent")?;
+            self.check_failure(FailurePoint::CommentAfterCheckpointIntent, operation, &root)?;
             let checkpoint = self.checkpoint_owned_paths(
                 &repository,
                 &context,
@@ -2464,6 +2522,7 @@ impl RepositoryService {
                     self.prove_comment_receipt(&root, &binding, Some(&request.body))?;
                 self.store_comment_receipt(&root, &binding, receipt.checkpoint_oid, &time)?;
                 binding.created_at = Some(time);
+                binding.receipt_recorded = true;
                 retained_binding = Some(binding);
             }
             self.advance_lifecycle(

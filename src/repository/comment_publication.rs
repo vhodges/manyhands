@@ -407,7 +407,7 @@ impl RepositoryService {
             )?;
             let connection = open_registry(&self.registry_path, &mut |_| {})?;
             connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed'
-                WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND state IN ('created','worktree_observed','authoring_destination_observed')",
+                WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND state IN ('created','worktree_observed','comment_checkpoint_intent','authoring_destination_observed')",
                 params![receipt.operation_id.to_string(),root.to_str()]).map_err(|_| recovery_error())?;
         }
         self.refresh_repository(RefreshRepositoryRequest {
@@ -518,20 +518,16 @@ impl RepositoryService {
             let head = repository
                 .refname_to_id(&format!("refs/heads/{branch}"))
                 .map_err(|_| recovery_error())?;
-            let mut walk = repository.revwalk().map_err(|_| recovery_error())?;
-            walk.push(head).map_err(|_| recovery_error())?;
-            walk.hide(binding.pre_checkpoint_oid)
-                .map_err(|_| recovery_error())?;
-            let mut found = None;
-            for oid in walk.take(4096) {
-                let oid = oid.map_err(|_| recovery_error())?;
-                if checkpoint_comment(&repository, oid, binding, &path).is_ok()
-                    && found.replace(oid).is_some()
-                {
-                    return Err(recovery_error());
-                }
+            let candidate =
+                find_comment_checkpoint(&repository, binding, &path)?.ok_or_else(recovery_error)?;
+            if head != candidate
+                && !repository
+                    .graph_descendant_of(head, candidate)
+                    .map_err(|_| recovery_error())?
+            {
+                return Err(recovery_error());
             }
-            found.ok_or_else(recovery_error)?
+            candidate
         };
         let comment = checkpoint_comment(&repository, oid, binding, &path)?;
         if body.is_some_and(|body| body != comment.body) {
@@ -552,6 +548,51 @@ impl RepositoryService {
         }
         Ok((binding_receipt(root, binding, oid), time))
     }
+
+    pub(super) fn comment_checkpoint_candidate_exists(
+        &self,
+        root: &Path,
+        binding: &recovery::CommentBinding,
+    ) -> Result<bool, RepositoryError> {
+        let repository = Repository::open(root).map_err(|_| recovery_error())?;
+        let path = PathBuf::from(format!(
+            ".manyhands/comments/{}/{}.md",
+            binding.item_id, binding.comment_id
+        ));
+        Ok(find_comment_checkpoint(&repository, binding, &path)?.is_some())
+    }
+}
+
+/// A receiptless retry is rare and must also notice an unreachable original
+/// checkpoint. Reachable-history-only search would authorize a replacement
+/// after an external reset. No object is written and no body digest is retained.
+fn find_comment_checkpoint(
+    repository: &Repository,
+    binding: &recovery::CommentBinding,
+    path: &Path,
+) -> Result<Option<git2::Oid>, RepositoryError> {
+    let odb = repository.odb().map_err(|_| recovery_error())?;
+    let mut found = None;
+    let mut ambiguous = false;
+    let subject = format!("Checkpoint comment {}", binding.comment_id);
+    odb.foreach(|oid| {
+        if let Ok(commit) = repository.find_commit(*oid)
+            && commit.parent_count() == 1
+            && commit.parent_id(0).ok() == Some(binding.pre_checkpoint_oid)
+            && commit.message() == Some(subject.as_str())
+            && (checkpoint_comment(repository, *oid, binding, path).is_err()
+                || found.replace(*oid).is_some())
+        {
+            ambiguous = true;
+            return false;
+        }
+        true
+    })
+    .map_err(|_| recovery_error())?;
+    if ambiguous {
+        return Err(recovery_error());
+    }
+    Ok(found)
 }
 
 fn binding_receipt(

@@ -367,3 +367,76 @@ all-feature locked Cargo check and clippy (`-D warnings`) pass. Cargo fmt and
 reran clippy plus focused library/authoring tests green. Full final and native
 Cycle evidence is still owed by Tasks 5–6. The exact table inventory is a known
 Task 2 regression migration, not a claimed passing full suite.
+
+## Task 2: Durable Binding and Receipt Recovery — 2026-10-10
+
+Review base: `82623fa`. Added strict binding-table/marker migration in the
+**existing operation-record transaction**, including startup root-digest,
+parent matcher and child root/action/item checks and the exact table inventory.
+The allocation transaction rechecks its parent row identity and all local/
+remote/binding ID collisions. Reciprocal consuming guards prevent another
+local action, plain refresh or remote target from taking an unused child; only
+its authoritative ordinary refresh may coexist.
+
+Receipt proof checks immutable commit/tree/path, one owned added path, the
+recorded direct pre-parent, original canonical IDs/time and context ancestry.
+Receiptless reconciliation finds unique matching objects including unreachable
+ones; an unreadable plausible candidate or competing checkpoint requires
+recovery. Fresh new writes do not perform that replay ODB scan under the lease.
+
+### Review and crash evidence
+
+Independent review found one remaining replacement path after receipt failure,
+reset and pruning/missing Git authority. Reproduced it in a red test, then added
+fixed categories to the existing local journal:
+
+- `comment_destination_prepared`: validated creation time is persisted before
+  the first canonical write, never a body or fingerprint. A prepared/observed
+  missing file requires recovery rather than another creation timestamp.
+- `comment_checkpoint_intent`: durable before actual Git checkpoint execution.
+  Without proved Git authority an exact retry cannot create a replacement,
+  even when original objects have disappeared. The existing known injected
+  precommit stop fires before this intent and still resumes its retained file.
+- Two hidden failure points following the existing test-seam pattern pin the
+  prepared-before-write and intent-before-commit windows. Both reopen into
+  typed recovery with unchanged file observation, timestamp, HEAD and binding.
+
+The existing binding timestamp field is now independent of checkpoint nullness:
+it is validated from canonical serialization before write; checkpoint authority
+is stored only after proof. This implements the owner's timestamp exception and
+preserves one observed creation time. An ephemeral `receipt_recorded` flag
+distinguishes stored authority from in-memory postcommit evidence; no extra
+remote phase or reservation is persisted in the binding.
+
+Review re-runs approved the production fixes and, after the two intent-window
+tests, found no remaining Task 2 blocker or acceptance gap. Other covered cases:
+pending local/interrupted remote rows preserved through legacy migration,
+failure after binding DDL rolling back both table and marker, rejected-row
+refresh/reopen identity, valid authoritative child/refresh/reopen coexistence,
+missing commit/tree/blob with and without retained file, multiple plausible
+checkpoints, cross-root/target/body/ID mismatch, concurrent services, and
+body/endpoint/passphrase/server/body-hash canaries absent from database sidecars.
+The authoritative-refresh unit case arranges durable metadata; it is not real
+SSH publication proof.
+
+Interim Task 1 registry definitions are intentionally not upgraded under the
+owner's explicit hand-off ruling: no running instances and no earlier-branch
+registry upgrade requirement. Main's legacy databases remain additive migrations
+with no inferred correlation/publication. An early schema placement broke the
+existing rollback regression; moved the new table/marker into the operation
+transaction and proved rollback after DDL as well as during legacy import.
+
+### Verification and next debts
+
+Devenv: full library **493 passed**, including 25 comment-publication tests;
+foundation recovery 51, enablement 78, remote reservation 9; full local authoring
+131 and journal rejection 18 passed during the task, with comment-authoring 17
+rerun after intent/timestamp changes. All-target/all-feature locked clippy with
+warnings denied, fmt and `git diff --check` pass. The first concurrency fixture
+used a resolution-only temp hook and timed out; switched to the actual normal
+writer Replace boundary and verified it green. No sleeps or index workaround.
+
+Carry to Task 3: live canonical-worktree validation can mask the child's typed
+pending conflict recovery; missing-registration discovery must remain independent
+index-pending evidence. Real SSH, remaining mapping/retry/cancel acceptance and
+final native gates remain Tasks 3–6. No push, dispatch or closure performed.

@@ -1561,11 +1561,9 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::keys::migrate_material_schema(&transaction)?;
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
-    super::recovery::migrate_comment_bindings(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     migrate_item_read_schema(connection)?;
-    super::recovery::migrate_operation_records(connection)?;
-    super::recovery::validate_comment_bindings(connection)
+    super::recovery::migrate_operation_records(connection)
 }
 
 /// The columns the item reads need: who closed a ticket, an item's unknown

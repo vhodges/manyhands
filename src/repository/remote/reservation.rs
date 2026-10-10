@@ -4,7 +4,7 @@
 mod tests;
 use std::{path::Path, sync::Arc};
 
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{
     RemoteOperationAction, RemoteOperationPhase, RemoteOperationPriority, RemoteOperationSafePoint,
@@ -550,6 +550,31 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
+            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path FROM comment_publication_bindings b
+                JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
+                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?))).optional().map_err(|_| state::recovery_required())?;
+            if let Some((kind, item, checkpoint, parent_root)) = binding {
+                let registered_root: String = tx
+                    .query_row(
+                        "SELECT root_path FROM repositories WHERE id=?1",
+                        [repository_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| state::recovery_required())?;
+                let identity_matches = target.item().is_some_and(|(target_kind, target_item)| {
+                    crate::repository::authoring_kind_segment(&target_kind) == kind
+                        && target_item.to_string() == item
+                });
+                if parent_root != registered_root
+                    || target.action() != RemoteOperationAction::SynchronizeContext
+                    || !identity_matches
+                {
+                    return Err(mismatch());
+                }
+                if checkpoint.is_none() {
+                    return Err(state::recovery_required());
+                }
+            }
             let local_id: bool = tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",

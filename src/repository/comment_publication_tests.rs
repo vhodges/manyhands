@@ -116,6 +116,23 @@ impl Fixture {
     fn db(&self) -> rusqlite::Connection {
         rusqlite::Connection::open(self.data.path().join(REGISTRY_FILE)).unwrap()
     }
+    fn configure_remote(&self) {
+        self.service
+            .add_remote(AddRemoteRequest {
+                root: self.root.path().into(),
+                name: "origin".into(),
+                url: "ssh://fixture@localhost/repository".into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        self.service
+            .set_publication_remote(SetPublicationRemoteRequest {
+                root: self.root.path().into(),
+                name: Some("origin".into()),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+    }
 }
 fn saved(
     value: CommentSubmissionOutcome,
@@ -411,7 +428,7 @@ fn comment_publication_receiptless_identity_retry_refuses_changed_pre_checkpoint
 fn comment_publication_receiptless_replay_never_recreates_an_externally_deleted_checkpoint() {
     let f = Fixture::new();
     let request = f.request();
-    f.db().execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+    f.db().execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE OF checkpoint_oid ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
     let (receipt, _, _) = saved(
         f.service
             .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
@@ -447,4 +464,861 @@ fn comment_publication_receiptless_replay_never_recreates_an_externally_deleted_
     } if matches!(*error, SynchronizationError::RecoveryRequired)));
     assert_eq!(repository.head().unwrap().target(), Some(removed));
     assert!(!f.context.worktree.join(&receipt.comment_path).exists());
+}
+
+#[test]
+fn comment_publication_bound_child_cannot_be_consumed_by_local_context_or_plain_refresh() {
+    for refresh in [false, true] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let kind = if refresh {
+            f.service
+                .refresh_repository(RefreshRepositoryRequest {
+                    root: f.root.path().into(),
+                    operation_id: receipt.synchronization_id,
+                })
+                .err()
+                .map(|e| e.kind)
+        } else {
+            f.service
+                .prepare_context(AuthoringTarget {
+                    root: f.root.path().into(),
+                    kind: AuthoringKind::Document,
+                    item_id: f.item.clone(),
+                    intent: ContextIntent::Edit,
+                    operation_id: receipt.synchronization_id,
+                })
+                .err()
+                .map(|e| e.kind)
+        };
+        assert_eq!(kind, Some(RepositoryErrorKind::OperationMismatch));
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1",
+                    [receipt.synchronization_id.to_string()],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(RepositoryService::open_at(f.data.path()).is_ok());
+    }
+}
+
+#[test]
+fn comment_publication_bound_child_refuses_other_remote_actions_and_targets() {
+    for action in [0, 1, 2] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = match action {
+            0 => RemoteOperationTarget::for_primary_synchronization(&plan),
+            1 => RemoteOperationTarget::for_poll(&plan),
+            _ => RemoteOperationTarget::for_context(
+                &plan,
+                RemoteOperationAction::SynchronizeContext,
+                AuthoringKind::Document,
+                canonical::ItemId::generate(),
+            )
+            .unwrap(),
+        };
+        assert!(
+            matches!(f.service.reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target), Err(e) if e.kind == RepositoryErrorKind::OperationMismatch)
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn comment_publication_startup_refuses_substituted_schema_root_and_item_identity() {
+    for corruption in [0, 1, 2] {
+        let f = Fixture::new();
+        saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        match corruption {
+            0 => f.db().execute_batch("PRAGMA foreign_keys=OFF; ALTER TABLE comment_publication_bindings RENAME TO old_bindings;
+                CREATE TABLE comment_publication_bindings AS SELECT * FROM old_bindings; DROP TABLE old_bindings;").unwrap(),
+            1 => { f.db().execute("UPDATE comment_publication_bindings SET root_digest=zeroblob(32)", []).unwrap(); },
+            _ => { f.db().execute("UPDATE comment_publication_bindings SET item_ulid=?1", [canonical::ItemId::generate().to_string()]).unwrap(); },
+        }
+        assert!(
+            RepositoryService::open_at(f.data.path()).is_err(),
+            "substituted registry must fail closed; category={corruption}"
+        );
+    }
+}
+
+#[test]
+fn comment_publication_unreachable_receiptless_checkpoint_never_generates_a_replacement() {
+    let f = Fixture::new();
+    let request = f.request();
+    f.db().execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE OF checkpoint_oid ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.db().execute_batch("DROP TRIGGER stop_receipt;").unwrap();
+    let repository = Repository::open(&f.context.worktree).unwrap();
+    let pre = repository
+        .find_commit(receipt.checkpoint_oid)
+        .unwrap()
+        .parent_id(0)
+        .unwrap();
+    repository
+        .find_reference(&format!("refs/heads/{}", receipt.context_branch))
+        .unwrap()
+        .set_target(pre, "external reset")
+        .unwrap();
+    repository
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    assert!(!f.context.worktree.join(&receipt.comment_path).exists());
+    assert!(
+        f.service
+            .submit_comment(request, &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(pre));
+    assert!(!f.context.worktree.join(&receipt.comment_path).exists());
+}
+
+#[test]
+fn comment_publication_binding_and_file_faults_reopen_without_duplicate_effects() {
+    for fault in [0, 1, 2, 3] {
+        let f = Fixture::new();
+        let request = f.request();
+        let path = f.context.worktree.join(format!(
+            ".manyhands/comments/{}/{}.md",
+            f.item, request.comment.comment_id
+        ));
+        let service = match fault {
+            1 => RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeItemWrite,
+            )
+            .unwrap(),
+            2 => RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeCheckpointCommit,
+            )
+            .unwrap(),
+            3 => RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeRegistryWrite,
+            )
+            .unwrap(),
+            _ => {
+                f.db().execute_batch("CREATE TRIGGER stop_binding BEFORE INSERT ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+                RepositoryService::open_at(f.data.path()).unwrap()
+            }
+        };
+        let first = service.submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt));
+        let retained = std::fs::read(&path).ok();
+        let child: Option<String> = f
+            .db()
+            .query_row(
+                "SELECT synchronization_ulid FROM comment_publication_bindings",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        if fault == 3 {
+            assert!(first.is_ok());
+        } else {
+            assert!(first.is_err());
+        }
+        if fault == 0 {
+            f.db().execute_batch("DROP TRIGGER stop_binding;").unwrap();
+        }
+        drop(service);
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        let (receipt, state, indexing) = saved(
+            reopened
+                .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+        if let Some(child) = child {
+            assert_eq!(receipt.synchronization_id.to_string(), child);
+        }
+        if let Some(bytes) = retained {
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        assert!(matches!(
+            state,
+            CommentPublicationState::Pending {
+                reason: CommentPublicationPendingReason::NoPublicationRemote
+            }
+        ));
+        assert!(!indexing.local_pending);
+        let repository = Repository::open(&f.context.worktree).unwrap();
+        assert_eq!(
+            repository.head().unwrap().target(),
+            Some(receipt.checkpoint_oid)
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM comment_publication_bindings",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn comment_publication_binding_mismatch_and_changed_body_never_write_again() {
+    let f = Fixture::new();
+    let request = f.request();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    let repository = Repository::open(&f.context.worktree).unwrap();
+    let bytes = std::fs::read(f.context.worktree.join(&receipt.comment_path)).unwrap();
+    for change in [0, 1, 2, 3, 4] {
+        let mut altered = request.clone();
+        match change {
+            0 => altered.comment.parent_id = Some(canonical::ItemId::generate()),
+            1 => altered.comment.target.kind = AuthoringKind::Ticket,
+            2 => altered.comment.comment_id = canonical::ItemId::generate(),
+            3 => altered.comment.body = "different-body-sentinel\n".into(),
+            _ => altered.comment.target.operation_id = OperationId::new(),
+        }
+        assert!(
+            f.service
+                .submit_comment(altered, &mut SessionCredentials::new(NoPrompt))
+                .is_err()
+        );
+        assert_eq!(
+            repository.head().unwrap().target(),
+            Some(receipt.checkpoint_oid)
+        );
+        assert_eq!(
+            std::fs::read(f.context.worktree.join(&receipt.comment_path)).unwrap(),
+            bytes
+        );
+    }
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT COUNT(*) FROM comment_publication_bindings",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn comment_publication_legacy_rows_migrate_without_inferred_correlation_or_publication() {
+    let f = Fixture::new();
+    let request = f.request();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(request, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    let original_step: String = f
+        .db()
+        .query_row(
+            "SELECT completed_step FROM operation_records WHERE operation_ulid=?1",
+            [receipt.operation_id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    f.db().execute_batch("DROP TABLE comment_publication_bindings; DELETE FROM registry_migrations WHERE name='cycle_07_comment_publication_bindings';").unwrap();
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT completed_step FROM operation_records WHERE operation_ulid=?1",
+                [receipt.operation_id.to_string()],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        original_step
+    );
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT COUNT(*) FROM comment_publication_bindings",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        matches!(reopened.retry_comment_publication(RetryCommentPublicationRequest { root: f.root.path().into(), operation_id: receipt.operation_id,
+        approval: None, confirmed_identity: None, restart: false }, &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+    assert_eq!(
+        f.db()
+            .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn comment_publication_persistence_excludes_bodies_and_body_fingerprints() {
+    let f = Fixture::new();
+    let db = f.db();
+    db.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+    let mut request = f.request();
+    request.comment.body = "body-private-canary ssh://endpoint-private-canary passphrase-private-canary server-private-canary\n".into();
+    let body_hash = blake3::hash(request.comment.body.as_bytes())
+        .to_hex()
+        .to_string();
+    saved(
+        f.service
+            .submit_comment(request, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    for entry in std::fs::read_dir(f.data.path()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            for forbidden in [
+                "body-private-canary",
+                "endpoint-private-canary",
+                "passphrase-private-canary",
+                "server-private-canary",
+                &body_hash,
+            ] {
+                assert!(
+                    !bytes
+                        .windows(forbidden.len())
+                        .any(|window| window == forbidden.as_bytes()),
+                    "persistence privacy category"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn comment_publication_correct_child_target_is_reserved_once() {
+    let f = Fixture::new();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.service
+        .add_remote(AddRemoteRequest {
+            root: f.root.path().into(),
+            name: "origin".into(),
+            url: "ssh://fixture@localhost/repository".into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    f.service
+        .set_publication_remote(SetPublicationRemoteRequest {
+            root: f.root.path().into(),
+            name: Some("origin".into()),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        receipt.kind,
+        receipt.item_id.clone(),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Replay(_)
+    ));
+    assert_eq!(
+        f.db()
+            .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn comment_publication_simultaneous_services_keep_one_binding_and_checkpoint() {
+    let f = Fixture::new();
+    let request = f.request();
+    let competing = RepositoryService::open_at(f.data.path()).unwrap();
+    let db = f.db();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    f.service.set_owned_path_hook_for_root_for_testing(
+        f.context.worktree.clone(),
+        format!(
+            ".manyhands/comments/{}/{}.md",
+            f.item, request.comment.comment_id
+        )
+        .into(),
+        OwnedPathBoundary::Replace,
+        move || {
+            ready_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        },
+    );
+    let first_request = request.clone();
+    let service = f.service;
+    let first = std::thread::spawn(move || {
+        service.submit_comment(first_request, &mut SessionCredentials::new(NoPrompt))
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let child: String = db
+        .query_row(
+            "SELECT synchronization_ulid FROM comment_publication_bindings",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let second = competing.submit_comment(request, &mut SessionCredentials::new(NoPrompt));
+    release_tx.send(()).unwrap();
+    assert!(matches!(second, Err(e) if e.kind == RepositoryErrorKind::RepositoryBusy));
+    let (receipt, _, _) = saved(first.join().unwrap().unwrap());
+    assert_eq!(receipt.synchronization_id.to_string(), child);
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM comment_publication_bindings",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+}
+
+#[test]
+fn comment_publication_original_action_cannot_move_to_another_registered_root() {
+    let f = Fixture::new();
+    let other = Fixture::new();
+    let request = f.request();
+    saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.service
+        .enable(EnableRepositoryRequest {
+            root: other.root.path().into(),
+            primary_branch: "main".into(),
+            identity: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let mut foreign = other.request();
+    foreign.comment.target.operation_id = request.comment.target.operation_id;
+    assert!(
+        matches!(f.service.submit_comment(foreign, &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::OperationMismatch)
+    );
+}
+
+#[test]
+fn comment_publication_binding_transaction_rechecks_the_parent_record_identity() {
+    let f = Fixture::new();
+    let request = f.request();
+    let unrelated = f
+        .db()
+        .query_row(
+            "SELECT id FROM operation_records WHERE action='prepare_context' LIMIT 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap();
+    let repository = Repository::open(f.root.path()).unwrap();
+    assert!(
+        matches!(f.service.bind_comment_publication(&repository, f.root.path(), &request.comment,
+        recovery::RecoveryRecord { id: unrelated, is_new: true, is_pending: false, completed_step: None }), Err(e) if e.kind == RepositoryErrorKind::OperationMismatch)
+    );
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT COUNT(*) FROM comment_publication_bindings",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn comment_publication_missing_receipt_authority_never_recreates_a_comment_or_checkpoint() {
+    for missing in [0, 1, 2, 3] {
+        let f = Fixture::new();
+        let request = f.request();
+        f.db().execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE OF checkpoint_oid ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        f.db().execute_batch("DROP TRIGGER stop_receipt;").unwrap();
+        let repository = Repository::open(&f.context.worktree).unwrap();
+        let commit = repository.find_commit(receipt.checkpoint_oid).unwrap();
+        let pre = commit.parent_id(0).unwrap();
+        let tree = commit.tree().unwrap();
+        let missing_oid = match missing {
+            0 => receipt.checkpoint_oid,
+            1 => tree.id(),
+            _ => tree.get_path(&receipt.comment_path).unwrap().id(),
+        };
+        let original_bytes = std::fs::read(f.context.worktree.join(&receipt.comment_path)).unwrap();
+        repository
+            .find_reference(&format!("refs/heads/{}", receipt.context_branch))
+            .unwrap()
+            .set_target(pre, "external reset")
+            .unwrap();
+        if missing != 3 {
+            repository
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .unwrap();
+        }
+        let oid = missing_oid.to_string();
+        std::fs::remove_file(
+            repository
+                .commondir()
+                .join("objects")
+                .join(&oid[..2])
+                .join(&oid[2..]),
+        )
+        .unwrap();
+        drop(tree);
+        drop(commit);
+        drop(repository);
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert!(
+            matches!(reopened.submit_comment(request, &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::RecoveryRequired),
+            "missing authority category={missing}"
+        );
+        assert_eq!(
+            Repository::open(&f.context.worktree)
+                .unwrap()
+                .head()
+                .unwrap()
+                .target(),
+            Some(pre)
+        );
+        if missing == 3 {
+            assert_eq!(
+                std::fs::read(f.context.worktree.join(&receipt.comment_path)).unwrap(),
+                original_bytes
+            );
+        } else {
+            assert!(!f.context.worktree.join(&receipt.comment_path).exists());
+        }
+    }
+}
+
+fn metadata_rows(
+    connection: &rusqlite::Connection,
+    table: &str,
+) -> Vec<Vec<rusqlite::types::Value>> {
+    let mut statement = connection
+        .prepare(&format!("SELECT * FROM {table} ORDER BY id"))
+        .unwrap();
+    let count = statement.column_count();
+    statement
+        .query_map([], |r| {
+            (0..count)
+                .map(|i| r.get(i))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+#[test]
+fn comment_publication_migration_preserves_pending_comment_and_interrupted_remote_rows() {
+    let f = Fixture::new();
+    f.configure_remote();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let operation = OperationId::new();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        canonical::ItemId::generate(),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root.path(), operation, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+            [operation.to_string()],
+        )
+        .unwrap();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::BeforeCheckpointCommit,
+    )
+    .unwrap();
+    assert!(
+        failing
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    let local = metadata_rows(&f.db(), "operation_records");
+    let remote = metadata_rows(&f.db(), "remote_operation_records");
+    let head = Repository::open(&f.context.worktree)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target();
+    f.db().execute_batch("DROP TABLE comment_publication_bindings; DELETE FROM registry_migrations WHERE name='cycle_07_comment_publication_bindings';").unwrap();
+    RepositoryService::open_at(f.data.path()).unwrap();
+    assert!(
+        metadata_rows(&f.db(), "operation_records") == local,
+        "legacy local rows changed during migration"
+    );
+    assert!(
+        metadata_rows(&f.db(), "remote_operation_records") == remote,
+        "legacy remote rows changed during migration"
+    );
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        head
+    );
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT COUNT(*) FROM comment_publication_bindings",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn comment_publication_migration_failure_after_table_creation_rolls_back_table_and_marker() {
+    let f = Fixture::new();
+    f.db().execute_batch("DROP TABLE comment_publication_bindings; DELETE FROM registry_migrations WHERE name='cycle_07_comment_publication_bindings';
+        CREATE TRIGGER stop_migration BEFORE INSERT ON registry_migrations WHEN NEW.name='cycle_07_comment_publication_bindings' BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+    assert!(RepositoryService::open_at(f.data.path()).is_err());
+    assert!(!f.db().query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='comment_publication_bindings')", [], |r| r.get::<_, bool>(0)).unwrap());
+    assert!(!f.db().query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_07_comment_publication_bindings')", [], |r| r.get::<_, bool>(0)).unwrap());
+    f.db()
+        .execute_batch("DROP TRIGGER stop_migration;")
+        .unwrap();
+    RepositoryService::open_at(f.data.path()).unwrap();
+}
+
+#[test]
+fn comment_publication_competing_plausible_checkpoints_require_recovery() {
+    let f = Fixture::new();
+    let request = f.request();
+    f.db().execute_batch("CREATE TRIGGER stop_receipt BEFORE UPDATE OF checkpoint_oid ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.db().execute_batch("DROP TRIGGER stop_receipt;").unwrap();
+    let repository = Repository::open(&f.context.worktree).unwrap();
+    let original = repository.find_commit(receipt.checkpoint_oid).unwrap();
+    let parent = original.parent(0).unwrap();
+    let signature = Signature::new(
+        "other",
+        "other@example.invalid",
+        &git2::Time::new(original.time().seconds() + 1, 0),
+    )
+    .unwrap();
+    repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            original.message().unwrap(),
+            &original.tree().unwrap(),
+            &[&parent],
+        )
+        .unwrap();
+    assert!(
+        matches!(f.service.retry_comment_publication(RetryCommentPublicationRequest { root: f.root.path().into(), operation_id: receipt.operation_id, approval: None, confirmed_identity: None, restart: false }, &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        repository.head().unwrap().target(),
+        Some(receipt.checkpoint_oid)
+    );
+}
+
+#[test]
+fn comment_publication_authoritative_child_allows_only_its_plain_refresh_and_reopen() {
+    // Durable-authority shape is arranged here; actual SSH authority is Task 5.
+    let f = Fixture::new();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.configure_remote();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        receipt.kind,
+        receipt.item_id.clone(),
+    )
+    .unwrap();
+    f.service
+        .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+        .unwrap();
+    f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
+        params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
+    assert!(matches!(
+        f.service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: f.root.path().into(),
+                operation_id: receipt.synchronization_id
+            })
+            .unwrap(),
+        RefreshOutcome::Refreshed { .. }
+    ));
+    RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=''", [receipt.synchronization_id.to_string()], |r| r.get::<_, i64>(0)).unwrap(), 1);
+}
+
+#[test]
+fn comment_publication_stops_in_pre_effect_intent_windows_require_recovery_without_replacement() {
+    for point in [
+        FailurePoint::CommentAfterDestinationPrepared,
+        FailurePoint::CommentAfterCheckpointIntent,
+    ] {
+        let f = Fixture::new();
+        let request = f.request();
+        let failing =
+            RepositoryService::open_at_with_failure_point_for_testing(f.data.path(), point)
+                .unwrap();
+        assert!(
+            matches!(failing.submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::InjectedFailure)
+        );
+        let path = f.context.worktree.join(format!(
+            ".manyhands/comments/{}/{}.md",
+            f.item, request.comment.comment_id
+        ));
+        let before = std::fs::read(&path).ok();
+        let head = Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target();
+        let time: String = f
+            .db()
+            .query_row(
+                "SELECT created_at FROM comment_publication_bindings",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert!(
+            matches!(reopened.submit_comment(request, &mut SessionCredentials::new(NoPrompt)), Err(e) if e.kind == RepositoryErrorKind::RecoveryRequired)
+        );
+        assert_eq!(std::fs::read(&path).ok(), before);
+        assert_eq!(
+            Repository::open(&f.context.worktree)
+                .unwrap()
+                .head()
+                .unwrap()
+                .target(),
+            head
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT created_at FROM comment_publication_bindings",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            time
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM comment_publication_bindings",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
 }

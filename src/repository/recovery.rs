@@ -19,6 +19,7 @@ pub(crate) struct CommentBinding {
     pub(super) pre_checkpoint_oid: git2::Oid,
     pub(super) checkpoint_oid: Option<git2::Oid>,
     pub(super) created_at: Option<String>,
+    pub(super) receipt_recorded: bool,
 }
 impl CommentBinding {
     pub(super) fn matches_request(
@@ -41,11 +42,10 @@ impl CommentBinding {
     }
 }
 
-pub(super) fn migrate_comment_bindings(connection: &Connection) -> Result<(), RepositoryError> {
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS comment_publication_bindings (
+const COMMENT_BINDING_SCHEMA: &str = "CREATE TABLE comment_publication_bindings (
         operation_ulid TEXT PRIMARY KEY NOT NULL,
         local_record_id INTEGER NOT NULL UNIQUE REFERENCES operation_records(id) ON DELETE CASCADE,
-        root_digest BLOB NOT NULL CHECK(length(root_digest)=32),
+        root_digest BLOB NOT NULL CHECK(typeof(root_digest)='blob' AND length(root_digest)=32),
         kind TEXT NOT NULL CHECK(kind IN ('document','ticket')),
         item_ulid TEXT NOT NULL,
         comment_ulid TEXT NOT NULL,
@@ -54,10 +54,32 @@ pub(super) fn migrate_comment_bindings(connection: &Connection) -> Result<(), Re
         pre_checkpoint_oid TEXT NOT NULL CHECK(length(pre_checkpoint_oid)=40 AND pre_checkpoint_oid NOT GLOB '*[^0-9a-f]*'),
         checkpoint_oid TEXT CHECK(length(checkpoint_oid)=40 AND checkpoint_oid NOT GLOB '*[^0-9a-f]*'),
         created_at TEXT,
-        CHECK((checkpoint_oid IS NULL)=(created_at IS NULL)),
+        CHECK(checkpoint_oid IS NULL OR created_at IS NOT NULL),
         CHECK(operation_ulid!=synchronization_ulid),
         UNIQUE(root_digest,comment_ulid)
-    );").map_err(|_| super::comment_publication::recovery_error())?;
+    )";
+
+pub(super) fn migrate_comment_bindings(connection: &Connection) -> Result<(), RepositoryError> {
+    let failure = super::comment_publication::recovery_error;
+    connection
+        .execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| failure())?;
+    let migrated: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_07_comment_publication_bindings')", [], |r| r.get(0)).map_err(|_| failure())?;
+    let actual: Option<String> = connection.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='comment_publication_bindings'", [], |r| r.get(0)).optional().map_err(|_| failure())?;
+    match actual {
+        None if !migrated => {
+            connection
+                .execute_batch(COMMENT_BINDING_SCHEMA)
+                .map_err(|_| failure())?;
+        }
+        Some(actual)
+            if actual.split_whitespace().collect::<String>()
+                == COMMENT_BINDING_SCHEMA
+                    .split_whitespace()
+                    .collect::<String>() => {}
+        _ => return Err(failure()),
+    }
+    connection.execute("INSERT OR IGNORE INTO registry_migrations(name) VALUES('cycle_07_comment_publication_bindings')", []).map_err(|_| failure())?;
     // A partial or substituted table is not repaired on startup.
     let columns = [
         "operation_ulid",
@@ -105,9 +127,10 @@ fn decode_comment_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommentBi
     }) {
         return Err(invalid());
     }
-    if checkpoint.is_some() != created_at.is_some() {
+    if checkpoint.is_some() && created_at.is_none() {
         return Err(invalid());
     }
+    let receipt_recorded = checkpoint.is_some();
     Ok(CommentBinding {
         operation_id: OperationId::parse(&operation).map_err(|_| invalid())?,
         synchronization_id: OperationId::parse(&child).map_err(|_| invalid())?,
@@ -126,6 +149,7 @@ fn decode_comment_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommentBi
             .map(|oid| git2::Oid::from_str(&oid).map_err(|_| invalid()))
             .transpose()?,
         created_at,
+        receipt_recorded,
     })
 }
 
@@ -134,13 +158,31 @@ pub(super) fn validate_comment_bindings(connection: &Connection) -> Result<(), R
     let rows = connection.prepare("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings")
         .and_then(|mut statement| statement.query_map([], decode_comment_binding)?.collect::<Result<Vec<_>, _>>()).map_err(|_| failure())?;
     for binding in rows {
+        let (root, target, digest): (String, String, Vec<u8>) = connection.query_row("SELECT o.root_path,o.target,b.root_digest
+            FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id WHERE b.operation_ulid=?1",
+            [binding.operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_| failure())?;
+        let expected_target = format!(
+            "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
+            super::authoring_kind_segment(&binding.kind),
+            binding.item_id,
+            binding.comment_id
+        );
+        if digest != blake3::hash(root.as_bytes()).as_bytes().as_slice()
+            || target != expected_target
+        {
+            return Err(failure());
+        }
         let invalid: bool = connection.query_row("SELECT
             NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
                 WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND action!='refresh')
+            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR target!='' OR root_path!=?3))
             OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
+            OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
+                AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
+            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
+                SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
             OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
-            params![binding.operation_id.to_string(), binding.synchronization_id.to_string()], |r| r.get(0)).map_err(|_| failure())?;
+            params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string()], |r| r.get(0)).map_err(|_| failure())?;
         if invalid {
             return Err(failure());
         }
@@ -160,14 +202,28 @@ impl super::RepositoryService {
             RepositoryOperation::SubmitComment,
         )?;
         let connection = super::open_registry_read_only(&self.registry_path)?;
-        let row = connection.query_row("SELECT b.operation_ulid,b.synchronization_ulid,b.kind,b.item_ulid,b.comment_ulid,b.parent_ulid,b.pre_checkpoint_oid,b.checkpoint_oid,b.created_at,o.root_path
+        let row = connection.query_row("SELECT b.operation_ulid,b.synchronization_ulid,b.kind,b.item_ulid,b.comment_ulid,b.parent_ulid,b.pre_checkpoint_oid,b.checkpoint_oid,b.created_at,o.root_path,b.root_digest,o.target,o.action
             FROM comment_publication_bindings b JOIN operation_records o ON o.id=b.local_record_id WHERE b.operation_ulid=?1",
-            [id.to_string()], |r| Ok((decode_comment_binding(r)?, r.get::<_, String>(9)?))).optional().map_err(|_| super::comment_publication::recovery_error())?;
+            [id.to_string()], |r| Ok((decode_comment_binding(r)?, r.get::<_, String>(9)?,r.get::<_, Vec<u8>>(10)?,r.get::<_, String>(11)?,r.get::<_, String>(12)?))).optional().map_err(|_| super::comment_publication::recovery_error())?;
         match row {
-            Some((_, bound_root)) if Some(bound_root.as_str()) != root.to_str() => {
+            Some((_, bound_root, _, _, _)) if Some(bound_root.as_str()) != root.to_str() => {
                 Err(mismatch(RepositoryOperation::SubmitComment, root))
             }
-            Some((binding, _)) => Ok(Some(binding)),
+            Some((binding, bound_root, digest, target, action)) => {
+                let expected = format!(
+                    "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
+                    super::authoring_kind_segment(&binding.kind),
+                    binding.item_id,
+                    binding.comment_id
+                );
+                if action != "submit_comment"
+                    || target != expected
+                    || digest != blake3::hash(bound_root.as_bytes()).as_bytes().as_slice()
+                {
+                    return Err(super::comment_publication::recovery_error());
+                }
+                Ok(Some(binding))
+            }
             None => Ok(None),
         }
     }
@@ -192,6 +248,16 @@ impl super::RepositoryService {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| failure())?;
+        let comment_id = request.comment_id.to_string();
+        let target = super::authoring_write_target(
+            &request.target,
+            &[Path::new(".manyhands/comments"), Path::new(&comment_id)],
+        );
+        let parent_matches: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE id=?1 AND root_path=?2 AND operation_ulid=?3 AND action='submit_comment' AND target=?4)",
+            params![record.id,root.to_str(),request.target.operation_id.to_string(),target], |r| r.get(0)).map_err(|_| failure())?;
+        if !parent_matches {
+            return Err(mismatch(RepositoryOperation::SubmitComment, root));
+        }
         let existing = tx.query_row("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings WHERE operation_ulid=?1",
             [request.target.operation_id.to_string()], decode_comment_binding).optional().map_err(|_| failure())?;
         if let Some(binding) = existing {
@@ -247,6 +313,7 @@ impl super::RepositoryService {
             pre_checkpoint_oid,
             checkpoint_oid: None,
             created_at: None,
+            receipt_recorded: false,
         })
     }
 
@@ -257,7 +324,10 @@ impl super::RepositoryService {
         oid: git2::Oid,
         time: &str,
     ) -> Result<(), RepositoryError> {
-        if binding.checkpoint_oid == Some(oid) && binding.created_at.as_deref() == Some(time) {
+        if binding.receipt_recorded
+            && binding.checkpoint_oid == Some(oid)
+            && binding.created_at.as_deref() == Some(time)
+        {
             return Ok(());
         }
         let _guard = super::cache_write_guard(
@@ -267,10 +337,34 @@ impl super::RepositoryService {
         )?;
         let connection = super::open_registry(&self.registry_path, &mut |_| {})?;
         let count = connection.execute("UPDATE comment_publication_bindings SET checkpoint_oid=?2,created_at=?3
-            WHERE operation_ulid=?1 AND synchronization_ulid=?4 AND (checkpoint_oid IS NULL OR (checkpoint_oid=?2 AND created_at=?3))",
+            WHERE operation_ulid=?1 AND synchronization_ulid=?4 AND (created_at IS NULL OR created_at=?3) AND (checkpoint_oid IS NULL OR (checkpoint_oid=?2 AND created_at=?3))",
             params![binding.operation_id.to_string(),oid.to_string(),time,binding.synchronization_id.to_string()]).map_err(|_| super::comment_publication::recovery_error())?;
         if count != 1 {
             return Err(super::comment_publication::recovery_error());
+        }
+        Ok(())
+    }
+
+    pub(super) fn store_comment_creation_time(
+        &self,
+        root: &Path,
+        binding: &CommentBinding,
+        time: &str,
+    ) -> Result<(), RepositoryError> {
+        let _guard = super::cache_write_guard(
+            &self.registry_path,
+            root,
+            RepositoryOperation::SubmitComment,
+        )?;
+        let connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        let changed = connection.execute("UPDATE comment_publication_bindings SET created_at=?3 WHERE operation_ulid=?1 AND synchronization_ulid=?2 AND created_at IS NULL",
+            params![binding.operation_id.to_string(),binding.synchronization_id.to_string(),time]).map_err(|_| super::comment_publication::recovery_error())?;
+        if changed == 0 {
+            let matches: bool = connection.query_row("SELECT created_at=?3 FROM comment_publication_bindings WHERE operation_ulid=?1 AND synchronization_ulid=?2",
+                params![binding.operation_id.to_string(),binding.synchronization_id.to_string(),time], |r| r.get(0)).map_err(|_| super::comment_publication::recovery_error())?;
+            if !matches {
+                return Err(super::comment_publication::recovery_error());
+            }
         }
         Ok(())
     }
@@ -494,6 +588,8 @@ pub(super) fn migrate_operation_records(
             )
             .map_err(RepositoryError::sqlite)?;
     }
+    migrate_comment_bindings(&transaction)?;
+    validate_comment_bindings(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -548,6 +644,17 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    let child: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid=?1)", [&requested], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    if child {
+        let allowed: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
+            JOIN operation_records o ON o.id=b.local_record_id JOIN remote_operation_records r ON r.operation_ulid=b.synchronization_ulid
+            JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
+            AND r.authoritative_kind IS NOT NULL AND r.action='synchronize_context' AND r.kind=b.kind AND r.item_id=b.item_ulid)",
+            params![requested,root_path], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+        if action != "refresh" || !target.is_empty() || !allowed {
+            return Err(mismatch(operation, root));
+        }
+    }
     if tagged_local_binding {
         let remote_id: bool = transaction
             .query_row(
@@ -720,6 +827,8 @@ fn begin_or_reconcile(
 
 fn authoring_observation_step(step: &str) -> Option<&'static str> {
     match step {
+        "comment_destination_prepared" => Some("comment_destination_prepared"),
+        "comment_checkpoint_intent" => Some("comment_checkpoint_intent"),
         "authoring_destination_observed" => Some("authoring_destination_observed"),
         "document_destination_observed" => Some("document_destination_observed"),
         "document_move_observed" => Some("document_move_observed"),
