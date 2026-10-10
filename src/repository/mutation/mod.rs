@@ -24,6 +24,9 @@ use super::{
 
 mod dto;
 mod identity;
+// Until `execute` is built on it, in the commits that follow.
+#[allow(dead_code)]
+mod outcome;
 mod records;
 
 pub use dto::{RequestDto, RequestOperationDto, RequestResultDto, RequestState};
