@@ -24,7 +24,9 @@ use super::{
 
 mod dto;
 mod identity;
-// Until `execute` is built on it, in the commits that follow.
+// Until `execute` is built on them, in the commits that follow.
+#[allow(dead_code)]
+mod observe;
 #[allow(dead_code)]
 mod outcome;
 mod records;
