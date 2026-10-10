@@ -9589,7 +9589,11 @@ mod tests {
     #[test]
     fn owned_index_refresh_in_primary_checkout_uses_committed_blobs_not_later_edits() {
         let directory = tempfile::tempdir().unwrap();
-        let root = create_born_repository(directory.path());
+        // Guarded readers require the same physical root that public saves
+        // resolve, including on macOS where the temporary path uses /var.
+        let root = create_born_repository(directory.path())
+            .canonicalize()
+            .unwrap();
         let repository = Repository::open(&root).unwrap();
         let relative = Path::new("owned.md");
         std::fs::write(root.join(relative), b"committed\n").unwrap();
