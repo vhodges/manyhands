@@ -427,15 +427,6 @@ fn stages(root: &Path, path: &str) -> Result<[Option<git2::Oid>; 3], FixtureErro
     let index = fixed(fixed(git2::Repository::open(root))?.index())?;
     Ok([1, 2, 3].map(|stage| index.get_path(Path::new(path), stage).map(|entry| entry.id)))
 }
-/// Refresh the on-disk Git index after a save. Known gap, tracked separately:
-/// a normal save leaves the index stale and synchronization then refuses the
-/// worktree as not clean.
-fn refresh_index(worktree: &Path) -> Result<(), FixtureError> {
-    let repo = fixed(git2::Repository::open(worktree))?;
-    let mut index = fixed(repo.index())?;
-    fixed(index.read_tree(&fixed(fixed(repo.head())?.peel_to_tree())?))?;
-    fixed(index.write())
-}
 // Fixed-size hashes avoid ever rendering snapshots containing private bytes/paths.
 fn physical(root: &Path, worktree: &Path) -> Result<[u8; 32], FixtureError> {
     let repo = fixed(git2::Repository::open(root))?;
@@ -913,7 +904,6 @@ impl Pair {
         else {
             return Err(FixtureError);
         };
-        refresh_index(&context.worktree)?;
         self.paths
             .borrow_mut()
             .push(context.worktree.to_string_lossy().as_bytes().to_vec());
