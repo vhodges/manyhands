@@ -925,3 +925,25 @@ fn a_repository_that_is_not_registered_is_reported_with_its_rebuild() {
     );
     assert_eq!(world.request_rows(), 0);
 }
+
+#[test]
+fn a_commit_the_domain_names_and_did_not_make_is_not_reported() {
+    // With the refresh mark failing, a save that changes nothing comes
+    // back from the domain naming the head it found as its checkpoint.
+    let world = failing_at(FailurePoint::BeforeRegistryWrite);
+    let token = world.token(TICKET_A);
+    let envelope = world.execute(
+        REQUEST_1,
+        Mutation::TicketSave(TicketSaveInput {
+            draft: World::unchanged_draft(),
+            ..world.save_input(TICKET_A, &token)
+        }),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_eq!(envelope.effects.checkpoint, CheckpointEffect::Unchanged);
+    assert_eq!(envelope.effects.commit_oid, None);
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+}

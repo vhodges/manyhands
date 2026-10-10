@@ -718,3 +718,7 @@ pub mod request_store {
         recovery::{FinalKind, JournalRow, PendingOperation},
     };
 }
+
+#[cfg(test)]
+#[path = "settle_tests.rs"]
+mod settle_tests;
