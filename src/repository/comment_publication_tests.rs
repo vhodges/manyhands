@@ -1322,3 +1322,396 @@ fn comment_publication_stops_in_pre_effect_intent_windows_require_recovery_witho
         );
     }
 }
+
+#[test]
+fn comment_publication_missing_registration_is_index_pending_and_repairs_before_publication() {
+    let f = Fixture::new();
+    f.service
+        .remove_registration(RemoveRegistrationRequest {
+            root: f.root.path().into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let (receipt, state, indexing) = saved(
+        f.service
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert!(indexing.local_pending);
+    assert!(matches!(
+        state,
+        CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::LocalRecoveryRequired
+        }
+    ));
+    assert_eq!(
+        f.db()
+            .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    f.service
+        .enable(EnableRepositoryRequest {
+            root: f.root.path().into(),
+            primary_branch: "main".into(),
+            identity: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(f.service.recovery_inspection(f.root.path()).unwrap().iter().any(|entry| matches!(entry, RecoveryInspection::Pending { operation_id, .. } if *operation_id==receipt.operation_id)));
+    let repository_id = f
+        .db()
+        .query_row("SELECT id FROM repositories", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_err());
+    let (again, state, indexing) = saved(
+        f.service
+            .retry_comment_publication(
+                RetryCommentPublicationRequest {
+                    root: f.root.path().into(),
+                    operation_id: receipt.operation_id,
+                    approval: None,
+                    confirmed_identity: None,
+                    restart: false,
+                },
+                &mut SessionCredentials::new(NoPrompt),
+            )
+            .unwrap(),
+    );
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert!(!indexing.local_pending);
+    assert!(matches!(
+        state,
+        CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::NoPublicationRemote
+        }
+    ));
+    assert!(
+        !f.service
+            .repository_snapshot(f.root.path())
+            .unwrap()
+            .refresh_required
+    );
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_ok());
+}
+
+#[test]
+fn comment_publication_live_frontmatter_failure_does_not_mask_the_child_recovery() {
+    let f = Fixture::new();
+    let (receipt, _, _) = saved(
+        f.service
+            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    f.configure_remote();
+    let conflict = b"<<<<<<< retained front matter conflict\n=======\n>>>>>>> incoming\n";
+    std::fs::write(f.context.worktree.join("docs/a.md"), conflict).unwrap();
+    let (again, state, _) = saved(
+        f.service
+            .retry_comment_publication(
+                RetryCommentPublicationRequest {
+                    root: f.root.path().into(),
+                    operation_id: receipt.operation_id,
+                    approval: None,
+                    confirmed_identity: None,
+                    restart: false,
+                },
+                &mut SessionCredentials::new(NoPrompt),
+            )
+            .unwrap(),
+    );
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert!(
+        matches!(state, CommentPublicationState::Pending { reason: CommentPublicationPendingReason::Synchronization(error) } if matches!(*error, SynchronizationError::TargetNotMaterialized))
+    );
+    assert_eq!(
+        std::fs::read(f.context.worktree.join("docs/a.md")).unwrap(),
+        conflict
+    );
+}
+
+#[test]
+fn comment_publication_pending_mapping_preserves_named_recoveries_and_redacts_repository_errors() {
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: canonical::ItemId::generate(),
+    };
+    let operation_id = OperationId::new();
+    let errors = vec![
+        SynchronizationError::Busy,
+        SynchronizationError::PollYielding,
+        SynchronizationError::Interrupted,
+        SynchronizationError::WorktreeNotClean {
+            target: target.clone(),
+        },
+        SynchronizationError::WorktreeConflicted {
+            target: target.clone(),
+        },
+        SynchronizationError::ConflictPending {
+            target: target.clone(),
+            operation_id,
+            stage: SynchronizationStage::Context,
+        },
+        SynchronizationError::ExternalResolutionRequired {
+            target: target.clone(),
+            operation_id,
+        },
+        SynchronizationError::PushRejected,
+        SynchronizationError::RemoteContextDeleted,
+        SynchronizationError::ExternalChange,
+        SynchronizationError::RecoveryRequired,
+    ];
+    for error in errors {
+        let expected = std::mem::discriminant(&error);
+        let CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::Synchronization(mapped),
+        } = comment_publication::pending_synchronization(error)
+        else {
+            panic!("saved pending mapping");
+        };
+        assert_eq!(std::mem::discriminant(&*mapped), expected);
+    }
+    let error = SynchronizationError::Repository(RepositoryError::new(
+        RepositoryOperation::RepositorySnapshot,
+        Some("private-error-path-canary".into()),
+        RepositoryErrorKind::Git,
+        "private-server-message-canary",
+    ));
+    let result = comment_publication::pending_synchronization(error);
+    assert!(!format!("{result:?}").contains("private-error-path-canary"));
+    let CommentPublicationState::Pending {
+        reason: CommentPublicationPendingReason::Synchronization(mapped),
+    } = result
+    else {
+        panic!("repository mapping");
+    };
+    assert!(!format!("{mapped:?}").contains("private-server-message-canary"));
+}
+
+#[test]
+fn comment_publication_registration_parking_recovers_after_metadata_interruptions() {
+    for interruption in [0, 1] {
+        let f = Fixture::new();
+        f.service
+            .remove_registration(RemoveRegistrationRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        f.db().execute_batch(if interruption==0 {
+            "CREATE TRIGGER stop_handoff BEFORE UPDATE OF checkpoint_oid ON comment_publication_bindings BEGIN SELECT RAISE(ABORT,'fixed failure'); END;"
+        } else {
+            "CREATE TRIGGER stop_handoff BEFORE UPDATE ON operation_records WHEN NEW.completed_step='comment_registration_pending' BEGIN SELECT RAISE(ABORT,'fixed failure'); END;"
+        }).unwrap();
+        let (receipt, _, index) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        assert!(index.local_pending);
+        f.db().execute_batch("DROP TRIGGER stop_handoff;").unwrap();
+        let request = RetryCommentPublicationRequest {
+            root: f.root.path().into(),
+            operation_id: receipt.operation_id,
+            approval: None,
+            confirmed_identity: None,
+            restart: false,
+        };
+        let (again, state, index) = saved(
+            f.service
+                .retry_comment_publication(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+        assert!(index.local_pending);
+        assert!(matches!(
+            state,
+            CommentPublicationState::Pending {
+                reason: CommentPublicationPendingReason::LocalRecoveryRequired
+            }
+        ));
+        f.service
+            .enable(EnableRepositoryRequest {
+                root: f.root.path().into(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let (again, _, index) = saved(
+            f.service
+                .retry_comment_publication(request, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+        assert!(!index.local_pending);
+    }
+}
+
+#[test]
+fn comment_publication_discovery_releases_leases_and_retry_preserves_active_index_owner() {
+    let f = Fixture::new();
+    let request = f.request();
+    let competing = RepositoryService::open_at(f.data.path()).unwrap();
+    let root = f.root.path().to_path_buf();
+    let data = f.data.path().to_path_buf();
+    let db = f.db();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    f.service.set_observation_hook_for_testing(move || {
+        let lease =
+            RepositoryService::hold_lease_for_testing(&root, &data, LeaseKind::Repository).unwrap();
+        drop(lease);
+        let lease =
+            RepositoryService::hold_lease_for_testing(&root, &data, LeaseKind::CacheWrite).unwrap();
+        drop(lease);
+        ready_tx.send(()).unwrap();
+        release_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+    });
+    let id = request.comment.target.operation_id;
+    let first = f.service;
+    let worker = std::thread::spawn(move || {
+        first.submit_comment(request, &mut SessionCredentials::new(NoPrompt))
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let row = || {
+        db.query_row(
+            "SELECT state,index_owner_epoch FROM operation_records WHERE operation_ulid=?1",
+            [id.to_string()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .unwrap()
+    };
+    let before = row();
+    assert_eq!(before.0, "indexing");
+    let (_, _, index) = saved(
+        competing
+            .retry_comment_publication(
+                RetryCommentPublicationRequest {
+                    root: f.root.path().into(),
+                    operation_id: id,
+                    approval: None,
+                    confirmed_identity: None,
+                    restart: false,
+                },
+                &mut SessionCredentials::new(NoPrompt),
+            )
+            .unwrap(),
+    );
+    assert!(index.local_pending);
+    assert_eq!(row(), before);
+    release_tx.send(()).unwrap();
+    let (_, _, index) = saved(worker.join().unwrap().unwrap());
+    assert!(!index.local_pending);
+}
+
+#[test]
+fn comment_publication_recorded_receipt_refuses_reset_removed_or_replaced_comment_without_transport()
+ {
+    for change in [0, 1, 2] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let repository = Repository::open(&f.context.worktree).unwrap();
+        let original = repository.find_commit(receipt.checkpoint_oid).unwrap();
+        let changed = if change == 0 {
+            original.parent_id(0).unwrap()
+        } else {
+            let mut index = git2::Index::new().unwrap();
+            index.read_tree(&original.tree().unwrap()).unwrap();
+            if change == 1 {
+                index.remove_path(&receipt.comment_path).unwrap();
+            } else {
+                let mut comment = match canonical::parse_item(
+                    &receipt.comment_path,
+                    &std::fs::read_to_string(f.context.worktree.join(&receipt.comment_path))
+                        .unwrap(),
+                )
+                .unwrap()
+                {
+                    canonical::CanonicalItem::Comment(c) => c,
+                    _ => panic!("original comment"),
+                };
+                comment.body = "replacement-body-canary\n".into();
+                let bytes =
+                    canonical::serialize_item(&canonical::CanonicalItem::Comment(comment)).unwrap();
+                index
+                    .add(&git2::IndexEntry {
+                        ctime: git2::IndexTime::new(0, 0),
+                        mtime: git2::IndexTime::new(0, 0),
+                        dev: 0,
+                        ino: 0,
+                        mode: 0o100644,
+                        uid: 0,
+                        gid: 0,
+                        file_size: bytes.len() as u32,
+                        id: repository.blob(bytes.as_bytes()).unwrap(),
+                        flags: 0,
+                        flags_extended: 0,
+                        path: receipt.comment_path.to_str().unwrap().as_bytes().to_vec(),
+                    })
+                    .unwrap();
+            }
+            let tree = repository
+                .find_tree(index.write_tree_to(&repository).unwrap())
+                .unwrap();
+            let signature = repository.signature().unwrap();
+            repository
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    "external change",
+                    &tree,
+                    &[&original],
+                )
+                .unwrap()
+        };
+        repository
+            .find_reference(&format!("refs/heads/{}", receipt.context_branch))
+            .unwrap()
+            .set_target(changed, "external change")
+            .unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        let (again, state, _) = saved(
+            f.service
+                .retry_comment_publication(
+                    RetryCommentPublicationRequest {
+                        root: f.root.path().into(),
+                        operation_id: receipt.operation_id,
+                        approval: None,
+                        confirmed_identity: None,
+                        restart: false,
+                    },
+                    &mut SessionCredentials::new(NoPrompt),
+                )
+                .unwrap(),
+        );
+        assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+        assert!(
+            matches!(state,CommentPublicationState::Pending {reason:CommentPublicationPendingReason::Synchronization(e)} if matches!(*e,SynchronizationError::RecoveryRequired))
+        );
+        assert_eq!(repository.head().unwrap().target(), Some(changed));
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+    }
+}

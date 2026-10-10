@@ -5039,7 +5039,7 @@ fn comment_rejects_any_existing_context_problem_without_mutation() {
 }
 
 #[test]
-fn comment_missing_registration_returns_refresh_pending_then_retries_only_invalidation() {
+fn comment_missing_registration_repairs_discovery_without_another_checkpoint() {
     let fixture = support::born_repository();
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
@@ -5110,7 +5110,7 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
         support::head_commit(&Repository::open(context.worktree).unwrap()),
         Some(commit_oid)
     );
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(registry_refresh_required(&enabled.service), 0);
 }
 
 #[test]

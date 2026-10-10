@@ -2545,6 +2545,17 @@ impl RepositoryService {
                 checkpoint,
                 binding,
             }) if !matches!(checkpoint, LocalCheckpoint::NoChange) || record.is_pending => {
+                if registered_repository_id(&self.registry_path, &root, operation)
+                    .is_err_and(|error| error.kind == RepositoryErrorKind::RepositoryNotRegistered)
+                {
+                    let _ = self.park_comment_registration_handoff(&root, operation_id);
+                    drop(lease);
+                    return Ok(LocalCommentCheckpointOutcome::IndexPending {
+                        context,
+                        checkpoint,
+                        binding,
+                    });
+                }
                 if self
                     .handoff_post_authoritative(&root, operation, record, operation_id, lease)
                     .unwrap_or(false)

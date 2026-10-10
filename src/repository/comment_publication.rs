@@ -157,6 +157,23 @@ pub(super) fn recovery_error() -> RepositoryError {
     )
 }
 
+pub(super) fn pending_synchronization(error: SynchronizationError) -> CommentPublicationState {
+    let error = match error {
+        SynchronizationError::Repository(error) => {
+            SynchronizationError::Repository(RepositoryError::new(
+                RepositoryOperation::SubmitComment,
+                None,
+                error.kind,
+                "context synchronization requires recovery",
+            ))
+        }
+        error => error,
+    };
+    CommentPublicationState::Pending {
+        reason: CommentPublicationPendingReason::Synchronization(Box::new(error)),
+    }
+}
+
 impl RepositoryService {
     pub fn submit_comment<P: SessionCredentialProvider>(
         &self,
@@ -400,6 +417,16 @@ impl RepositoryService {
         // retains its state and epoch for the existing refresh claim protocol.
         {
             let _lease = repository_lease(&repository, &root, RepositoryOperation::SubmitComment)?;
+            if let Err(error) = registered_repository_id(
+                &self.registry_path,
+                &root,
+                RepositoryOperation::SubmitComment,
+            ) {
+                if error.kind == RepositoryErrorKind::RepositoryNotRegistered {
+                    self.park_comment_registration_handoff(&root, receipt.operation_id)?;
+                }
+                return Err(error);
+            }
             let _guard = cache_write_guard(
                 &self.registry_path,
                 &root,
@@ -407,7 +434,7 @@ impl RepositoryService {
             )?;
             let connection = open_registry(&self.registry_path, &mut |_| {})?;
             connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed'
-                WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND state IN ('created','worktree_observed','comment_checkpoint_intent','authoring_destination_observed')",
+                WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND (state IN ('created','worktree_observed','comment_checkpoint_intent','authoring_destination_observed') OR (state='completed' AND completed_step='comment_registration_pending'))",
                 params![receipt.operation_id.to_string(),root.to_str()]).map_err(|_| recovery_error())?;
         }
         self.refresh_repository(RefreshRepositoryRequest {
@@ -426,9 +453,7 @@ impl RepositoryService {
         session: &mut SessionCredentials<P>,
         indexing: &mut CommentIndexingState,
     ) -> CommentPublicationState {
-        let pending = |error| CommentPublicationState::Pending {
-            reason: CommentPublicationPendingReason::Synchronization(Box::new(error)),
-        };
+        let pending = pending_synchronization;
         let child = self.comment_child_authority(&receipt.root, receipt.synchronization_id);
         let child = match child {
             Ok(child) => child,
@@ -474,14 +499,6 @@ impl RepositoryService {
             Ok(SynchronizationResult::IndexPending(value)) => {
                 indexing.remote_pending = true;
                 value.authoritative
-            }
-            Err(SynchronizationError::Repository(error)) => {
-                return pending(SynchronizationError::Repository(RepositoryError::new(
-                    RepositoryOperation::SubmitComment,
-                    None,
-                    error.kind,
-                    "context synchronization requires recovery",
-                )));
             }
             Err(error) => return pending(error),
         };
@@ -691,11 +708,23 @@ impl CommentReceipt {
         if validate_context_worktree(
             &repository,
             &context,
-            true,
+            false,
             RepositoryOperation::SubmitComment,
         )
         .is_err()
         {
+            return false;
+        }
+        let Ok(linked) = Repository::open(&context.worktree) else {
+            return false;
+        };
+        let (Ok(root_common), Ok(linked_common)) = (
+            std::fs::canonicalize(repository.commondir()),
+            std::fs::canonicalize(linked.commondir()),
+        ) else {
+            return false;
+        };
+        if root_common != linked_common {
             return false;
         }
         repository

@@ -1,4 +1,37 @@
 use super::*;
+
+#[test]
+fn comment_publication_identity_mapping_keeps_the_opaque_confirmation() {
+    let expected = merge::ExpectedConfiguration([17; 32]);
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    };
+    let result = crate::repository::comment_publication::pending_synchronization(
+        SynchronizationError::IdentityRequired {
+            target,
+            expected_configuration: expected,
+        },
+    );
+    let crate::repository::CommentPublicationState::Pending {
+        reason: crate::repository::CommentPublicationPendingReason::Synchronization(error),
+    } = result
+    else {
+        panic!("identity recovery mapping");
+    };
+    let SynchronizationError::IdentityRequired {
+        expected_configuration,
+        ..
+    } = *error
+    else {
+        panic!("typed identity recovery");
+    };
+    assert_eq!(expected_configuration, expected);
+    assert_eq!(
+        format!("{expected_configuration:?}"),
+        "ExpectedConfiguration(<redacted>)"
+    );
+}
 #[cfg(unix)]
 use crate::repository::OwnedPathBoundary;
 use crate::repository::remote::reservation::commit_observation_batch;

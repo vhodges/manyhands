@@ -379,8 +379,25 @@ impl super::RepositoryService {
             RepositoryOperation::SubmitComment,
         )?;
         let connection = super::open_registry_read_only(&self.registry_path)?;
-        connection.query_row("SELECT state!='completed' FROM operation_records WHERE operation_ulid=?1 AND root_path=?2",
+        connection.query_row("SELECT state!='completed' OR completed_step='comment_registration_pending' FROM operation_records WHERE operation_ulid=?1 AND root_path=?2",
             params![operation.to_string(),root.to_str()], |r| r.get(0)).map_err(|_| super::comment_publication::recovery_error())
+    }
+
+    pub(super) fn park_comment_registration_handoff(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+    ) -> Result<(), RepositoryError> {
+        let _guard = super::cache_write_guard(
+            &self.registry_path,
+            root,
+            RepositoryOperation::SubmitComment,
+        )?;
+        let connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        connection.execute("UPDATE operation_records SET state='completed',completed_step='comment_registration_pending' WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment'
+            AND (state IN ('created','worktree_observed','comment_destination_prepared','authoring_destination_observed','comment_checkpoint_intent','authoring_checkpoint_observed','authoritative_observed','failed') OR (state='completed' AND completed_step='comment_registration_pending'))",
+            params![operation_id.to_string(),root.to_str()]).map_err(|_| super::comment_publication::recovery_error())?;
+        Ok(())
     }
 }
 
@@ -598,7 +615,7 @@ pub(super) fn require_no_pending_local(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<(), RepositoryError> {
-    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')",
+    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND (state!='completed' OR completed_step='comment_registration_pending'))",
         [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if pending {
         return Err(super::remote::state::recovery_required());
@@ -829,6 +846,7 @@ fn authoring_observation_step(step: &str) -> Option<&'static str> {
     match step {
         "comment_destination_prepared" => Some("comment_destination_prepared"),
         "comment_checkpoint_intent" => Some("comment_checkpoint_intent"),
+        "comment_registration_pending" => Some("comment_registration_pending"),
         "authoring_destination_observed" => Some("authoring_destination_observed"),
         "document_destination_observed" => Some("document_destination_observed"),
         "document_move_observed" => Some("document_move_observed"),
@@ -1013,7 +1031,7 @@ pub(super) fn pending_for_root(
     let mut statement = connection
         .prepare(
             "SELECT operation_ulid, action, item_id, context_path, completed_step
-         FROM operation_records WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
+         FROM operation_records WHERE root_path = ?1 AND (state != 'completed' OR completed_step='comment_registration_pending') ORDER BY id",
         )
         .map_err(RepositoryError::sqlite)?;
     statement

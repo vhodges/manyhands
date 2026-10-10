@@ -440,3 +440,70 @@ Carry to Task 3: live canonical-worktree validation can mask the child's typed
 pending conflict recovery; missing-registration discovery must remain independent
 index-pending evidence. Real SSH, remaining mapping/retry/cancel acceptance and
 final native gates remain Tasks 3–6. No push, dispatch or closure performed.
+
+## Task 3: Immediate Context Synchronization and Independent Indexing — 2026-10-10
+
+Review base `41422f1`. Delegation uses the original receipt's one persisted child
+and only `SynchronizationTarget::Context`, caller-owned credentials, optional
+host approval and opaque identity confirmation. Publication relays verified
+Published/AlreadyCurrent only with the original checkpoint ancestry and original
+blob/mode at the authority OID. Fixed-category mapping preserves child recovery
+payloads, including ExpectedConfiguration; repository backend diagnostics are
+replaced with fixed text.
+
+Resolved carried source debts:
+- Context containment checks deterministic worktree/branch/common-directory
+  identity without requiring malformed live conflict source to parse as an item.
+  Committed ancestry/blob proof remains mandatory. The child supplies its own
+  materialization/conflict recovery rather than losing it behind a generic error.
+- Missing registration is independent local index-pending evidence. The original
+  local record parks as completed/comment_registration_pending so explicit enable
+  remains admissible; recovery inspection, compound pending detection and the
+  remote pending-local guard still recognize the unfinished handoff. Only a
+  proved original receipt can restore its pre-index state after registration.
+  No implicit registration or replacement comment/checkpoint is performed.
+- Initial review found a deadlock if receipt or parking metadata failed before
+  successful parking. Reproduced red; proved-receipt retry now retries the eligible
+  parking transition while registration is absent. It excludes live indexing
+  owner states/epochs. Both interruption windows now enable and repair using the
+  original identity without requiring a body.
+
+Independent re-review approves Task 3 source with no remaining blocker. Targeted
+assertions now cover both leases released at discovery, competing retry preserving
+an active index owner, recorded-receipt reset/removal/replacement negatives,
+named recovery mapping/redaction, opaque identity and missing-registration repair.
+
+### Real SSH evidence and early Task 5 infrastructure
+
+Created the planned custom-host `comment_publication` target and wired it into
+the existing five-target manual workflow now so Task 3 ordering/delegation has
+actual transport evidence. Fixtures seed a born canonical repository before
+service calls, use two short-path clones and a one-round protected fixture key,
+and perform no index refresh after authoring. No dependency/lockfile changes.
+
+Eight real-SSH cases pass through the public API:
+- document and ticket roots plus nested replies, three original checkpoints,
+  discovery thread membership, exact remote ancestry/blob proof and historical
+  no-transport terminal replay;
+- local-only zero prompts/helpers/reservations, then configure and publish with
+  the same body-free receipt/child;
+- dirty context preserves saved receipt and unrelated bytes;
+- credential prompt observes checkpoint and completed discovery with Git/cache
+  leases available;
+- another context's active reservation yields Busy after the scoped checkpoint;
+- verified publication plus remote index failure stays Published/index-pending;
+  reopen/retry repairs discovery only, with unchanged transport/push counters;
+- dirty local-only context also proves zero remote work and byte preservation.
+
+The Busy fixture must use a properly initialized endpoint scope; initial synthetic
+reservation before endpoint initialization legitimately gave HistoryUnknown.
+Prime deliberate primary observation/sync first for that case, preserving Cycle
+06's policy rather than changing its production preflight. The unit no-key/runtime
+fixture is not used as Busy transport proof.
+
+Devenv green: focused publication library 32, comment authoring 17, full local
+authoring 131, foundation recovery 51, remote reservation 9; real SSH target 8.
+All-target/all-feature locked clippy and fmt pass; `git diff --check` passes.
+No CI dispatch/native-pass claim. Full merge/conflict, cancellation/restart,
+identity-removal/confirmation, collaborator AlreadyCurrent and comprehensive
+transport/crash acceptance remain Tasks 4–5; final gates/review remain Task 6.
