@@ -4,9 +4,15 @@
 //! later does not compile until it is given a code. None formats the error
 //! it maps.
 
-use crate::results::{CheckpointEffect, DiscoveryEffect, Effects, ResultCode, WriteEffect};
+use crate::results::{
+    CheckpointEffect, DiscoveryEffect, Effects, RecoveryAction, RecoveryActionKind, ResultCode,
+    WriteEffect,
+};
 
-use super::super::{LocalCheckpoint, RepositoryErrorKind, SaveOutcome};
+use super::{
+    super::{LocalCheckpoint, OperationId, RepositoryErrorKind, SaveOutcome},
+    identity::RequestId,
+};
 
 /// The code a mutation reports for a domain error of `kind`.
 ///
@@ -171,6 +177,71 @@ pub(crate) fn stopped_save_effects(commit: Option<git2::Oid>, written: bool) -> 
         },
         None => Effects::not_requested(),
     }
+}
+
+/// The argument of a recovery action that names a repository root.
+const ROOT_ARGUMENT: &str = "root";
+/// The argument of `request.retry`.
+const REQUEST_ARGUMENT: &str = "request_id";
+
+/// What a client does about a code that stopped a request.
+///
+/// `root` is the repository the result names, when it names one. `retry`
+/// says the request's record was left accepted, so repeating the same
+/// request continues it; a code with an action of its own keeps that one.
+pub(crate) fn recovery(
+    code: ResultCode,
+    root: Option<&str>,
+    request_id: RequestId,
+    operation_id: Option<OperationId>,
+    retry: bool,
+) -> Vec<RecoveryAction> {
+    let at_root =
+        |action| RecoveryAction::new(action, root.map(|root| (ROOT_ARGUMENT, root.into())));
+    let retry_request = || {
+        RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [(REQUEST_ARGUMENT, request_id.to_string().into())],
+        )
+    };
+    if code == ResultCode::DiscoveryPending {
+        // The authoritative work is recorded and the hand-off is owed,
+        // which needs no input from the caller.
+        return operation_id
+            .map(|operation_id| {
+                RecoveryAction::for_operation(
+                    RecoveryActionKind::OperationResume,
+                    operation_id.to_string(),
+                    [],
+                )
+            })
+            .into_iter()
+            .collect();
+    }
+    if matches!(
+        code,
+        ResultCode::IdentityRequired | ResultCode::InitialsRequired
+    ) {
+        return vec![at_root(RecoveryActionKind::RepoIdentitySet)];
+    }
+    if matches!(
+        code,
+        ResultCode::RecoveryRequired
+            | ResultCode::InvalidSlugConfiguration
+            | ResultCode::InvalidConfiguration
+    ) {
+        return vec![at_root(RecoveryActionKind::RepoInspect)];
+    }
+    if matches!(
+        code,
+        ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable
+    ) {
+        return vec![at_root(RecoveryActionKind::IndexRebuild)];
+    }
+    if retry || code == ResultCode::Busy {
+        return vec![retry_request()];
+    }
+    Vec::new()
 }
 
 #[cfg(test)]

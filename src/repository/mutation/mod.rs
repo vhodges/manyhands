@@ -10,32 +10,44 @@
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]
 
-use std::sync::Arc;
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use time::OffsetDateTime;
 
-use crate::results::{Envelope, ResultCode, Scope, timestamp_string};
+use crate::results::{Envelope, ResultCode, Scope, absolute_path_string, timestamp_string};
 
 use super::{
     OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService, keys,
-    recovery::{self, JournalRow},
+    keys::{SessionCredentialProvider, SessionCredentials},
+    recovery::{self, FinalKind, JournalRow},
     remote,
 };
 
+mod bind;
 mod dto;
+mod evidence;
 mod identity;
-// Until `execute` is built on them, in the commits that follow.
-#[allow(dead_code)]
 mod observe;
-#[allow(dead_code)]
 mod outcome;
 mod records;
 
-pub use dto::{RequestDto, RequestOperationDto, RequestResultDto, RequestState};
-use identity::ScopeKey;
+pub use bind::ticket::{TicketCreateInput, TicketSaveInput};
+use bind::{Accepted, Answer, Binding, Ran, Standing, ticket::TicketBinding};
+pub use dto::{
+    MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    TicketMutationDto,
+};
+use evidence::Position;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
-use records::RequestRecord;
+use identity::{DigestSalt, IntentDigest, ScopeKey};
 pub(super) use records::migrate as migrate_request_tables;
+use records::{InsertRequestOutcome, NewRequest, RequestOperation, RequestRecord, RequestResult};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -158,6 +170,535 @@ impl RepositoryService {
         match shown {
             Ok((scope, dto)) => Envelope::read_success(REQUEST_SHOW, scope, dto),
             Err(error) => error.to_envelope(REQUEST_SHOW),
+        }
+    }
+}
+
+/// One request to change Manyhands state: the caller's request ID, the
+/// confirmation it presents, if any, and the typed mutation.
+pub struct MutationCall {
+    pub request_id: RequestId,
+    pub confirmation: Option<ConfirmationId>,
+    pub mutation: Mutation,
+}
+
+/// The mutations a front end can ask for: one variant for each bound
+/// command, holding that command's typed input. The variant fixes the
+/// envelope's `command`.
+pub enum Mutation {
+    TicketCreate(TicketCreateInput),
+    TicketSave(TicketSaveInput),
+}
+
+impl Mutation {
+    /// The command, as the envelope names it.
+    pub fn command(&self) -> &'static str {
+        match self {
+            Self::TicketCreate(_) => bind::ticket::TICKET_CREATE,
+            Self::TicketSave(_) => bind::ticket::TICKET_SAVE,
+        }
+    }
+
+    fn into_binding(self) -> Box<dyn Binding> {
+        match self {
+            Self::TicketCreate(input) => Box::new(TicketBinding::from(input)),
+            Self::TicketSave(input) => Box::new(TicketBinding::from(input)),
+        }
+    }
+}
+
+/// How a caller asks a running request to stop. A request that is
+/// cancelled before it is accepted does nothing.
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Where a request reports its progress. No command reports any yet; the
+/// events are added with the commands that have stages to report.
+pub trait ProgressSink {}
+
+/// A sink for a caller that wants no progress.
+pub struct NoProgress;
+
+impl ProgressSink for NoProgress {}
+
+/// A request as `execute` identifies it: what a record of it must hold to
+/// be the same request.
+struct RequestIdentity {
+    request_id: RequestId,
+    /// `None` when the root cannot be resolved to a canonical path: no
+    /// record can be of this request then.
+    scope: Option<ScopeKey>,
+    digest: Option<IntentDigest>,
+}
+
+impl RequestIdentity {
+    fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
+        let scope = ScopeKey::for_repository(binding.root());
+        let digest = scope.as_ref().map(|scope| {
+            binding
+                .fields(IntentDigest::builder(
+                    DigestSalt::Request(request_id),
+                    binding.command(),
+                    scope,
+                    &binding.target(),
+                ))
+                .finish()
+        });
+        Self {
+            request_id,
+            scope,
+            digest,
+        }
+    }
+
+    /// The repository, as a result's scope names it.
+    fn repository(&self, binding: &dyn Binding) -> Option<String> {
+        match &self.scope {
+            Some(scope) => scope.repository().map(str::to_owned),
+            None => absolute_path_string(binding.root()),
+        }
+    }
+
+    fn matches(&self, binding: &dyn Binding, record: &RequestRecord) -> bool {
+        self.scope.as_ref() == Some(&record.scope)
+            && record.command == binding.command()
+            && record.target == binding.target()
+            && self.digest == Some(record.intent_digest)
+    }
+}
+
+/// What the envelope of one call is built with.
+struct Reply<'a> {
+    binding: &'a dyn Binding,
+    identity: &'a RequestIdentity,
+}
+
+impl Reply<'_> {
+    fn scope(&self, position: Option<&Position>) -> Scope {
+        self.binding
+            .scope(self.identity.repository(self.binding), position)
+    }
+
+    /// The envelope of an answer. The outcome is derived from the code and
+    /// the effects; `retry` says the record was left accepted, so the same
+    /// request finishes the work.
+    fn envelope(
+        &self,
+        answer: Answer,
+        accepted: Option<&Accepted>,
+        retry: bool,
+    ) -> Envelope<MutationDataDto> {
+        let Answer {
+            code,
+            effects,
+            data,
+            recovery,
+        } = answer;
+        let scope = self.scope(accepted.map(|accepted| &accepted.position));
+        let recovery = if recovery.is_empty() {
+            outcome::recovery(
+                code,
+                scope.repository.as_deref(),
+                self.identity.request_id,
+                accepted.map(|accepted| accepted.operation_id),
+                retry,
+            )
+        } else {
+            recovery
+        };
+        let mut envelope = Envelope::classified_mutation(
+            self.binding.command(),
+            scope,
+            code == ResultCode::Cancelled,
+            code,
+            effects,
+            false,
+        )
+        .with_request_id(self.identity.request_id.to_string())
+        .with_recovery(recovery);
+        if let Some(accepted) = accepted {
+            envelope = envelope.with_operation_id(accepted.operation_id.to_string());
+        }
+        match data {
+            Some(data) => envelope.with_data(data),
+            None => envelope,
+        }
+    }
+
+    /// A request that stopped before it was accepted, having done nothing.
+    fn stopped(&self, code: ResultCode) -> Envelope<MutationDataDto> {
+        self.envelope(Answer::stopped(code), None, false)
+    }
+
+    fn read_failure(&self, error: &ReadError) -> Envelope<MutationDataDto> {
+        self.envelope(Answer::of_read(error), None, false)
+    }
+}
+
+impl RepositoryService {
+    /// Runs one mutation under the caller's request ID and returns its
+    /// result. Every handled outcome, success or not, is an envelope.
+    ///
+    /// The request ID decides what the call is. A request seen for the
+    /// first time is validated, checked, accepted and run once. One whose
+    /// record is finished gets the stored result again, whatever has
+    /// happened to its target since, and nothing is written. The same ID
+    /// with another command, target or input is `request_mismatch`, and
+    /// nothing runs.
+    ///
+    /// The call is synchronous and runs on the caller's thread. It takes
+    /// no lease and holds no lock between its steps: every Git or
+    /// canonical effect is made by the domain operation the binding calls,
+    /// under that operation's own lease and journal row.
+    pub fn execute<P: SessionCredentialProvider>(
+        &self,
+        call: MutationCall,
+        // No bound command needs a credential, reports a stage or can be
+        // stopped once it is accepted; the commands that do use these.
+        _credentials: &mut SessionCredentials<P>,
+        _progress: &mut dyn ProgressSink,
+        cancel: &CancellationToken,
+    ) -> Envelope<MutationDataDto> {
+        let MutationCall {
+            request_id,
+            confirmation,
+            mutation,
+        } = call;
+        let mut binding = mutation.into_binding();
+        let identity = RequestIdentity::of(request_id, binding.as_ref());
+        // Two processes that submit the same new request ID race on the
+        // record's key. The one that loses finds a record on its second
+        // look and is answered from it.
+        for _ in 0..2 {
+            let record = match self.request_record(request_id) {
+                Ok(record) => record,
+                Err(error) => {
+                    return Reply {
+                        binding: binding.as_ref(),
+                        identity: &identity,
+                    }
+                    .read_failure(&error);
+                }
+            };
+            match record {
+                Some(record) => {
+                    let reply = Reply {
+                        binding: binding.as_ref(),
+                        identity: &identity,
+                    };
+                    return if !identity.matches(binding.as_ref(), &record) {
+                        self.mismatched(&reply, &record)
+                    } else {
+                        match record.state {
+                            RequestState::Finished => self.replay(&reply, record),
+                            RequestState::Accepted => self.reenter(&reply, record),
+                        }
+                    };
+                }
+                None => {
+                    if let Some(envelope) =
+                        self.first_call(binding.as_mut(), &identity, confirmation, cancel)
+                    {
+                        return envelope;
+                    }
+                }
+            }
+        }
+        Reply {
+            binding: binding.as_ref(),
+            identity: &identity,
+        }
+        .stopped(ResultCode::Busy)
+    }
+
+    /// A request no record holds: validate, check, accept, run, settle.
+    /// `None` when another call accepted the same request ID meanwhile.
+    fn first_call(
+        &self,
+        binding: &mut dyn Binding,
+        identity: &RequestIdentity,
+        confirmation: Option<ConfirmationId>,
+        cancel: &CancellationToken,
+    ) -> Option<Envelope<MutationDataDto>> {
+        // Neither bound command takes a confirmation.
+        if confirmation.is_some() {
+            return Some(Reply { binding, identity }.stopped(ResultCode::NotConfirmable));
+        }
+        let prepared = match binding.prepare(self) {
+            Ok(prepared) => prepared,
+            Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
+        };
+        let reply = Reply { binding, identity };
+        // `prepare` resolved the repository, so the root has a scope key.
+        let (Some(scope), Some(digest)) = (identity.scope.clone(), identity.digest) else {
+            return Some(reply.stopped(ResultCode::InternalError));
+        };
+        if cancel.is_cancelled() {
+            return Some(reply.stopped(ResultCode::Cancelled));
+        }
+        let accepted = Accepted {
+            request_id: identity.request_id,
+            attempt: 1,
+            scope: scope.clone(),
+            family: prepared.family,
+            // A new acceptance gets a new operation ID, so the journal's
+            // own mismatch check never reaches a caller.
+            operation_id: OperationId::new(),
+            position: prepared.position,
+            expected: prepared.expected,
+        };
+        let inserted = self.insert_request(&NewRequest {
+            request_id: accepted.request_id,
+            scope,
+            command: binding.command().to_owned(),
+            target: binding.target(),
+            intent_digest: digest,
+            confirmation: None,
+            base_ref: accepted.position.base_ref.clone(),
+            base_oid: accepted.position.base_oid,
+            expected_digest: accepted.expected.clone(),
+            operations: vec![RequestOperation {
+                family: accepted.family,
+                operation_id: accepted.operation_id,
+            }],
+        });
+        match inserted {
+            Ok(InsertRequestOutcome::Inserted) => {}
+            Ok(InsertRequestOutcome::RequestExists) => return None,
+            // No confirmation was presented.
+            Ok(InsertRequestOutcome::ConfirmationUnavailable) => {
+                return Some(reply.stopped(ResultCode::InternalError));
+            }
+            Err(error) => return Some(reply.read_failure(&error)),
+        }
+        Some(self.run_accepted(&reply, &accepted))
+    }
+
+    /// Makes the binding's domain call for an accepted request and settles
+    /// its record from what the call left.
+    fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
+        // The cache guard is not held here: the record functions release
+        // it before they return, and the domain call takes it itself.
+        let Ran { answer, standing } = reply.binding.run(self, accepted);
+        let settlement = Settlement::of(&standing);
+        let envelope = reply.envelope(answer, Some(accepted), settlement == Settlement::Leave);
+        self.settle(accepted, settlement, &envelope);
+        envelope
+    }
+
+    /// Changes the record as `settlement` says. Every change is
+    /// conditional on the record still being accepted with this call's
+    /// attempt, so a call never settles a record another call has since
+    /// entered. A change that fails leaves the record as it is: the next
+    /// call of the request re-enters it.
+    fn settle(
+        &self,
+        accepted: &Accepted,
+        settlement: Settlement,
+        envelope: &Envelope<MutationDataDto>,
+    ) {
+        match settlement {
+            Settlement::Finish => {
+                let data = match &envelope.data {
+                    Some(data) => match serde_json::to_value(data) {
+                        Ok(data) => Some(data),
+                        // The record stays accepted and the request is
+                        // answered again by re-entering it.
+                        Err(_) => return,
+                    },
+                    None => None,
+                };
+                let _ = self.finish_request(
+                    accepted.request_id,
+                    accepted.attempt,
+                    &RequestResult {
+                        outcome: envelope.outcome,
+                        code: envelope.code,
+                        effects: envelope.effects.clone(),
+                        data,
+                    },
+                );
+            }
+            Settlement::Delete => {
+                let _ = self.delete_request(accepted.request_id, accepted.attempt);
+            }
+            Settlement::Leave => {}
+        }
+    }
+
+    /// A finished record of this request: its stored result, unchanged.
+    /// No domain call is made and nothing is written.
+    ///
+    /// The envelope is rebuilt from the record: the outcome, code, effects,
+    /// commit and data it stored and the operation it names. The record
+    /// matches this call's command, repository and target, and its
+    /// recorded position gives the scope its branch. It stores no recovery
+    /// action, and a finished ticket create or save has none.
+    fn replay(&self, reply: &Reply<'_>, record: RequestRecord) -> Envelope<MutationDataDto> {
+        let (Some(accepted), Some(result)) =
+            (Accepted::of_record(&record, record.attempt), record.result)
+        else {
+            return reply.stopped(ResultCode::InternalError);
+        };
+        // A result that names a commit is given again only while that
+        // commit can be reached from the branch the request committed to,
+        // or from primary once that branch is gone.
+        if let Some(commit) = result.effects.commit_oid.as_deref() {
+            let reachable = git2::Oid::from_str(commit).is_ok_and(|commit| {
+                record.scope.repository().is_some_and(|root| {
+                    evidence::still_reachable(
+                        Path::new(root),
+                        accepted.position.base_ref.as_deref(),
+                        commit,
+                    )
+                })
+            });
+            if !reachable {
+                return reply.stopped(ResultCode::RecoveryRequired);
+            }
+        }
+        let data = match result.data.as_ref() {
+            Some(stored) => match MutationDataDto::from_stored(&record.command, stored) {
+                Some(data) => Some(data),
+                None => return reply.stopped(ResultCode::InternalError),
+            },
+            None => None,
+        };
+        // The one place an outcome is not derived: it is the stored one.
+        let envelope = Envelope::mutation(
+            record.command,
+            reply.scope(Some(&accepted.position)),
+            result.outcome,
+            result.code,
+        )
+        .with_effects(result.effects)
+        .with_request_id(record.request_id.to_string())
+        .with_operation_id(accepted.operation_id.to_string());
+        match data {
+            Some(data) => envelope.with_data(data),
+            None => envelope,
+        }
+    }
+
+    /// A record exists and is not of this request: the same request ID
+    /// with another repository, command, target or input. Nothing runs and
+    /// the record is not changed.
+    ///
+    /// When the recorded request is unfinished and the repository shows a
+    /// change by it, the result reports that change, so the outcome is
+    /// `partial`. Otherwise it is an input error: a finished request's
+    /// effects are its own result's, which `request show` gives, and are
+    /// not reported as this call's.
+    fn mismatched(&self, reply: &Reply<'_>, record: &RequestRecord) -> Envelope<MutationDataDto> {
+        let changed = match record.state {
+            RequestState::Accepted => bind::recorded_change(self, record),
+            RequestState::Finished => false,
+        };
+        reply.envelope(
+            Answer {
+                effects: outcome::stopped_save_effects(None, changed),
+                ..Answer::stopped(ResultCode::RequestMismatch)
+            },
+            None,
+            false,
+        )
+    }
+
+    /// SEAM(7b): an accepted record matches this call. An earlier attempt
+    /// started and its end was not recorded.
+    ///
+    /// Re-entering a request is not built yet. This returns
+    /// `ReentryNotBuilt::envelope`, an `internal_error` that changes
+    /// nothing: the record keeps its state and its attempt, no domain call
+    /// is made. The call that replaces it raises the attempt with
+    /// `enter_request`, makes `Accepted::of_record(&record, attempt)` and
+    /// goes on to `run_accepted` or its own evidence rules.
+    fn reenter(&self, reply: &Reply<'_>, record: RequestRecord) -> Envelope<MutationDataDto> {
+        ReentryNotBuilt { record }.envelope(reply)
+    }
+}
+
+/// The placeholder for re-entering an accepted request, which holds what
+/// re-entry starts from.
+struct ReentryNotBuilt {
+    /// The matching record: `accepted`, with its attempt, operation ID,
+    /// recorded position (`base_ref`, `base_oid`) and expected digest.
+    record: RequestRecord,
+}
+
+impl ReentryNotBuilt {
+    fn envelope(self, reply: &Reply<'_>) -> Envelope<MutationDataDto> {
+        let accepted = Accepted::of_record(&self.record, self.record.attempt);
+        reply.envelope(
+            Answer::stopped(ResultCode::InternalError),
+            accepted.as_ref(),
+            false,
+        )
+    }
+}
+
+/// What a call does to its record once its domain call has returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settlement {
+    /// The result is stored and the record is finished.
+    Finish,
+    /// The record is deleted and the confirmation it accepted released:
+    /// the request ID is free again.
+    Delete,
+    /// The record stays accepted: a retry continues the request.
+    Leave,
+}
+
+impl Settlement {
+    /// Settling is decided from what the binding's call left and from the
+    /// operation's journal row, never from the kind of error the domain
+    /// returned.
+    ///
+    /// For a request that stopped, a result the domain has made final for
+    /// the operation is asked for before whether anything is in flight: a
+    /// cancelled synchronization that still owes its index hand-off is in
+    /// flight and is final all the same, and asking in the other order
+    /// would leave its record accepted for good. A row that could not be
+    /// read leaves the record as it is.
+    fn of(standing: &Standing) -> Self {
+        match standing {
+            Standing::Final => Self::Finish,
+            Standing::Owed => Self::Leave,
+            Standing::Stopped { journal: None } => Self::Leave,
+            Standing::Stopped {
+                journal: Some(journal),
+            } => match journal {
+                JournalRow::Final {
+                    kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                    owes_work: _,
+                } => Self::Finish,
+                JournalRow::Final {
+                    kind: FinalKind::Completed,
+                    owes_work: _,
+                }
+                | JournalRow::Absent
+                | JournalRow::Pending(_) => {
+                    if journal.in_flight() {
+                        Self::Leave
+                    } else {
+                        Self::Delete
+                    }
+                }
+            },
         }
     }
 }

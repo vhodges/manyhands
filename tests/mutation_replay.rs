@@ -2142,3 +2142,37 @@ fn the_mutation_goldens_are_exactly_the_registered_cases() {
         schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
     }
 }
+
+#[path = "mutation_replay/execute.rs"]
+mod execute;
+
+/// The process `support::hold_lease_in_child` starts: it holds the lease
+/// it is told to until it is released.
+#[test]
+fn common_git_lease_child() {
+    let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
+        return;
+    };
+    let variable = |name: &str| std::path::PathBuf::from(std::env::var(name).unwrap());
+    let kind = LeaseKind::parse(&std::env::var("MANYHANDS_LEASE_KIND").unwrap()).unwrap();
+    let _holder = RepositoryService::hold_lease_for_testing(
+        Path::new(&root),
+        &variable("MANYHANDS_LEASE_DATA_DIRECTORY"),
+        kind,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(variable("MANYHANDS_LEASE_READY"))
+        .unwrap();
+    let release = variable("MANYHANDS_LEASE_RELEASE");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !release.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for lease release"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}

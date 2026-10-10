@@ -13,6 +13,9 @@ use crate::results::ResultCode;
 use super::super::ExpectedPathObservation;
 
 /// What the absent token digests in place of a file's bytes.
+// No bound command takes an absent token yet: `observe_path` and
+// `document move` are the first to.
+#[allow(dead_code)]
 const ABSENT_MARKER: &[u8] = b"manyhands absent path v1";
 
 /// The observation token of a path where nothing exists: `v1:` and the
@@ -26,6 +29,7 @@ const ABSENT_MARKER: &[u8] = b"manyhands absent path v1";
 ///    name;
 /// 4. the repository-relative path's length in bytes, encoded the same
 ///    way, followed by the path with forward slashes.
+#[allow(dead_code)]
 pub(crate) fn absent_token(branch: Option<&str>, path: &str) -> String {
     fn part(hasher: &mut blake3::Hasher, bytes: &[u8]) {
         hasher.update(&(bytes.len() as u64).to_le_bytes());
