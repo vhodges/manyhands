@@ -155,6 +155,7 @@ pub const CASES: &[&str] = &[
     "request_show_accepted",
     "request_show_finished",
     "ticket_create",
+    "ticket_create_already_applied",
     "ticket_save",
     "ticket_save_cycle",
     "ticket_save_discovery_pending",
@@ -163,6 +164,9 @@ pub const CASES: &[&str] = &[
     "ticket_save_mismatch_partial",
     "ticket_save_noop",
     "ticket_save_partial",
+    "ticket_save_reentered",
+    "ticket_save_reentered_external_change",
+    "ticket_save_reentered_superseded",
     "ticket_save_replay",
 ];
 

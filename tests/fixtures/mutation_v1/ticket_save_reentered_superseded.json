@@ -1,0 +1,33 @@
+{
+  "code": "external_change",
+  "command": "ticket save",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
+    "rejected": [],
+    "slug": null,
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit>",
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "What the request was based on has changed.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}
