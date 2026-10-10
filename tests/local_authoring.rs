@@ -7224,3 +7224,159 @@ fn context_git_failure_after_branch_creation_stays_pending_until_exact_retry() {
         Ok(ContextProvisionOutcome::Created(_))
     ));
 }
+
+const FIXTURE_AUTHOR: &str = "Manyhands Test <manyhands-test@example.invalid>";
+
+fn written_comment(path: &std::path::Path) -> manyhands::canonical::Comment {
+    match manyhands::canonical::parse_item(
+        &comment_relative_path(&support::document_id(), &support::root_comment_id()),
+        &fs::read_to_string(path).unwrap(),
+    )
+    .unwrap()
+    {
+        manyhands::canonical::CanonicalItem::Comment(comment) => comment,
+        _ => panic!("expected a comment"),
+    }
+}
+
+#[test]
+fn comment_file_names_the_checkpoint_identity_as_created_by() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+
+    let (context, commit_oid, _) = saved_comment(
+        enabled
+            .service
+            .submit_comment(comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Root body\n",
+            ))
+            .unwrap(),
+    );
+
+    let path = comment_path(&context, &support::root_comment_id());
+    let source = fs::read_to_string(&path).unwrap();
+    let comment = written_comment(&path);
+    assert_eq!(comment.created_by.as_deref(), Some(FIXTURE_AUTHOR));
+    assert!(comment.unknown.is_empty());
+    let created_at = comment
+        .created_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    assert_eq!(
+        source,
+        format!(
+            "---\nid: {}\nitem_id: {}\ncreated_at: {created_at}\ncreated_by: {FIXTURE_AUTHOR}\nmanyhands_managed: true\nmanyhands_kind: comment\n---\nRoot body\n",
+            support::root_comment_id(),
+            support::document_id(),
+        )
+    );
+    let repository = Repository::open(&context.worktree).unwrap();
+    let commit = repository.find_commit(commit_oid).unwrap();
+    let author = commit.author();
+    assert_eq!(
+        format!("{} <{}>", author.name().unwrap(), author.email().unwrap()),
+        FIXTURE_AUTHOR
+    );
+    assert_eq!(
+        support::commit_tree_path(
+            &repository,
+            commit_oid,
+            comment_relative_path(&support::document_id(), &support::root_comment_id())
+        ),
+        Some(source.into_bytes())
+    );
+}
+
+/// Submits a comment that fails between its write and its checkpoint, then
+/// retries it, with the checkpoint identity changed first when one is given.
+fn assert_comment_retry_keeps_its_file(second_identity: Option<(&str, &str)>) {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let path = comment_path(&context, &support::root_comment_id());
+    let operation_id = support::new_operation_id();
+    let request = || {
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
+        .open_service(enabled.data_directory.path());
+    assert_eq!(
+        comment_error(failing.submit_comment(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let written = fs::read(&path).unwrap();
+    let first = written_comment(&path);
+    assert_eq!(first.created_by.as_deref(), Some(FIXTURE_AUTHOR));
+
+    if let Some((name, email)) = second_identity {
+        let mut config = Repository::open(&context.worktree)
+            .unwrap()
+            .config()
+            .unwrap();
+        config.set_str("user.name", name).unwrap();
+        config.set_str("user.email", email).unwrap();
+    }
+
+    // Not `OccupiedItemPath`: the file is this operation's own.
+    let (_, commit_oid, _) = saved_comment(enabled.service.submit_comment(request()).unwrap());
+
+    assert_eq!(fs::read(&path).unwrap(), written);
+    let retried = written_comment(&path);
+    assert_eq!(retried.created_at, first.created_at);
+    assert_eq!(retried.created_by.as_deref(), Some(FIXTURE_AUTHOR));
+    let repository = Repository::open(&context.worktree).unwrap();
+    let commit = repository.find_commit(commit_oid).unwrap();
+    let author = commit.author();
+    let (name, email) =
+        second_identity.unwrap_or(("Manyhands Test", "manyhands-test@example.invalid"));
+    assert_eq!((author.name(), author.email()), (Some(name), Some(email)));
+    assert_eq!(
+        support::commit_tree_path(
+            &repository,
+            commit_oid,
+            comment_relative_path(&support::document_id(), &support::root_comment_id())
+        ),
+        Some(written)
+    );
+}
+
+#[test]
+fn recovery_comment_retry_keeps_created_at_and_created_by() {
+    assert_comment_retry_keeps_its_file(None);
+}
+
+#[test]
+fn recovery_comment_retry_under_another_identity_keeps_the_first_as_created_by() {
+    assert_comment_retry_keeps_its_file(Some(("Second Author", "second@example.invalid")));
+}

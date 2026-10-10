@@ -10188,6 +10188,41 @@ fn resolution_creator_comment(creator: Option<&str>, reply: bool, body: &str) ->
     )
 }
 
+/// A comment's author is in the `created_by` field when its value names
+/// somebody and among the unknown keys when it does not. A resolution keeps
+/// it only when both places hold what they held.
+#[test]
+fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read() {
+    let path =
+        Path::new(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md");
+    let comment = |creator: &str| {
+        let source = resolution_creator_comment(None, false, "body")
+            .replace("---\n\nbody", &format!("{creator}---\n\nbody"));
+        canonical::parse_item(path, &source).unwrap()
+    };
+    let alice = "created_by: \"Alice <alice@example.invalid>\"\n";
+    let mallory = "created_by: \"Mallory <mallory@example.invalid>\"\n";
+    let alice_list = "created_by: [\"Alice <alice@example.invalid>\"]\n";
+    let mallory_list = "created_by: [\"Mallory <mallory@example.invalid>\"]\n";
+    let values = [
+        "",
+        alice,
+        mallory,
+        alice_list,
+        mallory_list,
+        "created_by: \"\"\n",
+    ];
+    for old in values {
+        for new in values {
+            assert_eq!(
+                RepositoryService::preserves_item_invariants(&comment(old), &comment(new)),
+                old == new,
+                "{old:?} -> {new:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies() {
     for creator in [Some("Alice <alice@example.invalid>"), None] {
@@ -10255,8 +10290,7 @@ fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies
             else {
                 panic!("expected comment");
             };
-            let expected_creator = creator.map(|value| serde_yaml::Value::String(value.to_owned()));
-            assert!(comment.unknown.get("created_by") == expected_creator.as_ref());
+            assert!(comment.created_by.as_deref() == creator);
         }
     }
 }

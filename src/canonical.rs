@@ -399,6 +399,10 @@ pub struct Comment {
     pub item_id: ItemId,
     pub parent_id: Option<ItemId>,
     pub created_at: OffsetDateTime,
+    /// The identity that created the comment, as `Name <email>`. Set when
+    /// the comment is created and never rewritten; `None` when the file
+    /// names nobody.
+    pub created_by: Option<String>,
     pub body: String,
     pub unknown: Mapping,
 }
@@ -496,6 +500,7 @@ pub fn parse_item(path: &Path, source: &str) -> Result<CanonicalItem, Validation
             item_id: required_item_id(path, &mut values, "item_id")?,
             parent_id: optional_item_id(path, &mut values, "parent_id")?,
             created_at: required_time(path, &mut values, "created_at")?,
+            created_by: comment_author(&mut values),
             body: body.to_owned(),
             unknown: values,
         }),
@@ -929,6 +934,7 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
             (values, &ticket.body)
         }
         CanonicalItem::Comment(comment) => {
+            validate_optional_text(&comment.created_by, "created_by")?;
             let mut values = comment.unknown.clone();
             insert_known(&mut values, "id", comment.id.to_string());
             insert_known(&mut values, "item_id", comment.item_id.to_string());
@@ -937,6 +943,10 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
                 insert_known(&mut values, "parent_id", parent_id.to_string());
             }
             insert_known(&mut values, "created_at", format_time(comment.created_at)?);
+            // A value that names nobody is in the unknown keys and stays there.
+            if let Some(created_by) = &comment.created_by {
+                insert_known(&mut values, "created_by", created_by.clone());
+            }
             (values, &comment.body)
         }
     };
@@ -1098,6 +1108,20 @@ fn optional_item_string(
     })?;
     validate_item_text(path, value, name)?;
     Ok(Some(value.to_owned()))
+}
+
+/// Takes a comment's `created_by` when it is what `closed_by` may be, a
+/// non-empty string with no NUL. Any other value names nobody: it is left
+/// among the unknown keys, and the comment is conforming all the same.
+fn comment_author(values: &mut Mapping) -> Option<String> {
+    match values.get("created_by") {
+        Some(Value::String(author)) if !author.is_empty() && !author.contains('\0') => {
+            remove_known(values, "created_by")?
+                .as_str()
+                .map(str::to_owned)
+        }
+        _ => None,
+    }
 }
 
 fn required_item_id(

@@ -4224,6 +4224,9 @@ impl RepositoryService {
                     && old.created_at == new.created_at
                     // Creator and legacy author metadata are immutable comment
                     // provenance, including their absence on legacy comments.
+                    // A creator that names somebody is the field; any other
+                    // value is left among the unknown keys.
+                    && old.created_by == new.created_by
                     && old.unknown.get("created_by") == new.unknown.get("created_by")
                     && old.unknown.get("author") == new.unknown.get("author")
             }

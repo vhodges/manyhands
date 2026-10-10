@@ -1771,3 +1771,114 @@ fn composed_slugs_are_valid_short_codes() {
     assert_eq!(compose_slug(Some("mh"), "vh", "k9x2b"), "mh-vh-k9x2b");
     assert_eq!(compose_slug(None, "vh", "k9x2b"), "vh-k9x2b");
 }
+
+const AUTHORED_COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAY";
+const AUTHORED_ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const AUTHOR: &str = "Manyhands Test <manyhands-test@example.invalid>";
+/// The bytes the serializer emits for a comment that names its author,
+/// pinned.
+const AUTHORED_COMMENT_GOLDEN: &str = "---\n\
+id: 01ARZ3NDEKTSV4RRFFQ69G5FAY\n\
+item_id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\n\
+created_at: 2026-09-30T12:34:56Z\n\
+created_by: Manyhands Test <manyhands-test@example.invalid>\n\
+manyhands_managed: true\n\
+manyhands_kind: comment\n\
+---\n\
+Body.\n";
+
+fn authored_comment(created_by: Option<&str>) -> manyhands::canonical::Comment {
+    manyhands::canonical::Comment {
+        id: id(AUTHORED_COMMENT),
+        item_id: id(AUTHORED_ITEM),
+        parent_id: None,
+        created_at: time::OffsetDateTime::from_unix_timestamp(1_790_771_696).unwrap(),
+        created_by: created_by.map(str::to_owned),
+        body: "Body.\n".to_owned(),
+        unknown: serde_yaml::Mapping::new(),
+    }
+}
+
+fn parsed_comment(extra: &str) -> manyhands::canonical::Comment {
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {AUTHORED_COMMENT}\nitem_id: {AUTHORED_ITEM}\ncreated_at: 2026-09-30T12:34:56Z\n{extra}---\nBody.\n"
+    );
+    let CanonicalItem::Comment(comment) = parse_item(
+        Path::new(&comment_path(AUTHORED_ITEM, AUTHORED_COMMENT)),
+        &source,
+    )
+    .unwrap() else {
+        panic!("not a comment");
+    };
+    comment
+}
+
+#[test]
+fn a_comments_author_is_written_as_created_by_and_read_back_into_the_field() {
+    let comment = authored_comment(Some(AUTHOR));
+
+    let serialized = serialize_item(&CanonicalItem::Comment(comment.clone())).unwrap();
+
+    assert_eq!(serialized, AUTHORED_COMMENT_GOLDEN);
+    let CanonicalItem::Comment(reparsed) = parse_item(
+        Path::new(&comment_path(AUTHORED_ITEM, AUTHORED_COMMENT)),
+        &serialized,
+    )
+    .unwrap() else {
+        panic!("not a comment");
+    };
+    assert_eq!(reparsed.created_by.as_deref(), Some(AUTHOR));
+    assert!(reparsed.unknown.is_empty());
+    assert_eq!(reparsed, comment);
+}
+
+#[test]
+fn a_comment_without_created_by_is_conforming_and_names_nobody() {
+    let comment = parsed_comment("");
+
+    assert_eq!(comment.created_by, None);
+    assert!(comment.unknown.is_empty());
+    let serialized = serialize_item(&CanonicalItem::Comment(comment)).unwrap();
+    assert!(!serialized.contains("created_by"), "{serialized}");
+}
+
+#[test]
+fn a_created_by_that_is_no_identity_stays_in_the_unknown_mapping() {
+    let cases: [(&str, serde_yaml::Value); 5] = [
+        (
+            "created_by:\n  - ada\n",
+            serde_yaml::Value::Sequence(vec!["ada".into()]),
+        ),
+        ("created_by: 7\n", 7.into()),
+        ("created_by: \"\"\n", "".into()),
+        ("created_by: \"a\\0b\"\n", "a\0b".into()),
+        ("created_by: null\n", serde_yaml::Value::Null),
+    ];
+    for (extra, value) in cases {
+        let comment = parsed_comment(extra);
+
+        assert_eq!(comment.created_by, None, "{extra}");
+        assert_eq!(comment.unknown.get("created_by"), Some(&value), "{extra}");
+        assert_eq!(comment.unknown.len(), 1, "{extra}");
+        // Written back as it was read.
+        let serialized = serialize_item(&CanonicalItem::Comment(comment.clone())).unwrap();
+        let CanonicalItem::Comment(reparsed) = parse_item(
+            Path::new(&comment_path(AUTHORED_ITEM, AUTHORED_COMMENT)),
+            &serialized,
+        )
+        .unwrap() else {
+            panic!("not a comment");
+        };
+        assert_eq!(reparsed, comment, "{extra}");
+    }
+}
+
+#[test]
+fn a_comment_author_that_is_empty_or_holds_a_nul_is_not_serialized() {
+    for created_by in ["", "a\0b"] {
+        let problem = serialize_item(&CanonicalItem::Comment(authored_comment(Some(created_by))))
+            .unwrap_err();
+
+        assert_eq!(problem.code, ValidationCode::InvalidField, "{created_by:?}");
+    }
+}

@@ -2429,7 +2429,7 @@ impl RepositoryService {
                 )?;
             }
             let exists = owned_file_exists(&context.worktree, &path, operation, &context.root)?;
-            let comment = if exists {
+            let mut comment = if exists {
                 let canonical::CanonicalItem::Comment(comment) =
                     read_owned_item(&context.worktree, &path, operation, &context.root)?
                 else {
@@ -2460,19 +2460,23 @@ impl RepositoryService {
                     item_id: context.item_id.clone(),
                     parent_id: request.parent_id.clone(),
                     created_at: OffsetDateTime::now_utc(),
+                    created_by: None,
                     body: request.body.clone(),
                     unknown: serde_yaml::Mapping::new(),
                 }
             };
-            let serialized = canonical::serialize_item(&canonical::CanonicalItem::Comment(comment))
-                .map_err(|problem| {
-                    authoring_error(
-                        operation,
-                        &context.root,
-                        RepositoryErrorKind::InvalidPath,
-                        problem.message,
-                    )
-                })?;
+            let serialize = |comment: &canonical::Comment| {
+                canonical::serialize_item(&canonical::CanonicalItem::Comment(comment.clone()))
+                    .map_err(|problem| {
+                        authoring_error(
+                            operation,
+                            &context.root,
+                            RepositoryErrorKind::InvalidPath,
+                            problem.message,
+                        )
+                    })
+            };
+            let serialized = serialize(&comment)?;
             if !record.is_new {
                 ensure_replayed_owned_destination(
                     &context.worktree,
@@ -2525,6 +2529,11 @@ impl RepositoryService {
                 return Ok(CommentSubmissionOutcome::IdentityRequired { context });
             };
             if !exists {
+                // A new comment names the identity that checkpoints it. A file
+                // already there keeps the author it was written with, so a
+                // retry under another identity rewrites nothing.
+                comment.created_by = Some(format!("{} <{}>", identity.name, identity.email));
+                let serialized = serialize(&comment)?;
                 effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
                 ensure_safe_owned_parent(&context.worktree, &path, operation, &context.root)?;

@@ -533,6 +533,7 @@ fn comment_source_created(body: &str, created_at: i64) -> String {
         item_id: TICKET.parse().unwrap(),
         parent_id: None,
         created_at: time::OffsetDateTime::from_unix_timestamp(created_at).unwrap(),
+        created_by: None,
         body: body.into(),
         unknown: serde_yaml::Mapping::new(),
     }))

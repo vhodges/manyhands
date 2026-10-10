@@ -12,8 +12,9 @@ use std::{
 
 use manyhands::{
     repository::{
-        CommentDto, CommentListDto, IndexState, ItemContextKind, ReadError, RepositoryService,
-        ResolvedRepository,
+        AuthoringKind, AuthoringTarget, CommentDto, CommentListDto, CommentSubmissionOutcome,
+        ContextIntent, ExpectedPathObservation, IndexState, ItemContextKind, ReadError,
+        RepositoryService, ResolvedRepository, SubmitCommentRequest,
     },
     results::{Outcome, ProblemCode, ResultCode},
 };
@@ -1316,4 +1317,83 @@ fn comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_s
     assert_eq!(Path::new(&from_worktree.context.worktree), worktree);
     assert_eq!(from_worktree.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_submitted_comment_is_listed_with_the_identity_that_checkpointed_it() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let root = &fixture.root;
+    create_document_context(&enabled.service, root, DOCUMENT_A, "docs/active.md");
+    let outcome = enabled
+        .service
+        .submit_comment(SubmitCommentRequest {
+            target: AuthoringTarget {
+                root: root.clone(),
+                kind: AuthoringKind::Document,
+                item_id: item_id(DOCUMENT_A),
+                intent: ContextIntent::Edit,
+                operation_id: support::new_operation_id(),
+            },
+            comment_id: item_id(COMMENT_A),
+            parent_id: None,
+            body: "Submitted.\n".to_owned(),
+            expected_destination: ExpectedPathObservation::Missing,
+        })
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        CommentSubmissionOutcome::Saved { .. } | CommentSubmissionOutcome::IndexPending { .. }
+    ));
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, DOCUMENT_A);
+
+    assert_eq!(ids(&list.items), [Some(COMMENT_A)]);
+    assert_eq!(
+        list.items[0].author.as_deref(),
+        Some("Manyhands Test <manyhands-test@example.invalid>")
+    );
+    assert_eq!(list.items[0].body.as_deref(), Some("Submitted.\n"));
+    assert!(list.items[0].unknown_metadata.is_empty());
+    assert!(list.items[0].problems.is_empty());
+    assert_eq!(list.context.kind, ItemContextKind::Active);
+}
+
+#[test]
+fn a_comment_without_created_by_has_no_author_and_a_list_there_is_an_invalid_field() {
+    let (fixture, enabled) = repository_with_ticket();
+    let root = &fixture.root;
+    write_comment(root, TICKET_A, COMMENT_A, None, &time(1), "");
+    write_comment(
+        root,
+        TICKET_A,
+        COMMENT_B,
+        None,
+        &time(2),
+        &format!("created_by:\n  - {ADA}\n"),
+    );
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let list = comments(&enabled.service, &repo, TICKET_A);
+
+    assert_eq!(ids(&list.items), [Some(COMMENT_A), Some(COMMENT_B)]);
+    let [absent, listed] = list.items.as_slice() else {
+        unreachable!()
+    };
+    assert_eq!(absent.author, None);
+    assert!(absent.problems.is_empty());
+    // Still a comment of the item, with its body, naming nobody.
+    assert_eq!(listed.author, None);
+    assert!(listed.body.is_some());
+    assert!(listed.unknown_metadata.is_empty(), "{listed:?}");
+    assert_eq!(codes(listed), [ProblemCode::InvalidField]);
+    assert_eq!(
+        listed.problems[0].path.as_deref(),
+        Some(comment_path(TICKET_A, COMMENT_B).as_str())
+    );
+    let serialized = serde_json::to_string(&list).unwrap();
+    assert!(!serialized.contains("created_by"), "{serialized}");
 }
