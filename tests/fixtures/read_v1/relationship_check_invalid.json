@@ -1,0 +1,40 @@
+{
+  "code": "ok",
+  "command": "ticket check",
+  "data": {
+    "deps": [
+      "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+      "01ARZ3NDEKTSV4RRFFQ69G5FR2"
+    ],
+    "parent": null,
+    "rejection": {
+      "code": "invalid_relationship",
+      "ids": [
+        "01ARZ3NDEKTSV4RRFFQ69G5FD0"
+      ]
+    },
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FR3",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

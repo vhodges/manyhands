@@ -781,3 +781,40 @@ fn a_reason_names_a_whole_cycle_until_it_is_longer_than_a_reason_holds() {
             .all(|reason| reason.complete)
     );
 }
+
+#[test]
+fn a_ticket_names_the_whole_cycle_it_is_on_in_either_field() {
+    let graph = graph([
+        // A ring of three, one of them closed, and a ticket that only
+        // leads into it.
+        ticket("a", &["c"]),
+        closed("b", &["a"]),
+        ticket("c", &["b"]),
+        ticket("d", &["a"]),
+        // A ticket that depends on itself, and one that is its own parent.
+        ticket("e", &["e"]),
+        child("f", "f"),
+        // A parent ring of two, and a child of it.
+        child("g", "h"),
+        child("h", "g"),
+        child("i", "g"),
+    ]);
+
+    for id in ["a", "b", "c"] {
+        assert_eq!(
+            graph.dependency_cycle_ids(id),
+            Some(names(&["a", "b", "c"]))
+        );
+        assert_eq!(graph.parent_cycle_ids(id), None);
+    }
+    assert_eq!(graph.dependency_cycle_ids("d"), None);
+    assert_eq!(graph.dependency_cycle_ids("e"), Some(names(&["e"])));
+    assert_eq!(graph.parent_cycle_ids("f"), Some(names(&["f"])));
+    assert_eq!(graph.parent_cycle_ids("g"), Some(names(&["g", "h"])));
+    assert_eq!(graph.parent_cycle_ids("h"), Some(names(&["g", "h"])));
+    assert_eq!(graph.parent_cycle_ids("i"), None);
+    assert_eq!(graph.dependency_cycle_ids("g"), None);
+    // An ID that is no ticket's is on no cycle.
+    assert_eq!(graph.dependency_cycle_ids("z"), None);
+    assert_eq!(graph.parent_cycle_ids("z"), None);
+}

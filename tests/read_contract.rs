@@ -12,9 +12,9 @@ use manyhands::{
         IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
         KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
         OperationFamily, OperationNextAction, OperationOwner, PollingInterval, PollingOutcome,
-        ProblemDto, ReadinessFilter, ReadinessReasonCode, ReadinessState, RepositoryService,
-        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
-        transport::SshAuthority,
+        ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode, ReadinessState,
+        RelationshipRejectionDto, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+        UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect,
@@ -891,6 +891,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "failure_code",
             OperationFailureCode::ALL
                 .map(OperationFailureCode::as_str)
+                .to_vec(),
+        ),
+        (
+            "relationship_check.schema.json",
+            "rejection.code",
+            RelationshipRejectionDto::CODES
+                .map(ResultCode::as_str)
                 .to_vec(),
         ),
     ]
@@ -2739,4 +2746,110 @@ fn a_path_with_nothing_at_it_matches_the_failure_golden() {
         &["absent.md"],
     );
     assert_git_transport_uninitialized();
+}
+
+fn proposed(deps: &[&str], parent: Option<&str>) -> ProposedRelationships {
+    ProposedRelationships {
+        deps: deps.iter().map(|id| items::item_id(id)).collect(),
+        parent: parent.map(items::item_id),
+    }
+}
+
+#[test]
+fn an_accepted_relationship_check_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_G),
+            &proposed(
+                &[items::RELATED_C, items::TICKET_ABSENT, items::RELATED_C],
+                Some(items::RELATED_B),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(check.rejection, None);
+    assert_eq!(check.unresolved, [items::TICKET_ABSENT]);
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_G), check);
+    assert_relationship_contract(
+        "relationship_check",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn a_relationship_check_that_finds_a_cycle_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    // C depends on B, which depends on A.
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_A),
+            &proposed(&[items::RELATED_C], None),
+        )
+        .unwrap();
+
+    let rejection = check.rejection.as_ref().unwrap();
+    assert_eq!(rejection.code, ResultCode::RelationshipCycle);
+    assert_eq!(
+        rejection.ids,
+        [items::RELATED_A, items::RELATED_B, items::RELATED_C]
+    );
+    // The read succeeded: its answer is that the proposal would be rejected.
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_A), check);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_relationship_contract(
+        "relationship_check_cycle",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn a_relationship_check_that_finds_a_document_matches_its_schema_and_golden() {
+    let (fixture, enabled, repo, tickets) = relationship_contract();
+    items::write(
+        &fixture.root,
+        "docs/guide.md",
+        &items::document_source(items::DOCUMENT_A, "Guide", ""),
+    );
+    items::commit(&fixture, &["docs/guide.md"], items::COMMITTED_AT + 100);
+    items::refresh_completely(&enabled.service, &fixture.root);
+
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_D),
+            &proposed(&[items::RELATED_C, items::DOCUMENT_A], None),
+        )
+        .unwrap();
+
+    let rejection = check.rejection.as_ref().unwrap();
+    assert_eq!(rejection.code, ResultCode::InvalidRelationship);
+    assert_eq!(rejection.ids, [items::DOCUMENT_A]);
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_D), check);
+    assert_relationship_contract(
+        "relationship_check_invalid",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
 }

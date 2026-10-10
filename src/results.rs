@@ -351,6 +351,10 @@ result_codes! {
         "No host pin exists for that authority.";
     OperationNotFound => "operation_not_found", Some(FailureClass::Input),
         "No operation has that ID.";
+    RelationshipCycle => "relationship_cycle", Some(FailureClass::Input),
+        "Those relationships would form a cycle.";
+    InvalidRelationship => "invalid_relationship", Some(FailureClass::Input),
+        "A relationship names an item that is not a ticket.";
     IndexUnavailable => "index_unavailable", Some(FailureClass::Blocked),
         "The index is degraded and must be rebuilt.";
     Busy => "busy", Some(FailureClass::Transient),

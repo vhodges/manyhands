@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use super::{
     ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
     IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
-    ReadError, ReadinessState, ResolvedRepository,
+    ReadError, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
     graph::{TicketGraph, TicketNode},
     index_state, root_action,
 };
@@ -98,6 +98,17 @@ impl TicketFilter {
                     })
             })
     }
+}
+
+/// The `deps` and `parent` a save would give a ticket: the whole of each,
+/// not a change to what the ticket has. An empty `deps` and no `parent`
+/// propose a ticket with neither.
+///
+/// `deps` may be in any order and may repeat an entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProposedRelationships {
+    pub deps: Vec<ItemId>,
+    pub parent: Option<ItemId>,
 }
 
 /// The stored problems that say a file is not an item. Only these make a
@@ -345,6 +356,59 @@ impl<'a> Related<'a> {
             .collect();
         nodes.push(ticket);
         TicketGraph::new(nodes)
+    }
+
+    /// What giving the ticket `id` these `deps` and this `parent` comes
+    /// to, against what the index holds. `id` need not be a ticket the
+    /// index holds: a ticket about to be created is checked the same way.
+    fn check(
+        &self,
+        id: &str,
+        deps: BTreeSet<String>,
+        parent: Option<String>,
+    ) -> RelationshipCheckDto {
+        let mut not_tickets = Vec::new();
+        let mut unresolved = Vec::new();
+        let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
+        // The ticket's own ID names the ticket, whether or not the index
+        // holds it yet.
+        for target in named.into_iter().filter(|target| *target != id) {
+            match self.targets.0.get(target.as_str()) {
+                Some(Target::Document | Target::Comment) => not_tickets.push(target.clone()),
+                Some(Target::OpenTicket | Target::ClosedTicket) => {}
+                None => unresolved.push(target.clone()),
+            }
+        }
+        let rejection = if not_tickets.is_empty() {
+            let closed = self
+                .tickets
+                .iter()
+                .any(|row| row.id == id && row.closed_at.is_some());
+            let proposed = Relationships {
+                parent: parent.clone(),
+                deps: deps.iter().cloned().collect(),
+                ..Default::default()
+            };
+            let graph = self.graph_with(self.targets.node(id, closed, &proposed));
+            graph
+                .dependency_cycle_ids(id)
+                .or_else(|| graph.parent_cycle_ids(id))
+                .map(|ids| RelationshipRejectionDto {
+                    code: ResultCode::RelationshipCycle,
+                    ids,
+                })
+        } else {
+            Some(RelationshipRejectionDto {
+                code: ResultCode::InvalidRelationship,
+                ids: not_tickets,
+            })
+        };
+        RelationshipCheckDto {
+            deps: deps.into_iter().collect(),
+            parent,
+            unresolved,
+            rejection,
+        }
     }
 }
 
@@ -1836,6 +1900,62 @@ impl RepositoryService {
             };
             item.observation = Some(observation);
             Ok(item)
+        })
+    }
+
+    /// Whether a save that gave the ticket `id` the `deps` and `parent` of
+    /// `proposed` would be rejected, decided without writing anything.
+    ///
+    /// The answer is a success whether or not the proposal is acceptable:
+    /// `rejection` is `None` for one a save may write, and otherwise names
+    /// the code the save would be rejected with.
+    ///
+    /// - A proposed ID the index holds as a document or a comment is
+    ///   `invalid_relationship`, naming every such ID.
+    /// - The proposed edges replace the ticket's stored ones in the graph
+    ///   of every ticket the index holds. A dependency cycle or a parent
+    ///   cycle through the ticket is then `relationship_cycle`, naming the
+    ///   cycle's tickets. A ticket naming itself is a cycle of one. Whether
+    ///   a ticket is closed makes no difference.
+    /// - An ID the index does not hold is accepted and listed in
+    ///   `unresolved`.
+    ///
+    /// When several apply, one is reported: `invalid_relationship`, then a
+    /// dependency cycle, then a parent cycle.
+    ///
+    /// `id` need not be a ticket the index holds, so a ticket can be
+    /// checked before it is created. That `id` is a ticket's and not a
+    /// document's is the save's to decide, not this read's.
+    ///
+    /// The check reads the index and scans nothing. Against an index that
+    /// is behind it uses what the index has: a cycle through a ticket the
+    /// index does not hold yet is accepted here, and is reported on the
+    /// tickets when they are next read, as one that arrives by a merge is.
+    pub fn check_ticket_relationships(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+    ) -> Result<RelationshipCheckDto, ReadError> {
+        let id = id.to_string();
+        let deps: BTreeSet<String> = proposed.deps.iter().map(ToString::to_string).collect();
+        let parent = proposed.parent.as_ref().map(ToString::to_string);
+        self.read_session(RepositoryOperation::Read, |connection| {
+            stored_index_state(connection, repo)?;
+            let stored = stored_items(connection, repo)?;
+            // The comments a stored edge names, as every relationship read
+            // has them, and the ones only the proposal names.
+            let mut comments = stored_comment_targets(connection, repo)?;
+            let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
+            let named: Vec<String> = named.into_iter().cloned().collect();
+            comments.extend(stored_comments_among(connection, repo, &named)?);
+            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
+            Ok(related.check(&id, deps, parent))
+        })
+        .map_err(|error| {
+            let mut error = repo.failure(error);
+            error.scope.item_id = Some(id.clone());
+            error
         })
     }
 }

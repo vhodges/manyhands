@@ -12,8 +12,9 @@ use std::{
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, DependencyDirection, IndexStatusState, LeaseKind, ReadError,
-        RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
+        ClosureFilter, DependencyDirection, IndexStatusState, LeaseKind, ProposedRelationships,
+        ReadError, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+        transport::SshAuthority,
     },
     results::{Outcome, ResultCode},
 };
@@ -679,6 +680,37 @@ fn every_item_read(
         ),
         outcome(service.ticket_critical_path(repo).map(drop)),
         outcome(service.find_tickets_by_slug(repo, "mh-vh-k9x2b").map(drop)),
+        // One proposal that is accepted with an unresolved target, and one
+        // whose answer is a rejection: both are reads that succeed.
+        outcome(
+            service
+                .check_ticket_relationships(
+                    repo,
+                    &items::item_id(items::TICKET_A),
+                    &ProposedRelationships {
+                        deps: vec![items::item_id(items::TICKET_ABSENT)],
+                        parent: None,
+                    },
+                )
+                .map(|check| assert_eq!(check.rejection, None)),
+        ),
+        outcome(
+            service
+                .check_ticket_relationships(
+                    repo,
+                    &items::item_id(items::TICKET_A),
+                    &ProposedRelationships {
+                        deps: vec![items::item_id(items::TICKET_A)],
+                        parent: Some(items::item_id(items::DOCUMENT_A)),
+                    },
+                )
+                .map(|check| {
+                    assert_eq!(
+                        check.rejection.map(|rejection| rejection.code),
+                        Some(ResultCode::InvalidRelationship)
+                    );
+                }),
+        ),
         outcome(
             service
                 .show_path(repo, None, path("../outside.md"))
@@ -722,6 +754,8 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
             Err(ResultCode::ItemNotFound),
             Ok(()),
             Err(ResultCode::ItemNotFound),
+            Ok(()),
+            Ok(()),
             Ok(()),
             Ok(()),
             Ok(()),

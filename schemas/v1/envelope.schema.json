@@ -51,6 +51,8 @@
         "public_key_unavailable",
         "authority_not_found",
         "operation_not_found",
+        "relationship_cycle",
+        "invalid_relationship",
         "index_unavailable",
         "busy",
         "internal_error"

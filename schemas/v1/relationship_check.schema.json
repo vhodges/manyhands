@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket relationship check",
+  "description": "What a proposed deps and parent come to for one ticket, and whether a save that wrote them would be rejected. The check is a read that succeeded either way: a rejection that is not null is its answer, not its failure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deps", "parent", "unresolved", "rejection"],
+  "properties": {
+    "deps": {
+      "description": "The proposed dependencies as a save writes them: in ID order, each once.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "parent": {
+      "type": ["string", "null"]
+    },
+    "unresolved": {
+      "description": "The proposed dependencies and parent that nothing the index holds has the ID of, in ID order, each once. They are accepted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rejection": {
+      "description": "Null when a save may write these relationships. Otherwise the result code a save would be rejected with and the IDs it is about, in ID order: for relationship_cycle the tickets of the cycle, the ticket itself included, and for invalid_relationship the proposed IDs that are a document's or a comment's.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "ids"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["relationship_cycle", "invalid_relationship"]
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

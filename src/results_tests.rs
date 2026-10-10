@@ -28,7 +28,7 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 ];
 
 /// The design's result-code table, in its order.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 17] = [
+const DESIGN_CODES: [(&str, Option<FailureClass>); 19] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -43,6 +43,8 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 17] = [
     ("public_key_unavailable", Some(FailureClass::Blocked)),
     ("authority_not_found", Some(FailureClass::Input)),
     ("operation_not_found", Some(FailureClass::Input)),
+    ("relationship_cycle", Some(FailureClass::Input)),
+    ("invalid_relationship", Some(FailureClass::Input)),
     ("index_unavailable", Some(FailureClass::Blocked)),
     ("busy", Some(FailureClass::Transient)),
     ("internal_error", Some(FailureClass::Internal)),
@@ -88,6 +90,8 @@ fn result_code_messages_are_fixed() {
         "The key registration has no readable public key.",
         "No host pin exists for that authority.",
         "No operation has that ID.",
+        "Those relationships would form a cycle.",
+        "A relationship names an item that is not a ticket.",
         "The index is degraded and must be rebuilt.",
         "The repository is busy; try again.",
         "An internal error occurred.",

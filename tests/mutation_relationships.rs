@@ -1,4 +1,6 @@
-//! `save_ticket_with`: how a save writes `deps`, `parent` and `slug`.
+//! `save_ticket_with`: how a save writes `deps`, `parent` and `slug`; and
+//! `check_ticket_relationships`: what a proposed `deps` and `parent` would
+//! be rejected for, before anything is written.
 
 use std::{
     fs,
@@ -10,9 +12,11 @@ use manyhands::{
     canonical::{CanonicalItem, Ticket, parse_item},
     repository::{
         AuthoringKind, AuthoringTarget, ContextIntent, ExpectedPathObservation, FailurePoint,
-        LocalCheckpoint, OperationId, RelationshipWrite, RepositoryError, RepositoryErrorKind,
-        RepositoryService, SaveOutcome, SaveTicketRequest, TicketDraft, TicketWriteOptions,
+        LocalCheckpoint, OperationId, ProposedRelationships, RelationshipCheckDto,
+        RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryService, SaveOutcome,
+        SaveTicketRequest, TicketDraft, TicketWriteOptions,
     },
+    results::ResultCode,
 };
 use serde_yaml::Value;
 
@@ -20,7 +24,10 @@ mod support;
 
 use support::{
     EnabledRepository, TestRepository,
-    items::{self, RELATED_A, RELATED_B, RELATED_C, RELATED_D, TICKET_A, TICKET_B, TICKET_C},
+    items::{
+        self, CLOSURE, COMMENT_A, DOCUMENT_A, RELATED_A, RELATED_B, RELATED_C, RELATED_D, TICKET_A,
+        TICKET_ABSENT, TICKET_B, TICKET_C,
+    },
 };
 
 const SLUG: &str = "mh-vh-k9x2b";
@@ -527,4 +534,349 @@ fn a_short_code_is_unchanged_by_a_later_save_that_changes_the_title() {
         text(&fixture.root, TICKET_B),
         source(TICKET_B, "Renamed", "slug: MH-VH-K9X2B\n")
     );
+}
+
+/// `repository`, with the index refreshed over what it committed.
+fn indexed(tickets: &[(&str, &str)]) -> (TestRepository, EnabledRepository) {
+    let (fixture, enabled) = repository(tickets);
+    items::refresh_completely(&enabled.service, &fixture.root);
+    (fixture, enabled)
+}
+
+fn check(
+    fixture: &TestRepository,
+    enabled: &EnabledRepository,
+    id: &str,
+    deps: &[&str],
+    parent: Option<&str>,
+) -> RelationshipCheckDto {
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(id),
+            &ProposedRelationships {
+                deps: deps.iter().map(|id| items::item_id(id)).collect(),
+                parent: parent.map(items::item_id),
+            },
+        )
+        .unwrap()
+}
+
+/// The code a proposal would be rejected with and the IDs it names, or
+/// `None` for one that is accepted.
+fn verdict(check: &RelationshipCheckDto) -> Option<(ResultCode, Vec<&str>)> {
+    check.rejection.as_ref().map(|rejection| {
+        (
+            rejection.code,
+            rejection.ids.iter().map(String::as_str).collect(),
+        )
+    })
+}
+
+fn cycle(ids: &[&'static str]) -> Option<(ResultCode, Vec<&'static str>)> {
+    Some((ResultCode::RelationshipCycle, ids.to_vec()))
+}
+
+fn invalid(ids: &[&'static str]) -> Option<(ResultCode, Vec<&'static str>)> {
+    Some((ResultCode::InvalidRelationship, ids.to_vec()))
+}
+
+fn dep(id: &str) -> String {
+    format!("deps:\n- {id}\n")
+}
+
+fn parent(id: &str) -> String {
+    format!("parent: {id}\n")
+}
+
+#[test]
+fn a_dependency_that_closes_a_cycle_is_a_relationship_cycle_naming_its_members() {
+    // B depends on A, and C on B.
+    let (fixture, enabled) = indexed(&[
+        (TICKET_A, ""),
+        (TICKET_B, &dep(TICKET_A)),
+        (TICKET_C, &dep(TICKET_B)),
+    ]);
+
+    let two = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    let three = check(&fixture, &enabled, TICKET_A, &[TICKET_C], None);
+
+    assert_eq!(verdict(&two), cycle(&[TICKET_A, TICKET_B]));
+    assert_eq!(verdict(&three), cycle(&[TICKET_A, TICKET_B, TICKET_C]));
+    // The answer still says what the proposal comes to.
+    assert_eq!(three.deps, [TICKET_C]);
+    assert_eq!(three.parent, None);
+    assert!(three.unresolved.is_empty());
+}
+
+#[test]
+fn a_parent_that_closes_a_cycle_is_a_relationship_cycle_naming_its_members() {
+    let (fixture, enabled) = indexed(&[
+        (TICKET_A, ""),
+        (TICKET_B, &parent(TICKET_A)),
+        (TICKET_C, &parent(TICKET_B)),
+    ]);
+
+    let ring = check(&fixture, &enabled, TICKET_A, &[], Some(TICKET_C));
+
+    assert_eq!(verdict(&ring), cycle(&[TICKET_A, TICKET_B, TICKET_C]));
+    assert_eq!(ring.parent.as_deref(), Some(TICKET_C));
+}
+
+#[test]
+fn a_ticket_naming_itself_in_either_field_is_a_cycle_of_one() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, "")]);
+
+    let as_dependency = check(&fixture, &enabled, TICKET_A, &[TICKET_B, TICKET_A], None);
+    let as_parent = check(&fixture, &enabled, TICKET_A, &[TICKET_B], Some(TICKET_A));
+
+    assert_eq!(verdict(&as_dependency), cycle(&[TICKET_A]));
+    assert_eq!(verdict(&as_parent), cycle(&[TICKET_A]));
+}
+
+#[test]
+fn a_cycle_through_a_closed_ticket_is_rejected() {
+    let closed = format!("{}{CLOSURE}", dep(TICKET_A));
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, &closed)]);
+
+    let through_closed = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+
+    assert_eq!(verdict(&through_closed), cycle(&[TICKET_A, TICKET_B]));
+}
+
+#[test]
+fn the_proposed_edges_replace_the_stored_ones() {
+    // A and B already name each other in both fields, as a merge can leave
+    // them, and C depends on nothing.
+    let both = |id: &str| format!("{}{}", parent(id), dep(id));
+    let (fixture, enabled) = indexed(&[
+        (TICKET_A, &both(TICKET_B)),
+        (TICKET_B, &both(TICKET_A)),
+        (TICKET_C, ""),
+    ]);
+
+    // Keeping what A has is still the cycle it is on.
+    let kept = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    let kept_parent = check(&fixture, &enabled, TICKET_A, &[], Some(TICKET_B));
+    // Removing the edge that closes it while adding another is accepted.
+    let replaced = check(&fixture, &enabled, TICKET_A, &[TICKET_C], Some(TICKET_C));
+
+    assert_eq!(verdict(&kept), cycle(&[TICKET_A, TICKET_B]));
+    assert_eq!(verdict(&kept_parent), cycle(&[TICKET_A, TICKET_B]));
+    assert_eq!(verdict(&replaced), None);
+    assert_eq!(replaced.deps, [TICKET_C]);
+    assert_eq!(replaced.parent.as_deref(), Some(TICKET_C));
+    assert!(replaced.unresolved.is_empty());
+}
+
+/// Two tickets, a document and a comment on it that no ticket names, all
+/// indexed.
+fn repository_with_a_document_and_a_comment() -> (TestRepository, EnabledRepository) {
+    let (fixture, enabled) = repository(&[(TICKET_A, ""), (TICKET_B, "")]);
+    items::write(
+        &fixture.root,
+        "docs/guide.md",
+        &items::document_source(DOCUMENT_A, "Guide", ""),
+    );
+    items::write_comment(
+        &fixture.root,
+        DOCUMENT_A,
+        COMMENT_A,
+        None,
+        "2026-10-01T00:00:00Z",
+        "",
+    );
+    items::commit(
+        &fixture,
+        &["docs/guide.md", &items::comment_path(DOCUMENT_A, COMMENT_A)],
+        10,
+    );
+    items::refresh_completely(&enabled.service, &fixture.root);
+    (fixture, enabled)
+}
+
+#[test]
+fn a_target_the_index_holds_as_a_document_or_a_comment_is_an_invalid_relationship() {
+    let (fixture, enabled) = repository_with_a_document_and_a_comment();
+
+    let document = check(&fixture, &enabled, TICKET_A, &[TICKET_B, DOCUMENT_A], None);
+    let document_parent = check(&fixture, &enabled, TICKET_A, &[], Some(DOCUMENT_A));
+    let comment = check(&fixture, &enabled, TICKET_A, &[COMMENT_A], None);
+    let comment_parent = check(&fixture, &enabled, TICKET_A, &[], Some(COMMENT_A));
+    let several = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[COMMENT_A, TICKET_ABSENT],
+        Some(DOCUMENT_A),
+    );
+
+    assert_eq!(verdict(&document), invalid(&[DOCUMENT_A]));
+    assert_eq!(verdict(&document_parent), invalid(&[DOCUMENT_A]));
+    assert_eq!(verdict(&comment), invalid(&[COMMENT_A]));
+    assert_eq!(verdict(&comment_parent), invalid(&[COMMENT_A]));
+    // Every offending ID, sorted, each once. What is not a ticket is not
+    // unresolved either.
+    assert_eq!(verdict(&several), invalid(&[DOCUMENT_A, COMMENT_A]));
+    assert_eq!(several.deps, [TICKET_ABSENT, COMMENT_A]);
+    assert_eq!(several.unresolved, [TICKET_ABSENT]);
+}
+
+#[test]
+fn an_unknown_target_is_accepted_and_listed_as_unresolved() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, "")]);
+
+    let unknown = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[TICKET_ABSENT, TICKET_B],
+        Some(RELATED_A),
+    );
+    let both_fields = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[TICKET_ABSENT],
+        Some(TICKET_ABSENT),
+    );
+
+    assert_eq!(verdict(&unknown), None);
+    assert_eq!(unknown.deps, [TICKET_B, TICKET_ABSENT]);
+    assert_eq!(unknown.parent.as_deref(), Some(RELATED_A));
+    assert_eq!(unknown.unresolved, [TICKET_ABSENT, RELATED_A]);
+    assert_eq!(verdict(&both_fields), None);
+    assert_eq!(both_fields.unresolved, [TICKET_ABSENT]);
+}
+
+#[test]
+fn repeated_entries_are_removed_and_the_rest_sorted() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, ""), (TICKET_C, "")]);
+
+    let repeated = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[TICKET_C, TICKET_B, TICKET_C, TICKET_ABSENT, TICKET_ABSENT],
+        None,
+    );
+    let nothing = check(&fixture, &enabled, TICKET_A, &[], None);
+
+    assert_eq!(verdict(&repeated), None);
+    assert_eq!(repeated.deps, [TICKET_B, TICKET_C, TICKET_ABSENT]);
+    assert_eq!(repeated.unresolved, [TICKET_ABSENT]);
+    assert_eq!(verdict(&nothing), None);
+    assert!(nothing.deps.is_empty());
+    assert_eq!(nothing.parent, None);
+    assert!(nothing.unresolved.is_empty());
+}
+
+#[test]
+fn a_ticket_the_index_does_not_hold_yet_can_be_checked() {
+    // B already waits for the ticket that is about to be created.
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, &dep(TICKET_C))]);
+
+    let accepted = check(&fixture, &enabled, TICKET_C, &[TICKET_A], Some(TICKET_B));
+    let rejected = check(&fixture, &enabled, TICKET_C, &[TICKET_B], Some(TICKET_A));
+
+    assert_eq!(verdict(&accepted), None);
+    assert_eq!(accepted.deps, [TICKET_A]);
+    assert_eq!(accepted.parent.as_deref(), Some(TICKET_B));
+    assert!(accepted.unresolved.is_empty());
+    assert_eq!(verdict(&rejected), cycle(&[TICKET_B, TICKET_C]));
+}
+
+#[test]
+fn an_invalid_relationship_is_reported_before_a_cycle_and_a_dependency_cycle_before_a_parent_one() {
+    // B depends on A, and A is the parent of C.
+    let (fixture, enabled) = repository(&[
+        (TICKET_A, ""),
+        (TICKET_B, &dep(TICKET_A)),
+        (TICKET_C, &parent(TICKET_A)),
+    ]);
+    items::write(
+        &fixture.root,
+        "docs/guide.md",
+        &items::document_source(DOCUMENT_A, "Guide", ""),
+    );
+    items::commit(&fixture, &["docs/guide.md"], 10);
+    items::refresh_completely(&enabled.service, &fixture.root);
+
+    let all_three = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[TICKET_B, DOCUMENT_A],
+        Some(TICKET_C),
+    );
+    let invalid_and_self = check(&fixture, &enabled, TICKET_A, &[TICKET_A], Some(DOCUMENT_A));
+    let both_cycles = check(&fixture, &enabled, TICKET_A, &[TICKET_B], Some(TICKET_C));
+    let parent_only = check(&fixture, &enabled, TICKET_A, &[], Some(TICKET_C));
+
+    assert_eq!(verdict(&all_three), invalid(&[DOCUMENT_A]));
+    assert_eq!(verdict(&invalid_and_self), invalid(&[DOCUMENT_A]));
+    assert_eq!(verdict(&both_cycles), cycle(&[TICKET_A, TICKET_B]));
+    assert_eq!(verdict(&parent_only), cycle(&[TICKET_A, TICKET_C]));
+}
+
+#[test]
+fn the_check_is_index_unavailable_when_the_index_cannot_be_read() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, "")]);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let (_data, service) = items::degraded_service(enabled);
+
+    let error = service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(TICKET_A),
+            &ProposedRelationships {
+                deps: vec![items::item_id(TICKET_B)],
+                parent: None,
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code(), ResultCode::IndexUnavailable);
+    assert_eq!(error.scope.item_id.as_deref(), Some(TICKET_A));
+    assert_eq!(error.recovery.len(), 1);
+    assert_eq!(error.recovery[0].action.as_str(), "index.rebuild");
+}
+
+#[test]
+fn a_stale_index_passes_a_cycle_that_the_reads_report_after_a_refresh() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, "")]);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    // B arrives depending on A, and the index is not refreshed: it does
+    // not hold B.
+    let path = items::ticket_path(TICKET_B);
+    items::write(
+        &fixture.root,
+        &path,
+        &source(TICKET_B, "Title", &dep(TICKET_A)),
+    );
+    items::commit(&fixture, &[&path], 10);
+
+    // The check does not scan: it answers from what the index has.
+    let stale = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    assert_eq!(verdict(&stale), None);
+    assert_eq!(stale.unresolved, [TICKET_B]);
+
+    // So the cycle is written, and reported when it is read.
+    let path = items::ticket_path(TICKET_A);
+    items::write(
+        &fixture.root,
+        &path,
+        &source(TICKET_A, "Title", &dep(TICKET_B)),
+    );
+    items::commit(&fixture, &[&path], 20);
+    items::refresh_completely(&enabled.service, &fixture.root);
+
+    let cycles = enabled.service.ticket_cycles(&repo).unwrap();
+    assert_eq!(cycles.items.len(), 1);
+    assert_eq!(cycles.items[0].kind.as_str(), "deps");
+    assert_eq!(cycles.items[0].ids, [TICKET_A, TICKET_B]);
+    let again = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    assert_eq!(verdict(&again), cycle(&[TICKET_A, TICKET_B]));
 }

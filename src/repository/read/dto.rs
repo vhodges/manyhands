@@ -6,7 +6,7 @@
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
-use crate::results::{OperationFailureCode, ProblemCode, contract_enum};
+use crate::results::{OperationFailureCode, ProblemCode, ResultCode, contract_enum};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NewIdDto {
@@ -941,4 +941,55 @@ pub struct UnplannableReasonDto {
     pub code: UnplannableReasonCode,
     pub ids: Vec<String>,
     pub complete: bool,
+}
+
+/// What a proposed `deps` and `parent` come to for one ticket, and whether
+/// a save that wrote them would be rejected.
+///
+/// The check is a read, and a read that could answer succeeds, so this is
+/// the data of an `ok` envelope whether or not the proposal is acceptable.
+/// A null `rejection` says a save may write these relationships. One that
+/// is not null says the read succeeded and its answer is that this
+/// proposal would be rejected with that code: the check itself did not
+/// fail. The ticket bindings read it before anything else is done and turn
+/// it into a rejected mutation that carries the code.
+///
+/// The first three fields describe the proposal and are filled either way.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelationshipCheckDto {
+    /// The proposed dependencies as a save writes them: in ID order, each
+    /// once.
+    pub deps: Vec<String>,
+    pub parent: Option<String>,
+    /// The proposed dependencies and parent that nothing the index holds
+    /// has the ID of, in ID order, each once. They are accepted: a later
+    /// fetch or merge may bring the ticket. The ticket's own ID is never
+    /// one of them.
+    pub unresolved: Vec<String>,
+    pub rejection: Option<RelationshipRejectionDto>,
+}
+
+/// Why a save of the proposed relationships would be rejected.
+///
+/// `code` is one of `CODES`. For `invalid_relationship`, `ids` holds every
+/// proposed ID that the index holds as a document or a comment. For
+/// `relationship_cycle` it holds the tickets of the cycle the proposal
+/// would put the ticket on, the ticket included and closed tickets
+/// counted: a set, not a path, and the ticket alone when it names itself.
+/// Either way `ids` is in ID order, each once.
+///
+/// One rejection is reported: `invalid_relationship` before any cycle, and
+/// a dependency cycle before a parent cycle.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelationshipRejectionDto {
+    pub code: ResultCode,
+    pub ids: Vec<String>,
+}
+
+impl RelationshipRejectionDto {
+    /// Every code a rejection can carry.
+    pub const CODES: [ResultCode; 2] = [
+        ResultCode::RelationshipCycle,
+        ResultCode::InvalidRelationship,
+    ];
 }

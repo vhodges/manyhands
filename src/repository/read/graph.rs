@@ -310,6 +310,23 @@ impl TicketGraph {
             .is_some_and(|ticket| self.on_parent_cycle[ticket])
     }
 
+    /// The dependency cycle the ticket is on, closed tickets counted: its
+    /// IDs, ascending. `None` for a ticket on no such cycle.
+    pub(super) fn dependency_cycle_ids(&self, id: &str) -> Option<Vec<String>> {
+        let cycle = self.cycle_of[self.position(id)?]?;
+        Some(self.names(&self.cycles[cycle]))
+    }
+
+    /// The parent cycle the ticket is on: its IDs, ascending. `None` for a
+    /// ticket whose `parent` links do not lead back to it.
+    pub(super) fn parent_cycle_ids(&self, id: &str) -> Option<Vec<String>> {
+        let ticket = self.position(id)?;
+        self.parent_cycles
+            .iter()
+            .find(|cycle| cycle.contains(&ticket))
+            .map(|cycle| self.names(cycle))
+    }
+
     /// Every dependency cycle and then every parent cycle, each once, each
     /// kind in the order of its cycles' lowest IDs. A cycle's IDs ascend.
     pub(super) fn cycles(&self) -> Vec<CycleDto> {
