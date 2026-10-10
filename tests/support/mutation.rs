@@ -154,6 +154,16 @@ pub const CASES: &[&str] = &[
     "failure_request_not_found",
     "request_show_accepted",
     "request_show_finished",
+    "ticket_create",
+    "ticket_save",
+    "ticket_save_cycle",
+    "ticket_save_discovery_pending",
+    "ticket_save_external_change",
+    "ticket_save_mismatch",
+    "ticket_save_mismatch_partial",
+    "ticket_save_noop",
+    "ticket_save_partial",
+    "ticket_save_replay",
 ];
 
 pub fn fixture_directory() -> PathBuf {

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket mutation data",
+  "description": "The data of a ticket create or ticket save envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the ticket. It never holds the ticket's title, body or source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "path", "slug", "unresolved", "rejected"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "description": "The ticket's file, relative to its context, with forward slashes.",
+      "type": "string"
+    },
+    "slug": {
+      "description": "The short code the ticket's file holds, once the request has written or found the file. Null before that, and for a ticket whose file has none.",
+      "type": ["string", "null"]
+    },
+    "unresolved": {
+      "description": "The dependencies and parent this request sets that nothing the index holds has the ID of, in ID order, each once. They are accepted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rejected": {
+      "description": "Empty unless the request was rejected for its relationships. Then, in ID order: for relationship_cycle the tickets of the cycle, the ticket itself included, and for invalid_relationship the IDs that are a document's or a comment's.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

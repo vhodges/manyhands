@@ -79,7 +79,7 @@ pub(crate) struct TicketBinding {
     parent: RelationshipWrite<String>,
     initials: Option<String>,
     observation: Option<String>,
-    /// What `prepare` and `resume` work out: the relationship and short
+    /// What `prepare` works out: the relationship and short
     /// code options of the domain call, and the targets nothing holds.
     options: TicketWriteOptions,
     unresolved: Vec<String>,
