@@ -978,8 +978,9 @@ pub struct RelationshipCheckDto {
 /// counted: a set, not a path, and the ticket alone when it names itself.
 /// Either way `ids` is in ID order, each once.
 ///
-/// One rejection is reported: `invalid_relationship` before any cycle, and
-/// a dependency cycle before a parent cycle.
+/// One rejection is reported: `invalid_relationship` first, then the ticket
+/// naming itself, which is always the ticket alone whatever other cycle
+/// the proposal closes, then a dependency cycle, then a parent cycle.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RelationshipRejectionDto {
     pub code: ResultCode,

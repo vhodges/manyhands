@@ -379,7 +379,21 @@ impl<'a> Related<'a> {
                 None => unresolved.push(target.clone()),
             }
         }
-        let rejection = if not_tickets.is_empty() {
+        let names_itself = deps.contains(id) || parent.as_deref() == Some(id);
+        let rejection = if !not_tickets.is_empty() {
+            Some(RelationshipRejectionDto {
+                code: ResultCode::InvalidRelationship,
+                ids: not_tickets,
+            })
+        } else if names_itself {
+            // Decided before the graph is asked, which would name every
+            // ticket of a larger cycle the ticket is also on, and would
+            // not see the edge at all for an ID that is no ticket's.
+            Some(RelationshipRejectionDto {
+                code: ResultCode::RelationshipCycle,
+                ids: vec![id.to_owned()],
+            })
+        } else {
             let closed = self
                 .tickets
                 .iter()
@@ -397,11 +411,6 @@ impl<'a> Related<'a> {
                     code: ResultCode::RelationshipCycle,
                     ids,
                 })
-        } else {
-            Some(RelationshipRejectionDto {
-                code: ResultCode::InvalidRelationship,
-                ids: not_tickets,
-            })
         };
         RelationshipCheckDto {
             deps: deps.into_iter().collect(),
@@ -1920,8 +1929,10 @@ impl RepositoryService {
     /// - An ID the index does not hold is accepted and listed in
     ///   `unresolved`.
     ///
-    /// When several apply, one is reported: `invalid_relationship`, then a
-    /// dependency cycle, then a parent cycle.
+    /// When several apply, one is reported: `invalid_relationship`, then the
+    /// ticket naming itself, which names the ticket alone whatever other
+    /// cycle the proposal closes, then a dependency cycle, then a parent
+    /// cycle.
     ///
     /// `id` need not be a ticket the index holds, so a ticket can be
     /// checked before it is created. That `id` is a ticket's and not a

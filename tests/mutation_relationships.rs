@@ -789,7 +789,7 @@ fn a_ticket_the_index_does_not_hold_yet_can_be_checked() {
 }
 
 #[test]
-fn an_invalid_relationship_is_reported_before_a_cycle_and_a_dependency_cycle_before_a_parent_one() {
+fn one_rejection_is_reported_invalid_then_self_reference_then_dependency_then_parent_cycle() {
     // B depends on A, and A is the parent of C.
     let (fixture, enabled) = repository(&[
         (TICKET_A, ""),
@@ -812,11 +812,19 @@ fn an_invalid_relationship_is_reported_before_a_cycle_and_a_dependency_cycle_bef
         Some(TICKET_C),
     );
     let invalid_and_self = check(&fixture, &enabled, TICKET_A, &[TICKET_A], Some(DOCUMENT_A));
+    let self_and_cycles = check(
+        &fixture,
+        &enabled,
+        TICKET_A,
+        &[TICKET_A, TICKET_B],
+        Some(TICKET_C),
+    );
     let both_cycles = check(&fixture, &enabled, TICKET_A, &[TICKET_B], Some(TICKET_C));
     let parent_only = check(&fixture, &enabled, TICKET_A, &[], Some(TICKET_C));
 
     assert_eq!(verdict(&all_three), invalid(&[DOCUMENT_A]));
     assert_eq!(verdict(&invalid_and_self), invalid(&[DOCUMENT_A]));
+    assert_eq!(verdict(&self_and_cycles), cycle(&[TICKET_A]));
     assert_eq!(verdict(&both_cycles), cycle(&[TICKET_A, TICKET_B]));
     assert_eq!(verdict(&parent_only), cycle(&[TICKET_A, TICKET_C]));
 }
@@ -879,4 +887,50 @@ fn a_stale_index_passes_a_cycle_that_the_reads_report_after_a_refresh() {
     assert_eq!(cycles.items[0].ids, [TICKET_A, TICKET_B]);
     let again = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
     assert_eq!(verdict(&again), cycle(&[TICKET_A, TICKET_B]));
+}
+
+#[test]
+fn a_ticket_naming_itself_is_a_cycle_of_one_whatever_other_cycle_it_closes() {
+    // B depends on A, and A is the parent of C.
+    let (fixture, enabled) = indexed(&[
+        (TICKET_A, ""),
+        (TICKET_B, &dep(TICKET_A)),
+        (TICKET_C, &parent(TICKET_A)),
+    ]);
+
+    // Itself beside a dependency that closes a larger cycle.
+    let in_deps = check(&fixture, &enabled, TICKET_A, &[TICKET_A, TICKET_B], None);
+    // Itself as the parent, while its dependencies close a cycle.
+    let as_parent = check(&fixture, &enabled, TICKET_A, &[TICKET_B], Some(TICKET_A));
+    // Itself as a dependency, while its parent closes a cycle.
+    let over_parent_cycle = check(&fixture, &enabled, TICKET_A, &[TICKET_A], Some(TICKET_C));
+
+    assert_eq!(verdict(&in_deps), cycle(&[TICKET_A]));
+    assert_eq!(verdict(&as_parent), cycle(&[TICKET_A]));
+    assert_eq!(verdict(&over_parent_cycle), cycle(&[TICKET_A]));
+    // Without itself, the larger cycle is what is named.
+    let larger = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    assert_eq!(verdict(&larger), cycle(&[TICKET_A, TICKET_B]));
+}
+
+#[test]
+fn an_id_the_index_holds_as_a_document_or_a_comment_naming_itself_is_a_cycle_of_one() {
+    let (fixture, enabled) = repository_with_a_document_and_a_comment();
+
+    let document = check(&fixture, &enabled, DOCUMENT_A, &[DOCUMENT_A], None);
+    let document_parent = check(&fixture, &enabled, DOCUMENT_A, &[], Some(DOCUMENT_A));
+    let comment = check(&fixture, &enabled, COMMENT_A, &[COMMENT_A], None);
+    // An invalid target still comes first.
+    let with_invalid = check(
+        &fixture,
+        &enabled,
+        DOCUMENT_A,
+        &[DOCUMENT_A, COMMENT_A],
+        None,
+    );
+
+    assert_eq!(verdict(&document), cycle(&[DOCUMENT_A]));
+    assert_eq!(verdict(&document_parent), cycle(&[DOCUMENT_A]));
+    assert_eq!(verdict(&comment), cycle(&[COMMENT_A]));
+    assert_eq!(verdict(&with_invalid), invalid(&[COMMENT_A]));
 }
