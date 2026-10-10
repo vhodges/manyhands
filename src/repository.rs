@@ -1789,16 +1789,14 @@ impl RepositoryService {
             }
             let will_write_destination =
                 !destination_exists || source.as_deref() == Some(destination.as_path());
-            let source_in_head = if moving && !source_present {
+            if moving && !source_present {
                 validate_head_document_source(
                     &repository,
                     source.as_ref().expect("move has a source"),
                     &context,
                     operation,
-                )?
-            } else {
-                false
-            };
+                )?;
+            }
             if will_write_destination {
                 effects.begin();
                 ensure_safe_owned_parent(
@@ -1860,8 +1858,7 @@ impl RepositoryService {
                     operation: RepositoryOperation::SaveDocument,
                     subject: &format!("Checkpoint document {}", context.item_id),
                     added_paths: &[destination.as_path()],
-                    removed_source: (source_present || source_in_head)
-                        .then(|| source.as_deref().expect("move has a source")),
+                    removed_source: moving.then(|| source.as_deref().expect("move has a source")),
                 },
             )?;
             self.advance_lifecycle(
@@ -2815,6 +2812,9 @@ impl RepositoryService {
             .write_tree_to(repository)
             .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
         if tree_oid == head_tree.id() {
+            // Also repair a stale owned entry left by an earlier failed index
+            // write. Git is authoritative; index repair must not fail the save.
+            let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
             return match self.mark_checkpoint_refresh(&context.root, operation) {
                 Ok(()) => Ok(LocalCheckpoint::NoChange),
                 Err(()) => Ok(LocalCheckpoint::RefreshPending {
@@ -2842,6 +2842,12 @@ impl RepositoryService {
                 &[&head],
             )
             .map_err(|error| RepositoryError::git(operation, Some(context.root.clone()), error))?;
+        // The isolated index is the exact snapshot just committed. Do not read
+        // worktree files again: an edit made since the commit must stay unstaged.
+        // A foreign index.lock (or other write failure) leaves the commit intact
+        // and can be repaired by a later save, including a no-change save.
+        // This runs before handing off the save's existing authoring lease.
+        let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
         Ok(
             match self.mark_checkpoint_refresh(&context.root, operation) {
                 Ok(()) => LocalCheckpoint::Checkpointed { commit_oid },
@@ -7652,6 +7658,104 @@ fn remove_owned_file(
     }
 }
 
+struct OwnedIndexLock {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    published: bool,
+}
+
+impl Drop for OwnedIndexLock {
+    fn drop(&mut self) {
+        // Close before unlinking on Windows. Only remove the lock we created.
+        drop(self.file.take());
+        if !self.published {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn refresh_owned_index(
+    repository: &Repository,
+    committed_index: &Index,
+    added_paths: &[&Path],
+    removed_source: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let index_path = repository.path().join("index");
+    let lock_path = repository.path().join("index.lock");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)?;
+    let mut lock = OwnedIndexLock {
+        path: lock_path,
+        file: Some(file),
+        published: false,
+    };
+
+    // Take Git's lock before loading the live snapshot so cooperating Git
+    // writers cannot stage unrelated changes between the read and publication.
+    // Serialize a detached index: repository-backed writes may zero unrelated
+    // racy entries' stat fields. Never replace the live contents with read_tree.
+    let index_modified = std::fs::metadata(&index_path)?.modified()?;
+    let scratch = tempfile::tempdir_in(repository.path())?;
+    let scratch_index = scratch.path().join("index");
+    std::fs::copy(&index_path, &scratch_index)?;
+    let mut index = Index::open(&scratch_index)?;
+    let mut changed = false;
+    if let Some(source) = removed_source
+        && (0..=3).any(|stage| index.get_path(source, stage).is_some())
+    {
+        index.remove_path(source)?;
+        changed = true;
+    }
+    for path in added_paths {
+        let entry = committed_index
+            .get_path(path, 0)
+            .ok_or_else(|| git2::Error::from_str("the committed owned entry is missing"))?;
+        if index.iter().any(|current| {
+            (current.path.starts_with(&entry.path)
+                && current.path.get(entry.path.len()) == Some(&b'/'))
+                || (entry.path.starts_with(&current.path)
+                    && entry.path.get(current.path.len()) == Some(&b'/'))
+        }) {
+            // A staged ancestor/descendant is not ours to displace. Leave the
+            // entire live index intact rather than publish a partial repair.
+            return Err(git2::Error::from_str(
+                "an unrelated staged path collides with the owned entry",
+            )
+            .into());
+        }
+        let conflicted = (1..=3).any(|stage| index.get_path(path, stage).is_some());
+        let matches = index
+            .get_path(path, 0)
+            .is_some_and(|current| current.id == entry.id && current.mode == entry.mode)
+            && !conflicted;
+        if !matches {
+            if conflicted {
+                index.conflict_remove(path)?;
+            }
+            index.add(&entry)?;
+            changed = true;
+        }
+    }
+    if changed {
+        index.write()?;
+        let bytes = std::fs::read(&scratch_index)?;
+        let file = lock.file.as_mut().expect("the index lock is open");
+        file.write_all(&bytes)?;
+        // Advancing the index timestamp could make an unchanged cached stat
+        // entry stop being racy, hiding an unrelated same-stat worktree edit.
+        file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        file.sync_all()?;
+        drop(lock.file.take());
+        std::fs::rename(&lock.path, &index_path)?;
+        lock.published = true;
+    }
+    Ok(())
+}
+
 fn add_owned_blob(
     index: &mut Index,
     repository: &Repository,
@@ -9730,6 +9834,72 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
         assert_eq!(std::fs::read(root.path().join(relative)).unwrap(), external);
+    }
+
+    #[test]
+    fn owned_index_refresh_in_primary_checkout_uses_committed_blobs_not_later_edits() {
+        let directory = tempfile::tempdir().unwrap();
+        // Guarded readers require the same physical root that public saves
+        // resolve, including on macOS where the temporary path uses /var.
+        let root = create_born_repository(directory.path())
+            .canonicalize()
+            .unwrap();
+        let repository = Repository::open(&root).unwrap();
+        let relative = Path::new("owned.md");
+        std::fs::write(root.join(relative), b"committed\n").unwrap();
+        let parent = repository.head().unwrap().peel_to_commit().unwrap();
+        let mut committed = Index::new().unwrap();
+        committed.read_tree(&parent.tree().unwrap()).unwrap();
+        add_owned_blob(
+            &mut committed,
+            &repository,
+            &root,
+            relative,
+            RepositoryOperation::SaveDocument,
+            &root,
+        )
+        .unwrap();
+        let tree = repository
+            .find_tree(committed.write_tree_to(&repository).unwrap())
+            .unwrap();
+        let signature = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "owned",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+
+        std::fs::write(root.join(relative), b"edited after commit\n").unwrap();
+        std::fs::write(root.join("other.md"), b"unrelated staged\n").unwrap();
+        let mut live = repository.index().unwrap();
+        live.add_path(Path::new("other.md")).unwrap();
+        live.write().unwrap();
+        let unrelated_before = format!("{:?}", live.get_path(Path::new("other.md"), 0).unwrap());
+
+        refresh_owned_index(&repository, &committed, &[relative], None).unwrap();
+        let reopened = Repository::open(&root).unwrap();
+        let index = reopened.index().unwrap();
+        assert_eq!(
+            index.get_path(relative, 0).unwrap().id,
+            tree.get_path(relative).unwrap().id()
+        );
+        assert_eq!(
+            reopened.status_file(relative).unwrap(),
+            git2::Status::WT_MODIFIED
+        );
+        assert_eq!(
+            format!("{:?}", index.get_path(Path::new("other.md"), 0).unwrap()),
+            unrelated_before
+        );
+        assert_eq!(
+            std::fs::read(root.join(relative)).unwrap(),
+            b"edited after commit\n"
+        );
     }
 
     #[test]

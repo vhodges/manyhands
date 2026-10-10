@@ -543,10 +543,6 @@ impl World {
             }
             _ => return Err(FixtureError),
         };
-        let repo = fixed(git2::Repository::open(&context.worktree))?;
-        let mut index = fixed(repo.index())?;
-        fixed(index.read_tree(&fixed(fixed(repo.head())?.peel_to_tree())?))?;
-        fixed(index.write())?;
         // This is forbidden in synchronization rows/errors, but intentional in
         // discovery context/registry path columns and original Git administration.
         self.paths
@@ -755,8 +751,16 @@ fn context_first_current_fast_forward_local_ahead() -> Result<(), FixtureError> 
     let main_before = primary_image(&w.root)?;
     let first = fixed(repo.refname_to_id(CONTEXT))?;
     let n = w.server.receive_updates().len();
+    // Public save followed immediately by public synchronization, without an
+    // intervening fixture index refresh (01M4GD0KKXW684QBA49F6EX3WE).
+    let synchronized = w.sync(w.context_request());
+    assert!(!matches!(
+        synchronized,
+        Err(SynchronizationError::WorktreeNotClean { .. })
+    ));
+    assert!(synchronized.is_ok(), "{synchronized:?}");
     outcome(
-        fixed(w.sync(w.context_request()))?,
+        fixed(synchronized)?,
         true,
         w.context_request().target,
         first,
