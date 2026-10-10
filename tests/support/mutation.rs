@@ -692,3 +692,52 @@ impl World {
         items::rebuild(&self.service, &self.root);
     }
 }
+
+impl World {
+    /// Amends the tip of the item's editing branch, as `git commit
+    /// --amend` with another message would: the same tree and parent, a
+    /// new commit. The worktree is as it was.
+    pub fn amend_branch_tip(&self, id: &str) -> git2::Oid {
+        let repository = git2::Repository::open(&self.root).unwrap();
+        let tip = repository
+            .find_commit(self.branch_tip(id).unwrap())
+            .unwrap();
+        let signature = git2::Signature::new(
+            "Someone Else",
+            "someone-else@example.invalid",
+            &git2::Time::new(items::COMMITTED_AT + 120, 0),
+        )
+        .unwrap();
+        let parents: Vec<git2::Commit<'_>> = tip.parents().collect();
+        let parents: Vec<&git2::Commit<'_>> = parents.iter().collect();
+        let amended = repository
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "amended",
+                &tip.tree().unwrap(),
+                &parents,
+            )
+            .unwrap();
+        repository
+            .reference(
+                &format!("refs/heads/{}", Self::branch(id)),
+                amended,
+                true,
+                "amend",
+            )
+            .unwrap();
+        amended
+    }
+
+    /// Resets the item's editing branch and its worktree to `commit`, as
+    /// `git reset --hard` in the worktree would.
+    pub fn reset_context(&self, id: &str, commit: git2::Oid) {
+        let repository = git2::Repository::open(self.worktree(id)).unwrap();
+        let target = repository.find_object(commit, None).unwrap();
+        repository
+            .reset(&target, git2::ResetType::Hard, None)
+            .unwrap();
+    }
+}

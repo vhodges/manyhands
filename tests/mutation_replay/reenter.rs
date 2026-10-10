@@ -1553,3 +1553,97 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
         Some(RequestState::Finished)
     );
 }
+
+#[test]
+fn a_retry_completes_after_the_branch_was_rewritten_under_a_request_in_flight() {
+    // A save of a ticket with a context is killed after its write: its
+    // row is pending and its file is written and not committed.
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeCheckpointCommit).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.outcome, Outcome::Partial);
+    assert!(world.worktree_source(TICKET_A).contains(TITLE));
+
+    // Someone amends the branch's tip. The recorded commit is no longer
+    // an ancestor of the branch, so the evidence is looked for in all of
+    // it, where the newest change to the file is the earlier save: not
+    // what this request intends, and not a change from elsewhere either.
+    let recorded = world.record(REQUEST_1).unwrap().base_oid.unwrap();
+    let amended = world.amend_branch_tip(TICKET_A);
+    assert_ne!(amended, recorded);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
+    // One commit of the request's, on top of the amended one, and it is
+    // the one reported: it was not there before the call.
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+    let tip = world.branch_tip(TICKET_A).unwrap();
+    assert_eq!(retry.effects.commit_oid, Some(tip.to_string()));
+    assert_eq!(
+        git2::Repository::open(&world.root)
+            .unwrap()
+            .find_commit(tip)
+            .unwrap()
+            .parent_id(0)
+            .unwrap(),
+        amended
+    );
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn an_older_commit_of_the_same_content_is_not_reported_after_the_branch_was_reset() {
+    // The branch's history holds the intended content, then something
+    // else, which is what the request is accepted against.
+    let mut world = World::new();
+    let old = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(old.outcome, Outcome::Success);
+    let old_commit = world.branch_tip(TICKET_A).unwrap();
+    let between = world.execute(REQUEST_3, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(between.outcome, Outcome::Success);
+
+    // The request saves the intended content again, commits, and its
+    // output is lost.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_output_lost(&world, REQUEST_1, &lost);
+    let own = world.branch_tip(TICKET_A).unwrap();
+    assert_eq!(world.branch_commits(TICKET_A), 3);
+
+    // The branch is reset behind the commit the request was accepted at:
+    // the request's own commit is gone from it, and the range is all of
+    // the branch, where an old commit holds the same content.
+    world.reset_context(TICKET_A, old_commit);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    // The old commit is not the request's and is not reported. Nor is
+    // the request's own, which the branch no longer holds. What it asked
+    // for is what the branch holds, committed: a no-op.
+    assert_no_op_without_a_commit(&retry, "the retry");
+    assert_ne!(retry.effects.commit_oid, Some(old_commit.to_string()));
+    assert_ne!(retry.effects.commit_oid, Some(own.to_string()));
+    assert_eq!(world.branch_tip(TICKET_A), Some(old_commit));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
