@@ -59,3 +59,10 @@ fn a_result_the_domain_made_final_is_stored_even_when_work_is_owed() {
         }
     }
 }
+
+#[test]
+fn a_commit_the_evidence_check_could_not_confirm_leaves_the_record_accepted() {
+    // The domain claims a commit and Git could not be read to confirm it:
+    // finishing the record would store a no-op for a save that committed.
+    assert_eq!(Settlement::of(&Standing::Unconfirmed), Settlement::Leave);
+}

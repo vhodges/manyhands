@@ -124,6 +124,11 @@ pub(crate) enum Standing {
     /// row's to say: `journal` is the row as the binding read it after the
     /// call, or `None` when it could not be read.
     Stopped { journal: Option<JournalRow> },
+    /// The domain returned a result that names a commit, and Git could not
+    /// be read to say whether the commit is this request's. Nothing is
+    /// stored: a result finished now would be a no-op for a save that may
+    /// have committed. The record stays accepted for a retry to settle.
+    Unconfirmed,
 }
 
 /// A domain call's result and what it leaves.
@@ -163,23 +168,28 @@ pub(crate) trait Binding {
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran;
 }
 
-/// Whether the repository shows a change by the unfinished request
-/// `record` holds: its operation is in flight and its file is no longer
-/// what it was before the request. The original input is not needed, and
-/// is not available when the request is being reused with another.
-pub(crate) fn recorded_change(service: &RepositoryService, record: &RequestRecord) -> bool {
+/// The effects the repository shows of the unfinished request `record`
+/// holds. The original input is not needed, and is not available when the
+/// request is being reused with another.
+///
+/// An earlier attempt ran when the operation's journal row is pending, or
+/// final and not rejected: anything but absent. A completed row counts,
+/// since a call can commit and complete its row and still fail to settle
+/// its record. Then the effects are what Git and the item's context show.
+/// With no row, no attempt reached the domain and there is no effect. A
+/// row that could not be read is taken to be there: the effects still
+/// have to be shown by the repository.
+pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Effects {
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
-        return false;
+        return Effects::not_requested();
     };
-    if !accepted
-        .journal_row(service)
-        .is_none_or(|row| row.in_flight())
-    {
-        return false;
-    }
-    if record.command == ticket::TICKET_CREATE || record.command == ticket::TICKET_SAVE {
-        ticket::recorded_change(record)
+    let ran = match accepted.journal_row(service) {
+        Some(JournalRow::Absent) => false,
+        Some(JournalRow::Pending(_) | JournalRow::Final { .. }) | None => true,
+    };
+    if ran && (record.command == ticket::TICKET_CREATE || record.command == ticket::TICKET_SAVE) {
+        ticket::recorded_effects(record, &accepted)
     } else {
-        false
+        Effects::not_requested()
     }
 }

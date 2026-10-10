@@ -947,3 +947,233 @@ fn a_commit_the_domain_names_and_did_not_make_is_not_reported() {
     assert_eq!(envelope.effects.commit_oid, None);
     assert_eq!(world.branch_commits(TICKET_A), 0);
 }
+
+fn another_body(world: &World, token: &str) -> Mutation {
+    Mutation::TicketSave(TicketSaveInput {
+        draft: World::draft(TITLE, "Another body.\n"),
+        ..world.save_input(TICKET_A, token)
+    })
+}
+
+#[test]
+fn a_changed_reuse_after_an_unsettled_commit_is_partial_with_that_commit() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.outcome, Outcome::Success);
+    // The process died after the domain committed and completed its row and
+    // before the record was settled. No fault point reaches that yet, so
+    // the record is put back as accepted through the store.
+    items::index(world.data.path())
+        .execute(
+            "UPDATE request_records SET state = 'accepted', outcome = NULL, code = NULL,
+                 effect_write = NULL, effect_checkpoint = NULL, effect_discovery = NULL,
+                 effect_publication = NULL, effect_integration = NULL, effect_cleanup = NULL,
+                 commit_oid = NULL, result_data = NULL, finished_at = NULL",
+            [],
+        )
+        .unwrap();
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Accepted);
+    assert!(
+        !world
+            .journal_row(&first.operation_id.clone().unwrap())
+            .in_flight()
+    );
+
+    let mismatch = world.execute(REQUEST_1, another_body(&world, &token));
+    assert_eq!(
+        (mismatch.outcome, mismatch.code, mismatch.failure_class()),
+        (
+            Outcome::Partial,
+            ResultCode::RequestMismatch,
+            Some(FailureClass::Incomplete)
+        )
+    );
+    assert_eq!(mismatch.effects.write, WriteEffect::Written);
+    assert_eq!(mismatch.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(mismatch.effects.commit_oid, first.effects.commit_oid);
+    assert_eq!(world.record(REQUEST_1), Some(record));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+}
+
+#[test]
+fn a_changed_reuse_of_a_request_that_made_no_context_reports_no_write() {
+    // The domain marks its effect before this fault point: the row stays
+    // pending, and there is no branch and no worktree.
+    let world = failing_at(FailurePoint::BeforeContextBranchCreation);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_stopped(
+        &first,
+        Outcome::Error,
+        ResultCode::InternalError,
+        FailureClass::Internal,
+    );
+    assert!(!world.worktree(TICKET_A).exists());
+    assert!(
+        world
+            .journal_row(&first.operation_id.clone().unwrap())
+            .in_flight()
+    );
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+
+    let mismatch = world.execute(REQUEST_1, another_body(&world, &token));
+    assert_stopped(
+        &mismatch,
+        Outcome::Error,
+        ResultCode::RequestMismatch,
+        FailureClass::Input,
+    );
+    assert_eq!(world.record(REQUEST_1), Some(record));
+}
+
+#[test]
+fn a_changed_reuse_after_a_commit_with_discovery_pending_reports_the_commit() {
+    let world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending);
+
+    let mismatch = world.execute(REQUEST_1, another_body(&world, &token));
+    assert_eq!(
+        (mismatch.outcome, mismatch.code),
+        (Outcome::Partial, ResultCode::RequestMismatch)
+    );
+    assert_eq!(mismatch.effects.write, WriteEffect::Written);
+    assert_eq!(mismatch.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(mismatch.effects.commit_oid, first.effects.commit_oid);
+    assert!(mismatch.effects.commit_oid.is_some());
+}
+
+#[test]
+fn an_error_after_the_commit_is_partial_with_that_commit() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.outcome, Outcome::Success);
+
+    // The file in the context already holds what the next request intends,
+    // uncommitted, and the caller has seen it.
+    let file = world.worktree(TICKET_A).join(items::ticket_path(TICKET_A));
+    let written = world
+        .worktree_source(TICKET_A)
+        .replace(TITLE, "Retitled by hand");
+    std::fs::write(&file, &written).unwrap();
+    let token = world.token(TICKET_A);
+
+    // So the domain skips the write, commits, and then fails to record
+    // the checkpoint step.
+    world.service = FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(world.data.path());
+    let envelope = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            draft: World::draft("Retitled by hand", BODY),
+            ..world.save_input(TICKET_A, &token)
+        }),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (
+            Outcome::Partial,
+            ResultCode::InternalError,
+            Some(FailureClass::Incomplete)
+        )
+    );
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+    assert_eq!(envelope.effects.write, WriteEffect::Written);
+    assert_eq!(envelope.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(envelope.effects.discovery, DiscoveryEffect::Pending);
+    assert_eq!(
+        envelope.effects.commit_oid,
+        world.branch_tip(TICKET_A).map(|tip| tip.to_string())
+    );
+    assert_ne!(envelope.effects.commit_oid, first.effects.commit_oid);
+    assert_eq!(recovery_actions(&envelope), ["request.retry"]);
+    let record = world.record(REQUEST_2).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
+    assert_eq!(world.worktree_source(TICKET_A), written);
+}
+
+const NO_IDENTITY_HOME: &str = "MANYHANDS_NO_IDENTITY_HOME";
+
+/// Runs in a process of its own: where libgit2 looks for configuration is
+/// process-wide, and this points every level but the repository's at an
+/// empty directory so that no identity is found.
+#[test]
+fn a_save_with_no_identity_is_blocked_and_its_request_id_is_free() {
+    let Some(home) = std::env::var_os(NO_IDENTITY_HOME) else {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "execute::a_save_with_no_identity_is_blocked_and_its_request_id_is_free",
+                "--nocapture",
+            ])
+            .env(NO_IDENTITY_HOME, home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    for level in [
+        git2::ConfigLevel::System,
+        git2::ConfigLevel::Global,
+        git2::ConfigLevel::XDG,
+        git2::ConfigLevel::ProgramData,
+    ] {
+        // This exact-test child runs nothing else, so no other use of
+        // libgit2 overlaps the change.
+        unsafe { git2::opts::set_search_path(level, &home).unwrap() };
+    }
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let mut local = git2::Repository::open(&world.root)
+        .unwrap()
+        .config()
+        .unwrap()
+        .open_level(git2::ConfigLevel::Local)
+        .unwrap();
+    local.remove("user.name").unwrap();
+    local.remove("user.email").unwrap();
+
+    let envelope = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_stopped(
+        &envelope,
+        Outcome::Blocked,
+        ResultCode::IdentityRequired,
+        FailureClass::Blocked,
+    );
+    assert_eq!(recovery_actions(&envelope), ["repo.identity_set"]);
+    // The domain ran and completed its row: nothing is in flight, so the
+    // record is deleted. The editing context it made stays.
+    let operation_id = envelope.operation_id.clone().expect("an operation ID");
+    assert!(matches!(
+        world.journal_row(&operation_id),
+        JournalRow::Final {
+            owes_work: false,
+            ..
+        }
+    ));
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert!(world.worktree(TICKET_A).is_dir());
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+    assert!(!world.worktree_source(TICKET_A).contains(TITLE));
+
+    // With an identity the same request ID runs.
+    world.set_local_config("user.name", "Manyhands Test");
+    world.set_local_config("user.email", "manyhands-test@example.invalid");
+    let again = world.execute(REQUEST_1, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(
+        (again.outcome, again.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}

@@ -7,8 +7,8 @@
 //! commit is not an ancestor of the branch. Only the request's own path is
 //! compared, so unrelated commits on the same branch do not enter into it.
 //!
-//! A failure to read Git is "not found": a result never reports a commit
-//! this could not find.
+//! A failure to read Git is its own answer, never "no commit": a caller
+//! that took it for one would report a save that committed as a no-op.
 
 use std::path::Path;
 
@@ -98,16 +98,37 @@ fn changed_path(repository: &Repository, commit: Oid, path: &Path) -> Result<boo
     Ok(before != after)
 }
 
+/// Git could not be read, so the check has no answer. This is not "not
+/// found": a caller must not take it for the absence of a commit. The Git
+/// error is dropped here; its text can hold a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Unreadable;
+
+/// What the check says of a commit a domain call named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// It is in range and it changed the request's path.
+    Confirmed,
+    /// It is not in range, or did not change the path: a save that
+    /// changed nothing can name the head it found.
+    NotThisRequests,
+    /// Git could not be read. The commit may well be the request's.
+    Unreadable,
+}
+
 /// Whether `claimed`, the commit a domain call named, is this request's:
-/// it is in range and it changed `path`. A save that changed nothing can
-/// name the head it found, which is neither.
-pub(crate) fn confirms(root: &Path, position: &Position, claimed: Oid, path: &str) -> bool {
+/// it is in range and it changed `path`.
+pub(crate) fn confirms(root: &Path, position: &Position, claimed: Oid, path: &str) -> Claim {
     let confirmed = || -> Result<bool, git2::Error> {
         let repository = Repository::open(root)?;
         Ok(range(&repository, position)?.contains(&claimed)
             && changed_path(&repository, claimed, Path::new(path))?)
     };
-    confirmed().unwrap_or(false)
+    match confirmed() {
+        Ok(true) => Claim::Confirmed,
+        Ok(false) => Claim::NotThisRequests,
+        Err(_) => Claim::Unreadable,
+    }
 }
 
 /// The newest commit in range that changed `path` and left it as the
@@ -121,7 +142,7 @@ pub(crate) fn intended_commit(
     position: &Position,
     path: &str,
     intended: &dyn Fn(&[u8]) -> bool,
-) -> Option<Oid> {
+) -> Result<Option<Oid>, Unreadable> {
     let found = || -> Result<Option<Oid>, git2::Error> {
         let repository = Repository::open(root)?;
         let path = Path::new(path);
@@ -138,7 +159,27 @@ pub(crate) fn intended_commit(
         }
         Ok(None)
     };
-    found().unwrap_or(None)
+    found().map_err(|_| Unreadable)
+}
+
+/// The newest commit in range that changed `path`, whatever it left
+/// there. This is what can be said of a request whose input is not at
+/// hand: that a commit was made to its path since it was accepted.
+pub(crate) fn path_commit(
+    root: &Path,
+    position: &Position,
+    path: &str,
+) -> Result<Option<Oid>, Unreadable> {
+    let found = || -> Result<Option<Oid>, git2::Error> {
+        let repository = Repository::open(root)?;
+        for commit in range(&repository, position)? {
+            if changed_path(&repository, commit, Path::new(path))? {
+                return Ok(Some(commit));
+            }
+        }
+        Ok(None)
+    };
+    found().map_err(|_| Unreadable)
 }
 
 /// Whether `commit` can still be reached from the branch recorded in
@@ -162,3 +203,7 @@ pub(crate) fn still_reachable(root: &Path, base_ref: Option<&str>, commit: Oid) 
     };
     reachable().unwrap_or(false)
 }
+
+#[cfg(test)]
+#[path = "evidence_tests.rs"]
+mod tests;

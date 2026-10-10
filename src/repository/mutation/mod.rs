@@ -20,7 +20,9 @@ use std::{
 
 use time::OffsetDateTime;
 
-use crate::results::{Envelope, ResultCode, Scope, absolute_path_string, timestamp_string};
+use crate::results::{
+    Effects, Envelope, ResultCode, Scope, absolute_path_string, timestamp_string,
+};
 
 use super::{
     OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService, keys,
@@ -598,19 +600,20 @@ impl RepositoryService {
     /// with another repository, command, target or input. Nothing runs and
     /// the record is not changed.
     ///
-    /// When the recorded request is unfinished and the repository shows a
-    /// change by it, the result reports that change, so the outcome is
-    /// `partial`. Otherwise it is an input error: a finished request's
+    /// When the recorded request is unfinished and an attempt of it ran,
+    /// the result reports what the repository shows of it, a commit to its
+    /// path among it, and the outcome is `partial` when that is a durable
+    /// effect. Otherwise it is an input error: a finished request's
     /// effects are its own result's, which `request show` gives, and are
     /// not reported as this call's.
     fn mismatched(&self, reply: &Reply<'_>, record: &RequestRecord) -> Envelope<MutationDataDto> {
-        let changed = match record.state {
-            RequestState::Accepted => bind::recorded_change(self, record),
-            RequestState::Finished => false,
+        let effects = match record.state {
+            RequestState::Accepted => bind::recorded_effects(self, record),
+            RequestState::Finished => Effects::not_requested(),
         };
         reply.envelope(
             Answer {
-                effects: outcome::stopped_save_effects(None, changed),
+                effects,
                 ..Answer::stopped(ResultCode::RequestMismatch)
             },
             None,
@@ -677,7 +680,7 @@ impl Settlement {
     fn of(standing: &Standing) -> Self {
         match standing {
             Standing::Final => Self::Finish,
-            Standing::Owed => Self::Leave,
+            Standing::Owed | Standing::Unconfirmed => Self::Leave,
             Standing::Stopped { journal: None } => Self::Leave,
             Standing::Stopped {
                 journal: Some(journal),
