@@ -271,6 +271,9 @@ pub struct RepositoryService {
     remote_reservation_scope: Arc<()>,
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
+    /// Whether the process ends at the failure point instead of the call
+    /// failing there: what a kill at that point leaves.
+    failure_exits: std::sync::atomic::AtomicBool,
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -748,6 +751,10 @@ pub enum RegistryConnectionPhase {
     BeforeWal,
     AfterWal,
 }
+/// The status a process ends with at a failure point it was opened to
+/// exit at.
+#[doc(hidden)]
+pub const FAILURE_POINT_EXIT_STATUS: i32 = 86;
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2682,6 +2689,12 @@ impl RepositoryService {
         })?;
         if *failure_point == Some(point) {
             *failure_point = None;
+            if self.failure_exits.load(std::sync::atomic::Ordering::SeqCst) {
+                // No destructor of this process runs: its leases and locks
+                // are left for the operating system to release, as for a
+                // process that was killed.
+                std::process::exit(FAILURE_POINT_EXIT_STATUS);
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -3327,6 +3340,7 @@ impl RepositoryService {
             remote_reservation_scope: Arc::new(()),
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
+            failure_exits: std::sync::atomic::AtomicBool::new(false),
             lifecycle_lease_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
             refresh_claim_hook: Mutex::new(None),
@@ -3859,6 +3873,20 @@ impl RepositoryService {
                 "the fixed test failure state is unavailable",
             )
         })? = Some(failure_point);
+        Ok(service)
+    }
+
+    /// A service whose process ends, with `FAILURE_POINT_EXIT_STATUS`, the
+    /// first time one of its calls reaches `failure_point`.
+    #[doc(hidden)]
+    pub fn open_at_with_exit_point_for_testing(
+        data_directory: &Path,
+        failure_point: FailurePoint,
+    ) -> Result<Self, RepositoryError> {
+        let service = Self::open_at_with_failure_point_for_testing(data_directory, failure_point)?;
+        service
+            .failure_exits
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(service)
     }
 

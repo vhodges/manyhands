@@ -1224,3 +1224,119 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
     );
     assert_eq!(world.pending_journal_rows(), 0);
 }
+
+const KILLED_ROOT: &str = "MANYHANDS_KILLED_ROOT";
+const KILLED_DATA: &str = "MANYHANDS_KILLED_DATA";
+const KILLED_TOKEN: &str = "MANYHANDS_KILLED_TOKEN";
+const KILLED_POINT: &str = "MANYHANDS_KILLED_POINT";
+
+/// The process `a_retry_completes_a_save_whose_process_was_killed...`
+/// starts: it submits the save and its process ends at the fault point,
+/// inside the domain operation, with nothing after it run.
+#[test]
+fn killed_at_fault_point_child() {
+    let Some(root) = std::env::var_os(KILLED_ROOT) else {
+        return;
+    };
+    let name = std::env::var(KILLED_POINT).unwrap();
+    let point = INTERRUPTIONS
+        .into_iter()
+        .map(|(point, _)| point)
+        .chain([FailurePoint::BeforeRequestSettlement])
+        .find(|point| format!("{point:?}") == name)
+        .expect("a known fault point");
+    let service = manyhands::repository::RepositoryService::open_at_with_exit_point_for_testing(
+        std::path::Path::new(&std::env::var_os(KILLED_DATA).unwrap()),
+        point,
+    )
+    .unwrap();
+    let token = std::env::var(KILLED_TOKEN).unwrap();
+    crate::support::mutation::execute_with(
+        &service,
+        REQUEST_1,
+        save_at(std::path::Path::new(&root), &token),
+    );
+    // Not reached: the process ended at the fault point.
+}
+
+#[test]
+fn a_retry_completes_a_save_whose_process_was_killed_at_each_fault_point() {
+    for (point, written) in INTERRUPTIONS {
+        let what = format!("{point:?}");
+        let mut world = World::new();
+        let token = world.token(TICKET_A);
+        killed_at(&world, &token, point);
+
+        // What a dead process leaves: the record accepted and never
+        // settled, and the journal row pending, in every case.
+        let record = world.record(REQUEST_1).expect("the record stays");
+        assert_eq!(
+            (record.state, record.attempt),
+            (RequestState::Accepted, 1),
+            "{what}"
+        );
+        let operation_id = record.operations[0].operation_id.to_string();
+        assert!(
+            matches!(world.journal_row(&operation_id), JournalRow::Pending(_)),
+            "{what}"
+        );
+        assert_eq!(
+            world.worktree_source(TICKET_A).contains(TITLE),
+            written,
+            "{what}"
+        );
+        let committed = point == FailurePoint::BeforeIndexTransactionCommit;
+        assert_eq!(
+            world.branch_commits(TICKET_A),
+            usize::from(committed),
+            "{what}"
+        );
+
+        // The retry, with the same body, completes.
+        world.reopen();
+        let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, &what);
+        assert_eq!(retry.operation_id, Some(operation_id), "{what}");
+    }
+}
+
+/// Runs the save in a child process that ends at `point`.
+fn killed_at(world: &World, token: &str, point: FailurePoint) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "reenter::killed_at_fault_point_child",
+            "--nocapture",
+        ])
+        .env(KILLED_ROOT, &world.root)
+        .env(KILLED_DATA, world.data.path())
+        .env(KILLED_TOKEN, token)
+        .env(KILLED_POINT, format!("{point:?}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(manyhands::repository::FAILURE_POINT_EXIT_STATUS),
+        "{point:?}: the child ended at the fault point"
+    );
+}
+
+#[test]
+fn a_retry_after_a_process_killed_before_it_settled_reports_its_commit() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    killed_at(&world, &token, FailurePoint::BeforeRequestSettlement);
+    // The save ran to its end in the process that died.
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit));
+}
