@@ -588,3 +588,22 @@ fn a_request_with_nothing_to_commit_at_acceptance_has_no_commit_of_its_own() {
     let edited = ExpectedPathObservation::from_bytes(b"before\nedited by hand\n");
     assert_eq!(evidence(&edited).own(), Some(other));
 }
+
+#[test]
+fn a_revert_of_the_request_s_commit_is_a_change_from_elsewhere() {
+    let fixture = fixture();
+    let position = fixture.position();
+    let made = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "intended\n",
+    );
+    commit(&fixture.repository, BRANCH, Some(made), PATH, "before\n");
+    // The tip holds what the request expected again, and the request's
+    // own commit is beneath it: someone undid it.
+    let reverted = fixture.evidence(&position).unwrap();
+    assert_eq!(reverted.own(), Some(made));
+    assert!(reverted.superseded());
+}

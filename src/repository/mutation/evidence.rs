@@ -256,11 +256,18 @@ impl PathEvidence {
 
     /// Whether the path was changed from elsewhere: the newest commit in
     /// range that changed it left it as something the request did not
-    /// intend, and the branch's tip no longer holds what the request
-    /// expected. While the tip holds that, nothing foreign stands at the
-    /// path, whatever older history a widened range shows.
+    /// intend.
+    ///
+    /// With one exception. While the branch's tip holds at the path what
+    /// the request expected, and the range shows no commit of the
+    /// request's own, nothing foreign stands at the path: what the range
+    /// shows is history older than the request, which a widened range
+    /// holds. When the request's own commit is in range and the tip is
+    /// back at what the request expected, someone undid that commit, and
+    /// that is a change from elsewhere.
     pub(crate) fn superseded(&self) -> bool {
-        !self.tip_as_expected && self.changes.first().is_some_and(|change| !change.intended)
+        let newest_is_foreign = self.changes.first().is_some_and(|change| !change.intended);
+        newest_is_foreign && !(self.tip_as_expected && self.own().is_none())
     }
 
     /// The commit a call reports, given this evidence read after its

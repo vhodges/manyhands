@@ -2086,3 +2086,41 @@ fn a_save_that_changed_nothing_does_not_take_a_commit_that_leaves_its_fields_alo
     assert_eq!(world.branch_commits(TICKET_A), 2);
     assert!(world.worktree_source(TICKET_A).contains("deps:"));
 }
+
+#[test]
+fn a_foreign_revert_of_the_commit_of_a_request_in_flight_is_not_undone() {
+    // The first attempt committed and stopped before its hand-off.
+    let mut world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let before = world.primary_source(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(first.code, ResultCode::DiscoveryPending);
+    let own = first.effects.commit_oid.clone().expect("a commit");
+
+    // Someone reverts it: the branch's tip holds the file exactly as the
+    // request expected it again.
+    let revert = world.commit_in_context(
+        TICKET_A,
+        &crate::support::items::ticket_path(TICKET_A),
+        &before,
+    );
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    // A change from elsewhere over the request's own commit: the request
+    // is not run again, and what it did is reported.
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Partial, ResultCode::ExternalChange)
+    );
+    assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(retry.effects.commit_oid, Some(own));
+    assert!(recovery_actions(&retry).is_empty());
+    assert_eq!(world.branch_tip(TICKET_A), Some(revert));
+    assert_eq!(world.branch_commits(TICKET_A), 2);
+    assert_eq!(world.worktree_source(TICKET_A), before);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+}
