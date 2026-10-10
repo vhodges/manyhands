@@ -279,6 +279,8 @@ pub struct RepositoryService {
     corrupt_cache_decision_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     corrupt_cache_critical_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     rebuild_error_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// What the request records read the time from.
+    clock: Arc<dyn mutation::Clock>,
 }
 
 struct IndexOwnerHeartbeat {
@@ -3323,6 +3325,7 @@ impl RepositoryService {
             corrupt_cache_decision_hook: Mutex::new(None),
             corrupt_cache_critical_hook: Mutex::new(None),
             rebuild_error_hook: Mutex::new(None),
+            clock: Arc::new(mutation::SystemClock),
         })
     }
 

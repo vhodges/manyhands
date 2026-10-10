@@ -584,6 +584,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
         tables,
         [
             "configuration_observations",
+            "confirmation_records",
             "contexts",
             "discovered_comments",
             "discovered_items",
@@ -610,6 +611,8 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
+            "request_operations",
+            "request_records",
             "shared_ssh_keys",
             "ssh_host_pins",
         ]

@@ -22,6 +22,7 @@ use rusqlite::{Connection, params};
 pub mod credentials;
 pub mod golden;
 pub mod items;
+pub mod mutation;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;

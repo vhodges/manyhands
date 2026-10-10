@@ -414,7 +414,7 @@ impl RepositoryService {
     /// and gives `read` a read-only connection inside a deferred transaction
     /// that is rolled back whatever `read` returns. A lock not obtained in
     /// time is `busy`; a degraded index is `index_unavailable`.
-    fn read_session<T>(
+    pub(in crate::repository) fn read_session<T>(
         &self,
         operation: RepositoryOperation,
         read: impl FnOnce(&Connection) -> Result<T, ReadError>,
