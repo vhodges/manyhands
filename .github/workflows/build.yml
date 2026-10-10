@@ -115,7 +115,7 @@ jobs:
           }
 
       - name: Test headless credential and platform contracts
-        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport --test remote_observation --test remote_synchronization --test remote_merge_recovery --test remote_reservation --test recovery_foundation_gate --test repository_enablement --test local_authoring --test discovery_rebuild --test read_boundary --test read_contract --test read_relationships --test read_repository --test read_credentials --test read_items --test read_comments --test read_status --test canonical_foundation --test mutation_relationships --test mutation_replay
+        run: cargo test --locked --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport --test remote_observation --test remote_synchronization --test remote_merge_recovery --test remote_reservation --test recovery_foundation_gate --test repository_enablement --test local_authoring --test discovery_rebuild --test read_boundary --test read_contract --test read_relationships --test read_repository --test read_credentials --test read_items --test read_comments --test read_status --test canonical_foundation --test mutation_relationships --test mutation_replay --test mutation_contract
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
