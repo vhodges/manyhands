@@ -569,8 +569,9 @@ fn a_mutation_serializes_every_field_and_keeps_its_data_on_any_outcome() {
 
 #[test]
 fn a_mutation_starts_with_only_its_command_scope_outcome_and_code() {
-    // A read's outcome follows from its code. A mutation's is the one given.
-    for outcome in Outcome::ALL {
+    // A read's outcome follows from its code. A mutation's is the one
+    // given: the same code is blocked before an effect and partial after.
+    for outcome in [Outcome::Blocked, Outcome::Partial] {
         let envelope = Envelope::<Value>::mutation(
             "remote add",
             Scope::default(),
@@ -596,87 +597,352 @@ fn a_mutation_starts_with_only_its_command_scope_outcome_and_code() {
 }
 
 #[test]
-fn the_failure_class_of_a_mutation_follows_the_classification_order() {
+fn only_completed_canonical_and_git_work_is_a_durable_effect() {
     let none = Effects::not_requested;
+    assert!(!none().is_durable());
+
+    let durable = [
+        Effects {
+            write: WriteEffect::Written,
+            ..none()
+        },
+        Effects {
+            checkpoint: CheckpointEffect::Committed,
+            ..none()
+        },
+        Effects {
+            publication: PublicationEffect::Published,
+            ..none()
+        },
+        Effects {
+            integration: IntegrationEffect::Complete,
+            ..none()
+        },
+        Effects {
+            cleanup: CleanupEffect::Complete,
+            ..none()
+        },
+    ];
+    for effects in durable {
+        assert!(effects.is_durable(), "{effects:?}");
+    }
+
+    // Nothing changed, work still pending, the rebuildable index, and a
+    // commit that was only observed.
+    let not_durable = [
+        Effects {
+            write: WriteEffect::Unchanged,
+            checkpoint: CheckpointEffect::Unchanged,
+            ..none()
+        },
+        Effects {
+            checkpoint: CheckpointEffect::Pending,
+            discovery: DiscoveryEffect::Pending,
+            publication: PublicationEffect::Pending,
+            integration: IntegrationEffect::Pending,
+            cleanup: CleanupEffect::Pending,
+            ..none()
+        },
+        Effects {
+            discovery: DiscoveryEffect::Current,
+            ..none()
+        },
+        Effects {
+            publication: PublicationEffect::Current,
+            commit_oid: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+            ..none()
+        },
+    ];
+    for effects in not_durable {
+        assert!(!effects.is_durable(), "{effects:?}");
+    }
+}
+
+/// One row of the classification table: what a binding knows, and the
+/// outcome and class that follow from it.
+struct Classified {
+    cancelled: bool,
+    code: ResultCode,
+    effects: Effects,
+    /// A durable change no effect field can show.
+    local_change: bool,
+    outcome: Outcome,
+    class: Option<FailureClass>,
+}
+
+#[test]
+fn the_outcome_and_class_of_a_mutation_follow_the_classification_order() {
+    let none = Effects::not_requested;
+    let row = |cancelled, code, effects, local_change, outcome, class| Classified {
+        cancelled,
+        code,
+        effects,
+        local_change,
+        outcome,
+        class,
+    };
+    let (blocked, incomplete, transient) = (
+        Some(FailureClass::Blocked),
+        Some(FailureClass::Incomplete),
+        Some(FailureClass::Transient),
+    );
     let cases = [
         // 1. A cancellation is cancelled, with or without an effect.
-        (
-            Outcome::Cancelled,
+        row(
+            true,
             ResultCode::Cancelled,
             none(),
+            false,
+            Outcome::Cancelled,
             Some(FailureClass::Cancelled),
         ),
-        (
-            Outcome::Cancelled,
+        row(
+            true,
             ResultCode::Cancelled,
             committed(),
+            false,
+            Outcome::Cancelled,
             Some(FailureClass::Cancelled),
         ),
-        // 2. A durable effect with work remaining is incomplete, whatever
-        //    stopped it; before any effect the code's own class stands.
-        (
+        // 2. A durable effect with work remaining is partial and
+        //    incomplete, whatever stopped it; before any effect the
+        //    code's own class stands.
+        row(
+            false,
+            ResultCode::ExternalChange,
+            none(),
+            false,
             Outcome::Blocked,
-            ResultCode::ExternalChange,
-            none(),
-            Some(FailureClass::Blocked),
+            blocked,
         ),
-        (
-            Outcome::Partial,
+        row(
+            false,
             ResultCode::ExternalChange,
             committed(),
-            Some(FailureClass::Incomplete),
+            false,
+            Outcome::Partial,
+            incomplete,
         ),
-        (
-            Outcome::Error,
+        row(
+            false,
             ResultCode::RemoteUnavailable,
             none(),
-            Some(FailureClass::Transient),
+            false,
+            Outcome::Error,
+            transient,
         ),
-        (
-            Outcome::Partial,
+        row(
+            false,
             ResultCode::RemoteUnavailable,
             committed(),
-            Some(FailureClass::Incomplete),
-        ),
-        (
+            false,
             Outcome::Partial,
-            ResultCode::InvalidInput,
-            committed(),
-            Some(FailureClass::Incomplete),
+            incomplete,
         ),
-        // 3. Otherwise a failure takes its code's own class.
-        (
-            Outcome::Error,
+        row(
+            false,
             ResultCode::InvalidInput,
             none(),
+            false,
+            Outcome::Error,
             Some(FailureClass::Input),
         ),
-        (
+        row(
+            false,
+            ResultCode::InvalidInput,
+            committed(),
+            false,
+            Outcome::Partial,
+            incomplete,
+        ),
+        // A key deletion that removed one file and not the other: no
+        // effect field shows it, so the binding says so.
+        row(
+            false,
+            ResultCode::RecoveryRequired,
+            none(),
+            false,
             Outcome::Blocked,
+            blocked,
+        ),
+        row(
+            false,
+            ResultCode::RecoveryRequired,
+            none(),
+            true,
+            Outcome::Partial,
+            incomplete,
+        ),
+        // 3. Otherwise a failure takes its code's own class.
+        row(
+            false,
             ResultCode::ConfirmationRequired,
             none(),
-            Some(FailureClass::Blocked),
+            false,
+            Outcome::Blocked,
+            blocked,
         ),
-        (
-            Outcome::Error,
+        row(
+            false,
             ResultCode::InternalError,
             none(),
+            false,
+            Outcome::Error,
             Some(FailureClass::Internal),
         ),
-        // 4. Success and a no-op have no class.
-        (Outcome::Success, ResultCode::Ok, committed(), None),
-        (Outcome::Noop, ResultCode::AlreadyApplied, none(), None),
+        row(
+            false,
+            ResultCode::RegistrationPending,
+            none(),
+            false,
+            Outcome::Partial,
+            incomplete,
+        ),
+        // 4. Success and a no-op have no class, whatever was done.
+        row(
+            false,
+            ResultCode::Ok,
+            committed(),
+            false,
+            Outcome::Success,
+            None,
+        ),
+        row(false, ResultCode::Ok, none(), true, Outcome::Success, None),
+        row(
+            false,
+            ResultCode::AlreadyApplied,
+            none(),
+            false,
+            Outcome::Noop,
+            None,
+        ),
     ];
-    for (outcome, code, effects, expected) in cases {
-        let envelope =
-            Envelope::<Value>::mutation("ticket update", Scope::default(), outcome, code)
-                .with_effects(effects);
+    for case in cases {
+        let name = format!(
+            "{} cancelled={} effects={:?} local_change={}",
+            case.code.as_str(),
+            case.cancelled,
+            case.effects,
+            case.local_change
+        );
         assert_eq!(
-            envelope.failure_class(),
-            expected,
-            "{} as {}",
-            code.as_str(),
-            outcome.as_str()
+            Outcome::of_mutation(case.cancelled, case.code, &case.effects, case.local_change),
+            case.outcome,
+            "{name}"
+        );
+        let envelope = Envelope::<Value>::classified_mutation(
+            "ticket update",
+            Scope::default(),
+            case.cancelled,
+            case.code,
+            case.effects.clone(),
+            case.local_change,
+        );
+        assert_eq!(envelope.outcome, case.outcome, "{name}");
+        assert_eq!(envelope.failure_class(), case.class, "{name}");
+        assert_eq!(envelope.code, case.code);
+        assert_eq!(envelope.message, case.code.message());
+        assert_eq!(envelope.effects, case.effects);
+    }
+}
+
+#[test]
+fn every_code_has_one_outcome_before_an_effect_and_one_after() {
+    for code in ResultCode::ALL {
+        let before = Outcome::of_mutation(false, code, &Effects::not_requested(), false);
+        let after = Outcome::of_mutation(false, code, &committed(), false);
+        let flagged = Outcome::of_mutation(false, code, &Effects::not_requested(), true);
+        let (expected_before, expected_after) = match code.failure_class() {
+            None if code == ResultCode::AlreadyApplied => (Outcome::Noop, Outcome::Noop),
+            None => (Outcome::Success, Outcome::Success),
+            Some(FailureClass::Blocked) => (Outcome::Blocked, Outcome::Partial),
+            Some(FailureClass::Input | FailureClass::Transient | FailureClass::Internal) => {
+                (Outcome::Error, Outcome::Partial)
+            }
+            Some(FailureClass::Incomplete) => (Outcome::Partial, Outcome::Partial),
+            Some(FailureClass::Cancelled) => (Outcome::Cancelled, Outcome::Partial),
+        };
+        assert_eq!(before, expected_before, "{}", code.as_str());
+        assert_eq!(after, expected_after, "{}", code.as_str());
+        assert_eq!(flagged, expected_after, "{}", code.as_str());
+        assert_eq!(
+            Outcome::of_mutation(true, code, &committed(), true),
+            Outcome::Cancelled
+        );
+    }
+}
+
+/// The explicit constructor refuses, in debug builds, an outcome its code
+/// or its effects contradict.
+#[cfg(debug_assertions)]
+mod inconsistent_mutations {
+    use super::*;
+
+    fn mutation(outcome: Outcome, code: ResultCode) -> Envelope<Value> {
+        Envelope::mutation("ticket update", Scope::default(), outcome, code)
+    }
+
+    #[test]
+    #[should_panic(expected = "success and noop carry a code with no failure class")]
+    fn a_success_with_a_failure_code() {
+        let _ = mutation(Outcome::Success, ResultCode::DiscoveryPending);
+    }
+
+    #[test]
+    #[should_panic(expected = "success and noop carry a code with no failure class")]
+    fn a_noop_with_a_failure_code() {
+        let _ = mutation(Outcome::Noop, ResultCode::ExternalChange);
+    }
+
+    #[test]
+    #[should_panic(expected = "a failure carries a code with a failure class")]
+    fn an_error_with_the_ok_code() {
+        let _ = mutation(Outcome::Error, ResultCode::Ok);
+    }
+
+    #[test]
+    #[should_panic(expected = "a failure carries a code with a failure class")]
+    fn a_blocked_result_with_the_noop_code() {
+        let _ = mutation(Outcome::Blocked, ResultCode::AlreadyApplied);
+    }
+
+    #[test]
+    #[should_panic(expected = "a failure carries a code with a failure class")]
+    fn a_partial_result_with_the_ok_code() {
+        let _ = mutation(Outcome::Partial, ResultCode::Ok);
+    }
+
+    #[test]
+    #[should_panic(expected = "a cancellation carries the cancelled code")]
+    fn a_cancellation_with_another_code() {
+        let _ = mutation(Outcome::Cancelled, ResultCode::RemoteUnavailable);
+    }
+
+    #[test]
+    #[should_panic(expected = "a durable effect with work remaining is partial")]
+    fn a_blocked_result_with_a_durable_effect() {
+        let _ = mutation(Outcome::Blocked, ResultCode::ExternalChange).with_effects(committed());
+    }
+
+    #[test]
+    #[should_panic(expected = "a durable effect with work remaining is partial")]
+    fn an_error_with_a_durable_effect() {
+        let _ = mutation(Outcome::Error, ResultCode::RemoteUnavailable).with_effects(Effects {
+            write: WriteEffect::Written,
+            ..Effects::not_requested()
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "a cancellation carries the cancelled code")]
+    fn a_classified_cancellation_with_another_code() {
+        let _ = Envelope::<Value>::classified_mutation(
+            "ticket update",
+            Scope::default(),
+            true,
+            ResultCode::RemoteUnavailable,
+            Effects::not_requested(),
+            false,
         );
     }
 }

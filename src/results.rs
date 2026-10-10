@@ -154,13 +154,20 @@ impl<T> Envelope<T> {
         }
     }
 
-    /// The result of a mutation. Its outcome is given, because the same
-    /// code is a different outcome before and after an effect; its message
-    /// is the code's.
+    /// The result of a mutation whose outcome the caller has decided; its
+    /// message is the code's. A binding that knows what stopped the request
+    /// and what it had done uses `classified_mutation` instead, which
+    /// derives the outcome.
     ///
     /// It starts with no request or operation ID, no effect, no data and no
     /// recovery action; the `with_` methods set what the command has. Data
     /// may accompany any outcome.
+    ///
+    /// An outcome that the code or the effects contradict is a mistake in
+    /// the caller, caught in debug builds: `success` and `noop` carry a
+    /// code with no failure class, every other outcome a code with one,
+    /// `cancelled` the `cancelled` code, and `blocked` and `error` no
+    /// durable effect.
     pub fn mutation(
         command: impl Into<String>,
         scope: Scope,
@@ -180,6 +187,60 @@ impl<T> Envelope<T> {
             data: None,
             recovery: Vec::new(),
         }
+        .checked()
+    }
+
+    /// The result of a mutation, with the outcome `Outcome::of_mutation`
+    /// derives from what the binding knows: whether the request was
+    /// cancelled, the code, the effects, and `local_change`, a durable
+    /// change that no effect shows.
+    ///
+    /// `cancelled` is set exactly when `code` is `cancelled`; anything else
+    /// is a mistake in the caller, caught in debug builds.
+    pub fn classified_mutation(
+        command: impl Into<String>,
+        scope: Scope,
+        cancelled: bool,
+        code: ResultCode,
+        effects: Effects,
+        local_change: bool,
+    ) -> Self {
+        debug_assert!(
+            cancelled == matches!(code, ResultCode::Cancelled),
+            "a cancellation carries the cancelled code"
+        );
+        let outcome = Outcome::of_mutation(cancelled, code, &effects, local_change);
+        Self {
+            effects,
+            ..Self::mutation(command, scope, outcome, code)
+        }
+        .checked()
+    }
+
+    /// Asserts, in debug builds, what `mutation` documents.
+    fn checked(self) -> Self {
+        let has_class = self.code.failure_class().is_some();
+        match self.outcome {
+            Outcome::Success | Outcome::Noop => debug_assert!(
+                !has_class,
+                "success and noop carry a code with no failure class"
+            ),
+            Outcome::Partial => {
+                debug_assert!(has_class, "a failure carries a code with a failure class");
+            }
+            Outcome::Blocked | Outcome::Error => {
+                debug_assert!(has_class, "a failure carries a code with a failure class");
+                debug_assert!(
+                    !self.effects.is_durable(),
+                    "a durable effect with work remaining is partial"
+                );
+            }
+            Outcome::Cancelled => debug_assert!(
+                matches!(self.code, ResultCode::Cancelled),
+                "a cancellation carries the cancelled code"
+            ),
+        }
+        self
     }
 
     pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
@@ -192,9 +253,11 @@ impl<T> Envelope<T> {
         self
     }
 
+    /// Sets the effects. The outcome is not derived again, so it must
+    /// already agree with them; see `mutation`.
     pub fn with_effects(mut self, effects: Effects) -> Self {
         self.effects = effects;
-        self
+        self.checked()
     }
 
     pub fn with_data(mut self, data: T) -> Self {
@@ -247,6 +310,48 @@ pub struct Effects {
 }
 
 impl Effects {
+    /// Whether the effects show completed work on canonical content or Git
+    /// that stays when the request stops: a file `written`, a checkpoint
+    /// `committed`, a publication `published`, an integration `complete`
+    /// or a cleanup `complete`.
+    ///
+    /// `not_requested`, `unchanged` and `pending` show no completed work.
+    /// `current` shows none either: a publication that is `current` was
+    /// found so, not made so, and discovery describes the index, which is
+    /// rebuilt from the repository. `commit_oid` names a commit and does
+    /// not say that this request made it.
+    pub const fn is_durable(&self) -> bool {
+        let written = match self.write {
+            WriteEffect::Written => true,
+            WriteEffect::NotRequested | WriteEffect::Unchanged => false,
+        };
+        let committed = match self.checkpoint {
+            CheckpointEffect::Committed => true,
+            CheckpointEffect::NotRequested
+            | CheckpointEffect::Unchanged
+            | CheckpointEffect::Pending => false,
+        };
+        let published = match self.publication {
+            PublicationEffect::Published => true,
+            PublicationEffect::NotRequested
+            | PublicationEffect::Current
+            | PublicationEffect::Pending => false,
+        };
+        let integrated = match self.integration {
+            IntegrationEffect::Complete => true,
+            IntegrationEffect::NotRequested | IntegrationEffect::Pending => false,
+        };
+        let cleaned = match self.cleanup {
+            CleanupEffect::Complete => true,
+            CleanupEffect::NotRequested | CleanupEffect::Pending => false,
+        };
+        match self.discovery {
+            DiscoveryEffect::NotRequested | DiscoveryEffect::Current | DiscoveryEffect::Pending => {
+                written || committed || published || integrated || cleaned
+            }
+        }
+    }
+
     /// The only value a read produces.
     pub fn not_requested() -> Self {
         Self {
@@ -571,6 +676,45 @@ impl ResultCode {
             }
             Some(FailureClass::Incomplete) => Outcome::Partial,
             Some(FailureClass::Cancelled) => Outcome::Cancelled,
+        }
+    }
+}
+
+impl Outcome {
+    /// The outcome of a mutation, in the CLI contract's classification
+    /// order. This is the one place it is decided.
+    ///
+    /// 1. A cancelled request is `cancelled`.
+    /// 2. A code that stops the request, one with a failure class, after a
+    ///    durable effect is `partial`, whatever the code. A durable effect
+    ///    is one `Effects::is_durable` finds, or `local_change`: a change
+    ///    to identity, keys, remotes, host trust or a registration, which
+    ///    no effect shows.
+    /// 3. Otherwise a code that stops the request gives the outcome of its
+    ///    own class, as for a read.
+    /// 4. A code with no class is `noop` for `already_applied` and
+    ///    `success` otherwise.
+    pub const fn of_mutation(
+        cancelled: bool,
+        code: ResultCode,
+        effects: &Effects,
+        local_change: bool,
+    ) -> Self {
+        if cancelled {
+            return Self::Cancelled;
+        }
+        match code.failure_class() {
+            Some(_) if effects.is_durable() || local_change => Self::Partial,
+            Some(
+                FailureClass::Input
+                | FailureClass::Blocked
+                | FailureClass::Incomplete
+                | FailureClass::Transient
+                | FailureClass::Internal
+                | FailureClass::Cancelled,
+            ) => code.outcome(),
+            None if matches!(code, ResultCode::AlreadyApplied) => Self::Noop,
+            None => Self::Success,
         }
     }
 }
