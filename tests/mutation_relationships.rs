@@ -12,7 +12,7 @@ use manyhands::{
     canonical::{CanonicalItem, Ticket, parse_item},
     repository::{
         AuthoringKind, AuthoringTarget, ContextIntent, ExpectedPathObservation, FailurePoint,
-        LocalCheckpoint, OperationId, ProposedRelationships, RelationshipCheckDto,
+        IndexState, LocalCheckpoint, OperationId, ProposedRelationships, RelationshipCheckDto,
         RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryService, SaveOutcome,
         SaveTicketRequest, TicketDraft, TicketWriteOptions,
     },
@@ -866,10 +866,26 @@ fn a_stale_index_passes_a_cycle_that_the_reads_report_after_a_refresh() {
     );
     items::commit(&fixture, &[&path], 10);
 
-    // The check does not scan: it answers from what the index has.
+    // The check does not scan, so a commit nothing has told the index of
+    // is not seen: it reports the index as the relationship reads do.
+    let unnoticed = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+    assert_eq!(
+        unnoticed.index,
+        enabled.service.ticket_cycles(&repo).unwrap().index
+    );
+    // The index is marked for a refresh, as it is once a change is noticed.
+    items::index(enabled.data_directory.path())
+        .execute("UPDATE repositories SET refresh_required = 1", [])
+        .unwrap();
+
+    // The check answers from what the index has.
     let stale = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
     assert_eq!(verdict(&stale), None);
     assert_eq!(stale.unresolved, [TICKET_B]);
+    // And says that what it answered from is behind. The refresh that was
+    // completed saw every ticket there was then.
+    assert_eq!(stale.index.state, IndexState::Stale);
+    assert!(stale.complete);
 
     // So the cycle is written, and reported when it is read.
     let path = items::ticket_path(TICKET_A);
@@ -887,6 +903,25 @@ fn a_stale_index_passes_a_cycle_that_the_reads_report_after_a_refresh() {
     assert_eq!(cycles.items[0].ids, [TICKET_A, TICKET_B]);
     let again = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
     assert_eq!(verdict(&again), cycle(&[TICKET_A, TICKET_B]));
+    assert_eq!(again.index.state, IndexState::Current);
+    assert!(again.complete);
+}
+
+#[test]
+fn an_accepted_check_on_a_current_index_says_it_is_current_and_complete() {
+    let (fixture, enabled) = indexed(&[(TICKET_A, ""), (TICKET_B, "")]);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let accepted = check(&fixture, &enabled, TICKET_A, &[TICKET_B], None);
+
+    assert_eq!(verdict(&accepted), None);
+    assert_eq!(accepted.index.state, IndexState::Current);
+    assert!(accepted.index.refreshed_at.is_some());
+    assert!(accepted.complete);
+    // As the sibling ticket reads report it, from the same index.
+    let cycles = enabled.service.ticket_cycles(&repo).unwrap();
+    assert_eq!(accepted.index, cycles.index);
+    assert_eq!(accepted.complete, cycles.complete);
 }
 
 #[test]

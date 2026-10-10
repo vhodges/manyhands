@@ -4,7 +4,7 @@
   "description": "What a proposed deps and parent come to for one ticket, and whether a save that wrote them would be rejected. The check is a read that succeeded either way: a rejection that is not null is its answer, not its failure.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["deps", "parent", "unresolved", "rejection"],
+  "required": ["deps", "parent", "unresolved", "rejection", "complete", "index"],
   "properties": {
     "deps": {
       "description": "The proposed dependencies as a save writes them: in ID order, each once.",
@@ -40,6 +40,14 @@
           }
         }
       }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the last refresh could not read, or stopped part of the way through, .manyhands/tickets, .manyhands or .manyhands/worktrees. Tickets may then be missing from what the check was made against while index.state is current."
+    },
+    "index": {
+      "description": "The state of the index the check answered from. The check scans nothing, so an answer from an index that is not current may lack tickets a refresh would bring.",
+      "$ref": "repository_index.schema.json"
     }
   }
 }

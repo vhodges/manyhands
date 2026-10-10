@@ -22,8 +22,8 @@ use super::{
     UnplannableTicketDto,
     items::{
         Related, StoredItem, behind, effective_rows, is_completely_observed, item_not_found,
-        stored_comment_targets, stored_index_state, stored_item_dto, stored_items, stored_problems,
-        ticket_list_order,
+        stored_comment_targets, stored_comments_among, stored_index_state, stored_item_dto,
+        stored_items, stored_problems, ticket_list_order,
     },
 };
 use crate::{
@@ -777,13 +777,13 @@ fn parent_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
 
 /// What one relationship read has to answer from: the effective copy of
 /// every ticket the index holds, and what they are to each other.
-struct Tickets<'a> {
+pub(super) struct Tickets<'a> {
     by_id: BTreeMap<&'a str, &'a StoredItem>,
-    related: Related<'a>,
-    index: IndexStateDto,
+    pub(super) related: Related<'a>,
+    pub(super) index: IndexStateDto,
     /// Whether the last refresh saw every ticket there is to see. When it
     /// did not, an answer made from the tickets may lack some of them.
-    complete: bool,
+    pub(super) complete: bool,
 }
 
 impl Tickets<'_> {
@@ -834,10 +834,24 @@ impl RepositoryService {
         repo: &ResolvedRepository,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
+        self.read_tickets_naming(repo, &[], read)
+    }
+
+    /// `read_tickets` for a read that is given IDs no stored edge may
+    /// name: those of `named` that are a stored comment's are known as
+    /// comments too. Nothing else differs, and with no `named` nothing
+    /// does.
+    pub(super) fn read_tickets_naming<T>(
+        &self,
+        repo: &ResolvedRepository,
+        named: &[String],
+        read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
+    ) -> Result<T, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let comments = stored_comment_targets(connection, repo)?;
+            let mut comments = stored_comment_targets(connection, repo)?;
+            comments.extend(stored_comments_among(connection, repo, named)?);
             let (rows, is_behind) = effective_rows(repo, &stored);
             let related = Related::of(&rows, &comments);
             let complete =

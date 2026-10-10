@@ -366,6 +366,8 @@ impl<'a> Related<'a> {
         id: &str,
         deps: BTreeSet<String>,
         parent: Option<String>,
+        index: IndexStateDto,
+        complete: bool,
     ) -> RelationshipCheckDto {
         let mut not_tickets = Vec::new();
         let mut unresolved = Vec::new();
@@ -417,6 +419,8 @@ impl<'a> Related<'a> {
             parent,
             unresolved,
             rejection,
+            complete,
+            index,
         }
     }
 }
@@ -464,7 +468,7 @@ const IDS_IN_A_STATEMENT: usize = 500;
 
 /// Those of `ids` that are the ID of a comment the index holds for the
 /// registration.
-fn stored_comments_among(
+pub(super) fn stored_comments_among(
     connection: &Connection,
     repo: &ResolvedRepository,
     ids: &[String],
@@ -1942,6 +1946,11 @@ impl RepositoryService {
     /// is behind it uses what the index has: a cycle through a ticket the
     /// index does not hold yet is accepted here, and is reported on the
     /// tickets when they are next read, as one that arrives by a merge is.
+    ///
+    /// `index` and `complete` say what the answer was made from, as they do
+    /// on every other ticket relationship read: an answer from an index
+    /// that is not `current`, or with `complete` false, may lack tickets a
+    /// refresh would bring, and so a cycle through them.
     pub fn check_ticket_relationships(
         &self,
         repo: &ResolvedRepository,
@@ -1951,20 +1960,16 @@ impl RepositoryService {
         let id = id.to_string();
         let deps: BTreeSet<String> = proposed.deps.iter().map(ToString::to_string).collect();
         let parent = proposed.parent.as_ref().map(ToString::to_string);
-        self.read_session(RepositoryOperation::Read, |connection| {
-            stored_index_state(connection, repo)?;
-            let stored = stored_items(connection, repo)?;
-            // The comments a stored edge names, as every relationship read
-            // has them, and the ones only the proposal names.
-            let mut comments = stored_comment_targets(connection, repo)?;
-            let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
-            let named: Vec<String> = named.into_iter().cloned().collect();
-            comments.extend(stored_comments_among(connection, repo, &named)?);
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
-            Ok(related.check(&id, deps, parent))
+        // The comments a stored edge names, as every relationship read
+        // has them, and the ones only the proposal names.
+        let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
+        let named: Vec<String> = named.into_iter().cloned().collect();
+        self.read_tickets_naming(repo, &named, |tickets| {
+            Ok(tickets
+                .related
+                .check(&id, deps, parent, tickets.index.clone(), tickets.complete))
         })
-        .map_err(|error| {
-            let mut error = repo.failure(error);
+        .map_err(|mut error| {
             error.scope.item_id = Some(id.clone());
             error
         })

@@ -2,9 +2,14 @@
   "code": "ok",
   "command": "ticket check",
   "data": {
+    "complete": true,
     "deps": [
       "01ARZ3NDEKTSV4RRFFQ69G5FR2"
     ],
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
     "parent": null,
     "rejection": {
       "code": "relationship_cycle",

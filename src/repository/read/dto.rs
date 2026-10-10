@@ -955,6 +955,12 @@ pub struct UnplannableReasonDto {
 /// it into a rejected mutation that carries the code.
 ///
 /// The first three fields describe the proposal and are filled either way.
+///
+/// `index` and `complete` say what the answer was made from, and mean what
+/// they mean on the ticket relationship reads. The check scans nothing: an
+/// answer from an index that is not `current`, or with `complete` false,
+/// may lack tickets a refresh would bring, so a null `rejection` then says
+/// only that no cycle runs through the tickets the index holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RelationshipCheckDto {
     /// The proposed dependencies as a save writes them: in ID order, each
@@ -967,6 +973,13 @@ pub struct RelationshipCheckDto {
     /// one of them.
     pub unresolved: Vec<String>,
     pub rejection: Option<RelationshipRejectionDto>,
+    /// False when the last refresh could not read, or stopped part of the
+    /// way through, `.manyhands/tickets`, `.manyhands` or
+    /// `.manyhands/worktrees`. Tickets may then be missing from what the
+    /// check was made against, and `index.state` can still be `current`.
+    pub complete: bool,
+    /// The state of the index the check answered from.
+    pub index: IndexStateDto,
 }
 
 /// Why a save of the proposed relationships would be rejected.

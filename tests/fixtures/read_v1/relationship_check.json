@@ -2,10 +2,15 @@
   "code": "ok",
   "command": "ticket check",
   "data": {
+    "complete": true,
     "deps": [
       "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
       "01ARZ3NDEKTSV4RRFFQ69G5FR2"
     ],
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
     "parent": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
     "rejection": null,
     "unresolved": [

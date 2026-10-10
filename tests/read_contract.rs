@@ -2821,7 +2821,7 @@ fn a_relationship_check_that_finds_a_cycle_matches_its_schema_and_golden() {
 
 #[test]
 fn a_relationship_check_that_finds_a_document_matches_its_schema_and_golden() {
-    let (fixture, enabled, repo, tickets) = relationship_contract();
+    let (fixture, enabled, repo, _) = relationship_contract();
     items::write(
         &fixture.root,
         "docs/guide.md",
@@ -2829,6 +2829,12 @@ fn a_relationship_check_that_finds_a_document_matches_its_schema_and_golden() {
     );
     items::commit(&fixture, &["docs/guide.md"], items::COMMITTED_AT + 100);
     items::refresh_completely(&enabled.service, &fixture.root);
+    // The check reports the index it answered from, which is this refresh.
+    let tickets = enabled
+        .service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap()
+        .items;
 
     let check = enabled
         .service
