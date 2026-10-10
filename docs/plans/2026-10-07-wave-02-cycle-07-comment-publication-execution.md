@@ -297,3 +297,11 @@ redesign of synchronization, cancellation, binding or conflict resolution is
 requested. The approved Cycle paragraph has not been edited. No Rust edit,
 branch push, CI dispatch, PR or closure performed. Next action: owner approves
 the affected Cycle wording, then apply it and finish Task 0 before Task 1.
+
+### Task 0 approval — 2026-10-10T13:10:42Z
+
+The owner answered "Yes" to approval of the exact proposed replacement for
+Cycle amendment point 2. Applied the qualification to that approved paragraph;
+the existing Cycle 06 local guard and saved-local/Busy mapping stand. Task 0
+is complete. No additional implementation, publication or lifecycle authority
+is inferred from this document approval.

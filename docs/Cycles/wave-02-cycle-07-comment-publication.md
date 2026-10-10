@@ -159,9 +159,13 @@ merged Cycle 06 code. The contract above stands; these points refine it.
 2. **Repository-wide conflict block.** A pending synchronization conflict in any
    context makes every other synchronization in the repository return `Busy`,
    and there is no abandon path yet (ticket `01M4H33R34Z7C7EEKTY1ZCT950`). A
-   comment submitted meanwhile is saved locally with publication pending for
-   every item, not only the conflicted one. This is accepted; contract point 6
-   already maps `Busy` to saved-local.
+   comment that can be checkpointed in another writable context is saved locally
+   with publication pending/`Busy`. Existing local authoring refuses a new comment
+   in the context owned by the pending merge before writing/checkpointing it;
+   that pre-checkpoint refusal returns local recovery, not a saved receipt. This
+   Cycle preserves both guards; contract point 6 maps delegated `Busy` after a
+   proven checkpoint to saved-local. This qualification was approved by the
+   owner on 2026-10-10 at the Task 0 review checkpoint.
 3. **Cancellation.** Cancelling a synchronization child whose newest window
    holds a pending conflict or owned resolution is a recoverable stop: the child
    becomes `interrupted`, not `cancelled`, and stays restartable and
