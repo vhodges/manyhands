@@ -590,3 +590,79 @@ pub fn owned_path_hook_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+impl World {
+    /// Commits `content` at `path` on the branch checked out in the
+    /// worktree `directory`, and writes it there, as someone working in
+    /// that worktree with Git would.
+    pub fn commit_in(directory: &Path, path: &str, content: &str) -> git2::Oid {
+        let file = directory.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, content).unwrap();
+        let commit = Self::commit_behind(directory, path, content);
+        // The worktree's own index follows, so the file is not shown as
+        // modified.
+        let repository = git2::Repository::open(directory).unwrap();
+        let tree = repository.find_commit(commit).unwrap().tree().unwrap();
+        let mut index = repository.index().unwrap();
+        index.read_tree(&tree).unwrap();
+        index.write().unwrap();
+        commit
+    }
+
+    /// Commits `content` at `path` on the branch checked out in the
+    /// worktree `directory` and leaves the worktree as it is, as a push
+    /// into the branch or a commit made with plumbing would. The commit
+    /// is built from the head's tree and this one file.
+    pub fn commit_behind(directory: &Path, path: &str, content: &str) -> git2::Oid {
+        let repository = git2::Repository::open(directory).unwrap();
+        let head = repository.head().unwrap().peel_to_commit().unwrap();
+        let mut index = git2::Index::new().unwrap();
+        index.read_tree(&head.tree().unwrap()).unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: repository.blob(content.as_bytes()).unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            })
+            .unwrap();
+        let tree = repository
+            .find_tree(index.write_tree_to(&repository).unwrap())
+            .unwrap();
+        let signature = git2::Signature::new(
+            "Someone Else",
+            "someone-else@example.invalid",
+            &git2::Time::new(items::COMMITTED_AT + 60, 0),
+        )
+        .unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "by hand",
+                &tree,
+                &[&head],
+            )
+            .unwrap()
+    }
+
+    /// A commit by hand in the item's editing context.
+    pub fn commit_in_context(&self, id: &str, path: &str, content: &str) -> git2::Oid {
+        Self::commit_in(&self.worktree(id), path, content)
+    }
+
+    /// A commit by hand on primary.
+    pub fn commit_on_primary(&self, path: &str, content: &str) -> git2::Oid {
+        Self::commit_in(&self.root, path, content)
+    }
+}

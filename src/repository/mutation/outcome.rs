@@ -188,7 +188,8 @@ const REQUEST_ARGUMENT: &str = "request_id";
 ///
 /// `root` is the repository the result names, when it names one. `retry`
 /// says the request's record was left accepted, so repeating the same
-/// request continues it; a code with an action of its own keeps that one.
+/// request continues it; a code with an action of its own keeps that one,
+/// and `external_change` is offered none.
 pub(crate) fn recovery(
     code: ResultCode,
     root: Option<&str>,
@@ -237,6 +238,13 @@ pub(crate) fn recovery(
         ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable
     ) {
         return vec![at_root(RecoveryActionKind::IndexRebuild)];
+    }
+    // An external change to an item is not answered by the same request:
+    // it is refused again for as long as the change stands, also when its
+    // record stays accepted because its operation is still in flight. The
+    // caller reads the item again and submits a new request.
+    if code == ResultCode::ExternalChange {
+        return Vec::new();
     }
     if retry || code == ResultCode::Busy {
         return vec![retry_request()];

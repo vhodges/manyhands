@@ -75,6 +75,26 @@ impl RepositoryService {
         self
     }
 
+    /// Has `hook` run once in the mutation boundary, immediately before
+    /// the next domain call an `execute` on this service makes: after the
+    /// request is accepted, or, for a request entered again, after its
+    /// journal row and evidence are read.
+    #[doc(hidden)]
+    pub fn set_request_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.request_hook.lock().expect("test request hook lock") = Some(Box::new(hook));
+    }
+
+    fn run_request_hook(&self) {
+        let hook = self
+            .request_hook
+            .lock()
+            .expect("test request hook lock")
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     /// Where the operation `operation_id` stands in the journal of its
     /// family: absent, pending in a state or phase, or final in some way
     /// and owing work or not. `JournalRow::in_flight` is what settling asks.
@@ -526,6 +546,7 @@ impl RepositoryService {
         }
         // The cache guard is not held here: the record functions release
         // it before they return, and the domain call takes it itself.
+        self.run_request_hook();
         let ran = call();
         if let Some(envelope) = died(FailurePoint::BeforeRequestSettlement) {
             return envelope;

@@ -233,3 +233,24 @@ fn a_stopped_save_reports_what_the_repository_shows_of_it() {
     assert_eq!(committed.discovery, DiscoveryEffect::Pending);
     assert_eq!(committed.commit_oid, Some(oid(3).to_string()));
 }
+
+fn actions(code: ResultCode, retry: bool) -> Vec<&'static str> {
+    let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
+    recovery(code, Some("/repository"), request_id, None, retry)
+        .iter()
+        .map(|action| action.action.as_str())
+        .collect()
+}
+
+#[test]
+fn the_same_request_is_offered_again_only_where_repeating_it_can_help() {
+    // A record left accepted is finished by the same request.
+    assert_eq!(actions(ResultCode::InternalError, true), ["request.retry"]);
+    assert!(actions(ResultCode::InternalError, false).is_empty());
+    assert_eq!(actions(ResultCode::Busy, false), ["request.retry"]);
+    // Except after an external change to an item: the same request is
+    // refused again for as long as the change stands. The caller reads
+    // the item again and submits a new request.
+    assert!(actions(ResultCode::ExternalChange, true).is_empty());
+    assert!(actions(ResultCode::ExternalChange, false).is_empty());
+}
