@@ -20,7 +20,7 @@ use super::{
         super::{
             AuthoringKind, ExpectedPathObservation, ItemDto, ItemDtoKind, RepositoryError,
             RepositoryErrorKind, RepositoryOperation, RepositoryService, ResolvedRepository,
-            SaveOutcome, owned_file_bytes,
+            owned_file_bytes,
             recovery::{FinalKind, JournalRow},
         },
         context::context_names,
@@ -50,12 +50,13 @@ pub(crate) trait Save {
     fn holds_bytes(&self, bytes: &[u8]) -> bool;
 
     /// The one domain call, under the recorded operation ID and
-    /// expectation.
+    /// expectation, and what it returned without an error, as a save's
+    /// report.
     fn call_domain(
         &self,
         service: &RepositoryService,
         accepted: &Accepted,
-    ) -> Result<SaveOutcome, RepositoryError>;
+    ) -> Result<SaveReport, RepositoryError>;
 
     /// The answer of a request that has been accepted, with what the
     /// command reports of its item as the repository at `root` holds it.
@@ -246,8 +247,7 @@ pub(crate) fn run<S: Save + ?Sized>(
     let result = save.call_domain(service, accepted);
     let file = save.context_file(&root);
     let (code, effects, standing) = match result {
-        Ok(outcome) => {
-            let report = SaveReport::of(outcome);
+        Ok(report) => {
             // The commit and the effects come from what Git shows, made
             // after the domain call: a save that changed nothing can
             // name a commit it did not make.
@@ -375,7 +375,7 @@ pub(crate) fn rerun<S: Save + ?Sized>(
     let after = path_evidence(save, accepted);
     let file = save.context_file(&root);
     let (code, effects, standing) = match result {
-        Ok(outcome) => match (SaveReport::of(outcome), after) {
+        Ok(report) => match (report, after) {
             (SaveReport::IdentityRequired, _) => (
                 ResultCode::IdentityRequired,
                 Effects::not_requested(),

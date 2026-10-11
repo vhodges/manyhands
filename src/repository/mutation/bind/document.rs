@@ -20,8 +20,8 @@ use super::{
         super::{
             AuthoringKind, AuthoringTarget, ContextIntent, DocumentDraft, ExpectedPathObservation,
             ItemDto, ItemDtoKind, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, ResolvedRepository, SaveDocumentRequest, SaveOutcome,
-            collect_canonical_sources, owned_file_bytes,
+            RepositoryService, ResolvedRepository, SaveDocumentRequest, collect_canonical_sources,
+            owned_file_bytes,
             read::{is_plain_relative, observe_in_context},
             recovery::JournalRow,
         },
@@ -31,7 +31,7 @@ use super::{
         evidence::{self, PathEvidence, Position, Unreadable},
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
-        outcome,
+        outcome::{self, SaveReport},
         records::RequestRecord,
     },
     Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, resolve_root, save,
@@ -676,7 +676,7 @@ impl save::Save for DocumentBinding {
         &self,
         service: &RepositoryService,
         accepted: &Accepted,
-    ) -> Result<SaveOutcome, RepositoryError> {
+    ) -> Result<SaveReport, RepositoryError> {
         let not_set_up = || {
             // Neither `prepare` nor `resume` lets a call come here
             // without what it needs.
@@ -728,20 +728,22 @@ impl save::Save for DocumentBinding {
                 )
             }
         };
-        service.save_document(SaveDocumentRequest {
-            target: AuthoringTarget {
-                root: accepted.root(),
-                kind: AuthoringKind::Document,
-                item_id: self.id.clone(),
-                intent,
-                operation_id: accepted.operation_id,
-            },
-            source_path,
-            destination_path: PathBuf::from(destination),
-            draft,
-            expected_source,
-            expected_destination,
-        })
+        service
+            .save_document(SaveDocumentRequest {
+                target: AuthoringTarget {
+                    root: accepted.root(),
+                    kind: AuthoringKind::Document,
+                    item_id: self.id.clone(),
+                    intent,
+                    operation_id: accepted.operation_id,
+                },
+                source_path,
+                destination_path: PathBuf::from(destination),
+                draft,
+                expected_source,
+                expected_destination,
+            })
+            .map(SaveReport::of)
     }
 
     fn answer(&self, code: ResultCode, effects: Effects, _root: &Path) -> Answer {

@@ -21,7 +21,7 @@ use super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
             ExpectedPathObservation, ItemDto, ItemDtoKind, ProposedRelationships,
             RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
+            RepositoryService, ResolvedRepository, SaveTicketRequest, TicketDraft,
             TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
@@ -30,6 +30,7 @@ use super::{
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
+        outcome::SaveReport,
         records::RequestRecord,
     },
     Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, resolve_root, save,
@@ -644,21 +645,23 @@ impl save::Save for TicketBinding {
         &self,
         service: &RepositoryService,
         accepted: &Accepted,
-    ) -> Result<SaveOutcome, RepositoryError> {
-        service.save_ticket_with(
-            SaveTicketRequest {
-                target: AuthoringTarget {
-                    root: accepted.root(),
-                    kind: AuthoringKind::Ticket,
-                    item_id: self.id.clone(),
-                    intent: self.intent,
-                    operation_id: accepted.operation_id,
+    ) -> Result<SaveReport, RepositoryError> {
+        service
+            .save_ticket_with(
+                SaveTicketRequest {
+                    target: AuthoringTarget {
+                        root: accepted.root(),
+                        kind: AuthoringKind::Ticket,
+                        item_id: self.id.clone(),
+                        intent: self.intent,
+                        operation_id: accepted.operation_id,
+                    },
+                    draft: self.draft.clone(),
+                    expected_path: accepted.expectation(),
                 },
-                draft: self.draft.clone(),
-                expected_path: accepted.expectation(),
-            },
-            self.options.clone(),
-        )
+                self.options.clone(),
+            )
+            .map(SaveReport::of)
     }
 
     fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer {
@@ -1032,7 +1035,7 @@ impl save::Save for SlugAssignBinding {
         &self,
         service: &RepositoryService,
         accepted: &Accepted,
-    ) -> Result<SaveOutcome, RepositoryError> {
+    ) -> Result<SaveReport, RepositoryError> {
         let (Some(draft), Some(slug)) = (self.found.as_ref().map(draft_of), self.slug.clone())
         else {
             // Neither `prepare` nor `resume` lets a call come here
@@ -1044,23 +1047,25 @@ impl save::Save for SlugAssignBinding {
                 "a short code assignment was not set up",
             ));
         };
-        service.save_ticket_with(
-            SaveTicketRequest {
-                target: AuthoringTarget {
-                    root: accepted.root(),
-                    kind: AuthoringKind::Ticket,
-                    item_id: self.id.clone(),
-                    intent: ContextIntent::Edit,
-                    operation_id: accepted.operation_id,
+        service
+            .save_ticket_with(
+                SaveTicketRequest {
+                    target: AuthoringTarget {
+                        root: accepted.root(),
+                        kind: AuthoringKind::Ticket,
+                        item_id: self.id.clone(),
+                        intent: ContextIntent::Edit,
+                        operation_id: accepted.operation_id,
+                    },
+                    draft,
+                    expected_path: accepted.expectation(),
                 },
-                draft,
-                expected_path: accepted.expectation(),
-            },
-            TicketWriteOptions {
-                slug: Some(slug),
-                ..TicketWriteOptions::default()
-            },
-        )
+                TicketWriteOptions {
+                    slug: Some(slug),
+                    ..TicketWriteOptions::default()
+                },
+            )
+            .map(SaveReport::of)
     }
 
     fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer {
