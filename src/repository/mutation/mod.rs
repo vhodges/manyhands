@@ -154,6 +154,20 @@ impl RepositoryService {
     }
 }
 
+impl RepositoryService {
+    /// The step a local operation that has completed recorded of its own
+    /// work; see `recovery::completed_step`.
+    pub(crate) fn completed_local_step(
+        &self,
+        scope: &ScopeKey,
+        operation_id: OperationId,
+    ) -> Result<Option<String>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            recovery::completed_step(connection, scope.as_str(), operation_id)
+        })
+    }
+}
+
 /// The command `show_request` answers.
 const REQUEST_SHOW: &str = "request show";
 

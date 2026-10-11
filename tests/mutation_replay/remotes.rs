@@ -313,7 +313,8 @@ fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
 
 /// The row of an `add_remote` that ran to its end has no checkpoint step.
 /// By the authoring reading it did nothing, and its record would be
-/// released and the request run as new.
+/// released and the request run as new. The step it does have says that
+/// this operation added the remote, and the retry is given that result.
 #[test]
 fn a_completed_add_whose_result_was_lost_is_answered_from_its_row_and_not_run_again() {
     let world = World::with_service(|data| {
@@ -336,10 +337,9 @@ fn a_completed_add_whose_result_was_lost_is_answered_from_its_row_and_not_run_ag
     let rows = operation_rows(&world);
 
     let retry = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
-    // The design's answer for a completed `add_remote`: a no-op.
     assert_eq!(
         (retry.outcome, retry.code, retry.failure_class()),
-        (Outcome::Noop, ResultCode::AlreadyApplied, None)
+        (Outcome::Success, ResultCode::Ok, None)
     );
     assert_names_origin(&retry);
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
@@ -830,4 +830,215 @@ fn a_selection_with_no_identity_to_commit_as_is_identity_required_and_leaves_not
     world.set_local_config("user.email", "manyhands-test@example.invalid");
     let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
     assert_selected(&world, &selected, Some("origin"), world.primary_head());
+}
+
+/// A stale lock on the repository's Git configuration, as a Git process
+/// that died leaves one: Git refuses to write a remote while it is there.
+fn lock_git_configuration(world: &World) -> std::path::PathBuf {
+    let lock = world.root.join(".git/config.lock");
+    std::fs::write(&lock, b"").unwrap();
+    lock
+}
+
+/// An attempt that stopped inside Git's write, with its row pending and
+/// nothing written. Returns the request's operation ID.
+fn stopped_inside_git(world: &World) -> String {
+    let lock = lock_git_configuration(world);
+    let stopped = execute(world, REQUEST_1, add(world, "origin", &location(SECRET)));
+    std::fs::remove_file(lock).unwrap();
+    assert_eq!(
+        (stopped.outcome, stopped.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    // Git's own message names the lock. The result holds the code's
+    // fixed message and nothing of the error's.
+    let text = serde_json::to_string(&stopped).unwrap();
+    assert!(!text.contains("lock"), "{text}");
+    assert_eq!(stopped.message, ResultCode::InternalError.message());
+    assert_eq!(stopped.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&stopped), ["request.retry"]);
+    assert_eq!(remote_url(world, "origin"), None);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation = record.operations[0].operation_id.to_string();
+    assert!(matches!(
+        world.journal_row(&operation),
+        JournalRow::Pending(_)
+    ));
+    operation
+}
+
+/// `add_remote` completes a row an earlier attempt began when it refuses
+/// the request for a name conflict. Such a row has completed and the
+/// remote is not the request's.
+#[test]
+fn a_completed_row_of_an_add_refused_for_a_conflict_is_not_taken_for_the_remote_in_place() {
+    let mut world = World::new();
+    let operation = stopped_inside_git(&world);
+
+    // Someone gives the name another location, and the retry's refusal
+    // is lost.
+    git_remote(&world, "origin", "git@example.invalid:team/other.git");
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let lost = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(
+        world.journal_row(&operation),
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        }
+    );
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+
+    world.reopen();
+    let retry = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::RemoteNameConflict,
+            Some(FailureClass::Input)
+        )
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(
+        remote_url(&world, "origin").as_deref(),
+        Some("git@example.invalid:team/other.git")
+    );
+    // Nothing is left: the request ID is free for corrected input.
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
+    let corrected = execute(
+        &world,
+        REQUEST_1,
+        add(&world, "upstream", &location(SECRET)),
+    );
+    assert_eq!(corrected.outcome, Outcome::Success);
+}
+
+/// The same row, with the remote someone added being the one asked for:
+/// the request's end state holds and no commit or change is its own.
+#[test]
+fn a_completed_row_of_an_add_that_found_the_remote_in_place_is_a_no_op() {
+    let mut world = World::new();
+    let operation = stopped_inside_git(&world);
+    git_remote(&world, "origin", &location(SECRET));
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let lost = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert!(matches!(
+        world.journal_row(&operation),
+        JournalRow::Final { .. }
+    ));
+
+    world.reopen();
+    let rows = operation_rows(&world);
+    let retry = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_names_origin(&retry);
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(operation_rows(&world), rows);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+}
+
+/// The same row once more, with the conflicting remote gone again: no
+/// remote has the name, the request is not done, and the domain
+/// operation is called under the request's operation.
+#[test]
+fn a_completed_row_of_an_add_whose_remote_is_absent_is_run() {
+    let mut world = World::new();
+    let operation = stopped_inside_git(&world);
+    git_remote(&world, "origin", "git@example.invalid:team/other.git");
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let lost = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .remote_delete("origin")
+        .unwrap();
+
+    world.reopen();
+    let retry = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_names_origin(&retry);
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(remote_url(&world, "origin"), Some(location(SECRET)));
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn an_add_or_a_selection_that_died_before_its_domain_call_is_run_by_its_retry() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+    });
+    let died = execute(
+        &world,
+        REQUEST_1,
+        add(&world, "upstream", &location(SECRET)),
+    );
+    assert_eq!(died.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_1).expect("a record");
+    let operation = record.operations[0].operation_id.to_string();
+    assert_eq!(world.journal_row(&operation), JournalRow::Absent);
+    assert_eq!(remote_url(&world, "upstream"), None);
+
+    let retry = execute(
+        &world,
+        REQUEST_1,
+        add(&world, "upstream", &location(SECRET)),
+    );
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(remote_url(&world, "upstream"), Some(location(SECRET)));
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+
+    let mut world = world;
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let before = world.primary_head();
+    let died = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let operation = world.record(REQUEST_2).unwrap().operations[0]
+        .operation_id
+        .to_string();
+    assert_eq!(world.journal_row(&operation), JournalRow::Absent);
+    assert_eq!(world.primary_head(), before);
+
+    let retry = world.execute(REQUEST_2, select(&world, Some("origin")));
+    let commit = world.primary_head();
+    assert_eq!(parent_of(&world, commit), before);
+    assert_selected(&world, &retry, Some("origin"), commit);
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
 }

@@ -634,6 +634,37 @@ pub(super) fn lookup_operation(
     })
 }
 
+/// The last step the local operation `operation_id` on `root_path`
+/// recorded, when the operation has completed. `None` for an operation
+/// that has not completed, that the journal does not hold, or that
+/// completed having recorded no step of its own: such a row holds
+/// `completed`, or `rejected` when its call left nothing behind.
+///
+/// `lookup_operation` says whether a row has completed. This says what
+/// the completed row recorded, for an operation whose step tells what it
+/// did: `add_remote` records `remote_changed` only on the row of the
+/// call that added the remote.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn completed_step(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: OperationId,
+) -> Result<Option<String>, ReadError> {
+    let step: Option<Option<String>> = connection
+        .query_row(
+            "SELECT completed_step FROM operation_records
+              WHERE root_path = ?1 AND operation_ulid = ?2 AND state = 'completed'",
+            params![root_path, operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match step.flatten() {
+        Some(step) if !is_stored_name(&step) => Err(ReadError::new(ResultCode::InternalError)),
+        Some(step) if step == "completed" || step == REJECTED_STEP => Ok(None),
+        step => Ok(step),
+    }
+}
+
 pub(super) fn advance_after_observation(
     connection: &Connection,
     record_id: i64,

@@ -118,6 +118,19 @@ impl RemoteAddBinding {
         }
     }
 
+    /// Whether the repository at `root` has the remote with the requested
+    /// location: `Some(false)` when it has the name with another, `None`
+    /// when it has no remote of the name, and `Err` when Git could not
+    /// be read. The Git error is dropped: its text can hold a location.
+    fn in_place(&self, root: &Path) -> Result<Option<bool>, ()> {
+        let repository = git2::Repository::open(root).map_err(|_| ())?;
+        match repository.find_remote(&self.name) {
+            Ok(remote) => Ok(Some(remote.url() == Some(self.url.as_str()))),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
     fn answer(&self, code: ResultCode, local_change: bool) -> Answer {
         Answer {
             local_change,
@@ -225,11 +238,21 @@ impl Binding for RemoteAddBinding {
         self.call(service, accepted)
     }
 
-    /// The evidence that the request's work is done is its operation's
-    /// row: one that has completed left the remote in place with the
-    /// requested location, and the request is finished as a no-op with no
-    /// domain call. Whether this request or an earlier one put the remote
-    /// there the row does not say, and a no-op claims neither.
+    /// A row that has completed is answered here, with no domain call,
+    /// from what the row recorded and what Git holds. That the row has
+    /// completed does not show the remote to be in place: `add_remote`
+    /// also completes a row an earlier attempt began when it refuses the
+    /// request for a name conflict.
+    ///
+    /// - The row recorded `remote_changed`: this operation added the
+    ///   remote. The request is finished with `ok`, whatever has been
+    ///   done to the remote since.
+    /// - Otherwise Git is asked. The remote is there with the requested
+    ///   location: the request's end state holds and the change was not
+    ///   its own, a no-op. It is there with another location: the name is
+    ///   taken, and the request stopped with nothing in flight. It is not
+    ///   there: the request is not done, and the domain operation is
+    ///   called, as for a row that has not completed.
     ///
     /// A row that has not completed is taken up again by the domain
     /// operation. It reports no change when the remote is already there
@@ -237,8 +260,8 @@ impl Binding for RemoteAddBinding {
     /// hand-off when an earlier attempt added the remote.
     fn reenter(
         &mut self,
-        _service: &RepositoryService,
-        _accepted: &Accepted,
+        service: &RepositoryService,
+        accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         match journal {
@@ -246,10 +269,42 @@ impl Binding for RemoteAddBinding {
                 kind: FinalKind::Completed,
                 owes_work: false,
                 checkpointed: _,
-            } => Err(Ran {
-                answer: self.answer(ResultCode::AlreadyApplied, false),
-                standing: Standing::Final,
-            }),
+            } => {
+                // What cannot be read answers the call and leaves the
+                // record as it is.
+                let unread = |answer, journal| Ran {
+                    answer,
+                    standing: Standing::NotRun { journal },
+                };
+                let step =
+                    match service.completed_local_step(&accepted.scope, accepted.operation_id) {
+                        Ok(step) => step,
+                        Err(error) => return Err(unread(Answer::of_read(&error), journal)),
+                    };
+                if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+                    return Err(Ran {
+                        answer: self.answer(ResultCode::Ok, true),
+                        standing: Standing::Final,
+                    });
+                }
+                match self.in_place(&accepted.root()) {
+                    Ok(Some(true)) => Err(Ran {
+                        answer: self.answer(ResultCode::AlreadyApplied, false),
+                        standing: Standing::Final,
+                    }),
+                    Ok(Some(false)) => Err(Ran {
+                        answer: self.answer(ResultCode::RemoteNameConflict, false),
+                        standing: Standing::Stopped {
+                            journal: Some(journal),
+                        },
+                    }),
+                    Ok(None) => Ok(Entered::Unfinished),
+                    Err(()) => Err(unread(
+                        Answer::stopped(ResultCode::RepositoryInaccessible),
+                        journal,
+                    )),
+                }
+            }
             JournalRow::Absent | JournalRow::Pending(_) => Ok(Entered::Unfinished),
             // No local operation ends in another way or owes work once it
             // has completed. Nothing is run or settled on a row that
