@@ -1097,10 +1097,13 @@ impl Binding for RepoBinding {
     ///    request's own work has changed the state that would be
     ///    observed, so that is not compared, and the confirmation is the
     ///    request's however old it is. The identity the preview showed
-    ///    is compared all the same: the request's work never changes
-    ///    where it comes from, and a request that went on with another
-    ///    would commit as, and write, an identity nobody was shown. A
-    ///    difference is `external_change`, and nothing more is written.
+    ///    is compared all the same, until the initialization commit is
+    ///    recorded: the request's work never changes where it comes
+    ///    from, and a request that went on with another would commit
+    ///    as, and write, an identity nobody was shown. A difference is
+    ///    `external_change`, and nothing more is written. Once the
+    ///    commit is recorded nothing left to do reads the identity, and
+    ///    it is not compared.
     /// 3. With no step recorded, nothing of the request's is known to be
     ///    there. When no row stands and the end state holds, the request
     ///    is a no-op and is finished. Otherwise what was previewed is
@@ -1127,9 +1130,9 @@ impl Binding for RepoBinding {
             .confirmation
             .and_then(|consent| consent.observation_digest.as_deref())
             .and_then(ObservationDigest::from_stored);
-        let stepped = match &journal {
-            JournalRow::Absent => false,
-            JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.is_some(),
+        let step = match &journal {
+            JournalRow::Absent => None,
+            JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.clone(),
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,
@@ -1155,7 +1158,24 @@ impl Binding for RepoBinding {
         let Some(previewed) = previewed else {
             return Err(changed(journal));
         };
-        if stepped {
+        // Everything that depends on the identity is done once the
+        // commit is recorded: enablement writes the identity to the
+        // repository's own configuration before it writes the
+        // configuration file, and authors the commit before it records
+        // this step, for a create as for an enable. From here the
+        // request only registers and indexes, and reads no identity, so
+        // none is compared: a request told to send itself again is not
+        // refused for an identity that has changed since. A row that
+        // holds the step before it may or may not have committed, and is
+        // still compared.
+        if step.as_deref() == Some(INITIALIZATION_COMMITTED_STEP) {
+            // Not used by what is left to do; given as before when it
+            // can be read.
+            let effective = self.effective_identity_at(&root).ok().flatten();
+            self.acting = self.acting_with(effective.as_ref());
+            return Ok(Entered::Unfinished);
+        }
+        if step.is_some() {
             let effective = match self.effective_identity_at(&root) {
                 Ok(effective) => effective,
                 Err(answer) => return Err(not_run(answer, journal)),

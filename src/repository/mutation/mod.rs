@@ -128,14 +128,17 @@ impl RepositoryService {
         *self
             .acceptance_hook
             .lock()
-            .expect("test acceptance hook lock") = Some(Box::new(hook));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
     }
 
+    /// Runs the test's hook, when one is set. This is on the path of
+    /// every request that is accepted, so a lock that a panicking hook
+    /// poisoned is taken all the same: no request fails for it.
     fn run_acceptance_hook(&self) {
         let hook = self
             .acceptance_hook
             .lock()
-            .expect("test acceptance hook lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(hook) = hook {
             hook();

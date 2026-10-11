@@ -2231,17 +2231,30 @@ fn a_retry_whose_effective_identity_changed_is_external_change() {
     }
 }
 
-/// The same for `repo enable`, which finds its identity itself: the
-/// repository's own identity is replaced while the request's hand-off is
-/// owed. Nothing is left to commit, and the retry still answers that
-/// what was shown is not what is there.
+/// The same for `repo enable`, which finds its identity itself, while
+/// anything that depends on the identity is still to do: the enablement
+/// is killed after it wrote the configuration and before it committed,
+/// and the repository's own identity is replaced. The retry would commit
+/// as an identity nobody was shown, and is refused.
 #[test]
-fn a_retry_of_repo_enable_compares_the_identity_it_showed() {
+fn a_retry_of_repo_enable_before_its_commit_compares_the_identity_it_showed() {
     let mut desk = Desk::new();
     let plain = Plain::new();
     let (confirmation, _) = desk.preview(&plain.enable());
-    desk.fail_once_at(FailurePoint::BeforeRegistryWrite);
-    desk.execute(REQUEST_1, &confirmation, plain.enable());
+    killed_at(
+        &desk,
+        &plain.root,
+        true,
+        &confirmation,
+        FailurePoint::BeforeInitializationCommit,
+    );
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE state != 'completed' AND completed_step = 'configuration_written'"
+        ),
+        1
+    );
     let mut config = git2::Config::open(&plain.root.join(".git/config")).unwrap();
     config.set_str("user.name", "Someone Else").unwrap();
 
@@ -2250,13 +2263,62 @@ fn a_retry_of_repo_enable_compares_the_identity_it_showed() {
 
     assert_eq!(refused.code, ResultCode::ExternalChange);
     assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
-    assert!(!desk.registered(&plain.root));
-    config.set_str("user.name", "Manyhands Test").unwrap();
-    assert_enabled(
-        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
-        &plain.root,
+    assert_eq!(plain.initializations(), 0);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
     );
+}
+
+/// Once the initialization commit is recorded, nothing the request has
+/// left to do reads the identity: it is written and the commit is
+/// authored. A request answered `registration_pending` was told to send
+/// itself again, and a change of identity since is none of its business:
+/// the retry registers the repository and reports the same commit.
+#[test]
+fn a_retry_after_the_recorded_commit_does_not_compare_the_identity() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeRegistryWrite);
+    let pending = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(pending.code, ResultCode::RegistrationPending);
+    assert_eq!(recovery_actions(&pending), ["request.retry"]);
+    let commit = plain.head();
+    let mut config = git2::Config::open(&plain.root.join(".git/config")).unwrap();
+    config.set_str("user.name", "Someone Else").unwrap();
+
+    desk.reopen();
+    desk.clock.set(START + 3600);
+    let finished = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(assert_enabled(&finished, &plain.root), commit.to_string());
+    assert!(desk.registered(&plain.root));
     assert_eq!(plain.initializations(), 1);
+    let authored = plain.fixture.repository.find_commit(commit).unwrap();
+    assert_eq!(authored.author().name(), Some("Manyhands Test"));
+}
+
+/// The allowance for a create's own directory is for a create whose
+/// operation has begun. With no row, no attempt of the request reached
+/// the domain, so an empty directory where the preview saw none was
+/// made by someone else: the retry observes again and is refused.
+#[test]
+fn an_empty_directory_made_by_another_before_the_create_began_is_external_change() {
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let (confirmation, _) = desk.preview(&site.create());
+    desk.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    desk.execute(REQUEST_1, &confirmation, site.create());
+    assert_eq!(desk.count("SELECT COUNT(*) FROM operation_records"), 0);
+    fs::create_dir(&site.root).unwrap();
+
+    let refused = desk.execute(REQUEST_1, &confirmation, site.create());
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(recovery_actions(&refused), ["request.prepare"]);
+    assert!(fs::read_dir(&site.root).unwrap().next().is_none());
+    desk.assert_nothing_left(REQUEST_1);
 }
 
 const KILLED_PARENT: &str = "MANYHANDS_KILLED_PARENT";
