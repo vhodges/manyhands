@@ -5,9 +5,9 @@
 use manyhands::{
     repository::{
         DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, KeyClearInput,
-        KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, RelationshipWrite,
-        RemoteAddInput, RemoteSelectInput, SharedKeyId, TicketCreateInput, TicketSaveInput,
-        TicketSlugAssignInput,
+        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
+        RelationshipWrite, RemoteAddInput, RemoteSelectInput, SharedKeyId, TicketCreateInput,
+        TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -611,4 +611,41 @@ fn a_key_remove_matches_its_schema_and_goldens() {
     let removed = world.execute(REQUEST_1, remove(work));
     assert_eq!(removed.outcome, Outcome::Success);
     assert_key_contract("key_remove", &removed, &keys);
+}
+
+#[test]
+fn a_key_import_matches_its_schema_and_goldens() {
+    let world = KeyWorld::new();
+    let (private, public) = world.key_files("work");
+    let import = |label: &str, private: &std::path::Path| {
+        Mutation::KeyImport(KeyImportInput {
+            label: label.to_owned(),
+            private_key_path: private.to_owned(),
+            public_key_path: Some(public.clone()),
+        })
+    };
+
+    let invalid = world.execute(
+        REQUEST_1,
+        import("Work laptop", std::path::Path::new("work")),
+    );
+    assert_eq!(invalid.code, ResultCode::InvalidInput);
+    assert_key_contract("key_import_invalid", &invalid, &[]);
+
+    let imported = world.execute(REQUEST_1, import("Work laptop", &private));
+    assert_eq!(imported.outcome, Outcome::Success);
+    let id = world.keys()[0].0;
+    let keys = [(&id, "<key>")];
+    assert_key_contract("key_import", &imported, &keys);
+
+    let again = world.execute(REQUEST_2, import("Renamed", &private));
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert_key_contract("key_import_noop", &again, &keys);
+
+    // No result holds where the key's files are.
+    let home = world.home.path().canonicalize().unwrap();
+    for envelope in [&invalid, &imported, &again] {
+        let text = serde_json::to_string(envelope).unwrap();
+        assert!(!text.contains(home.to_str().unwrap()), "{text}");
+    }
 }

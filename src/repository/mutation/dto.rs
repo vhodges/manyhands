@@ -87,8 +87,11 @@ contract_enum!(
 /// it did. It holds no path, no key material and no passphrase.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct KeyMutationDto {
-    /// The key the request is about: the one it selected or removed, or
-    /// was refused for. Null for `key clear`, which names none.
+    /// The key the request is about: the one it registered, selected or
+    /// removed, or was refused for, and for a `key import` of a source
+    /// that is already registered, the key that holds it. Null for
+    /// `key clear`, which names none, and for a `key import` that
+    /// registered nothing.
     pub id: Option<String>,
     /// The key's label, when the request read the key's registration.
     pub label: Option<String>,
@@ -238,7 +241,7 @@ impl MutationDataDto {
             Command::RemoteAdd | Command::RemoteSelect => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
             }
-            Command::KeySelect | Command::KeyClear | Command::KeyRemove => {
+            Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove => {
                 KeyMutationDto::from_stored(stored).map(Self::Key)
             }
             // These report no data, so a record of one stores none.

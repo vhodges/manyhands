@@ -598,7 +598,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::IndexRefresh | Command::IndexRebuild) => Recorded::nothing(),
         // A change to the key registry has no operation, so none is ever
         // found to have run: this is not reached, and nothing is claimed.
-        Some(Command::KeySelect | Command::KeyClear | Command::KeyRemove) => Recorded::nothing(),
+        Some(Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove) => {
+            Recorded::nothing()
+        }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

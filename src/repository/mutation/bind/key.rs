@@ -6,28 +6,43 @@
 //! every effect is `not_requested`, `data` names the key, and the outcome
 //! says whether anything changed.
 //!
-//! `key select`, `key clear` and `key remove` change the key registry
-//! and nothing else. The domain call of each is one transaction with no
+//! `key import`, `key select`, `key clear` and `key remove` change the
+//! key registry and nothing else. The domain call of each is one transaction with no
 //! operation ID and no journal row: it happened or it did not. A request
 //! of one is therefore accepted with no operation, nothing is ever in
 //! flight under it, and it is settled as any request with no journal row
 //! is: finished when its end state holds, deleted when it was refused.
 
+use std::path::{Path, PathBuf};
+
 use crate::results::{ResultCode, Scope};
 
 use super::{
     super::{
-        super::{ReadError, RepositoryService, SharedKeyId, SharedKeySelectionOutcome},
+        super::{
+            ReadError, RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RepositoryService,
+            SharedKeyId, SharedKeyOwnership, SharedKeySelectionOutcome,
+        },
         command::Command,
         dto::{KeyMutationDto, MutationDataDto},
         evidence::Position,
-        identity::IntentDigestBuilder,
+        identity::{FieldValue, IntentDigestBuilder},
         outcome,
     },
     Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
     Standing,
 };
 use crate::repository::{SharedKeyRegistration, recovery::JournalRow};
+
+/// The input of `key import`: a private key file the user keeps, to
+/// register under `label`, and its public key file if it has one.
+/// Nothing is copied and neither file is changed: the registration names
+/// them where they are.
+pub struct KeyImportInput {
+    pub label: String,
+    pub private_key_path: PathBuf,
+    pub public_key_path: Option<PathBuf>,
+}
 
 /// The input of `key select`: the registered key to authenticate with.
 pub struct KeySelectInput {
@@ -77,23 +92,52 @@ fn registered(registration: &SharedKeyRegistration) -> MutationDataDto {
     )
 }
 
+/// A path as the digest reads it: the bytes the caller gave, whatever
+/// their encoding. A path is fed to the digest and stored nowhere by the
+/// boundary.
+fn path_field(path: &Path) -> FieldValue<'_> {
+    FieldValue::Bytes(path.as_os_str().as_encoded_bytes())
+}
+
 /// What a change to the key registry asks for.
 enum Change {
+    Import {
+        label: String,
+        private_key_path: PathBuf,
+        public_key_path: Option<PathBuf>,
+    },
     Select(SharedKeyId),
     Clear,
     Remove(SharedKeyId),
 }
 
-/// `key select`, `key clear` and `key remove`: one binding, since each is
-/// one registry transaction with no operation.
+/// `key import`, `key select`, `key clear` and `key remove`: one binding,
+/// since each is one registry transaction with no operation.
 pub(crate) struct KeyRegistryBinding {
     change: Change,
 }
 
-impl From<KeySelectInput> for KeyRegistryBinding {
-    fn from(input: KeySelectInput) -> Self {
+impl From<KeyImportInput> for KeyRegistryBinding {
+    fn from(input: KeyImportInput) -> Self {
         // Every field is named: one added to the input does not compile
         // until it is taken into the binding or left out here.
+        let KeyImportInput {
+            label,
+            private_key_path,
+            public_key_path,
+        } = input;
+        Self {
+            change: Change::Import {
+                label,
+                private_key_path,
+                public_key_path,
+            },
+        }
+    }
+}
+
+impl From<KeySelectInput> for KeyRegistryBinding {
+    fn from(input: KeySelectInput) -> Self {
         let KeySelectInput { id } = input;
         Self {
             change: Change::Select(id),
@@ -120,11 +164,12 @@ impl From<KeyRemoveInput> for KeyRegistryBinding {
 }
 
 impl KeyRegistryBinding {
-    /// The key the request names, if it names one.
+    /// The key the request names, if it names one. An import names a
+    /// source, and learns its key from the registry.
     fn id(&self) -> Option<SharedKeyId> {
         match self.change {
             Change::Select(id) | Change::Remove(id) => Some(id),
-            Change::Clear => None,
+            Change::Import { .. } | Change::Clear => None,
         }
     }
 
@@ -149,11 +194,51 @@ impl KeyRegistryBinding {
         let answer = |code, data| Answer::stopped(code).with_data(data);
         // Only the kind of a domain error is read.
         let failed = |kind| answer(outcome::repository_error_code(kind), self.named());
-        match self.change {
+        match &self.change {
+            Change::Import {
+                label,
+                private_key_path,
+                public_key_path,
+            } => {
+                let registration = service.register_shared_key(RegisterSharedKeyRequest {
+                    label: label.clone(),
+                    ownership: SharedKeyOwnership::Imported,
+                    private_key_path: private_key_path.clone(),
+                    public_key_path: public_key_path.clone(),
+                });
+                match registration {
+                    Ok(registration) => {
+                        let code = outcome::register_key_outcome_code(&registration);
+                        match registration {
+                            RegisterSharedKeyOutcome::Registered(registration) => {
+                                answer(code, registered(&registration))
+                            }
+                            // The key that holds the source, with its
+                            // own label and not the request's. Were it
+                            // removed meanwhile, its ID is still what
+                            // the registry answered with.
+                            RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing } => {
+                                answer(
+                                    code,
+                                    match service.show_key(existing) {
+                                        Ok(key) => key_data(
+                                            Some(existing),
+                                            Some(&key.label),
+                                            key.fingerprint.as_deref(),
+                                        ),
+                                        Err(_) => key_data(Some(existing), None, None),
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    Err(error) => failed(error.kind),
+                }
+            }
             // The domain selects a key that is already selected and says
             // the same of both, so the registry is read first. A key
             // that already is selected is left as it is.
-            Change::Select(id) => match service.show_key(id) {
+            &Change::Select(id) => match service.show_key(id) {
                 Ok(key) if key.selected => answer(
                     ResultCode::AlreadyApplied,
                     key_data(Some(id), Some(&key.label), key.fingerprint.as_deref()),
@@ -183,7 +268,7 @@ impl KeyRegistryBinding {
                 ),
                 Err(error) => failed(error.kind),
             },
-            Change::Remove(id) => match service.unregister_shared_key(id) {
+            &Change::Remove(id) => match service.unregister_shared_key(id) {
                 Ok(removal) => answer(outcome::unregister_key_outcome_code(removal), self.named()),
                 Err(error) => failed(error.kind),
             },
@@ -208,6 +293,7 @@ impl KeyRegistryBinding {
 impl Binding for KeyRegistryBinding {
     fn command(&self) -> Command {
         match self.change {
+            Change::Import { .. } => Command::KeyImport,
             Change::Select(_) => Command::KeySelect,
             Change::Clear => Command::KeyClear,
             Change::Remove(_) => Command::KeyRemove,
@@ -225,15 +311,32 @@ impl Binding for KeyRegistryBinding {
         Place::Application
     }
 
-    /// The key, or nothing for `key clear`, which names none.
+    /// The key, or nothing for `key clear`, which names none, and for
+    /// `key import`: a record holds its target as text, and the source of
+    /// an import is a path in the user's home. The source is a field of
+    /// the digest instead.
     fn target(&self) -> String {
         self.id().map(|id| id.to_string()).unwrap_or_default()
     }
 
     fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
-        // The command and the target are what the digest is begun with,
-        // and no change holds anything else.
-        match self.change {
+        match &self.change {
+            Change::Import {
+                label,
+                private_key_path,
+                public_key_path,
+            } => builder
+                .field("label", FieldValue::Text(label))
+                .field("private_key_path", path_field(private_key_path))
+                .field(
+                    "public_key_path",
+                    match public_key_path {
+                        Some(path) => path_field(path),
+                        None => FieldValue::Absent,
+                    },
+                ),
+            // The command and the target are what the digest is begun
+            // with, and these hold nothing else.
             Change::Select(_) | Change::Clear | Change::Remove(_) => builder,
         }
     }
@@ -244,7 +347,8 @@ impl Binding for KeyRegistryBinding {
     }
 
     /// A key that is not registered is refused here, before the request
-    /// is accepted. `key remove` depends on it: the domain reports a key
+    /// is accepted. An import is validated by the domain call alone, which
+    /// writes nothing for an input it refuses. `key remove` depends on it: the domain reports a key
     /// that is not registered as one already removed, which is the
     /// answer for a request that was accepted while the key was there
     /// and not for one that names a key the registry never held.
@@ -255,7 +359,7 @@ impl Binding for KeyRegistryBinding {
                     .show_key(id)
                     .map_err(|error| self.unread(&error))?;
             }
-            Change::Clear => {}
+            Change::Import { .. } | Change::Clear => {}
         }
         Ok(Prepared {
             family: None,

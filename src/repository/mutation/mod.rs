@@ -63,7 +63,7 @@ use bind::{
 pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
-    key::{KeyClearInput, KeyRemoveInput, KeySelectInput},
+    key::{KeyClearInput, KeyImportInput, KeyRemoveInput, KeySelectInput},
     remote::{RemoteAddInput, RemoteSelectInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
@@ -259,6 +259,7 @@ pub enum Mutation {
     RemoteSelect(RemoteSelectInput),
     IndexRefresh(IndexRefreshInput),
     IndexRebuild(IndexRebuildInput),
+    KeyImport(KeyImportInput),
     KeySelect(KeySelectInput),
     KeyClear(KeyClearInput),
     KeyRemove(KeyRemoveInput),
@@ -282,6 +283,7 @@ impl Mutation {
             Self::RemoteSelect(_) => Command::RemoteSelect,
             Self::IndexRefresh(_) => Command::IndexRefresh,
             Self::IndexRebuild(_) => Command::IndexRebuild,
+            Self::KeyImport(_) => Command::KeyImport,
             Self::KeySelect(_) => Command::KeySelect,
             Self::KeyClear(_) => Command::KeyClear,
             Self::KeyRemove(_) => Command::KeyRemove,
@@ -300,6 +302,7 @@ impl Mutation {
             Self::RemoteSelect(input) => Box::new(RemoteSelectBinding::from(input)),
             Self::IndexRefresh(input) => Box::new(IndexBinding::from(input)),
             Self::IndexRebuild(input) => Box::new(IndexBinding::from(input)),
+            Self::KeyImport(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::KeySelect(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::KeyClear(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::KeyRemove(input) => Box::new(KeyRegistryBinding::from(input)),

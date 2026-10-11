@@ -2,14 +2,17 @@
 //! repository. Every effect is `not_requested`, `data` names the key, and
 //! the outcome says whether anything changed.
 //!
-//! `key select`, `key clear` and `key remove` change the key registry in
-//! one step with no operation: a request of one names none, is finished
+//! `key import`, `key select`, `key clear` and `key remove` change the key
+//! registry in one step with no operation: a request of one names none, is finished
 //! when its end state holds, and leaves nothing when it is refused.
+
+use std::path::Path;
 
 use manyhands::{
     repository::{
-        FailurePoint, KeyClearInput, KeyMutationDto, KeyRemoveInput, KeySelectInput, Mutation,
-        MutationDataDto, RequestState, SharedKeyId, request_store::ScopeKey,
+        FailurePoint, KeyClearInput, KeyImportInput, KeyMutationDto, KeyRemoveInput,
+        KeySelectInput, Mutation, MutationDataDto, RequestState, SharedKeyId,
+        request_store::ScopeKey,
     },
     results::{Effects, Envelope, FailureClass, Outcome, ResultCode, Scope},
 };
@@ -18,8 +21,8 @@ use crate::support::{
     FailOnce,
     items::{self, TICKET_A},
     mutation::{
-        KeyWorld, REQUEST_1, REQUEST_2, REQUEST_3, World, execute_cancellable, execute_confirmed,
-        execute_with, key_data, recovery_actions,
+        self, KeyWorld, PUBLIC_KEY_FINGERPRINT, REQUEST_1, REQUEST_2, REQUEST_3, World,
+        execute_cancellable, execute_confirmed, execute_with, key_data, recovery_actions,
     },
 };
 
@@ -436,4 +439,173 @@ fn a_request_with_a_confirmation_or_cancelled_before_acceptance_does_nothing() {
     assert_eq!(world.selected(), None);
     assert_eq!(world.request_rows(), 0);
     assert!(recovery_actions(&cancelled).is_empty());
+}
+
+fn import(label: &str, private: &Path, public: Option<&Path>) -> Mutation {
+    Mutation::KeyImport(KeyImportInput {
+        label: label.to_owned(),
+        private_key_path: private.to_owned(),
+        public_key_path: public.map(Path::to_owned),
+    })
+}
+
+/// A directory name that marks the paths of an imported key: no request
+/// store and no result may hold where a key file is.
+const PATH_SENTINEL: &str = "SENTINEL-KEYPATH-5d1e";
+
+/// Runs a request and checks that the path of the key it imports is in
+/// neither its envelope nor any request store.
+fn execute_import(
+    world: &KeyWorld,
+    request_id: &str,
+    request: Mutation,
+) -> Envelope<MutationDataDto> {
+    let envelope = world.execute(request_id, request);
+    let text = serde_json::to_string(&envelope).unwrap();
+    assert!(
+        !text.contains(PATH_SENTINEL),
+        "the envelope holds a path: {text}"
+    );
+    mutation::assert_request_stores_exclude(world.data.path(), &[PATH_SENTINEL]);
+    envelope
+}
+
+fn imported(id: &str, label: &str) -> KeyMutationDto {
+    KeyMutationDto {
+        id: Some(id.to_owned()),
+        label: Some(label.to_owned()),
+        fingerprint: Some(PUBLIC_KEY_FINGERPRINT.to_owned()),
+        generation: None,
+    }
+}
+
+#[test]
+fn a_key_is_imported_and_the_same_source_again_is_a_no_op_naming_it() {
+    let world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    let source = std::fs::read(&private).unwrap();
+
+    let first = execute_import(
+        &world,
+        REQUEST_1,
+        import("Work laptop", &private, Some(&public)),
+    );
+    assert_success(&first);
+    let [(id, false)] = world.keys()[..] else {
+        panic!("one key, not selected: {:?}", world.keys());
+    };
+    assert_eq!(key_data(&first), &imported(&id.to_string(), "Work laptop"));
+    // The registration names the files where they are: neither is changed.
+    assert_eq!(std::fs::read(&private).unwrap(), source);
+    // An import names a source and no key, so its record has no target:
+    // the path is in the digest alone.
+    assert_finished(&world, REQUEST_1, "key import", "");
+
+    // Replay: the stored result, and nothing runs.
+    assert_eq!(
+        execute_import(
+            &world,
+            REQUEST_1,
+            import("Work laptop", &private, Some(&public))
+        ),
+        first
+    );
+
+    // A new request for the same source, under another label, registers
+    // nothing and names the key that holds it, by its own label.
+    let again = execute_import(
+        &world,
+        REQUEST_2,
+        import("Renamed", &private, Some(&public)),
+    );
+    assert_noop(&again);
+    assert_eq!(key_data(&again), &imported(&id.to_string(), "Work laptop"));
+    assert_eq!(world.keys(), [(id, false)]);
+    assert_finished(&world, REQUEST_2, "key import", "");
+}
+
+#[test]
+fn an_import_with_a_changed_label_or_source_is_another_request() {
+    let world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    let (other, _) = world.key_files("other");
+    assert_success(&execute_import(
+        &world,
+        REQUEST_1,
+        import("Work laptop", &private, Some(&public)),
+    ));
+
+    for changed in [
+        import("Renamed", &private, Some(&public)),
+        import("Work laptop", &other, Some(&public)),
+        import("Work laptop", &private, None),
+        import("Work laptop", &private, Some(&other)),
+    ] {
+        let mismatch = execute_import(&world, REQUEST_1, changed);
+        assert_eq!(
+            (mismatch.outcome, mismatch.code),
+            (Outcome::Error, ResultCode::RequestMismatch)
+        );
+        assert_of_the_application(&mismatch);
+    }
+    assert_eq!(world.keys().len(), 1);
+    assert_eq!(world.request_rows(), 1);
+}
+
+#[test]
+fn an_import_the_registry_refuses_is_invalid_input_and_leaves_nothing() {
+    let world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+
+    for refused in [
+        import("  ", &private, Some(&public)),
+        import("Work laptop", Path::new("relative/key"), None),
+        import("Work laptop", &private, Some(Path::new("relative/key.pub"))),
+    ] {
+        let refused = execute_import(&world, REQUEST_1, refused);
+        assert_eq!(
+            (refused.outcome, refused.code, refused.failure_class()),
+            (
+                Outcome::Error,
+                ResultCode::InvalidInput,
+                Some(FailureClass::Input)
+            )
+        );
+        assert_of_the_application(&refused);
+        assert_eq!(key_data(&refused), &named(None));
+        assert!(refused.recovery.is_empty());
+        assert!(world.keys().is_empty());
+        assert_eq!(world.request_rows(), 0);
+    }
+
+    // The same request ID, with the input corrected, runs at once.
+    assert_success(&execute_import(
+        &world,
+        REQUEST_1,
+        import("Work laptop", &private, Some(&public)),
+    ));
+}
+
+/// An import whose result was lost registered the key. The same request
+/// finds its source registered, and is answered with that key: one key.
+#[test]
+fn an_import_whose_result_was_lost_names_its_key_on_its_retry() {
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    lost_then_retried(
+        &mut world,
+        REQUEST_1,
+        || import("Work laptop", &private, Some(&public)),
+        |world| world.keys().len() == 1,
+    );
+    let id = world.keys()[0].0;
+    let replayed = execute_import(
+        &world,
+        REQUEST_1,
+        import("Work laptop", &private, Some(&public)),
+    );
+    assert_eq!(
+        key_data(&replayed),
+        &imported(&id.to_string(), "Work laptop")
+    );
 }

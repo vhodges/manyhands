@@ -167,6 +167,9 @@ pub const CASES: &[&str] = &[
     "index_refresh_mismatch",
     "key_clear",
     "key_clear_noop",
+    "key_import",
+    "key_import_invalid",
+    "key_import_noop",
     "key_remove",
     "key_remove_not_found",
     "key_remove_selected",
@@ -807,6 +810,9 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     }
 }
 
+/// The fingerprint of the public key fixture.
+pub const PUBLIC_KEY_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk";
+
 /// A service with no repository, and a home for key files: the key
 /// commands belong to the application.
 ///
@@ -880,6 +886,23 @@ impl KeyWorld {
             RegisterSharedKeyOutcome::Registered(registration) => registration.id,
             RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing } => existing,
         }
+    }
+
+    /// Copies the public key fixture into the home under `name`, with a
+    /// private key file beside it, and returns the two paths: a source
+    /// for `key import` whose fingerprint is `PUBLIC_KEY_FINGERPRINT`.
+    pub fn key_files(&self, name: &str) -> (PathBuf, PathBuf) {
+        let home = self.home.path().canonicalize().unwrap();
+        let private = home.join(name);
+        let public = home.join(format!("{name}.pub"));
+        fs::write(&private, "not a key\n").unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/shared_key_registry_public_fixture.pub"),
+            &public,
+        )
+        .unwrap();
+        (private, public)
     }
 
     /// The registered keys, each with whether it is selected.

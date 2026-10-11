@@ -227,6 +227,18 @@ pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
     }
 }
 
+/// The code of what `register_shared_key` returns. A source that is
+/// already registered is the request's end state, whichever request
+/// registered it.
+pub(crate) fn register_key_outcome_code(outcome: &RegisterSharedKeyOutcome) -> ResultCode {
+    match outcome {
+        RegisterSharedKeyOutcome::Registered(_) => ResultCode::Ok,
+        RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing: _ } => {
+            ResultCode::AlreadyApplied
+        }
+    }
+}
+
 /// The code of what `select_shared_key` and `clear_shared_key_selection`
 /// return. A selection reads as `ok` whether or not the key was selected
 /// before: `key select` reports a key that already was as a no-op from
@@ -296,15 +308,6 @@ pub(crate) mod unbound {
                 local_oid: _,
                 reason: PublishPendingReason::NoPublicationRemote,
             } => ResultCode::PublicationRemoteRequired,
-        }
-    }
-
-    pub(crate) fn register_key_outcome_code(outcome: &RegisterSharedKeyOutcome) -> ResultCode {
-        match outcome {
-            RegisterSharedKeyOutcome::Registered(_) => ResultCode::Ok,
-            RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing: _ } => {
-                ResultCode::AlreadyApplied
-            }
         }
     }
 
@@ -569,7 +572,7 @@ pub(crate) fn recovery(
         // Decided: these have no action of their own. They are the codes
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
-        // refreshed or rebuilt, a key selected, cleared or removed. The
+        // refreshed or rebuilt, a key imported, selected, cleared or removed. The
         // same request is offered when its record was left accepted, and
         // nothing otherwise.
         ResultCode::Ok
