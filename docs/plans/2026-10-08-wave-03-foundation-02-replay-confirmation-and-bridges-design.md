@@ -32,14 +32,16 @@ what landed on main. The corrections made after the fifth review, and the
 section on abandoning an operation, were approved without a further
 review. It authorizes no Rust change.
 
-**How settled this is.** Every review round found blocking errors in how a
-retried request is settled, including in the corrections made for the round
-before. The rules under [Request Identity And Records](#request-identity-and-records)
-are the fourth version and have not been reviewed. What is firm is the
-table of [required outcomes](#required-outcomes): what must be true after
-each sequence of events, whatever mechanism produces it. The plan builds
-that part test-first against the table and stops for a design checkpoint
-before any other binding is written.
+**How settled this is.** Every review round of the proposal found blocking
+errors in how a retried request is settled, including in the corrections
+made for the round before. The rules under
+[Request Identity And Records](#request-identity-and-records) are no longer
+the proposal: they describe what was built test-first against the table of
+[required outcomes](#required-outcomes) through `ticket create` and
+`ticket save`, and were reviewed against the code at the design checkpoint
+after Task 7. The table stays the contract: what must be true after each
+sequence of events, whatever mechanism produces it. Rules for commands not
+yet bound are still plans.
 
 Terms used below:
 
@@ -500,7 +502,7 @@ the mechanism is changed.
 | Either, with someone else having committed different content to the same file in between. | `external_change`. Nothing is written. This is open case 1. |
 | A save that changes nothing; its result is lost; retry. | A no-op. No commit is reported, even if earlier commits hold the same content. |
 | A create writes its file and dies; the user's initials or the prefix change; retry. | The retry commits. The short code first written is kept. |
-| A request is rejected with nothing written. | Nothing is left: a different request on the repository runs at once, and the same request ID can be used with corrected input. |
+| A request is rejected with nothing written. | Nothing is left: a different request on the repository runs at once, and the same request ID can be used with corrected input. One crash window is a known limit, listed below: the process dying between the rejection and the deletion of its record. |
 | A request returns an error after it wrote something. | `partial`. A retry of the same request finishes it. |
 | The same request arrives twice at once. | One set of effects. Both callers get a truthful result. |
 | The database is lost; the repository is registered again; a completed create or save is retried. | A no-op. Nothing is written. |
