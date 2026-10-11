@@ -13,7 +13,8 @@ use crate::support::{
     FailOnce,
     items::{self, TICKET_A},
     mutation::{
-        BODY, REQUEST_1, REQUEST_2, TICKET_NEW, TITLE, World, recovery_actions, ticket_data,
+        BODY, KeyWorld, PASSPHRASE, REQUEST_1, REQUEST_2, TICKET_NEW, TITLE, World, key_data,
+        recovery_actions, ticket_data,
     },
 };
 
@@ -218,4 +219,42 @@ fn a_file_someone_else_changed_is_an_external_change_after_the_cache_is_lost() {
         assert!(world.record(REQUEST_1).is_none(), "{what}");
         assert_eq!(world.pending_journal_rows(), 0, "{what}");
     }
+}
+
+/// The key store is no part of the cache. With the database gone, the
+/// request record, the key journal and the key's registration are gone
+/// with it, and the key file is still in the store. The retried
+/// generation is a new request: it generates a new key and adopts
+/// nothing. The earlier file is left where it is and can be imported.
+#[test]
+fn a_retried_key_generation_creates_a_new_key_and_leaves_the_earlier_file() {
+    let mut world = KeyWorld::new();
+    let first = world.execute(REQUEST_1, world.generate("Work laptop", Some(PASSPHRASE)));
+    assert_eq!(first.outcome, Outcome::Success);
+    let earlier = key_data(&first).id.clone().expect("a key");
+    let earlier_file = world.store_directory().join(&earlier);
+    let earlier_bytes = std::fs::read(&earlier_file).unwrap();
+
+    world.lose_cache();
+    assert!(world.keys().is_empty());
+    assert_eq!(world.request_rows(), 0);
+
+    let retry = world.execute(REQUEST_1, world.generate("Work laptop", Some(PASSPHRASE)));
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    let new = key_data(&retry).id.clone().expect("a key");
+    assert_ne!(new, earlier);
+    assert_ne!(retry.operation_id, first.operation_id);
+    // One registered key, the new one, and both files.
+    let [(registered, false)] = world.keys()[..] else {
+        panic!("one key: {:?}", world.keys());
+    };
+    assert_eq!(registered.to_string(), new);
+    let mut files = vec![earlier.clone(), new];
+    files.sort();
+    assert_eq!(world.private_key_files(), files);
+    assert_eq!(std::fs::read(&earlier_file).unwrap(), earlier_bytes);
 }

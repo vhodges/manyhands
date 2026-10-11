@@ -14,12 +14,15 @@ use std::{
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
-        DocumentMutationDto, DocumentSaveInput, KeyMutationDto, Mutation, MutationCall,
-        MutationDataDto, NoProgress, OperationFamily, OperationId, RegisterSharedKeyOutcome,
-        RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto, RepositoryService,
-        RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership, TicketCreateInput,
-        TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
-        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        DocumentMutationDto, DocumentSaveInput, KeyGenerateInput, KeyMutationDto, Mutation,
+        MutationCall, MutationDataDto, NoProgress, OperationFamily, OperationId,
+        RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto,
+        RepositoryService, RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership,
+        TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
+        keys::{
+            KeyProtection, KeyStore, PassphraseResponse, SecretPassphrase,
+            SessionCredentialProvider, SessionCredentials, UnlockRequest,
+        },
         request_store::{Clock, JournalRow, RequestRecord, ScopeKey},
     },
     results::Envelope,
@@ -167,6 +170,10 @@ pub const CASES: &[&str] = &[
     "index_refresh_mismatch",
     "key_clear",
     "key_clear_noop",
+    "key_generate",
+    "key_generate_interrupted",
+    "key_generate_invalid",
+    "key_generate_retained",
     "key_import",
     "key_import_invalid",
     "key_import_noop",
@@ -813,6 +820,11 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
 /// The fingerprint of the public key fixture.
 pub const PUBLIC_KEY_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk";
 
+/// The passphrase the key scenarios protect a generated key with. It
+/// holds a sentinel that no request store and no envelope may keep.
+pub const PASSPHRASE: &str = "correct horse SENTINEL-PASSPHRASE-c07a";
+pub const PASSPHRASE_SENTINEL: &str = "SENTINEL-PASSPHRASE-c07a";
+
 /// A service with no repository, and a home for key files: the key
 /// commands belong to the application.
 ///
@@ -852,8 +864,29 @@ impl KeyWorld {
         self.service = super::FailOnce::at(point).open_service(self.data.path());
     }
 
+    /// Loses the cache: the database, with the request records, the key
+    /// journal and the key registry, is deleted, and a service is opened
+    /// over what is left. The key store is no part of it.
+    pub fn lose_cache(&mut self) {
+        for entry in fs::read_dir(self.data.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name.starts_with("manyhands.sqlite3") && !name.ends_with(".lock") {
+                fs::remove_file(&path).unwrap();
+            }
+        }
+        self.reopen();
+    }
+
+    /// Runs one request and scans its envelope for the sentinels and for
+    /// the passphrase.
     pub fn execute(&self, request_id: &str, mutation: Mutation) -> Envelope<MutationDataDto> {
-        execute_with(&self.service, request_id, mutation)
+        let envelope = execute_with(&self.service, request_id, mutation);
+        let value = serde_json::to_value(&envelope).unwrap();
+        if let Some((sentinel, location)) = golden::find_sentinel(&value, &[PASSPHRASE_SENTINEL]) {
+            panic!("the envelope contains {sentinel:?} at {location}");
+        }
+        envelope
     }
 
     pub fn record(&self, request_id: &str) -> Option<RequestRecord> {
@@ -865,6 +898,59 @@ impl KeyWorld {
     pub fn request_rows(&self) -> i64 {
         items::index(self.data.path())
             .query_row("SELECT COUNT(*) FROM request_records", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// The key store of the world's home.
+    pub fn store(&self) -> KeyStore {
+        KeyStore::for_home(self.home.path()).unwrap()
+    }
+
+    /// A generation of a key labelled `label`, protected by `passphrase`
+    /// or not protected.
+    pub fn generate(&self, label: &str, passphrase: Option<&str>) -> Mutation {
+        Mutation::KeyGenerate(KeyGenerateInput {
+            store: self.store(),
+            label: label.to_owned(),
+            protection: match passphrase {
+                Some(passphrase) => {
+                    KeyProtection::Passphrase(SecretPassphrase::new(passphrase.to_owned()).unwrap())
+                }
+                None => KeyProtection::Unencrypted,
+            },
+        })
+    }
+
+    /// Where the key store keeps the files of generated keys.
+    pub fn store_directory(&self) -> PathBuf {
+        self.home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(".ssh")
+            .join("manyhands")
+    }
+
+    /// The private key files in the key store, by the ID of their key, in
+    /// ID order: each generated key has one, named by its ID.
+    pub fn private_key_files(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.store_directory()) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| SharedKeyId::parse(name).is_ok())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// How many rows the key journal holds.
+    pub fn key_operations(&self) -> i64 {
+        items::index(self.data.path())
+            .query_row("SELECT COUNT(*) FROM key_material_operations", [], |row| {
+                row.get(0)
+            })
             .unwrap()
     }
 
@@ -927,6 +1013,7 @@ impl Drop for KeyWorld {
     fn drop(&mut self) {
         if !std::thread::panicking() {
             assert_request_stores_exclude(self.data.path(), &SENTINELS);
+            assert_request_stores_exclude(self.data.path(), &[PASSPHRASE_SENTINEL]);
             super::assert_operation_records_hold_no_content(self.data.path());
         }
     }

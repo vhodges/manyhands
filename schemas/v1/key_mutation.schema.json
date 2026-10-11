@@ -1,17 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 key mutation data",
-  "description": "The data of a key import, key select, key clear or key remove envelope. It may accompany any outcome: a success, a no-op, and a rejection that is about the key. A key command changes no canonical content and makes no commit, so every effect of its envelope is not_requested, and this and the outcome say what the request did. It holds no path, no key material and no passphrase.",
+  "description": "The data of a key generate, key import, key select, key clear or key remove envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the key. A key command changes no canonical content and makes no commit, so every effect of its envelope is not_requested, and this and the outcome say what the request did. It holds no path, no key material and no passphrase.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "label", "fingerprint", "generation"],
   "properties": {
     "id": {
-      "description": "The key the request is about: the one it registered, selected or removed, or was refused for, and for a key import of a source that is already registered, the key that holds it. Null for key clear, which names none, and for a key import that registered nothing.",
+      "description": "The key the request is about: the one it generated, registered, selected or removed, or was refused for, and for a key import of a source that is already registered, the key that holds it. A key generate names its key from the moment it reserves the key's ID, which is before the key is registered. Null for key clear, which names none, and for a key generate or a key import that got no key.",
       "type": ["string", "null"]
     },
     "label": {
-      "description": "The key's label, when the request read the key's registration. Null otherwise.",
+      "description": "The key's label: as its registration holds it, when the request read the registration, and for a key generate the label the request gives its key. Null otherwise.",
       "type": ["string", "null"]
     },
     "fingerprint": {
@@ -19,7 +19,7 @@
       "type": ["string", "null"]
     },
     "generation": {
-      "description": "Always null for key import, key select, key clear and key remove.",
+      "description": "Set only by a key generate that has not registered its key: where its generation stands, as operation show names the state of its operation. The result is then partial with recovery_required: a key ID is reserved and key files may have been written, which no effect shows. In every state but retained_for_inspection the same request continues the generation. retained_for_inspection is final: the generation stopped before its key pair was complete, its files are left where they are for a person to inspect, and no key is registered.",
       "type": ["string", "null"],
       "enum": [
         "reserved",

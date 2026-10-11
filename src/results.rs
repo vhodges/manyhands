@@ -388,7 +388,8 @@ macro_rules! recovery_actions {
             }
 
             /// The keys of the action's `arguments`. An action carries all
-            /// of them, or none when the result names no repository.
+            /// of them, or, when one of them is `root` and the result
+            /// names no repository, none.
             pub const fn argument_keys(self) -> &'static [&'static str] {
                 match self {
                     $(Self::$variant => &[$($argument),*]),+

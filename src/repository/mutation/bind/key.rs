@@ -12,19 +12,41 @@
 //! of one is therefore accepted with no operation, nothing is ever in
 //! flight under it, and it is settled as any request with no journal row
 //! is: finished when its end state holds, deleted when it was refused.
+//!
+//! `key generate` writes a key pair into the user's key store and
+//! registers it, as one operation in the key journal. That journal is
+//! not the local one. Its rows are of one key each: a generation that has
+//! not ended blocks no other key operation and no repository, so its
+//! record waits on nothing but its own retry. A row that has completed
+//! is a key that was registered, since the domain completes a
+//! generation's row in the transaction that registers the key and in no
+//! other; and a row whose files were retained for inspection is final,
+//! and nothing continues it.
+//!
+//! The passphrase of a new key is given to the one domain call and to
+//! nothing else. It is no field of the digest, and no record, journal
+//! row, result or error holds it or anything made from it.
 
-use std::path::{Path, PathBuf};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+};
 
 use crate::results::{ResultCode, Scope};
 
 use super::{
     super::{
         super::{
-            ReadError, RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RepositoryService,
-            SharedKeyId, SharedKeyOwnership, SharedKeySelectionOutcome,
+            OperationFamily, ReadError, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
+            RepositoryService, SharedKeyId, SharedKeyOwnership, SharedKeySelectionOutcome,
+            keys::{
+                GenerateSharedKeyOutcome, GenerateSharedKeyRequest, KeyMaterialPhase,
+                KeyMaterialRecovery, KeyProtection, KeyStore,
+            },
+            recovery::{FinalKind, PendingOperation},
         },
         command::Command,
-        dto::{KeyMutationDto, MutationDataDto},
+        dto::{KeyGenerationState, KeyMutationDto, MutationDataDto},
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
         outcome,
@@ -388,6 +410,363 @@ impl Binding for KeyRegistryBinding {
             JournalRow::Pending(_)
             | JournalRow::Final {
                 kind: _,
+                owes_work: _,
+                checkpointed: _,
+            } => Err(Ran {
+                answer: Answer::stopped(ResultCode::InternalError),
+                standing: Standing::NotRun { journal },
+            }),
+        }
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+/// The input of `key generate`: the key store the pair is written into,
+/// the label the key is registered under, and how its private key is
+/// protected.
+///
+/// `protection` can hold the new key's passphrase, so this is neither
+/// printed nor serialized:
+///
+/// ```compile_fail
+/// # use manyhands::repository::KeyGenerateInput;
+/// # fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<KeyGenerateInput>();
+/// ```
+/// ```compile_fail
+/// # use manyhands::repository::KeyGenerateInput;
+/// # fn assert_debug<T: std::fmt::Debug>() {}
+/// assert_debug::<KeyGenerateInput>();
+/// ```
+pub struct KeyGenerateInput {
+    pub store: KeyStore,
+    pub label: String,
+    pub protection: KeyProtection,
+}
+
+/// Whether the row of a generation says that a key file was written and
+/// the generation has not ended: a change that no effect shows, with work
+/// remaining.
+pub(crate) fn written_and_unfinished(journal: Option<&JournalRow>) -> bool {
+    match journal {
+        Some(JournalRow::Pending(PendingOperation::KeyMaterial { phase })) => match phase {
+            KeyMaterialPhase::PrivateWritten | KeyMaterialPhase::PairWritten => true,
+            // Nothing is known to be written, or the row is a deletion's.
+            KeyMaterialPhase::Reserved
+            | KeyMaterialPhase::Prepared
+            | KeyMaterialPhase::PrivateRemoved
+            | KeyMaterialPhase::FilesRemoved
+            | KeyMaterialPhase::Completed
+            | KeyMaterialPhase::RetainedForInspection => false,
+        },
+        Some(
+            JournalRow::Absent
+            | JournalRow::Pending(
+                PendingOperation::Local { state: _, step: _ }
+                | PendingOperation::Remote { phase: _ },
+            )
+            | JournalRow::Final {
+                kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                owes_work: _,
+                checkpointed: _,
+            },
+        )
+        | None => false,
+    }
+}
+
+/// Where a generation stands, as a result names it. `None` for a phase
+/// only a deletion passes through.
+fn generation_state(phase: KeyMaterialPhase) -> Option<KeyGenerationState> {
+    match phase {
+        KeyMaterialPhase::Reserved => Some(KeyGenerationState::Reserved),
+        KeyMaterialPhase::PrivateWritten => Some(KeyGenerationState::PrivateWritten),
+        KeyMaterialPhase::PairWritten => Some(KeyGenerationState::PairWritten),
+        KeyMaterialPhase::Completed => Some(KeyGenerationState::Completed),
+        KeyMaterialPhase::RetainedForInspection => Some(KeyGenerationState::RetainedForInspection),
+        KeyMaterialPhase::Prepared
+        | KeyMaterialPhase::PrivateRemoved
+        | KeyMaterialPhase::FilesRemoved => None,
+    }
+}
+
+pub(crate) struct KeyGenerateBinding {
+    store: KeyStore,
+    label: String,
+    /// Whether the private key is to be protected by a passphrase: what
+    /// the digest holds of the protection.
+    protected: bool,
+    /// The protection itself, which can hold the passphrase. It is taken
+    /// by the one domain call a binding makes, and is read nowhere else.
+    protection: Cell<Option<KeyProtection>>,
+}
+
+impl From<KeyGenerateInput> for KeyGenerateBinding {
+    fn from(input: KeyGenerateInput) -> Self {
+        // Every field is named: one added to the input does not compile
+        // until it is taken into the binding or left out here.
+        let KeyGenerateInput {
+            store,
+            label,
+            protection,
+        } = input;
+        Self {
+            store,
+            label,
+            protected: match &protection {
+                KeyProtection::Unencrypted => false,
+                KeyProtection::Passphrase(_) => true,
+            },
+            protection: Cell::new(Some(protection)),
+        }
+    }
+}
+
+impl KeyGenerateBinding {
+    /// What the request reports of its key: the ID the generation
+    /// reserved, once it has one, and the label the request gives.
+    fn data(
+        &self,
+        id: Option<SharedKeyId>,
+        fingerprint: Option<&str>,
+        generation: Option<KeyGenerationState>,
+    ) -> MutationDataDto {
+        MutationDataDto::Key(KeyMutationDto {
+            id: id.map(|id| id.to_string()),
+            label: Some(self.label.clone()),
+            fingerprint: fingerprint.map(str::to_owned),
+            generation,
+        })
+    }
+
+    /// A generation that stopped short of a registered key, as the
+    /// domain reports it. Its key ID is reserved and its files may be
+    /// written, which no effect shows: the result is `partial`.
+    ///
+    /// The record is finished only when the domain has made the result
+    /// final, by retaining the files for inspection. In every other
+    /// phase the same request continues the generation, and the record
+    /// stays accepted for it. That includes a row that has completed and
+    /// whose files then failed their check: the key is registered, and a
+    /// record released for it would have the next call generate a second
+    /// key for the same request.
+    fn interrupted(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        recovery: &KeyMaterialRecovery,
+        code: ResultCode,
+    ) -> Ran {
+        let KeyMaterialRecovery {
+            operation_id: _,
+            key_id,
+            action: _,
+            phase,
+            // Read through `operation show`, with the operation's state.
+            failure_code: _,
+            recovery_action: _,
+        } = recovery;
+        let answer = Answer {
+            local_change: true,
+            ..Answer::stopped(code).with_data(self.data(
+                Some(*key_id),
+                None,
+                generation_state(*phase),
+            ))
+        };
+        let standing = match phase {
+            // Final by the row's own word, read after the call. A row
+            // that does not say so, or cannot be read, finishes nothing.
+            KeyMaterialPhase::RetainedForInspection => Standing::Stopped {
+                journal: accepted.journal_row(service).filter(|journal| {
+                    matches!(
+                        journal,
+                        JournalRow::Final {
+                            kind: FinalKind::RetainedForInspection,
+                            owes_work: _,
+                            checkpointed: _,
+                        }
+                    )
+                }),
+            },
+            KeyMaterialPhase::Reserved
+            | KeyMaterialPhase::PrivateWritten
+            | KeyMaterialPhase::PairWritten
+            | KeyMaterialPhase::Completed
+            | KeyMaterialPhase::Prepared
+            | KeyMaterialPhase::PrivateRemoved
+            | KeyMaterialPhase::FilesRemoved => Standing::Owed,
+        };
+        Ran { answer, standing }
+    }
+
+    /// The one domain call, under the recorded operation ID, and what it
+    /// came to. It is the same call for a first attempt and for a retry:
+    /// the domain takes up the operation where its row stands.
+    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        // A binding makes one domain call. Without the protection there
+        // is none to make, and nothing is settled on that.
+        let Some(protection) = self.protection.take() else {
+            return Ran {
+                answer: Answer::stopped(ResultCode::InternalError)
+                    .with_data(self.data(None, None, None)),
+                standing: Standing::Stopped { journal: None },
+            };
+        };
+        let result = service.generate_shared_key(
+            &self.store,
+            GenerateSharedKeyRequest {
+                operation_id: accepted.operation_id,
+                label: self.label.clone(),
+                protection,
+            },
+        );
+        match result {
+            Ok(generated) => {
+                let code = outcome::generate_key_outcome_code(&generated);
+                let created = |code, registration: &SharedKeyRegistration| Ran {
+                    answer: Answer::stopped(code).with_data(self.data(
+                        Some(registration.id),
+                        registration.public_key_fingerprint.as_deref(),
+                        None,
+                    )),
+                    standing: Standing::Final,
+                };
+                match generated {
+                    GenerateSharedKeyOutcome::Created(registration) => created(code, &registration),
+                    // The operation is the request's own, so a key it
+                    // had already created is the key this request
+                    // generated: the work of an earlier call whose
+                    // answer was lost, and no no-op.
+                    GenerateSharedKeyOutcome::AlreadyCreated(registration) => {
+                        created(ResultCode::Ok, &registration)
+                    }
+                    GenerateSharedKeyOutcome::RecoveryRequired(recovery) => {
+                        self.interrupted(service, accepted, &recovery, code)
+                    }
+                }
+            }
+            Err(error) => {
+                // Only the kind is read.
+                let code = outcome::key_material_error_code(error.kind);
+                let journal = accepted.journal_row(service);
+                let answer = Answer {
+                    local_change: written_and_unfinished(journal.as_ref()),
+                    ..Answer::stopped(code).with_data(self.data(None, None, None))
+                };
+                let standing = match journal {
+                    // The generation never began, or has not ended: the
+                    // row says whether anything is in flight.
+                    Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
+                        Standing::Stopped { journal }
+                    }
+                    // The generation had ended, and this call failed all
+                    // the same: the store was busy, or the key's
+                    // registration is no longer what the generation
+                    // made. The error is no result of the generation.
+                    // Nothing is stored and nothing is deleted.
+                    Some(JournalRow::Final {
+                        kind: _,
+                        owes_work: _,
+                        checkpointed: _,
+                    }) => Standing::Unconfirmed,
+                };
+                Ran { answer, standing }
+            }
+        }
+    }
+}
+
+impl Binding for KeyGenerateBinding {
+    fn command(&self) -> Command {
+        Command::KeyGenerate
+    }
+
+    /// The key journal records phases and no checkpoint step.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::SaysNothing
+    }
+
+    fn place(&self) -> Place<'_> {
+        Place::Application
+    }
+
+    /// A generation names no key: its key's ID is the domain's to
+    /// reserve.
+    fn target(&self) -> String {
+        String::new()
+    }
+
+    fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
+        let Self {
+            // Where the pair is written. The domain refuses an operation
+            // ID that is taken up again with another store.
+            store: _,
+            label,
+            protected,
+            // Never a field: two requests that differ only in their
+            // passphrase are the same request.
+            protection: _,
+        } = self;
+        builder
+            .field("label", FieldValue::Text(label))
+            .field("protected", FieldValue::Flag(*protected))
+    }
+
+    fn scope(&self, _repository: Option<String>, _position: Option<&Position>) -> Scope {
+        Scope::default()
+    }
+
+    /// A label the domain refuses is refused here, before the request is
+    /// accepted and given an operation.
+    fn prepare(&mut self, _call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        if self.label.trim().is_empty() {
+            return Err(
+                Answer::stopped(ResultCode::InvalidInput).with_data(self.data(None, None, None))
+            );
+        }
+        Ok(Prepared {
+            family: Some(OperationFamily::KeyMaterial),
+            position: no_position(),
+            expected: None,
+        })
+    }
+
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        self.call(call.service, accepted)
+    }
+
+    /// The domain operation is called whatever the row says, and its
+    /// answer is the evidence of what the request did. No reading of the
+    /// row here could stand in for it: on a row that has completed the
+    /// call checks the key's files and its registration and returns the
+    /// key, on a pair that was written it verifies and registers it, and
+    /// on anything less it retains the files and makes that final.
+    fn reenter(
+        &mut self,
+        _call: &CallContext<'_>,
+        _accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Entered, Ran> {
+        match journal {
+            JournalRow::Absent
+            | JournalRow::Pending(PendingOperation::KeyMaterial { phase: _ })
+            | JournalRow::Final {
+                kind: FinalKind::Completed | FinalKind::RetainedForInspection,
+                owes_work: _,
+                checkpointed: _,
+            } => Ok(Entered::Unfinished),
+            // No row of the key journal reads so. Nothing is run or
+            // settled on one that does.
+            JournalRow::Pending(
+                PendingOperation::Local { state: _, step: _ }
+                | PendingOperation::Remote { phase: _ },
+            )
+            | JournalRow::Final {
+                kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
             } => Err(Ran {

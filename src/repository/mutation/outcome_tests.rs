@@ -1220,6 +1220,29 @@ fn clone_selection(outcome: &PublicationRemoteOutcome) -> PublicationRemoteOutco
     }
 }
 
+/// A request of the application names no repository, so there is none
+/// to inspect: an interrupted key generation is continued by the same
+/// request, and one that is final offers nothing.
+#[test]
+fn recovery_required_with_no_repository_offers_the_request_or_nothing() {
+    let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
+    let offered = |retry| recovery(ResultCode::RecoveryRequired, None, request_id, None, retry);
+    let accepted = offered(true);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].action.as_str(), "request.retry");
+    assert_eq!(accepted[0].arguments["request_id"], request_id.to_string());
+    assert!(offered(false).is_empty());
+    // With a repository it is that repository that is inspected, as before.
+    assert_eq!(
+        actions(ResultCode::RecoveryRequired, true),
+        ["repo.inspect"]
+    );
+    assert_eq!(
+        actions(ResultCode::RecoveryRequired, false),
+        ["repo.inspect"]
+    );
+}
+
 #[test]
 fn a_pending_registration_is_finished_by_the_same_request() {
     assert_eq!(

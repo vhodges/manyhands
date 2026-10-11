@@ -601,6 +601,12 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove) => {
             Recorded::nothing()
         }
+        // A key file is shown by no effect. The generation's row says
+        // whether one was written with the generation not yet ended.
+        Some(Command::KeyGenerate) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: key::written_and_unfinished(journal.as_ref()),
+        },
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

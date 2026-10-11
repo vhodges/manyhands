@@ -87,13 +87,17 @@ contract_enum!(
 /// it did. It holds no path, no key material and no passphrase.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct KeyMutationDto {
-    /// The key the request is about: the one it registered, selected or
-    /// removed, or was refused for, and for a `key import` of a source
-    /// that is already registered, the key that holds it. Null for
-    /// `key clear`, which names none, and for a `key import` that
-    /// registered nothing.
+    /// The key the request is about: the one it generated, registered,
+    /// selected or removed, or was refused for, and for a `key import` of
+    /// a source that is already registered, the key that holds it. A
+    /// `key generate` names its key from the moment it reserves the
+    /// key's ID, which is before the key is registered. Null for
+    /// `key clear`, which names none, and for a `key generate` or a
+    /// `key import` that got no key.
     pub id: Option<String>,
-    /// The key's label, when the request read the key's registration.
+    /// The key's label: as its registration holds it, when the request
+    /// read the registration, and for a `key generate` the label the
+    /// request gives its key.
     pub label: Option<String>,
     /// The fingerprint the key's registration stores, when the request
     /// read the registration and it stores one.
@@ -241,9 +245,11 @@ impl MutationDataDto {
             Command::RemoteAdd | Command::RemoteSelect => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
             }
-            Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove => {
-                KeyMutationDto::from_stored(stored).map(Self::Key)
-            }
+            Command::KeyGenerate
+            | Command::KeyImport
+            | Command::KeySelect
+            | Command::KeyClear
+            | Command::KeyRemove => KeyMutationDto::from_stored(stored).map(Self::Key),
             // These report no data, so a record of one stores none.
             Command::IndexRefresh | Command::IndexRebuild => None,
         }

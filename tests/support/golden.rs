@@ -166,7 +166,12 @@ pub fn assert_registered_recovery(name: &str, envelope: &Value) {
             .keys()
             .map(String::as_str)
             .collect();
-        if envelope["scope"]["repository"].is_null() {
+        // An action about a repository carries no arguments when the
+        // result names none. One that is not about a repository carries
+        // its own whatever the result names: a request of the
+        // application is retried by its request ID.
+        let about_a_repository = registered.argument_keys().contains(&"root");
+        if envelope["scope"]["repository"].is_null() && about_a_repository {
             assert!(keys.is_empty(), "{name}: {kind} names no repository");
         } else {
             let mut expected = registered.argument_keys().to_vec();

@@ -649,3 +649,80 @@ fn a_key_import_matches_its_schema_and_goldens() {
         assert!(!text.contains(home.to_str().unwrap()), "{text}");
     }
 }
+
+/// As `assert_key_contract`, for a generation: the fingerprint of the
+/// key it made differs from run to run as well.
+fn assert_generation_contract(name: &str, envelope: &Envelope<MutationDataDto>) {
+    let data = mutation::key_data(envelope);
+    let id = data.id.as_deref().map(|id| SharedKeyId::parse(id).unwrap());
+    let fingerprint = data.fingerprint.clone();
+    let operation = envelope.operation_id.clone();
+    let id = id.map(|id| id.to_string());
+    let mut placeholders: Vec<(&str, &str)> = Vec::new();
+    if let Some(id) = id.as_deref() {
+        placeholders.push((id, "<key>"));
+    }
+    if let Some(fingerprint) = fingerprint.as_deref() {
+        placeholders.push((fingerprint, "<fingerprint>"));
+    }
+    if let Some(operation) = operation.as_deref() {
+        placeholders.push((operation, "<operation>"));
+    }
+    mutation::assert_contract(
+        &ContractCase {
+            name,
+            data_schema: Some(KEY_SCHEMA),
+            placeholders: &placeholders,
+            sentinels: &[mutation::PASSPHRASE_SENTINEL],
+        },
+        envelope,
+    );
+}
+
+#[test]
+fn a_key_generate_matches_its_schema_and_goldens() {
+    let world = KeyWorld::new();
+    let generate = |label: &str| world.generate(label, Some(mutation::PASSPHRASE));
+
+    let invalid = world.execute(REQUEST_1, generate(""));
+    assert_eq!(invalid.code, ResultCode::InvalidInput);
+    assert_generation_contract("key_generate_invalid", &invalid);
+
+    let generated = world.execute(REQUEST_1, generate("Work laptop"));
+    assert_eq!(generated.outcome, Outcome::Success);
+    assert_generation_contract("key_generate", &generated);
+    // No result holds where the key's files are.
+    let home = world.home.path().canonicalize().unwrap();
+    let text = serde_json::to_string(&generated).unwrap();
+    assert!(!text.contains(home.to_str().unwrap()), "{text}");
+}
+
+#[test]
+fn an_interrupted_key_generate_matches_its_schema_and_goldens() {
+    // Interrupted with its pair written: the same request registers it.
+    let world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::GenerationAfterPublicWrite).open_service(data)
+    });
+    let interrupted = world.execute(
+        REQUEST_1,
+        world.generate("Work laptop", Some(mutation::PASSPHRASE)),
+    );
+    assert_eq!(interrupted.outcome, Outcome::Partial);
+    assert_generation_contract("key_generate_interrupted", &interrupted);
+
+    // Interrupted before its pair was complete: its retry is final.
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::GenerationAfterPrivateWrite).open_service(data)
+    });
+    world.execute(
+        REQUEST_1,
+        world.generate("Work laptop", Some(mutation::PASSPHRASE)),
+    );
+    world.reopen();
+    let retained = world.execute(
+        REQUEST_1,
+        world.generate("Work laptop", Some(mutation::PASSPHRASE)),
+    );
+    assert_eq!(retained.code, ResultCode::RecoveryRequired);
+    assert_generation_contract("key_generate_retained", &retained);
+}

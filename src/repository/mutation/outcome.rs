@@ -125,8 +125,6 @@ pub(crate) fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCo
 }
 
 /// The code a mutation reports for a failure of a key-material operation.
-// Used by the key bindings, which are not bound yet.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn key_material_error_code(kind: KeyMaterialErrorKind) -> ResultCode {
     match kind {
         KeyMaterialErrorKind::InvalidLabel | KeyMaterialErrorKind::InvalidPassphrase => {
@@ -227,6 +225,19 @@ pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
     }
 }
 
+/// The code of what `generate_shared_key` returns.
+///
+/// `key generate` reports `ok` for `AlreadyCreated`, from what its
+/// binding knows: the operation ID is the request's own, so a key that
+/// operation already created is the key this request generated.
+pub(crate) fn generate_key_outcome_code(outcome: &GenerateSharedKeyOutcome) -> ResultCode {
+    match outcome {
+        GenerateSharedKeyOutcome::Created(_) => ResultCode::Ok,
+        GenerateSharedKeyOutcome::AlreadyCreated(_) => ResultCode::AlreadyApplied,
+        GenerateSharedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
+    }
+}
+
 /// The code of what `register_shared_key` returns. A source that is
 /// already registered is the request's end state, whichever request
 /// registered it.
@@ -308,14 +319,6 @@ pub(crate) mod unbound {
                 local_oid: _,
                 reason: PublishPendingReason::NoPublicationRemote,
             } => ResultCode::PublicationRemoteRequired,
-        }
-    }
-
-    pub(crate) fn generate_key_outcome_code(outcome: &GenerateSharedKeyOutcome) -> ResultCode {
-        match outcome {
-            GenerateSharedKeyOutcome::Created(_) => ResultCode::Ok,
-            GenerateSharedKeyOutcome::AlreadyCreated(_) => ResultCode::AlreadyApplied,
-            GenerateSharedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
         }
     }
 
@@ -551,6 +554,20 @@ pub(crate) fn recovery(
         ResultCode::IdentityRequired | ResultCode::InitialsRequired => {
             vec![at_root(RecoveryActionKind::RepoIdentitySet)]
         }
+        // A result that names no repository has none to inspect: it is
+        // of a request of the application, as a key generation is. When
+        // its record was left accepted, as that of a generation that was
+        // interrupted is, the same request is what continues it; when
+        // the record is finished, as that of a generation whose files
+        // were retained is, nothing is offered, and `operation show`
+        // says what the operation left.
+        ResultCode::RecoveryRequired if root.is_none() => {
+            if retry {
+                vec![retry_request()]
+            } else {
+                Vec::new()
+            }
+        }
         ResultCode::RecoveryRequired
         | ResultCode::InvalidSlugConfiguration
         | ResultCode::InvalidConfiguration => vec![at_root(RecoveryActionKind::RepoInspect)],
@@ -572,9 +589,9 @@ pub(crate) fn recovery(
         // Decided: these have no action of their own. They are the codes
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
-        // refreshed or rebuilt, a key imported, selected, cleared or removed. The
-        // same request is offered when its record was left accepted, and
-        // nothing otherwise.
+        // refreshed or rebuilt, a key generated, imported, selected,
+        // cleared or removed. The same request is offered when its record
+        // was left accepted, and nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
         | ResultCode::Cancelled
@@ -598,11 +615,12 @@ pub(crate) fn recovery(
         | ResultCode::WorktreeConflicted
         | ResultCode::RemoteNameConflict
         | ResultCode::InvalidRemote
-        // A key that is not registered, and a key that is selected: the
-        // code says what is missing, and the command that resolves it is
-        // the caller's to choose.
+        // A key that is not registered, a key that is selected, and a
+        // key store that cannot be used: the code says what is missing,
+        // and the command that resolves it is the caller's to choose.
         | ResultCode::KeyNotFound
         | ResultCode::SelectedKeyInUse
+        | ResultCode::KeyUnavailable
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -629,7 +647,6 @@ pub(crate) fn recovery(
         | ResultCode::RemoteBranchDeleted
         | ResultCode::PushRejected
         | ResultCode::NoSelectedKey
-        | ResultCode::KeyUnavailable
         | ResultCode::KeyRejected
         | ResultCode::UnlockRequired
         | ResultCode::UnlockFailed
