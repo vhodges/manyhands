@@ -42,6 +42,7 @@
         "worktree",
         "paths",
         "paths_complete",
+        "committed",
         "request_id",
         "files_changed",
         "git_state_changed"
@@ -99,6 +100,10 @@
         },
         "paths_complete": {
           "description": "Whether paths is all of them. False when there are more than are listed, or the worktree could not be read: git status in the worktree then says what is there.",
+          "type": "boolean"
+        },
+        "committed": {
+          "description": "Whether the operation recorded that it passed the point where its work is committed: for a save, its checkpoint; for an enablement, its initialization commit. The command leaves that commit where it is: abandoning undoes nothing.",
           "type": "boolean"
         },
         "request_id": {

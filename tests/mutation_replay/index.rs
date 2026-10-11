@@ -244,7 +244,11 @@ fn a_failed_refresh_or_rebuild_is_an_error_that_only_its_own_retry_clears() {
         );
         assert_eq!(failed.effects, Effects::not_requested(), "{command}");
         assert_eq!(failed.data, None);
-        assert_eq!(recovery_actions(&failed), ["request.retry"], "{command}");
+        assert_eq!(
+            crate::support::mutation::recovery_before_own_abandon(&failed),
+            ["request.retry"],
+            "{command}"
+        );
         assert_eq!(
             failed.recovery[0].arguments["request_id"], REQUEST_1,
             "{command}"
@@ -488,7 +492,10 @@ fn a_rebuild_of_a_corrupt_database_that_fails_is_finished_by_its_retry() {
         (Outcome::Error, ResultCode::InternalError)
     );
     assert_eq!(failed.effects, Effects::not_requested());
-    assert_eq!(recovery_actions(&failed), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&failed),
+        ["request.retry"]
+    );
     let operation = failed.operation_id.clone().expect("an operation");
     assert!(matches!(
         world.journal_row(&operation),

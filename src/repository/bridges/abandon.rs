@@ -17,14 +17,27 @@
 //!   bootstrap lease, which a creation holds before there is a
 //!   repository to have a lease. Both are taken here, so a call that
 //!   holds either makes this one `RepositoryBusy`;
-//! - the heartbeat of an index owner, which a row in the state
-//!   `indexing` has from the call that claimed it after that call let
-//!   the repository lease go. A row whose heartbeat is no older than the
-//!   time after which another call may take the claim over is busy.
+//! - a heartbeat, for the two kinds of call that work under a row with
+//!   no lease held: an index owner, whose row is in the state `indexing`
+//!   from the call that claimed it, and a rebuild, which observes the
+//!   whole repository unleased and touches its row throughout. A row
+//!   whose heartbeat is no older than the time after which another call
+//!   may take an index claim over is busy.
 //!
-//! A call that is between two leases, as a creation is for an instant
-//! before it goes on as an enablement, finds its row closed when it
-//! takes the next one and is refused there, having written nothing more.
+//! **A row that was closed is never reopened.** The checks above leave
+//! instants in which a call is at work with neither sign showing: a
+//! creation between its leases, before it goes on as an enablement; a
+//! local synchronization between binding its row and refreshing; an
+//! authoring call between letting its lease go and completing its row.
+//! What makes those safe is not the checks but the journal: every
+//! statement that changes a row by its ID refuses an abandoned one, so
+//! the call that was still running stops with `OperationAbandoned` at
+//! its next step and writes nothing further under the row.
+//!
+//! **Only an operation of the local journal alone.** An ID the remote
+//! journal or the key journal holds is not abandoned here, even when the
+//! local journal holds a row under it, as it does for the index hand-off
+//! of a synchronization: that row is the synchronization's to end.
 
 use std::path::{Path, PathBuf};
 
@@ -33,9 +46,9 @@ use rusqlite::TransactionBehavior;
 use time::OffsetDateTime;
 
 use super::super::{
-    INDEX_OWNER_STALE_AFTER, OperationId, ReadError, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService, bootstrap_lease, cache_write_guard, canonical,
-    migrate_registry, mutation, open_registry,
+    AuthoringKind, INDEX_OWNER_STALE_AFTER, OperationId, ReadError, RepositoryError,
+    RepositoryErrorKind, RepositoryOperation, RepositoryService, authoring_kind_segment,
+    bootstrap_lease, cache_write_guard, canonical, migrate_registry, mutation, open_registry,
     recovery::{self, LocalRow, LocalStanding},
     repository_lease,
 };
@@ -96,6 +109,10 @@ pub struct OperationRemains {
     /// Whether `paths` is all of them. It is not when there are more than
     /// are listed, or when the worktree could not be read.
     pub paths_complete: bool,
+    /// Whether the operation recorded that it passed the point where its
+    /// work is committed. An abandon leaves that commit where it is: it
+    /// is not undone, and nothing says it was abandoned but this.
+    pub committed: bool,
     /// The request whose record holds the operation and is not finished:
     /// the one an abandon releases.
     pub owner: Option<String>,
@@ -106,6 +123,10 @@ pub struct OperationRemains {
 pub enum AbandonableOperation {
     /// The local journal holds no row of the ID for the root.
     NotFound,
+    /// The remote journal or the key journal holds an operation of the
+    /// ID: it is not a local operation, whatever the local journal holds
+    /// under it.
+    AnotherJournal,
     /// The operation is pending, and this is what it has left.
     Pending(OperationRemains),
     /// The operation ran to its end.
@@ -121,6 +142,9 @@ pub enum AbandonableOperation {
 pub enum AbandonOperationOutcome {
     /// The row was pending and is closed. Nothing else was changed.
     Abandoned(OperationRemains),
+    /// The remote journal or the key journal holds an operation of the
+    /// ID. Nothing was changed.
+    AnotherJournal,
     /// The local journal holds no row of the ID for the root.
     NotFound,
     /// The row is pending and no longer stands as the caller saw it.
@@ -158,37 +182,72 @@ fn journal_root(root: &Path) -> Result<PathBuf, RepositoryError> {
         .join(name))
 }
 
+/// What an operation writes in a worktree, by its kind.
+enum Writes {
+    /// The files of one item, in that item's own worktree.
+    Item,
+    /// The configuration file, in the primary worktree.
+    Configuration,
+    /// No file of any worktree.
+    Nothing,
+}
+
+/// What `operation` writes in a worktree. Every operation is named: one
+/// added later does not compile until it is decided here, so that an
+/// operation that writes a file is never reported as having left none.
+fn writes(operation: RepositoryOperation) -> Writes {
+    match operation {
+        RepositoryOperation::PrepareContext
+        | RepositoryOperation::SaveDocument
+        | RepositoryOperation::SaveTicket
+        | RepositoryOperation::SubmitComment => Writes::Item,
+        RepositoryOperation::CreateAndEnable
+        | RepositoryOperation::Enable
+        | RepositoryOperation::SetPublicationRemote => Writes::Configuration,
+        // A remote is Git configuration, a registration and the index
+        // are Manyhands' own, and the rest begin no row.
+        RepositoryOperation::AddRemote
+        | RepositoryOperation::RemoveRemote
+        | RepositoryOperation::RemoveRegistration
+        | RepositoryOperation::RefreshRepository
+        | RepositoryOperation::RebuildRepository
+        | RepositoryOperation::OpenRegistry
+        | RepositoryOperation::RegisterSharedKey
+        | RepositoryOperation::SelectSharedKey
+        | RepositoryOperation::ClearSharedKeySelection
+        | RepositoryOperation::UnregisterSharedKey
+        | RepositoryOperation::ListSharedKeys
+        | RepositoryOperation::PreflightGeneratedKeyDeletion
+        | RepositoryOperation::Inspect
+        | RepositoryOperation::ListRemotes
+        | RepositoryOperation::RepositorySnapshot
+        | RepositoryOperation::Read
+        | RepositoryOperation::AbandonOperation => Writes::Nothing,
+    }
+}
+
 /// The item an authoring operation writes, from its row's target:
 /// `authoring-context-v1/<kind>/<item ID>/<intent>`, followed for a write
 /// by the paths it names.
-fn authoring_item(action: &str, target: Option<&str>) -> Option<String> {
-    if !matches!(
-        action,
-        "prepare_context" | "save_document" | "save_ticket" | "submit_comment"
-    ) {
-        return None;
-    }
+fn authoring_item(target: Option<&str>) -> Option<String> {
     let context = target?.split('\0').next()?;
     let mut parts = context.split('/');
     if parts.next() != Some("authoring-context-v1") {
         return None;
     }
-    let _kind = parts.next()?;
+    let kind = parts.next()?;
+    if ![AuthoringKind::Document, AuthoringKind::Ticket]
+        .iter()
+        .any(|known| authoring_kind_segment(known) == kind)
+    {
+        return None;
+    }
     let item_id = parts.next()?;
     // Only an item ID is passed on: it becomes a directory name.
     item_id
         .parse::<canonical::ItemId>()
         .ok()
         .map(|item_id| item_id.to_string())
-}
-
-/// Whether the action writes the configuration file in the primary
-/// worktree.
-fn writes_configuration(action: &str) -> bool {
-    matches!(
-        action,
-        "create_and_enable" | "enable" | "set_publication_remote"
-    )
 }
 
 /// The paths of `worktree` that differ from its head, each joined to
@@ -242,28 +301,41 @@ fn differing_paths(worktree: &Path, prefix: &Path, only: Option<&str>) -> (Vec<S
 /// What the pending `row` of the repository at `root` has left. Git is
 /// read and nothing is written.
 fn remains(root: &Path, row: &LocalRow, owner: Option<String>) -> OperationRemains {
-    let item_id = authoring_item(&row.action, row.target.as_deref());
-    let (worktree, paths, paths_complete) = if let Some(item_id) = &item_id {
-        let relative = Path::new(WORKTREES_DIRECTORY).join(item_id);
-        let directory = root.join(&relative);
-        if directory.is_dir() {
-            let (paths, complete) = differing_paths(&directory, &relative, None);
-            (relative_path_string(&relative), paths, complete)
-        } else {
-            // No worktree: the operation stopped before it made one.
-            (None, Vec::new(), true)
+    // An action this build does not know is one it cannot say anything
+    // of: nothing is named, and the list is not called complete.
+    let (item_id, worktree, paths, paths_complete) = match row.operation().map(writes) {
+        Some(Writes::Item) => match authoring_item(row.target.as_deref()) {
+            Some(item_id) => {
+                let relative = Path::new(WORKTREES_DIRECTORY).join(&item_id);
+                let directory = root.join(&relative);
+                if directory.is_dir() {
+                    let (paths, complete) = differing_paths(&directory, &relative, None);
+                    (
+                        Some(item_id),
+                        relative_path_string(&relative),
+                        paths,
+                        complete,
+                    )
+                } else {
+                    // No worktree: the operation stopped before it made
+                    // one.
+                    (Some(item_id), None, Vec::new(), true)
+                }
+            }
+            None => (None, None, Vec::new(), false),
+        },
+        Some(Writes::Configuration) => {
+            if root.join(".git").exists() {
+                let (paths, complete) =
+                    differing_paths(root, Path::new(""), Some(canonical::CONFIG_PATH));
+                (None, Some(".".to_owned()), paths, complete)
+            } else {
+                // No repository: the creation stopped before it made one.
+                (None, None, Vec::new(), true)
+            }
         }
-    } else if writes_configuration(&row.action) {
-        if root.join(".git").exists() {
-            let (paths, complete) =
-                differing_paths(root, Path::new(""), Some(canonical::CONFIG_PATH));
-            (Some(".".to_owned()), paths, complete)
-        } else {
-            // No repository: the creation stopped before it made one.
-            (None, Vec::new(), true)
-        }
-    } else {
-        (None, Vec::new(), true)
+        Some(Writes::Nothing) => (None, None, Vec::new(), true),
+        None => (None, None, Vec::new(), false),
     };
     OperationRemains {
         action: row.action.clone(),
@@ -275,8 +347,14 @@ fn remains(root: &Path, row: &LocalRow, owner: Option<String>) -> OperationRemai
         worktree,
         paths,
         paths_complete,
+        committed: row.is_checkpointed(),
         owner,
     }
+}
+
+/// The time before which a heartbeat is too old to be a live call's.
+pub(in super::super) fn stale_heartbeat() -> i64 {
+    OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER
 }
 
 impl RepositoryService {
@@ -296,17 +374,23 @@ impl RepositoryService {
             return Err(ReadError::new(ResultCode::InvalidPath));
         };
         let found = self.read_session(RepositoryOperation::Read, |connection| {
+            // Asked first: such an ID is not a local operation's,
+            // whatever the local journal holds under it.
+            if recovery::held_by_another_journal(connection, &operation_id.to_string())? {
+                return Ok(Err(AbandonableOperation::AnotherJournal));
+            }
             let Some(row) = recovery::local_row(connection, root_key, operation_id)? else {
-                return Ok(None);
+                return Ok(Err(AbandonableOperation::NotFound));
             };
             if !row.is_well_formed() {
                 return Err(ReadError::new(ResultCode::InternalError));
             }
             let owner = mutation::operation_owner(connection, root_key, operation_id)?;
-            Ok(Some((row, owner)))
+            Ok(Ok((row, owner)))
         })?;
-        let Some((row, owner)) = found else {
-            return Ok(AbandonableOperation::NotFound);
+        let (row, owner) = match found {
+            Ok(found) => found,
+            Err(standing) => return Ok(standing),
         };
         Ok(match row.standing() {
             LocalStanding::Pending => AbandonableOperation::Pending(remains(&root, &row, owner)),
@@ -367,6 +451,11 @@ impl RepositoryService {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite)?;
+        if recovery::held_by_another_journal(&transaction, &operation_id.to_string())
+            .map_err(sqlite)?
+        {
+            return Ok(AbandonOperationOutcome::AnotherJournal);
+        }
         let Some(row) =
             recovery::local_row(&transaction, root_key, operation_id).map_err(sqlite)?
         else {
@@ -386,16 +475,14 @@ impl RepositoryService {
             LocalStanding::Rejected => return Ok(AbandonOperationOutcome::Rejected),
             LocalStanding::Abandoned => return Ok(AbandonOperationOutcome::AlreadyAbandoned),
         }
-        // An index owner whose heartbeat is fresh is at work, with no
-        // lease held. A clock that reads earlier than the heartbeat does
-        // not make it stale.
-        let stale_before = OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER;
-        if row.state == "indexing" && row.observed_at >= stale_before {
+        // An index owner or a rebuild whose heartbeat is fresh is at
+        // work, with no lease held.
+        if row.has_live_heartbeat(stale_heartbeat()) {
             return Err(RepositoryError::new(
                 operation,
                 Some(root.clone()),
                 RepositoryErrorKind::RepositoryBusy,
-                "the operation is being indexed by another call",
+                "another call is at work under the operation",
             ));
         }
         if let Some(expected) = &expected

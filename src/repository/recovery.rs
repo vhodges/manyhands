@@ -462,6 +462,8 @@ fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
     existing == requested || (existing == "create_and_enable" && requested == "enable")
 }
 
+/// The state of a row whose index hand-off a call has claimed.
+const INDEXING_STATE: &str = "indexing";
 const REJECTED_STEP: &str = "rejected";
 /// The step of a row that `abandon_operation` closed. Such a row is
 /// `completed`, so it blocks nothing, and is told apart from a row that
@@ -482,18 +484,69 @@ fn is_checkpoint_step(step: &str) -> bool {
 
 /// Closes the row of a call that was rejected and left nothing behind. The row
 /// no longer blocks the repository, and a repeat of its ID begins again.
+///
+/// A row that was abandoned stays abandoned: the call that would discard it
+/// is told so with `OperationAbandoned`, and nothing is written.
 pub(super) fn discard_operation(
     connection: &Connection,
     record_id: i64,
 ) -> Result<(), RepositoryError> {
-    connection
+    let discarded = connection
         .execute(
-            "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3 WHERE id = ?1",
+            &format!(
+                "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
+                  WHERE id = ?1 AND {NOT_ABANDONED}"
+            ),
             params![record_id, REJECTED_STEP, now()],
         )
         .map_err(RepositoryError::sqlite)?;
+    if discarded == 0 {
+        refuse_abandoned(connection, record_id)?;
+    }
     Ok(())
 }
+
+/// Whether `step`, the last step of a row that is `completed`, says the
+/// row was closed as abandoned. Whoever reads a row's state for itself
+/// asks this before it takes `completed` to mean that the work was done.
+pub(super) fn is_abandoned_step(step: Option<&str>) -> bool {
+    step == Some(ABANDONED_STEP)
+}
+
+/// What every statement that changes a row by its ID holds of the row: it
+/// was not closed as abandoned. An abandoned row is final. No call
+/// reopens it, completes it, rejects it or records a step on it, whatever
+/// it was doing when the row was closed under it.
+pub(super) const NOT_ABANDONED: &str =
+    "NOT (state = 'completed' AND completed_step IS 'abandoned')";
+
+/// Fails with `OperationAbandoned` when the row `record_id` was closed
+/// as abandoned. A statement guarded by `NOT_ABANDONED` that changed no
+/// row asks this, and its caller stops there, having written nothing.
+///
+/// The error names no operation or root: the caller knows both and sets
+/// them with `for_operation`.
+fn refuse_abandoned(connection: &Connection, record_id: i64) -> Result<(), RepositoryError> {
+    let is_abandoned: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM operation_records
+              WHERE id = ?1 AND state = 'completed' AND completed_step = ?2)",
+            params![record_id, ABANDONED_STEP],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    if is_abandoned {
+        return Err(RepositoryError::new(
+            RepositoryOperation::Read,
+            None,
+            RepositoryErrorKind::OperationAbandoned,
+            ABANDONED_MESSAGE,
+        ));
+    }
+    Ok(())
+}
+
+const ABANDONED_MESSAGE: &str = "the operation was abandoned and its ID cannot be used again";
 
 /// Where one operation stands in its journal: the local one here, the
 /// remote one or the key-material one. Each journal answers through a
@@ -715,6 +768,34 @@ impl LocalRow {
         }
     }
 
+    /// Whether the row shows a call at work under it that holds no
+    /// lease: the heartbeat of an index owner, which a row in the state
+    /// `indexing` has from the call that claimed it, or of a rebuild,
+    /// which touches its row for as long as it runs. `stale_before` is
+    /// the time before which a heartbeat is too old to be anyone's. A
+    /// clock that reads earlier than the heartbeat does not make it
+    /// stale.
+    ///
+    /// Every other pending row is worked under with a lease held, which
+    /// whoever asks this takes or cannot take.
+    pub(super) fn has_live_heartbeat(&self, stale_before: i64) -> bool {
+        let beats = self.state == INDEXING_STATE
+            || operation_from_name(&self.action) == Some(RepositoryOperation::RebuildRepository);
+        self.state != "completed" && beats && self.observed_at >= stale_before
+    }
+
+    /// Whether the row records that the operation passed the point where
+    /// its work is committed; see `is_checkpoint_step`.
+    pub(super) fn is_checkpointed(&self) -> bool {
+        self.step.as_deref().is_some_and(is_checkpoint_step)
+    }
+
+    /// The operation the row is of. `None` for an action this build
+    /// does not know.
+    pub(super) fn operation(&self) -> Option<RepositoryOperation> {
+        operation_from_name(&self.action)
+    }
+
     /// Whether the row's state and step have the form of the names the
     /// journal stores; see `is_stored_name`.
     pub(super) fn is_well_formed(&self) -> bool {
@@ -758,23 +839,92 @@ pub(super) fn abandon_row(connection: &Connection, record_id: i64) -> rusqlite::
     )? == 1)
 }
 
-/// The operation IDs of the local rows of `root_path` that are pending,
-/// oldest first. A row without an ID, which only an index made before
-/// operations had IDs holds, is left out: nothing can name it.
-pub(super) fn pending_operation_ids(
+/// Sets the heartbeat of the pending row `record_id` to `rested_at`, a
+/// time at which no heartbeat is fresh: the call that touched the row has
+/// ended and left it pending. A row that has ended is not touched.
+pub(super) fn rest_pending(
+    connection: &Connection,
+    record_id: i64,
+    rested_at: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state != 'completed'",
+        params![record_id, rested_at],
+    )?;
+    Ok(())
+}
+
+/// The pending local rows of `root_path`, oldest first. A row without an
+/// ID, which only an index made before operations had IDs holds, is left
+/// out: nothing can name it.
+pub(super) fn pending_rows(
     connection: &Connection,
     root_path: &str,
-) -> rusqlite::Result<Vec<String>> {
+) -> rusqlite::Result<Vec<(String, LocalRow)>> {
     connection
         .prepare(
-            "SELECT operation_ulid FROM operation_records
+            "SELECT operation_ulid, id, action, target, state, completed_step, observed_at
+               FROM operation_records
               WHERE root_path = ?1 AND state != 'completed' AND operation_ulid IS NOT NULL
               ORDER BY id",
         )?
-        .query_map([root_path], |row| row.get(0))?
+        .query_map([root_path], |row| {
+            Ok((
+                row.get(0)?,
+                LocalRow {
+                    id: row.get(1)?,
+                    action: row.get(2)?,
+                    target: row.get(3)?,
+                    state: row.get(4)?,
+                    step: row.get(5)?,
+                    observed_at: row.get(6)?,
+                },
+            ))
+        })?
         .collect()
 }
 
+/// Whether the remote journal or the key journal holds an operation of
+/// the ID, in any repository. Such an operation is not a local one even
+/// when the local journal holds a row under its ID, as it does for the
+/// index hand-off of a synchronization: the row is that operation's to
+/// end, and the operation has its own way out.
+pub(super) fn held_by_another_journal(
+    connection: &Connection,
+    operation_id: &str,
+) -> rusqlite::Result<bool> {
+    for (table, column) in [
+        ("remote_operation_records", "operation_ulid"),
+        ("key_material_operations", "operation_id"),
+    ] {
+        // An index that has never held such an operation may lack the
+        // table.
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [table],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            continue;
+        }
+        let held: bool = connection.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column} = ?1)"),
+            [operation_id],
+            |row| row.get(0),
+        )?;
+        if held {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Records the state or step `state` on the row `record_id`.
+///
+/// A row that was abandoned is not changed: the call fails with
+/// `OperationAbandoned`, and its caller stops, having written nothing
+/// under the row. This is what keeps a call that was still at work when
+/// its row was closed from reopening it.
 pub(super) fn advance_after_observation(
     connection: &Connection,
     record_id: i64,
@@ -782,9 +932,10 @@ pub(super) fn advance_after_observation(
     context: Option<&Path>,
     persisted_context_count: Option<i64>,
 ) -> Result<(), RepositoryError> {
-    connection
+    let advanced = connection
         .execute(
-            "UPDATE operation_records
+            &format!(
+                "UPDATE operation_records
          SET state = ?2,
                completed_step = CASE
                     WHEN ?2 = 'completed' THEN COALESCE(completed_step, 'completed')
@@ -794,7 +945,8 @@ pub(super) fn advance_after_observation(
                END,
                context_path = ?3,
               persisted_context_count = COALESCE(?4, persisted_context_count), observed_at = ?5
-          WHERE id = ?1 AND NOT (state = 'completed' AND ?2 = 'error')",
+          WHERE id = ?1 AND NOT (state = 'completed' AND ?2 = 'error') AND {NOT_ABANDONED}"
+            ),
             params![
                 record_id,
                 state,
@@ -804,6 +956,24 @@ pub(super) fn advance_after_observation(
             ],
         )
         .map_err(RepositoryError::sqlite)?;
+    // A completed row that is told of an error is left as it is, as
+    // before. Recording an error on an abandoned row is the same: the
+    // call that failed is already stopping.
+    if advanced == 0 && state != "error" {
+        refuse_abandoned(connection, record_id)?;
+    }
+    Ok(())
+}
+
+/// Marks the pending row `record_id` as touched now: the heartbeat of a
+/// call that works under the row with no lease held and no index claim,
+/// as a rebuild does while it observes. Nothing else of the row changes,
+/// and a row that has ended is not touched.
+pub(super) fn touch_pending(connection: &Connection, record_id: i64) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state != 'completed'",
+        params![record_id, now()],
+    )?;
     Ok(())
 }
 
@@ -1023,12 +1193,12 @@ fn mismatch(operation: RepositoryOperation, root: &Path) -> RepositoryError {
     )
 }
 
-fn abandoned(operation: RepositoryOperation, root: &Path) -> RepositoryError {
+pub(super) fn abandoned(operation: RepositoryOperation, root: &Path) -> RepositoryError {
     RepositoryError::new(
         operation,
         Some(root.to_owned()),
         RepositoryErrorKind::OperationAbandoned,
-        "the operation was abandoned and its ID cannot be used again",
+        ABANDONED_MESSAGE,
     )
 }
 
@@ -1138,4 +1308,200 @@ pub(super) fn publish_remote_history_marker(data: &std::path::Path) -> std::io::
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod abandoned_row_tests {
+    //! An abandoned row is final: every statement that changes a row by
+    //! its ID leaves one as it is, and the two a running call makes under
+    //! its own row say so with `OperationAbandoned`.
+
+    use super::*;
+
+    const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAB";
+
+    /// A journal holding one row, in `state` with `step`, touched at
+    /// `observed_at`.
+    fn journal(action: &str, state: &str, step: Option<&str>, observed_at: i64) -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        // The table the journal refers to; no row of it is needed.
+        connection
+            .execute_batch("CREATE TABLE repositories (id INTEGER PRIMARY KEY, root_path TEXT)")
+            .unwrap();
+        migrate_operation_records(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO operation_records
+                    (id, root_path, operation_ulid, action, target, state, completed_step, observed_at)
+                 VALUES (1, '/repository', ?1, ?2, '', ?3, ?4, ?5)",
+                params![ID, action, state, step, observed_at],
+            )
+            .unwrap();
+        connection
+    }
+
+    fn abandoned_journal() -> Connection {
+        let connection = journal(
+            "save_ticket",
+            "worktree_observed",
+            Some("worktree_observed"),
+            7,
+        );
+        assert!(abandon_row(&connection, 1).unwrap());
+        connection
+    }
+
+    fn row(connection: &Connection) -> (String, Option<String>, i64, i64) {
+        connection
+            .query_row(
+                "SELECT state, completed_step, index_owner_epoch, persisted_context_count
+                   FROM operation_records WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap()
+    }
+
+    fn abandoned_row() -> (String, Option<String>, i64, i64) {
+        ("completed".to_owned(), Some("abandoned".to_owned()), 0, 0)
+    }
+
+    #[test]
+    fn no_step_or_state_is_recorded_on_an_abandoned_row() {
+        for state in [
+            "observed",
+            "persisted",
+            "retry",
+            "failed",
+            "indexing",
+            "completed",
+            "authoring_checkpoint_observed",
+            "authoritative_observed",
+            "repository_initialized",
+        ] {
+            let connection = abandoned_journal();
+            let refused =
+                advance_after_observation(&connection, 1, state, None, Some(3)).unwrap_err();
+            assert_eq!(
+                refused.kind,
+                RepositoryErrorKind::OperationAbandoned,
+                "{state}"
+            );
+            assert_eq!(row(&connection), abandoned_row(), "{state}");
+        }
+        // A call that failed and records its error is already stopping:
+        // nothing is recorded, and nothing more is said.
+        let connection = abandoned_journal();
+        advance_after_observation(&connection, 1, "error", None, None).unwrap();
+        assert_eq!(row(&connection), abandoned_row());
+    }
+
+    #[test]
+    fn an_abandoned_row_is_not_discarded_as_rejected() {
+        let connection = abandoned_journal();
+        let refused = discard_operation(&connection, 1).unwrap_err();
+        assert_eq!(refused.kind, RepositoryErrorKind::OperationAbandoned);
+        assert_eq!(row(&connection), abandoned_row());
+    }
+
+    #[test]
+    fn an_abandoned_row_is_not_claimed_touched_or_abandoned_again() {
+        let connection = abandoned_journal();
+        assert!(claim_indexing(&connection, 1, i64::MAX).unwrap().is_none());
+        let owner = IndexOwner {
+            record_id: 1,
+            epoch: 0,
+        };
+        assert!(!transition_indexing(&connection, owner, "completed", None).unwrap());
+        assert!(!touch_indexing(&connection, owner).unwrap());
+        assert!(
+            !record_owned_persisted_context(&connection, owner, Path::new("/context")).unwrap()
+        );
+        record_persisted_context(&connection, 1, Path::new("/context")).unwrap();
+        touch_pending(&connection, 1).unwrap();
+        assert!(!abandon_row(&connection, 1).unwrap());
+        assert_eq!(row(&connection), abandoned_row());
+        let observed_at: i64 = connection
+            .query_row("SELECT observed_at FROM operation_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        // Still the time it was abandoned at: no heartbeat moved it.
+        assert!(observed_at > 7);
+        assert!(lookup_row(&connection).standing() == LocalStanding::Abandoned);
+    }
+
+    fn lookup_row(connection: &Connection) -> LocalRow {
+        local_row(connection, "/repository", OperationId::parse(ID).unwrap())
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_row_that_is_not_abandoned_is_advanced_and_discarded_as_before() {
+        let connection = journal("rebuild", "created", None, 7);
+        advance_after_observation(&connection, 1, "observed", None, None).unwrap();
+        assert_eq!(row(&connection).0, "observed");
+        discard_operation(&connection, 1).unwrap();
+        assert_eq!(
+            row(&connection),
+            ("completed".to_owned(), Some("rejected".to_owned()), 0, 0)
+        );
+        // An error is not recorded on a row that completed, as before.
+        advance_after_observation(&connection, 1, "error", None, None).unwrap();
+        assert_eq!(row(&connection).0, "completed");
+    }
+
+    #[test]
+    fn only_an_index_owner_and_a_rebuild_show_a_call_at_work_by_a_heartbeat() {
+        let now = 1_000;
+        let stale_before = now - 3;
+        for (action, state, observed_at, live) in [
+            ("refresh", "indexing", now, true),
+            ("save_ticket", "indexing", stale_before, true),
+            ("save_ticket", "indexing", stale_before - 1, false),
+            ("rebuild", "created", now, true),
+            ("rebuild", "observed", now, true),
+            ("rebuild", "retry", stale_before - 1, false),
+            // A clock set back does not make a heartbeat stale.
+            ("rebuild", "created", now + 60, true),
+            // Worked under with a lease held, which a read cannot see.
+            ("save_ticket", "worktree_observed", now, false),
+            ("enable", "created", now, false),
+            // Ended.
+            ("rebuild", "completed", now, false),
+        ] {
+            let connection = journal(action, state, None, observed_at);
+            assert_eq!(
+                lookup_row(&connection).has_live_heartbeat(stale_before),
+                live,
+                "{action} {state} {observed_at}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_the_remote_or_the_key_journal_holds_is_not_a_local_operation_s() {
+        let connection = journal("refresh", "failed", None, 7);
+        // Neither table is there: nothing holds it.
+        assert!(!held_by_another_journal(&connection, ID).unwrap());
+        connection
+            .execute_batch(
+                "CREATE TABLE remote_operation_records (operation_ulid TEXT);
+                 CREATE TABLE key_material_operations (operation_id TEXT);",
+            )
+            .unwrap();
+        assert!(!held_by_another_journal(&connection, ID).unwrap());
+        connection
+            .execute("INSERT INTO key_material_operations VALUES (?1)", [ID])
+            .unwrap();
+        assert!(held_by_another_journal(&connection, ID).unwrap());
+        connection
+            .execute("DELETE FROM key_material_operations", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO remote_operation_records VALUES (?1)", [ID])
+            .unwrap();
+        assert!(held_by_another_journal(&connection, ID).unwrap());
+    }
 }

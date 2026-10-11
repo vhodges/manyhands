@@ -439,8 +439,9 @@ fn foreign_source() -> String {
 }
 
 /// Asserts that `envelope` is `external_change` with nothing done, and
-/// that it offers no action: the caller reads the item again and submits
-/// a new request.
+/// that it does not offer the same request again: the caller reads the
+/// item again and submits a new request. Where the request's own
+/// operation was left pending, it is offered to be abandoned.
 fn assert_external_change(envelope: &Envelope<MutationDataDto>, what: &str) {
     assert_eq!(
         (envelope.outcome, envelope.code, envelope.failure_class()),
@@ -452,7 +453,10 @@ fn assert_external_change(envelope: &Envelope<MutationDataDto>, what: &str) {
         "{what}"
     );
     assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
-    assert!(recovery_actions(envelope).is_empty(), "{what}");
+    assert!(
+        crate::support::mutation::recovery_apart_from_own_abandon(envelope).is_empty(),
+        "{what}"
+    );
 }
 
 #[test]
@@ -596,7 +600,7 @@ fn a_foreign_commit_over_the_commit_of_a_request_in_flight_reports_that_commit()
     assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
     assert_eq!(retry.effects.discovery, DiscoveryEffect::Pending);
     assert_eq!(retry.effects.commit_oid, Some(own));
-    assert!(recovery_actions(&retry).is_empty());
+    assert!(crate::support::mutation::recovery_before_own_abandon(&retry).is_empty());
     assert_eq!(world.branch_tip(TICKET_A), Some(foreign));
     assert_eq!(world.worktree_source(TICKET_A), foreign_source());
     let record = world.record(REQUEST_1).expect("the record stays");
@@ -886,7 +890,10 @@ fn a_commit_whose_journal_step_was_refused_is_finished_by_a_retry() {
     assert_eq!(first.effects.write, WriteEffect::Written);
     assert_eq!(first.effects.checkpoint, CheckpointEffect::Committed);
     assert_eq!(first.effects.commit_oid, Some(commit.clone()));
-    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&first),
+        ["request.retry"]
+    );
     held.release();
     let operation_id = first.operation_id.clone().unwrap();
     assert!(world.journal_row(&operation_id).in_flight());
@@ -1893,7 +1900,10 @@ fn a_hand_off_that_keeps_failing_keeps_the_commit_and_the_record() {
         assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
         assert_eq!(retry.effects.discovery, DiscoveryEffect::Pending);
         assert_eq!(retry.effects.commit_oid, Some(commit.clone()));
-        assert_eq!(recovery_actions(&retry), ["operation.resume"]);
+        assert_eq!(
+            crate::support::mutation::recovery_before_own_abandon(&retry),
+            ["operation.resume"]
+        );
         assert_eq!(world.branch_commits(TICKET_A), 1, "attempt {attempt}");
         let record = world.record(REQUEST_1).expect("the record stays");
         assert_eq!(
@@ -2205,7 +2215,7 @@ fn a_foreign_revert_of_the_commit_of_a_request_in_flight_is_not_undone() {
     );
     assert_eq!(retry.effects.checkpoint, CheckpointEffect::Committed);
     assert_eq!(retry.effects.commit_oid, Some(own));
-    assert!(recovery_actions(&retry).is_empty());
+    assert!(crate::support::mutation::recovery_before_own_abandon(&retry).is_empty());
     assert_eq!(world.branch_tip(TICKET_A), Some(revert));
     assert_eq!(world.branch_commits(TICKET_A), 2);
     assert_eq!(world.worktree_source(TICKET_A), before);

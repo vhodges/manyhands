@@ -441,7 +441,10 @@ fn interrupted_move() -> (World, Mutation) {
         (first.outcome, first.code),
         (Outcome::Error, ResultCode::InternalError)
     );
-    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&first),
+        ["request.retry"]
+    );
     assert_eq!(
         world.record(REQUEST_1).map(|record| record.state),
         Some(RequestState::Accepted)
@@ -476,8 +479,12 @@ fn a_foreign_commit_to_either_path_of_a_move_in_flight_is_an_external_change() {
             "{what}"
         );
         assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
-        // Read the item again and use a new request: no action is offered.
-        assert!(recovery_actions(&envelope).is_empty(), "{what}");
+        // Read the item again and use a new request: the same request
+        // is not offered. Its operation is, to be abandoned.
+        assert!(
+            crate::support::mutation::recovery_before_own_abandon(&envelope).is_empty(),
+            "{what}"
+        );
         // Nothing was written, and the other commit is the branch's tip.
         assert_eq!(world.branch_tip(DOCUMENT), Some(foreign), "{what}");
         // The operation's row is still pending, so the record stays
@@ -546,7 +553,7 @@ fn an_edit_made_under_an_interrupted_move_is_not_committed_as_its_own() {
         )
     );
     assert_eq!(retry.effects, Effects::not_requested());
-    assert!(recovery_actions(&retry).is_empty());
+    assert!(crate::support::mutation::recovery_before_own_abandon(&retry).is_empty());
     // The row is pending, having recorded the steps that made the
     // context: the record stays accepted.
     let record = world.record(REQUEST_1).expect("the record stays");

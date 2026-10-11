@@ -46,7 +46,7 @@ pub use bridges::abandon::{
 };
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
-    cache_read_guard, cache_write_guard, repository_lease,
+    cache_read_guard, cache_write_guard, leases_are_free, repository_lease,
 };
 use discovery::{
     ObservedCommentThread, ObservedItem, RootConfiguration, RootObservation,
@@ -307,6 +307,26 @@ impl IndexOwnerHeartbeat {
         root: PathBuf,
         heartbeat_hook: Option<Box<dyn FnOnce() + Send>>,
     ) -> Self {
+        Self::beating(heartbeat_hook, move || {
+            // Heartbeats use their own brief cache guard so scans remain unguarded.
+            let _ = touch_refresh_index_owner(&registry_path, owner, &root);
+        })
+    }
+
+    /// The heartbeat of a rebuild, which claims no index ownership: its
+    /// row is touched for as long as the rebuild works under it, so that
+    /// the row shows a call at work while no lease is held.
+    fn start_for_rebuild(registry_path: PathBuf, record_id: i64, root: PathBuf) -> Self {
+        Self::beating(None, move || {
+            let _ = touch_rebuild_operation(&registry_path, record_id, &root);
+        })
+    }
+
+    /// Runs `touch` once in every heartbeat interval until dropped.
+    fn beating(
+        heartbeat_hook: Option<Box<dyn FnOnce() + Send>>,
+        touch: impl Fn() + Send + 'static,
+    ) -> Self {
         let (stop, stopped) = mpsc::channel();
         let worker = thread::spawn(move || {
             if let Some(hook) = heartbeat_hook {
@@ -315,10 +335,7 @@ impl IndexOwnerHeartbeat {
             loop {
                 match stopped.recv_timeout(INDEX_OWNER_HEARTBEAT_INTERVAL) {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        // Heartbeats use their own brief cache guard so scans remain unguarded.
-                        let _ = touch_refresh_index_owner(&registry_path, owner, &root);
-                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => touch(),
                 }
             }
         });
@@ -1285,8 +1302,22 @@ impl RepositoryService {
         self.replace_corrupt_cache(operation, &root)?;
         let operation_id = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
-            begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id
+            let record_id =
+                begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id;
+            // The row may be one an earlier call left: it is touched
+            // before the lease is let go, so that it shows this call at
+            // work from then on.
+            touch_rebuild_operation(&self.registry_path, record_id, &root)?;
+            record_id
         };
+        // The repository is observed with no lease held, for as long as
+        // reading it takes. The heartbeat is what says, meanwhile, that
+        // a call is at work under the row: an abandon of it is busy.
+        let heartbeat = IndexOwnerHeartbeat::start_for_rebuild(
+            self.registry_path.clone(),
+            operation_id,
+            root.clone(),
+        );
         let result = (|| {
             // As in a refresh: the time before the first observation.
             let observed_from = OffsetDateTime::now_utc().unix_timestamp();
@@ -1324,14 +1355,23 @@ impl RepositoryService {
             set_rebuild_operation(&self.registry_path, operation_id, "completed", &root)?;
             read_repository_snapshot_from_registry(&self.registry_path, &root)
         })();
-        match result {
+        // This call is no longer at work under the row. Where it leaves
+        // the row pending, the row says so at once, and does not go on
+        // showing a call at work for as long as a heartbeat stays fresh.
+        drop(heartbeat);
+        let result = match result {
             Ok(snapshot) => Ok(snapshot),
-            Err(error) => {
-                self.run_corrupt_cache_hook(&self.rebuild_error_hook, operation, &root)?;
-                let _ = set_rebuild_operation(&self.registry_path, operation_id, "error", &root);
-                Err(error)
-            }
-        }
+            Err(error) => self
+                .run_corrupt_cache_hook(&self.rebuild_error_hook, operation, &root)
+                .and_then(|()| {
+                    let _ =
+                        set_rebuild_operation(&self.registry_path, operation_id, "error", &root);
+                    Err(error)
+                }),
+        };
+        // After the last thing this call records on the row.
+        let _ = rest_rebuild_operation(&self.registry_path, operation_id, &root);
+        result
     }
 
     /// The first step of a rebuild: an index that is not a usable
@@ -5156,6 +5196,40 @@ fn set_rebuild_operation(
     Ok(())
 }
 
+/// Marks a rebuild's pending row as touched now; see
+/// `recovery::touch_pending`.
+fn touch_rebuild_operation(
+    registry_path: &Path,
+    record_id: i64,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RebuildRepository;
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    recovery::touch_pending(&connection, record_id)
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
+}
+
+/// Marks a rebuild's pending row as no longer worked under; see
+/// `recovery::rest_pending`.
+fn rest_rebuild_operation(
+    registry_path: &Path,
+    record_id: i64,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    let operation = RepositoryOperation::RebuildRepository;
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
+    let connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    recovery::rest_pending(
+        &connection,
+        record_id,
+        OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER - 1,
+    )
+    .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
+}
+
 fn persist_rebuild_observation(
     registry_path: &Path,
     operation_id: i64,
@@ -5197,7 +5271,11 @@ fn persist_rebuild_observation(
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     transaction
         .execute(
-            "UPDATE operation_records SET repository_id = ?2 WHERE id = ?1 AND root_path = ?3",
+            &format!(
+                "UPDATE operation_records SET repository_id = ?2
+                  WHERE id = ?1 AND root_path = ?3 AND {}",
+                recovery::NOT_ABANDONED
+            ),
             params![operation_id, repository_id, root_path],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;

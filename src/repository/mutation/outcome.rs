@@ -721,47 +721,78 @@ pub(crate) fn recovery(
     }
 }
 
-/// Adds `operation.abandon` to what a result offers, for each local
-/// operation that is pending on the repository the result names.
+/// Adds `operation.abandon` to what a result of a request that stopped
+/// offers, where a pending local operation stands in the way.
 ///
 /// A pending local operation refuses every other operation on its
 /// repository, and is cleared by a repeat of its own request or, where
-/// that cannot be, by abandoning it. So the action is offered wherever a
-/// result says to look at the repository because of one:
+/// that cannot be, by abandoning it. There are two rules:
 ///
-/// - `recovery_required` on a repository that has a pending local
-///   operation, which is then what the request was refused for, or what
-///   it left;
-/// - `external_change` on a confirmed request whose record was left
-///   accepted, which is offered `repo.inspect` because its own pending
-///   operation is in the way of a new preview.
+/// 1. **Another's operation, or any.** A result that already says to
+///    look at the repository, `recovery_required` or the
+///    `external_change` of a confirmed request, is offered the abandon
+///    of each operation in `pending`. The offer is made whatever the
+///    result's own cause was: an active reservation or a pending merge
+///    can be why a request was `recovery_required` while a local
+///    operation is pending as well. That is harmless, since the pending
+///    operation does refuse the repository's other operations, and the
+///    preview of the abandon says what it is.
+/// 2. **The request's own.** A result that left the request's record
+///    accepted with the request's own local operation pending is offered
+///    the abandon of that operation, whatever its code, with
+///    `repo.inspect` before it: the same request may still finish the
+///    work, and what it keeps of its own actions says so, but where it
+///    cannot, this is the way out and the result is where its caller
+///    learns the operation's ID. `own` is that operation, and `None` for
+///    a result that left no such record.
 ///
-/// `pending` is the operation IDs of the repository's pending local
-/// rows, oldest first. Nothing is added to a result that names no
-/// repository, since the action takes its root, or to one that offers
-/// something else: the action follows `repo.inspect` and never replaces
-/// it, because what an operation left is looked at before it is given up.
+/// `pending` is the operation IDs of the repository's pending local rows
+/// that nothing is seen against abandoning, oldest first: a row a call
+/// is at work under, or one the remote or key journal also holds, is
+/// not in it, and so is not offered under either rule.
+///
+/// Nothing is added to a result that names no repository, since the
+/// action takes its root. The action follows `repo.inspect` and never
+/// replaces it or any other action: what an operation left is looked at
+/// before it is given up.
 pub(crate) fn offering_abandon(
     mut recovery: Vec<RecoveryAction>,
     code: ResultCode,
     root: Option<&str>,
     pending: &[String],
+    own: Option<&str>,
 ) -> Vec<RecoveryAction> {
     let Some(root) = root else {
         return recovery;
     };
-    if !abandon_may_be_offered(code, &recovery) {
+    let offered: Vec<&str> = if abandon_may_be_offered(code, &recovery) {
+        pending.iter().map(String::as_str).collect()
+    } else {
+        own.filter(|own| pending.iter().any(|pending| pending == own))
+            .into_iter()
+            .collect()
+    };
+    if offered.is_empty() {
         return recovery;
     }
-    for operation_id in pending {
-        let offered = recovery.iter().any(|action| {
+    let inspects = recovery
+        .iter()
+        .any(|action| action.action == RecoveryActionKind::RepoInspect);
+    if !inspects {
+        recovery.push(RecoveryAction::new(
+            RecoveryActionKind::RepoInspect,
+            [(ROOT_ARGUMENT, root.into())],
+        ));
+    }
+    for operation_id in offered {
+        let already = recovery.iter().any(|action| {
             action.action == RecoveryActionKind::OperationAbandon
-                && action.operation_id.as_deref() == Some(operation_id.as_str())
+                && action.operation_id.as_deref() == Some(operation_id)
         });
-        if !offered {
+        if !already {
             recovery.push(RecoveryAction::for_operation(
                 RecoveryActionKind::OperationAbandon,
-                operation_id.clone(),
+                operation_id,
                 [(ROOT_ARGUMENT, root.into())],
             ));
         }
@@ -769,8 +800,9 @@ pub(crate) fn offering_abandon(
     recovery
 }
 
-/// Whether a result of `code` that offers `recovery` is one a pending
-/// local operation can be the cause of; see `offering_abandon`.
+/// Whether a result of `code` that offers `recovery` already says to
+/// look at the repository for something a pending local operation can be
+/// the cause of: the first rule of `offering_abandon`.
 pub(crate) fn abandon_may_be_offered(code: ResultCode, recovery: &[RecoveryAction]) -> bool {
     let inspects = recovery
         .iter()

@@ -6,6 +6,7 @@
     "confirmation_id": "<confirmation>",
     "details": {
       "action": "save_ticket",
+      "committed": false,
       "files_changed": false,
       "git_state_changed": false,
       "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",

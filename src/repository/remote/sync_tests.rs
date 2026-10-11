@@ -15477,3 +15477,85 @@ mod process_death {
         }
     }
 }
+
+/// The local row of a synchronization with no publication remote is
+/// left pending by a refresh that stopped, and is then abandoned. An
+/// abandoned row is `completed` in the journal, which is not "the refresh
+/// was done": the repeat of the ID is refused, neither replayed as
+/// complete nor begun again, and writes nothing.
+#[test]
+fn a_local_synchronization_whose_row_was_abandoned_is_refused_and_not_replayed_as_complete() {
+    let (root, data, service) = fixture();
+    let req = request(root.path());
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        data.path(),
+        FailurePoint::AfterIndexClaim,
+    )
+    .unwrap();
+    assert!(matches!(
+        failing
+            .synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::IndexPending(_)
+    ));
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // The claim's owner is gone: its heartbeat is stale.
+    assert_eq!(
+        db.execute(
+            "UPDATE operation_records SET observed_at = observed_at - 60 WHERE state != 'completed'",
+            [],
+        )
+        .unwrap(),
+        1
+    );
+    assert!(matches!(
+        service
+            .abandon_operation(crate::repository::AbandonOperationRequest {
+                root: root.path().into(),
+                operation_id: req.operation_id,
+                expected: None,
+            })
+            .unwrap(),
+        crate::repository::AbandonOperationOutcome::Abandoned(_)
+    ));
+    let journal = |db: &rusqlite::Connection| -> Vec<(String, String, Option<String>)> {
+        db.prepare(
+            "SELECT operation_ulid, state, completed_step FROM operation_records ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let before = (journal(&db), local_binding_image(root.path()));
+
+    for _ in 0..2 {
+        let repeated =
+            service.synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt));
+        assert!(
+            matches!(
+                repeated,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::OperationAbandoned,
+                    ..
+                }))
+            ),
+            "{repeated:?}"
+        );
+    }
+
+    assert_eq!(before, (journal(&db), local_binding_image(root.path())));
+    assert!(before.0.contains(&(
+        req.operation_id.to_string(),
+        "completed".to_owned(),
+        Some("abandoned".to_owned())
+    )));
+    // Another synchronization runs at once.
+    assert!(matches!(
+        service
+            .synchronize_remote(request(root.path()), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::Complete(_)
+    ));
+}

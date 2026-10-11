@@ -326,8 +326,15 @@ fn an_edit_made_under_an_interrupted_assignment_is_not_committed_as_its_own() {
         // no step, and the domain closes such a row as rejected when it
         // refuses the repeat: the record is released.
         assert_eq!(world.record(REQUEST_1).is_some(), !has_context, "{what}");
-        // Either way the same request is not offered again.
-        assert!(recovery_actions(&retry).is_empty(), "{what}");
+        // Either way the same request is not offered again. Where its
+        // operation is left pending, that operation is offered to be
+        // abandoned.
+        let offered = if has_context {
+            recovery_actions(&retry)
+        } else {
+            crate::support::mutation::recovery_before_own_abandon(&retry)
+        };
+        assert!(offered.is_empty(), "{what}");
         assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
         assert_eq!(world.worktree_source(TICKET_A), edited, "{what}");
     }
@@ -364,7 +371,7 @@ fn a_foreign_commit_that_carries_a_short_code_is_not_the_assignment_s_own() {
         (Outcome::Blocked, ResultCode::ExternalChange)
     );
     assert_eq!(retry.effects, Effects::not_requested());
-    assert!(recovery_actions(&retry).is_empty());
+    assert!(crate::support::mutation::recovery_before_own_abandon(&retry).is_empty());
     assert_eq!(world.branch_tip(TICKET_A), Some(foreign));
     assert_eq!(world.worktree_source(TICKET_A), foreign_source);
 }

@@ -206,6 +206,9 @@ pub struct OperationAbandonPreviewDto {
     /// Whether `paths` is all of them. False when there are more than
     /// are listed, or the worktree could not be read.
     pub paths_complete: bool,
+    /// Whether the operation recorded that it passed the point where its
+    /// work is committed. The command leaves that commit where it is.
+    pub committed: bool,
     /// The unfinished request that began the operation, whose record
     /// the command deletes. Null when no such request is recorded.
     pub request_id: Option<String>,
@@ -332,6 +335,11 @@ pub struct OperationMutationDto {
     /// Whether `paths` is all of them. False when there are more than
     /// are listed, or the worktree could not be read.
     pub paths_complete: bool,
+    /// Whether the operation had recorded that it passed the point where
+    /// its work is committed. That commit is kept: an abandon undoes
+    /// nothing. The released request, sent again, is a new request, and
+    /// is answered by what the repository then shows.
+    pub committed: bool,
     /// The request whose record was deleted with the operation: its ID
     /// is free, and its next use is a new request. Null when no
     /// unfinished request held the operation.
@@ -368,6 +376,11 @@ impl OperationMutationDto {
                 .map(|value| value.as_str().map(str::to_owned))
                 .collect::<Option<_>>()?,
             paths_complete: stored.get("paths_complete")?.as_bool()?,
+            // A record stored before an abandon said so holds none.
+            committed: stored
+                .get("committed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
             released_request_id: text("released_request_id")?,
         })
     }

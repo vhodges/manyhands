@@ -13,8 +13,9 @@ use crate::results::{Envelope, ResultCode};
 use super::{
     super::{
         FailurePoint, OperationId, RepositoryOperation, RepositoryService,
+        bridges::abandon::stale_heartbeat,
         keys::{SessionCredentialProvider, SessionCredentials},
-        recovery,
+        leases_are_free, recovery,
     },
     CancellationToken, MutationCall, ProgressSink,
     bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
@@ -22,7 +23,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
-    records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
+    records::{self, ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
 
@@ -55,29 +56,83 @@ impl RepositoryService {
         self.offering_abandon(envelope)
     }
 
-    /// Adds `operation.abandon` to an envelope that says to look at a
-    /// repository on which a local operation is pending; see
-    /// `outcome::offering_abandon`. The journal is read only for such an
-    /// envelope, after everything the call did, so the action names what
-    /// is pending now. A journal that cannot be read adds nothing: the
-    /// envelope still says to inspect the repository.
+    /// Adds `operation.abandon` to an envelope of a request that
+    /// stopped, where a pending local operation is what stands in the way;
+    /// see `outcome::offering_abandon` for the two rules.
+    ///
+    /// The journal and the records are read only for an envelope either
+    /// rule can apply to, after everything the call did, so the action
+    /// names what is pending now. That is also so for a result given
+    /// again from a finished record: its stored actions are none, and
+    /// what it is offered is what is true when it is read.
+    ///
+    /// An operation is offered only when the lookup can see nothing
+    /// against abandoning it: it is an operation of the local journal
+    /// alone, no call is at work under it with a heartbeat, and no call
+    /// holds the repository's lease or its bootstrap lease, which is
+    /// looked at without waiting and let go at once. The look is taken
+    /// last, and only when there is something to offer.
+    ///
+    /// A journal that cannot be read adds nothing: the envelope keeps
+    /// what it has.
     pub(super) fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
-        if !outcome::abandon_may_be_offered(envelope.code, &envelope.recovery) {
+        if envelope.code.failure_class().is_none() {
             return envelope;
         }
         let Some(root) = envelope.scope.repository.clone() else {
             return envelope;
         };
-        let Ok(pending) = self.read_session(RepositoryOperation::Read, |connection| {
-            Ok(recovery::pending_operation_ids(connection, &root)?)
-        }) else {
+        let inspects = outcome::abandon_may_be_offered(envelope.code, &envelope.recovery);
+        // The request's own operation, when its envelope names one.
+        let own = envelope
+            .operation_id
+            .as_deref()
+            .and_then(|operation_id| OperationId::parse(operation_id).ok())
+            .zip(envelope.request_id.clone());
+        if !inspects && own.is_none() {
+            return envelope;
+        }
+        let read = self.read_session(RepositoryOperation::Read, |connection| {
+            let stale_before = stale_heartbeat();
+            let mut pending = Vec::new();
+            for (operation_id, row) in recovery::pending_rows(connection, &root)? {
+                if !row.has_live_heartbeat(stale_before)
+                    && !recovery::held_by_another_journal(connection, &operation_id)?
+                {
+                    pending.push(operation_id);
+                }
+            }
+            // Whether the request's record was left accepted, holding
+            // that operation as a local one.
+            let own = match &own {
+                Some((operation_id, request_id)) => {
+                    let owner = records::operation_owner(connection, &root, *operation_id)?;
+                    (owner.as_deref() == Some(request_id.as_str()))
+                        .then(|| operation_id.to_string())
+                }
+                None => None,
+            };
+            Ok((pending, own))
+        });
+        let Ok((pending, own)) = read else {
             return envelope;
         };
+        if pending.is_empty() {
+            return envelope;
+        }
+        let data_directory = self
+            .registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        if !leases_are_free(data_directory, Path::new(&root)) {
+            return envelope;
+        }
         envelope.recovery = outcome::offering_abandon(
             std::mem::take(&mut envelope.recovery),
             envelope.code,
             Some(&root),
             &pending,
+            own.as_deref(),
         );
         envelope
     }

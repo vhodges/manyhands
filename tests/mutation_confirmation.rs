@@ -1003,7 +1003,10 @@ fn a_failed_hand_off_after_the_commit_is_partial_with_the_commit() {
     assert_eq!(pending.effects.checkpoint, CheckpointEffect::Committed);
     assert_eq!(pending.effects.discovery, DiscoveryEffect::Pending);
     assert_eq!(pending.effects.commit_oid, Some(plain.head().to_string()));
-    assert_eq!(recovery_actions(&pending), ["operation.resume"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&pending),
+        ["operation.resume"]
+    );
 }
 
 /// A request is accepted and stops before its first effect. The state
@@ -1113,7 +1116,10 @@ fn a_failed_registry_write_is_registration_pending_and_its_retry_registers() {
     assert_eq!(pending.effects.discovery, DiscoveryEffect::Pending);
     let commit = plain.head();
     assert_eq!(pending.effects.commit_oid, Some(commit.to_string()));
-    assert_eq!(recovery_actions(&pending), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&pending),
+        ["request.retry"]
+    );
     assert!(!desk.registered(&plain.root));
     assert_eq!(
         desk.record(REQUEST_1).map(|record| record.state),
@@ -1996,7 +2002,10 @@ fn a_create_interrupted_after_initialization_is_partial_and_its_retry_completes(
     assert_eq!(partial.outcome, Outcome::Partial, "{}", partial.message);
     assert_eq!(partial.code, ResultCode::InternalError);
     assert_eq!(partial.effects.commit_oid, None);
-    assert_eq!(recovery_actions(&partial), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&partial),
+        ["request.retry"]
+    );
     assert!(git2::Repository::open(&site.root).is_ok());
     assert_eq!(site.configuration(), None);
     assert_eq!(
@@ -2334,7 +2343,10 @@ fn a_retry_after_the_recorded_commit_does_not_compare_the_identity() {
     desk.fail_once_at(FailurePoint::BeforeRegistryWrite);
     let pending = desk.execute(REQUEST_1, &confirmation, plain.enable());
     assert_eq!(pending.code, ResultCode::RegistrationPending);
-    assert_eq!(recovery_actions(&pending), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&pending),
+        ["request.retry"]
+    );
     let commit = plain.head();
     let mut config = git2::Config::open(&plain.root.join(".git/config")).unwrap();
     config.set_str("user.name", "Someone Else").unwrap();
@@ -2379,8 +2391,9 @@ const KILLED_POINT: &str = "MANYHANDS_KILLED_POINT";
 const KILLED_EXISTING: &str = "MANYHANDS_KILLED_EXISTING";
 
 /// The points a child process can be made to end at.
-const KILL_POINTS: [FailurePoint; 3] = [
+const KILL_POINTS: [FailurePoint; 4] = [
     FailurePoint::BeforeRepositoryInitialization,
+    FailurePoint::AfterRepositoryInitialization,
     FailurePoint::BeforeInitializationCommit,
     FailurePoint::AfterInitializationCommit,
 ];
@@ -3328,7 +3341,10 @@ fn a_removal_interrupted_after_the_remote_is_deleted_is_partial_and_its_retry_co
     assert_eq!(partial.code, ResultCode::InternalError);
     assert_eq!(partial.outcome, Outcome::Partial);
     assert_eq!(partial.effects, Effects::not_requested());
-    assert_eq!(recovery_actions(&partial), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&partial),
+        ["request.retry"]
+    );
     assert_eq!(home.remote_url("backup"), None);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
     assert_eq!(home.world.pending_journal_rows(), 1);
@@ -3715,7 +3731,10 @@ fn a_repo_remove_that_fails_before_its_transaction_stays_pending_and_its_retry_s
     assert_eq!(failed.code, ResultCode::InternalError);
     assert_eq!(failed.outcome, Outcome::Error);
     assert_eq!(failed.effects, Effects::not_requested());
-    assert_eq!(recovery_actions(&failed), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&failed),
+        ["request.retry"]
+    );
     assert!(home.registered());
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
     assert_eq!(home.world.pending_journal_rows(), 1);
@@ -4829,7 +4848,10 @@ fn a_removal_that_fails_before_its_step_is_recorded_is_partial_and_its_retry_is_
     assert_eq!(partial.code, ResultCode::InternalError);
     assert_eq!(partial.outcome, Outcome::Partial);
     assert_eq!(partial.effects, Effects::not_requested());
-    assert_eq!(recovery_actions(&partial), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&partial),
+        ["request.retry"]
+    );
     assert_eq!(home.remote_url("backup"), None);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
     assert_eq!(

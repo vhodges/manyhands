@@ -1072,6 +1072,43 @@ pub fn recovery_actions(envelope: &Envelope<MutationDataDto>) -> Vec<&'static st
         .collect()
 }
 
+/// The names of the recovery actions an envelope suggests before the
+/// two every result ends with that left its request's record accepted
+/// with the request's own local operation pending: `repo.inspect`, and
+/// `operation.abandon` of that operation, the one the envelope names.
+/// The same request may still finish the work, which is what the actions
+/// before these say; where it cannot, this is the way out.
+pub fn recovery_before_own_abandon(envelope: &Envelope<MutationDataDto>) -> Vec<&'static str> {
+    let actions = recovery_actions(envelope);
+    let (own, tail) = actions.split_at(actions.len().saturating_sub(2));
+    assert_eq!(
+        tail,
+        ["repo.inspect", "operation.abandon"],
+        "the request's own pending operation is offered to be abandoned: {actions:?}"
+    );
+    let abandon = envelope.recovery.last().unwrap();
+    assert!(envelope.operation_id.is_some());
+    assert_eq!(abandon.operation_id, envelope.operation_id);
+    assert_eq!(
+        abandon.arguments.get("root").and_then(|root| root.as_str()),
+        envelope.scope.repository.as_deref()
+    );
+    own.to_vec()
+}
+
+/// As `recovery_before_own_abandon`, for an assertion shared by results
+/// that left the request's own operation pending and results that left
+/// nothing: the two closing actions are checked where they are there,
+/// and the actions before them returned either way.
+pub fn recovery_apart_from_own_abandon(envelope: &Envelope<MutationDataDto>) -> Vec<&'static str> {
+    let actions = recovery_actions(envelope);
+    if actions.contains(&"operation.abandon") {
+        recovery_before_own_abandon(envelope)
+    } else {
+        actions
+    }
+}
+
 static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
     std::sync::OnceLock::new();
 

@@ -40,7 +40,7 @@ pub(super) fn repository_lease(
     operation: RepositoryOperation,
 ) -> Result<RepositoryLease, RepositoryError> {
     acquire_exclusive(
-        repository.commondir().join("manyhands-operation.lock"),
+        repository.commondir().join(REPOSITORY_LOCK_FILE),
         root,
         operation,
     )
@@ -52,11 +52,12 @@ pub(super) fn bootstrap_lease(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<BootstrapLease, RepositoryError> {
-    let name = format!(
-        "manyhands-bootstrap-{}.lock",
-        blake3::hash(root.as_os_str().as_encoded_bytes())
-    );
-    acquire_exclusive(data_directory.join(name), root, operation).map(BootstrapLease)
+    acquire_exclusive(
+        data_directory.join(bootstrap_lease_name(root)),
+        root,
+        operation,
+    )
+    .map(BootstrapLease)
 }
 
 pub(super) fn cache_read_guard(
@@ -73,6 +74,63 @@ pub(super) fn cache_write_guard(
     operation: RepositoryOperation,
 ) -> Result<CacheWriteGuard, RepositoryError> {
     acquire_exclusive(cache_lock_path(registry_path), root, operation).map(CacheWriteGuard)
+}
+
+/// Whether no call holds the repository's lease or the bootstrap lease
+/// of its root at this instant. Neither is waited for, and each is let go
+/// at once: this is a look, for a read that must not offer to end an
+/// operation a call is at work under. A lease that cannot be looked at
+/// is taken to be held.
+pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
+    let free = |path: std::path::PathBuf| -> bool {
+        let Ok(file) = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+        else {
+            return false;
+        };
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(true) => {
+                let _ = FileExt::unlock(&file);
+                true
+            }
+            Ok(false) | Err(_) => false,
+        }
+    };
+    let bootstrap = data_directory.join(bootstrap_lease_name(root));
+    // The bootstrap lease is only ever of a root whose creation was
+    // begun: one that has no lock file has none held.
+    if bootstrap.exists() && !free(bootstrap) {
+        return false;
+    }
+    match Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        &[] as &[&std::ffi::OsStr],
+    ) {
+        Ok(repository) => {
+            let lock = repository.commondir().join(REPOSITORY_LOCK_FILE);
+            // As for the bootstrap lease: no file, no holder, and none
+            // is made by looking.
+            !lock.exists() || free(lock)
+        }
+        // No repository is there to have a lease.
+        Err(_) => true,
+    }
+}
+
+/// The file the repository lease is taken on, in the repository's common
+/// directory.
+const REPOSITORY_LOCK_FILE: &str = "manyhands-operation.lock";
+
+fn bootstrap_lease_name(root: &Path) -> String {
+    format!(
+        "manyhands-bootstrap-{}.lock",
+        blake3::hash(root.as_os_str().as_encoded_bytes())
+    )
 }
 
 fn cache_lock_path(registry_path: &Path) -> std::path::PathBuf {

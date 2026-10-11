@@ -465,7 +465,10 @@ fn an_error_after_the_write_is_partial_and_leaves_the_request_accepted() {
     assert_eq!(envelope.effects.write, WriteEffect::Written);
     assert_eq!(envelope.effects.checkpoint, CheckpointEffect::Pending);
     assert_eq!(envelope.effects.commit_oid, None);
-    assert_eq!(recovery_actions(&envelope), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&envelope),
+        ["request.retry"]
+    );
     assert_eq!(envelope.recovery[0].arguments["request_id"], REQUEST_1);
     // The file is what the request intended and no commit holds it.
     assert!(world.worktree_source(TICKET_A).contains(TITLE));
@@ -513,7 +516,10 @@ fn a_failure_before_the_write_is_an_error_and_leaves_the_request_accepted() {
         ResultCode::InternalError,
         FailureClass::Internal,
     );
-    assert_eq!(recovery_actions(&envelope), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&envelope),
+        ["request.retry"]
+    );
     assert!(!world.worktree_source(TICKET_A).contains(TITLE));
     let record = world.record(REQUEST_1).expect("the record stays");
     assert_eq!(record.state, RequestState::Accepted);
@@ -563,7 +569,10 @@ fn a_failure_after_the_checkpoint_is_partial_with_discovery_pending() {
     assert_eq!(world.branch_commits(TICKET_A), 1);
 
     // The action names the operation and takes no argument.
-    assert_eq!(recovery_actions(&envelope), ["operation.resume"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&envelope),
+        ["operation.resume"]
+    );
     assert_eq!(envelope.recovery[0].operation_id, envelope.operation_id);
     assert!(envelope.recovery[0].arguments.is_empty());
 
@@ -1061,7 +1070,10 @@ fn an_error_after_the_commit_is_partial_with_that_commit() {
         world.branch_tip(TICKET_A).map(|tip| tip.to_string())
     );
     assert_ne!(envelope.effects.commit_oid, first.effects.commit_oid);
-    assert_eq!(recovery_actions(&envelope), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&envelope),
+        ["request.retry"]
+    );
     let record = world.record(REQUEST_2).expect("the record stays");
     assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
     assert_eq!(world.worktree_source(TICKET_A), written);

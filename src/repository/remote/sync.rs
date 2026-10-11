@@ -5905,11 +5905,11 @@ impl RepositoryService {
                     .authority()
                     .ok_or(SynchronizationError::RecoveryRequired)?,
             );
-            return Ok(if inspection.index_pending() {
+            return if inspection.index_pending() {
                 self.synchronization_refresh(&request, Some(&record.target), outcome)
             } else {
-                SynchronizationResult::Complete(outcome)
-            });
+                Ok(SynchronizationResult::Complete(outcome))
+            };
         }
         if let Some(record) = &existing
             && record.phase == RemoteOperationPhase::Cancelled
@@ -5926,7 +5926,7 @@ impl RepositoryService {
         if existing.is_none()
             && let Some(oid) = self.local_synchronization_replay(&request)?
         {
-            return Ok(self.synchronization_refresh(
+            return self.synchronization_refresh(
                 &request,
                 None,
                 SynchronizationOutcome::PublishPending {
@@ -5934,7 +5934,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
-            ));
+            );
         }
         // A local child is authority for its recorded pass, not for fresh
         // transport. Reconcile it before endpoint discovery or clean preflight;
@@ -5998,7 +5998,7 @@ impl RepositoryService {
                 return Err(SynchronizationError::RecoveryRequired);
             }
             let oid = self.bind_local_synchronization(&request, &config.primary_branch)?;
-            return Ok(self.synchronization_refresh(
+            return self.synchronization_refresh(
                 &request,
                 None,
                 SynchronizationOutcome::PublishPending {
@@ -6006,7 +6006,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
-            ));
+            );
         };
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -6039,11 +6039,11 @@ impl RepositoryService {
             RemoteReservationOutcome::Replay(record) => {
                 if let Some(authority) = record.authority() {
                     let outcome = authority_outcome(&request.target, authority);
-                    return Ok(if record.index_pending() {
+                    return if record.index_pending() {
                         self.synchronization_refresh(&request, Some(&target), outcome)
                     } else {
-                        SynchronizationResult::Complete(outcome)
-                    });
+                        Ok(SynchronizationResult::Complete(outcome))
+                    };
                 }
                 if record.phase() == RemoteOperationPhase::Cancelled {
                     return Err(SynchronizationError::Interrupted);
@@ -6821,11 +6821,11 @@ impl RepositoryService {
         }
         self.synchronization_boundary(root, owner)?;
         decision(self.classify_synchronization(root, owner, authority)?)?;
-        Ok(self.synchronization_refresh(
+        self.synchronization_refresh(
             request,
             Some(target),
             authority_outcome(&request.target, authority),
-        ))
+        )
     }
 
     /// The one push attempt of an open publication attempt. Durable intent
@@ -7070,9 +7070,10 @@ impl RepositoryService {
         request: &SynchronizeRemoteRequest,
     ) -> Result<Option<git2::Oid>, SynchronizationError> {
         let row = refresh_row(self, request)?;
-        let Some((root, action, matcher, _)) = row else {
+        let Some((root, action, matcher, _, step)) = row else {
             return Ok(None);
         };
+        refuse_abandoned_refresh(request, step.as_deref())?;
         if root != request.root.to_string_lossy() || action != "refresh" {
             return Err(identity_mismatch());
         }
@@ -7090,20 +7091,26 @@ impl RepositoryService {
         request: &SynchronizeRemoteRequest,
         target: Option<&RemoteOperationTarget>,
         outcome: SynchronizationOutcome,
-    ) -> SynchronizationResult {
+    ) -> Result<SynchronizationResult, SynchronizationError> {
         let matcher = match &outcome {
             SynchronizationOutcome::PublishPending {
                 target, local_oid, ..
             } => format!("{}/{local_oid}", local_refresh_identity(target)),
             _ => String::new(),
         };
-        let completed = refresh_row(self, request).is_ok_and(|row| {
-            row.is_some_and(|(root, action, stored, state)| {
-                root == request.root.to_string_lossy()
-                    && action == "refresh"
-                    && stored == matcher
-                    && state == "completed"
-            })
+        // The local row under the ID, when the journal can be read. One
+        // that was abandoned is `completed` and is not a refresh that
+        // was done: the synchronization is refused, and nothing is
+        // written or reported as complete under it.
+        let row = refresh_row(self, request).ok().flatten();
+        if let Some((_, _, _, _, step)) = &row {
+            refuse_abandoned_refresh(request, step.as_deref())?;
+        }
+        let completed = row.is_some_and(|(root, action, stored, state, _)| {
+            root == request.root.to_string_lossy()
+                && action == "refresh"
+                && stored == matcher
+                && state == "completed"
         });
         let refreshed = completed
             || matches!(
@@ -7116,16 +7123,18 @@ impl RepositoryService {
                 ),
                 Ok(RefreshOutcome::Refreshed { .. })
             );
-        if refreshed
-            && target.is_none_or(|target| {
-                self.finish_synchronization_index(&request.root, request.operation_id, target)
-                    .is_ok()
-            })
-        {
-            SynchronizationResult::Complete(outcome)
-        } else {
-            SynchronizationResult::IndexPending(IndexPending::new(outcome))
-        }
+        Ok(
+            if refreshed
+                && target.is_none_or(|target| {
+                    self.finish_synchronization_index(&request.root, request.operation_id, target)
+                        .is_ok()
+                })
+            {
+                SynchronizationResult::Complete(outcome)
+            } else {
+                SynchronizationResult::IndexPending(IndexPending::new(outcome))
+            },
+        )
     }
 }
 fn authority_outcome(
@@ -7235,13 +7244,30 @@ fn validate_record_target(
         Err(identity_mismatch())
     }
 }
-type RefreshRow = (String, String, String, String);
+/// The local row under a synchronization's ID: its root, action, target,
+/// state and last step.
+/// Refuses a synchronization whose local row was closed as abandoned: its
+/// ID is neither replayed as completed nor begun again.
+fn refuse_abandoned_refresh(
+    request: &SynchronizeRemoteRequest,
+    step: Option<&str>,
+) -> Result<(), SynchronizationError> {
+    if crate::repository::recovery::is_abandoned_step(step) {
+        return Err(crate::repository::recovery::abandoned(
+            RepositoryOperation::RefreshRepository,
+            &request.root,
+        )
+        .into());
+    }
+    Ok(())
+}
+type RefreshRow = (String, String, String, String, Option<String>);
 fn refresh_row(
     service: &RepositoryService,
     request: &SynchronizeRemoteRequest,
 ) -> Result<Option<RefreshRow>, RepositoryError> {
     use rusqlite::OptionalExtension;
     state::with_transaction(service, &request.root, |tx, _| {
-        tx.query_row("SELECT root_path,action,coalesce(target,''),state FROM operation_records WHERE operation_ulid=?1",[request.operation_id.to_string()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|_|state::recovery_required())
+        tx.query_row("SELECT root_path,action,coalesce(target,''),state,completed_step FROM operation_records WHERE operation_ulid=?1",[request.operation_id.to_string()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|_|state::recovery_required())
     })
 }

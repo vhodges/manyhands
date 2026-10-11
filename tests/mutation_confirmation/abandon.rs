@@ -131,6 +131,25 @@ impl Stranded {
         (preview.confirmation_id.clone(), preview)
     }
 
+    /// Closes the stranded operation as `request_id`, with a new preview.
+    fn abandon_as(&self, request_id: &str) -> Envelope<MutationDataDto> {
+        let (confirmation, _) = self.preview(&self.abandon());
+        let abandoned = self.execute(request_id, &confirmation);
+        assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+        abandoned
+    }
+
+    /// How every test of an abandon ends: nothing differs from `before`,
+    /// which was taken before the abandon, and then a different
+    /// operation on the repository succeeds.
+    fn assert_goes_on(&self, before: &Everything, what: &str) {
+        before.assert_unchanged(&self.world, what);
+        assert_eq!(self.world.pending_journal_rows(), 0, "{what}");
+        let other = self.world.execute(REQUEST_5, self.world.create(TICKET_NEW));
+        assert_eq!(other.code, ResultCode::Ok, "{what}: {}", other.message);
+        assert_eq!(other.outcome, Outcome::Success, "{what}");
+    }
+
     fn execute(&self, request_id: &str, confirmation: &str) -> Envelope<MutationDataDto> {
         execute_confirmed(
             &self.world.service,
@@ -146,6 +165,44 @@ impl Stranded {
     }
 }
 
+/// Everything an abandon must leave as it found it: the worktrees, the
+/// index files, the references and the remotes, as Git reads them; and
+/// every file under `.git` by its bytes, which adds the objects, the
+/// packed references, the reflogs and the worktrees' own metadata.
+#[derive(Debug, PartialEq)]
+struct Everything {
+    read: support::RepositoryAndWorktreeSnapshot,
+    git: BTreeMap<PathBuf, support::FilesystemEntry>,
+}
+
+/// The repository lease's file, in `.git`. Taking the lease makes it,
+/// empty, where no operation has taken the lease before: the one file an
+/// abandon can add, and it holds nothing.
+const LEASE_FILE: &str = "manyhands-operation.lock";
+
+impl Everything {
+    fn of(world: &World) -> Self {
+        Self::of_fixture(&world.fixture)
+    }
+
+    fn of_fixture(fixture: &support::TestRepository) -> Self {
+        let mut git = support::repository_git_file_bytes(fixture);
+        git.remove(Path::new(LEASE_FILE));
+        Self {
+            read: repository_and_worktree_snapshot(fixture),
+            git,
+        }
+    }
+
+    fn assert_unchanged(&self, world: &World, what: &str) {
+        assert_eq!(
+            self,
+            &Self::of(world),
+            "{what} touched a file, a reference or a worktree"
+        );
+    }
+}
+
 fn journal(data: &Path) -> Vec<(String, String, Option<String>)> {
     let connection = items::index(data);
     let mut statement = connection
@@ -156,6 +213,26 @@ fn journal(data: &Path) -> Vec<(String, String, Option<String>)> {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap()
+}
+
+/// What the reservations of these tests are of: a synchronization of the
+/// open ticket's context. Such a reservation owns that item alone, so
+/// another item can still be written while it is held.
+fn reserved_target() -> RemoteOperationTarget {
+    RemoteOperationTarget::for_context(
+        &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
+        manyhands::repository::RemoteOperationAction::SynchronizeContext,
+        manyhands::repository::AuthoringKind::Ticket,
+        items::item_id(TICKET_A),
+    )
+    .unwrap()
+}
+
+/// A different operation on the repository succeeds.
+fn assert_another_operation_succeeds(world: &World, what: &str) {
+    let other = world.execute(REQUEST_5, world.create(TICKET_NEW));
+    assert_eq!(other.code, ResultCode::Ok, "{what}: {}", other.message);
+    assert_eq!(other.outcome, Outcome::Success, "{what}");
 }
 
 fn abandon(root: &Path, operation_id: &str) -> Mutation {
@@ -199,10 +276,11 @@ fn assert_blocked_and_offered_the_abandon(stranded: &Stranded, request_id: &str)
 
 /// The abandon of the stranded save, confirmed as `request_id`: it
 /// succeeds, shows no effect, names what was left and releases the
-/// save's request, and no file, reference or worktree differs.
-fn assert_abandoned(stranded: &Stranded, request_id: &str, left: &[String]) {
+/// save's request, and no file, reference or worktree differs. Returns
+/// what everything was before it.
+fn assert_abandoned(stranded: &Stranded, request_id: &str, left: &[String]) -> Everything {
     let world = &stranded.world;
-    let before = repository_and_worktree_snapshot(&world.fixture);
+    let before = Everything::of(world);
     let (confirmation, preview) = stranded.preview(&stranded.abandon());
     let details = abandon_preview(&preview);
     assert_eq!(details.paths, left);
@@ -227,17 +305,26 @@ fn assert_abandoned(stranded: &Stranded, request_id: &str, left: &[String]) {
     assert_eq!(data.paths, left);
     assert!(data.paths_complete);
     assert_eq!(data.released_request_id.as_deref(), Some(REQUEST_1));
+    // The result names paths and holds nothing of what is in them.
+    assert_holds_no_content(&abandoned);
 
-    assert_eq!(
-        before,
-        repository_and_worktree_snapshot(&world.fixture),
-        "the abandon touched a file, a reference or a worktree"
-    );
+    before.assert_unchanged(world, "the abandon");
     assert_eq!(world.pending_journal_rows(), 0);
     assert_eq!(world.record(REQUEST_1), None, "the save's request");
     assert_eq!(
         world.record(request_id).map(|record| record.state),
         Some(RequestState::Finished)
+    );
+    before
+}
+
+/// Neither the title nor the body the stranded save wrote is in
+/// `envelope`.
+fn assert_holds_no_content(envelope: &impl serde::Serialize) {
+    let text = serde_json::to_string(envelope).unwrap();
+    assert!(
+        !text.contains(TITLE) && !text.contains(BODY.trim()),
+        "the envelope holds a file's content"
     );
 }
 
@@ -254,6 +341,7 @@ fn a_save_whose_input_is_lost_is_abandoned_and_the_repository_goes_on() {
     assert_blocked_and_offered_the_abandon(&stranded, REQUEST_2);
 
     assert_abandoned(&stranded, REQUEST_3, &[stranded.written_path()]);
+    assert!(!operation_data(&world.execute(REQUEST_3, stranded.abandon())).committed);
 
     // A save of another item succeeds at once.
     let other = world.execute(REQUEST_2, world.create(TICKET_NEW));
@@ -304,8 +392,18 @@ fn a_save_that_was_overtaken_is_abandoned_and_the_repository_goes_on() {
         &items::ticket_source(TICKET_A, "Someone else's title", ""),
     );
     // The same request, with the same input, cannot clear its row.
+    // It is not offered again: it is offered the abandon of its own
+    // operation, which its result names.
     let refused = world.execute(REQUEST_1, world.save(TICKET_A, &stranded.token));
     assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&refused),
+        [] as [&str; 0]
+    );
+    assert_eq!(
+        refused.operation_id.as_deref(),
+        Some(stranded.operation_id.as_str())
+    );
     assert_eq!(world.pending_journal_rows(), 1);
     assert_blocked_and_offered_the_abandon(&stranded, REQUEST_2);
 
@@ -360,7 +458,10 @@ fn an_enablement_that_left_its_configuration_file_is_abandoned_and_the_file_is_n
     // step, so it is the domain that refuses it.
     let refused = desk.execute(REQUEST_1, &confirmation, enable());
     assert_eq!(refused.code, ResultCode::WorktreeNotClean);
-    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&refused),
+        ["request.retry"]
+    );
     assert_eq!(desk.pending_journal_rows(), 1);
     // The result names the operation that is in the way.
     assert_eq!(refused.operation_id.as_deref(), Some(operation_id.as_str()));
@@ -422,7 +523,7 @@ fn an_enablement_that_left_its_configuration_file_is_abandoned_and_the_file_is_n
 fn a_preview_of_an_abandon_shows_what_the_operation_left_and_changes_nothing() {
     let stranded = Stranded::new();
     let world = &stranded.world;
-    let before = repository_and_worktree_snapshot(&world.fixture);
+    let before = Everything::of(world);
     let journal = stranded.journal();
 
     let (_, preview) = stranded.preview(&stranded.abandon());
@@ -442,16 +543,17 @@ fn a_preview_of_an_abandon_shows_what_the_operation_left_and_changes_nothing() {
     assert_eq!(details.item_id.as_deref(), Some(TICKET_A));
     assert_eq!(details.paths, [stranded.written_path()]);
     assert!(details.paths_complete);
+    // The save wrote its file and committed nothing.
+    assert!(!details.committed);
     assert_eq!(details.request_id.as_deref(), Some(REQUEST_1));
     assert!(!details.files_changed);
     assert!(!details.git_state_changed);
     // No content of the file is in the preview.
-    let text = serde_json::to_string(&preview).unwrap();
-    assert!(!text.contains(TITLE) && !text.contains(BODY.trim()));
+    assert_holds_no_content(&preview);
 
     // One confirmation, and nothing else.
     assert_eq!(stranded.confirmations(), 1);
-    assert_eq!(before, repository_and_worktree_snapshot(&world.fixture));
+    before.assert_unchanged(world, "the preview");
     assert_eq!(journal, stranded.journal());
     assert_eq!(world.request_rows(), 1);
     assert_eq!(
@@ -459,11 +561,15 @@ fn a_preview_of_an_abandon_shows_what_the_operation_left_and_changes_nothing() {
         Some(RequestState::Accepted)
     );
     assert_eq!(world.pending_journal_rows(), 1);
+
+    stranded.abandon_as(REQUEST_3);
+    stranded.assert_goes_on(&before, "the preview and the abandon");
 }
 
 #[test]
 fn an_abandon_without_a_confirmation_is_confirmation_required_and_closes_nothing() {
     let stranded = Stranded::new();
+    let before = Everything::of(&stranded.world);
 
     let refused = stranded.world.execute(REQUEST_3, stranded.abandon());
 
@@ -474,6 +580,11 @@ fn an_abandon_without_a_confirmation_is_confirmation_required_and_closes_nothing
     );
     assert_eq!(stranded.world.pending_journal_rows(), 1);
     assert_eq!(stranded.world.record(REQUEST_3), None);
+    before.assert_unchanged(&stranded.world, "the refused abandon");
+
+    // Prepared, as the refusal says, the same request ID closes it.
+    stranded.abandon_as(REQUEST_3);
+    stranded.assert_goes_on(&before, "the abandon");
 }
 
 /// The operation is completed by its own request after the preview: the
@@ -486,6 +597,7 @@ fn an_operation_that_completed_between_preview_and_confirmation_is_external_chan
     let finished = world.execute(REQUEST_1, world.save(TICKET_A, &stranded.token));
     assert_eq!(finished.code, ResultCode::Ok, "{}", finished.message);
     let journal = stranded.journal();
+    let before = Everything::of(world);
 
     let refused = stranded.execute(REQUEST_3, &confirmation);
 
@@ -502,6 +614,8 @@ fn an_operation_that_completed_between_preview_and_confirmation_is_external_chan
     assert_eq!(noop.code, ResultCode::AlreadyApplied);
     assert_eq!(noop.outcome, Outcome::Noop);
     assert_eq!(noop.data, None);
+
+    stranded.assert_goes_on(&before, "the refused abandon");
 }
 
 /// A step recorded after the preview is a change as well: the
@@ -517,6 +631,7 @@ fn an_operation_that_advanced_between_preview_and_confirmation_is_external_chang
             [],
         )
         .unwrap();
+    let before = Everything::of(&stranded.world);
 
     let refused = stranded.execute(REQUEST_3, &confirmation);
 
@@ -527,6 +642,17 @@ fn an_operation_that_advanced_between_preview_and_confirmation_is_external_chang
         stranded.world.record(REQUEST_1).map(|record| record.state),
         Some(RequestState::Accepted)
     );
+    before.assert_unchanged(&stranded.world, "the refused abandon");
+
+    // A new preview shows the step the operation has now recorded, a
+    // checkpoint, and the abandon made with it keeps what was committed.
+    let abandoned = stranded.abandon_as(REQUEST_3);
+    assert!(operation_data(&abandoned).committed);
+    assert_eq!(
+        operation_data(&abandoned).step.as_deref(),
+        Some("authoring_checkpoint_observed")
+    );
+    stranded.assert_goes_on(&before, "the abandon");
 }
 
 #[test]
@@ -535,18 +661,26 @@ fn an_unknown_operation_is_operation_not_found_and_an_ended_one_is_a_no_op() {
     let world = &stranded.world;
     let prepare =
         |operation_id: &str| prepare_with(&world.service, &abandon(&world.root, operation_id));
+    let before = Everything::of(world);
 
     let unknown = prepare(&OperationId::new().to_string());
     assert_eq!(unknown.code, ResultCode::OperationNotFound);
     assert_eq!(unknown.outcome, Outcome::Error);
     assert_eq!(unknown.data, None);
-
-    // Close the stranded one, so that others can run.
-    let (confirmation, _) = stranded.preview(&stranded.abandon());
-    assert_eq!(
-        stranded.execute(REQUEST_3, &confirmation).code,
-        ResultCode::Ok
+    // An operation of another repository's journal is not this one's.
+    let elsewhere = Plain::new();
+    let foreign = prepare_with(
+        &world.service,
+        &abandon(&elsewhere.root, &stranded.operation_id),
     );
+    assert_eq!(foreign.code, ResultCode::OperationNotFound);
+    assert_eq!(stranded.confirmations(), 0, "no confirmation");
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // Close the stranded one: other operations then run, one that
+    // completes and one that is rejected.
+    stranded.abandon_as(REQUEST_3);
+    before.assert_unchanged(world, "the abandon");
     let completed = OperationId::new();
     world
         .service
@@ -569,6 +703,7 @@ fn an_unknown_operation_is_operation_not_found_and_an_ended_one_is_a_no_op() {
         .unwrap_err();
     let journal = stranded.journal();
     let confirmations = stranded.confirmations();
+    let before = Everything::of(world);
 
     for (what, operation_id) in [
         ("completed", completed.to_string()),
@@ -580,16 +715,10 @@ fn an_unknown_operation_is_operation_not_found_and_an_ended_one_is_a_no_op() {
         assert_eq!(noop.outcome, Outcome::Noop, "{what}");
         assert_eq!(noop.data, None, "{what}");
     }
-    // An operation of another repository's journal is not this one's.
-    let elsewhere = Plain::new();
-    let foreign = prepare_with(
-        &world.service,
-        &abandon(&elsewhere.root, &stranded.operation_id),
-    );
-    assert_eq!(foreign.code, ResultCode::OperationNotFound);
 
     assert_eq!(journal, stranded.journal());
     assert_eq!(confirmations, stranded.confirmations(), "no confirmation");
+    stranded.assert_goes_on(&before, "the previews");
 }
 
 /// Only local operations are abandoned. A synchronization's reservation
@@ -605,13 +734,7 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
     let remote = OperationId::new();
     let reserved = world
         .service
-        .reserve_remote_operation(
-            &world.root,
-            remote,
-            &RemoteOperationTarget::for_primary_synchronization(
-                &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
-            ),
-        )
+        .reserve_remote_operation(&world.root, remote, &reserved_target())
         .unwrap();
     assert!(matches!(reserved, RemoteReservationOutcome::Reserved(_)));
     let home = tempfile::tempdir().unwrap();
@@ -629,7 +752,7 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
             .unwrap()
     };
     let before = (
-        repository_and_worktree_snapshot(&world.fixture),
+        Everything::of(&world),
         journal(world.data.path()),
         count("remote_operation_records"),
         count("confirmation_records"),
@@ -650,7 +773,7 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
     assert_eq!(
         before,
         (
-            repository_and_worktree_snapshot(&world.fixture),
+            Everything::of(&world),
             journal(world.data.path()),
             count("remote_operation_records"),
             count("confirmation_records"),
@@ -673,6 +796,8 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
             }
         )
     );
+    // The reservation is of one item's context: another item is written.
+    assert_another_operation_succeeds(&world, "the refused abandons");
 }
 
 // ---------------------------------------------------------------------
@@ -683,12 +808,8 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
 fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
     let stranded = Stranded::new();
     let world = &stranded.world;
-    let (confirmation, _) = stranded.preview(&stranded.abandon());
-    assert_eq!(
-        stranded.execute(REQUEST_3, &confirmation).code,
-        ResultCode::Ok
-    );
-    let before = repository_and_worktree_snapshot(&world.fixture);
+    let before = Everything::of(world);
+    stranded.abandon_as(REQUEST_3);
     let journal = stranded.journal();
     let abandoned = OperationId::parse(&stranded.operation_id).unwrap();
 
@@ -701,7 +822,6 @@ fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
         .unwrap_err();
 
     assert_eq!(refused.kind, RepositoryErrorKind::OperationAbandoned);
-    assert_eq!(before, repository_and_worktree_snapshot(&world.fixture));
     assert_eq!(journal, stranded.journal());
     assert!(
         journal.contains(&(
@@ -715,12 +835,14 @@ fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
     let shown = world.service.show_operation(&repo, abandoned).unwrap();
     assert_eq!(shown.state, "completed");
     assert_eq!(shown.completed_step.as_deref(), Some("abandoned"));
+    stranded.assert_goes_on(&before, "the abandon and the refused repeat");
 }
 
 #[test]
 fn a_retry_of_an_abandon_returns_its_stored_result_and_another_operation_is_a_mismatch() {
     let stranded = Stranded::new();
     let world = &stranded.world;
+    let before = Everything::of(world);
     let (confirmation, _) = stranded.preview(&stranded.abandon());
     let abandoned = stranded.execute(REQUEST_3, &confirmation);
     assert_eq!(abandoned.code, ResultCode::Ok);
@@ -748,6 +870,7 @@ fn a_retry_of_an_abandon_returns_its_stored_result_and_another_operation_is_a_mi
     assert_eq!(other.code, ResultCode::RequestMismatch);
     assert_eq!(other.data, None);
     assert_eq!(journal, stranded.journal());
+    stranded.assert_goes_on(&before, "the abandon and its retries");
 }
 
 /// The abandon's own result is lost after it closed the row. The row,
@@ -755,6 +878,7 @@ fn a_retry_of_an_abandon_returns_its_stored_result_and_another_operation_is_a_mi
 #[test]
 fn an_abandon_whose_result_was_lost_is_a_no_op_and_not_external_change() {
     let mut stranded = Stranded::new();
+    let before = Everything::of(&stranded.world);
     let (confirmation, _) = stranded.preview(&stranded.abandon());
     stranded.world.service = RepositoryService::open_at_with_failure_point_for_testing(
         stranded.world.data.path(),
@@ -778,6 +902,7 @@ fn an_abandon_whose_result_was_lost_is_a_no_op_and_not_external_change() {
         Some(RequestState::Finished)
     );
     assert_eq!(stranded.world.record(REQUEST_1), None);
+    stranded.assert_goes_on(&before, "the abandon and its retry");
 }
 
 /// The abandon is cut off before its transaction. Its retry finds the
@@ -785,6 +910,7 @@ fn an_abandon_whose_result_was_lost_is_a_no_op_and_not_external_change() {
 #[test]
 fn an_abandon_interrupted_before_its_transaction_is_completed_by_its_retry() {
     let mut stranded = Stranded::new();
+    let before = Everything::of(&stranded.world);
     let (confirmation, _) = stranded.preview(&stranded.abandon());
     stranded.world.service = RepositoryService::open_at_with_failure_point_for_testing(
         stranded.world.data.path(),
@@ -802,8 +928,8 @@ fn an_abandon_interrupted_before_its_transaction_is_completed_by_its_retry() {
         operation_data(&retried).released_request_id.as_deref(),
         Some(REQUEST_1)
     );
-    assert_eq!(stranded.world.pending_journal_rows(), 0);
     assert_eq!(stranded.world.record(REQUEST_1), None);
+    stranded.assert_goes_on(&before, "the abandon");
 }
 
 /// A call that holds the repository's lease may be the one working under
@@ -813,6 +939,7 @@ fn an_abandon_interrupted_before_its_transaction_is_completed_by_its_retry() {
 fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
     let stranded = Stranded::new();
     let world = &stranded.world;
+    let before = Everything::of(world);
     let (confirmation, _) = stranded.preview(&stranded.abandon());
     let held = RepositoryService::hold_lease_for_testing(
         &world.root,
@@ -830,11 +957,20 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
         world.record(REQUEST_1).map(|record| record.state),
         Some(RequestState::Accepted)
     );
+    // While the lease is held, no result offers the abandon: the call
+    // that holds it may be the one at work under the operation.
+    let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert!(
+        !recovery_actions(&blocked).contains(&"operation.abandon"),
+        "{:?}",
+        recovery_actions(&blocked)
+    );
+    before.assert_unchanged(world, "the busy abandon");
     drop(held);
 
     let abandoned = stranded.execute(REQUEST_3, &confirmation);
     assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
-    assert_eq!(world.pending_journal_rows(), 0);
+    stranded.assert_goes_on(&before, "the abandon");
 }
 
 /// The request that began the operation is entered again at the moment
@@ -861,17 +997,16 @@ fn a_call_of_the_owning_request_that_races_the_abandon_is_refused_and_leaves_not
         );
         assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
     });
-    let before = world.worktree_source(TICKET_A);
+    let before = Everything::of(world);
 
     let raced = world.execute(REQUEST_1, world.save(TICKET_A, &stranded.token));
 
     assert_eq!(raced.code, ResultCode::ExternalChange);
+    // Nothing of the request is left, so nothing is offered for it.
+    assert_eq!(recovery_actions(&raced), [] as [&str; 0]);
     assert_eq!(world.record(REQUEST_1), None);
-    assert_eq!(world.pending_journal_rows(), 0);
     assert_eq!(world.branch_commits(TICKET_A), 0);
-    assert_eq!(world.worktree_source(TICKET_A), before);
-    let other = world.execute(REQUEST_5, world.create(TICKET_NEW));
-    assert_eq!(other.code, ResultCode::Ok, "{}", other.message);
+    stranded.assert_goes_on(&before, "the abandon and the call it raced");
 }
 
 /// A create killed after it made its directory, into which something
@@ -943,4 +1078,258 @@ fn a_create_that_cannot_go_on_is_abandoned_by_the_action_its_refusal_offers() {
         assert_enabled(&created, &site.root);
         assert!(desk.registered(&site.root), "{what}");
     }
+}
+
+/// The index hand-off of a synchronization is a row of the local journal
+/// under the synchronization's own ID. It is the synchronization's to
+/// end, and a reservation has its own cancellation: the ID is refused
+/// although a local row is pending under it, and no result offers it.
+///
+/// The row is written here as a hand-off that failed leaves it; the
+/// reservation is a real one.
+#[test]
+fn a_local_row_under_a_synchronization_s_id_is_refused_and_is_not_offered() {
+    let world = World::new();
+    let connection = items::index(world.data.path());
+    connection
+        .execute_batch("UPDATE remote_polling_state SET remote_name='origin',primary_branch='main'")
+        .unwrap();
+    let remote = OperationId::new();
+    let reserved = world
+        .service
+        .reserve_remote_operation(&world.root, remote, &reserved_target())
+        .unwrap();
+    assert!(matches!(reserved, RemoteReservationOutcome::Reserved(_)));
+    connection
+        .execute(
+            "INSERT INTO operation_records
+                (repository_id, root_path, operation_ulid, action, target, state, observed_at)
+             SELECT id, root_path, ?1, 'refresh', '', 'failed', 0 FROM repositories",
+            [remote.to_string()],
+        )
+        .unwrap();
+    let before = Everything::of(&world);
+    let mutation = abandon(&world.root, &remote.to_string());
+
+    let refused = prepare_with(&world.service, &mutation);
+    assert_eq!(refused.code, ResultCode::InvalidInput);
+    assert_eq!(refused.data, None);
+    assert_eq!(
+        world
+            .service
+            .abandon_operation(manyhands::repository::AbandonOperationRequest {
+                root: world.root.clone(),
+                operation_id: remote,
+                expected: None,
+            })
+            .unwrap(),
+        manyhands::repository::AbandonOperationOutcome::AnotherJournal
+    );
+    // The row does refuse the repository's other operations. They are
+    // told to look, and are not told to abandon it.
+    let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
+    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+
+    before.assert_unchanged(&world, "a refused abandon");
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // The synchronization ends its own row, which is what the row
+    // written above stands in for; another item is then written.
+    connection
+        .execute(
+            "UPDATE operation_records SET state = 'completed' WHERE operation_ulid = ?1",
+            [remote.to_string()],
+        )
+        .unwrap();
+    assert_another_operation_succeeds(&world, "the refused abandon");
+}
+
+/// A save that committed and whose index hand-off then failed is
+/// pending with its checkpoint recorded. Abandoned, its commit stays
+/// where it is, and the preview and the result both say that one was
+/// made.
+#[test]
+fn an_abandoned_operation_that_had_committed_keeps_its_commit_and_says_so() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    world.service = RepositoryService::open_at_with_failure_point_for_testing(
+        world.data.path(),
+        FailurePoint::BeforeIndexTransactionCommit,
+    )
+    .unwrap();
+    let owed = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(owed.code, ResultCode::DiscoveryPending);
+    // The same request finishes it, or its operation is abandoned.
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&owed),
+        ["operation.resume"]
+    );
+    let commit = owed.effects.commit_oid.clone().expect("the save's commit");
+    let operation_id = owed.operation_id.clone().unwrap();
+    world.reopen();
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(world.pending_journal_rows(), 1);
+    let before = Everything::of(&world);
+
+    let preview = prepare_with(&world.service, &abandon(&world.root, &operation_id));
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    let preview = preview.data.unwrap();
+    let details = abandon_preview(&preview);
+    assert!(details.committed);
+    // Nothing differs from the branch: it is all committed.
+    assert_eq!(details.paths, [] as [&str; 0]);
+    let abandoned = execute_confirmed(
+        &world.service,
+        REQUEST_3,
+        &preview.confirmation_id,
+        abandon(&world.root, &operation_id),
+    );
+
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    assert!(operation_data(&abandoned).committed);
+    assert_eq!(operation_data(&abandoned).paths, [] as [&str; 0]);
+    before.assert_unchanged(&world, "the abandon");
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(
+        world.branch_tip(TICKET_A).map(|tip| tip.to_string()),
+        Some(commit)
+    );
+    assert_eq!(world.record(REQUEST_1), None);
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // The released request, sent again, is a new request: what it asked
+    // for is committed, and it makes no second commit.
+    let again = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_ne!(again.operation_id.as_deref(), Some(operation_id.as_str()));
+    assert_eq!(again.effects.commit_oid, None);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_another_operation_succeeds(&world, "the abandon");
+}
+
+/// The one file an abandon can add. A creation killed after it
+/// initialized its repository has a `.git` that no operation has taken
+/// the lease of, so the lease's file is not there yet. The abandon takes
+/// the lease, which makes that file, empty. Nothing else differs.
+#[test]
+fn the_lease_file_is_the_only_file_an_abandon_can_add() {
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let create = || killed_create(site.parent.path());
+    let (confirmation, _) = desk.preview(&create());
+    killed_at(
+        &desk,
+        site.parent.path(),
+        false,
+        &confirmation,
+        FailurePoint::AfterRepositoryInitialization,
+    );
+    desk.reopen();
+    let lease_file = PathBuf::from("new/.git").join(LEASE_FILE);
+    let before = tree(site.parent.path());
+    assert!(
+        before.contains_key(Path::new("new/.git/HEAD")),
+        "initialized"
+    );
+    assert!(!before.contains_key(&lease_file), "no lease was taken yet");
+    let operation_id = desk.record(REQUEST_1).unwrap().operations[0]
+        .operation_id
+        .to_string();
+
+    let (abandon_confirmation, preview) = desk.preview(&abandon(&site.root, &operation_id));
+    assert_eq!(tree(site.parent.path()), before, "the preview adds nothing");
+    assert_eq!(
+        abandon_preview(&preview).action,
+        Some(OperationAction::CreateAndEnable)
+    );
+    let abandoned = desk.execute(
+        REQUEST_2,
+        &abandon_confirmation,
+        abandon(&site.root, &operation_id),
+    );
+
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    let mut after = tree(site.parent.path());
+    assert_eq!(
+        after.remove(&lease_file),
+        Some(Some(Vec::new())),
+        "the lease's file, empty"
+    );
+    assert_eq!(after, before, "the abandon touched another file");
+    assert_eq!(desk.pending_journal_rows(), 0);
+    assert_eq!(desk.record(REQUEST_1), None);
+
+    // With the target cleared, the same request ID creates the
+    // repository, with a new preview.
+    fs::remove_dir_all(&site.root).unwrap();
+    let (confirmation, _) = desk.preview(&create());
+    let created = desk.execute(REQUEST_1, &confirmation, create());
+    assert_enabled(&created, &site.root);
+    assert!(desk.registered(&site.root));
+}
+
+/// A rebuild observes the whole repository with no lease held. While it
+/// does, its row refuses other requests as any pending row does, but no
+/// result offers to abandon it and an abandon of it is busy: its
+/// heartbeat shows a call at work. The rebuild then finishes.
+#[test]
+fn a_rebuild_that_is_running_is_not_offered_and_its_abandon_is_busy() {
+    let world = World::new();
+    let before = Everything::of(&world);
+    let (data, root) = (world.data.path().to_owned(), world.root.clone());
+    let (sent, received) = std::sync::mpsc::channel();
+    world.service.set_observation_hook_for_testing(move || {
+        let other = RepositoryService::open_at(&data).unwrap();
+        let operation_id: String = items::index(&data)
+            .query_row(
+                "SELECT operation_ulid FROM operation_records WHERE state != 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let blocked = execute_with(
+            &other,
+            REQUEST_2,
+            Mutation::TicketCreate(TicketCreateInput {
+                root: root.clone(),
+                id: items::item_id(TICKET_NEW),
+                draft: World::draft(TITLE, BODY),
+                deps: Vec::new(),
+                parent: None,
+                initials: None,
+            }),
+        );
+        let preview = prepare_with(&other, &abandon(&root, &operation_id));
+        let attempt = preview.data.map(|preview| {
+            execute_confirmed(
+                &other,
+                REQUEST_3,
+                &preview.confirmation_id,
+                abandon(&root, &operation_id),
+            )
+        });
+        sent.send((blocked, attempt)).unwrap();
+    });
+
+    let rebuilt = world.execute(
+        REQUEST_1,
+        Mutation::IndexRebuild(manyhands::repository::IndexRebuildInput {
+            root: world.root.clone(),
+        }),
+    );
+
+    let (blocked, attempt) = received.recv().unwrap();
+    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
+    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+    let attempt = attempt.expect("a preview is given: it does not say who is at work");
+    assert_eq!(attempt.code, ResultCode::Busy);
+    assert_eq!(recovery_actions(&attempt), ["request.retry"]);
+    assert_eq!(rebuilt.code, ResultCode::Ok, "{}", rebuilt.message);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    before.assert_unchanged(&world, "the busy abandon");
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_another_operation_succeeds(&world, "the rebuild");
 }

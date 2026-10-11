@@ -9,9 +9,9 @@ use crate::results::{ResultCode, Scope};
 use super::{
     super::{
         super::{
-            AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation,
-            OperationFamily, OperationId, OperationRemains, PendingStanding, RepositoryService,
-            read::local_action, recovery::JournalRow,
+            AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationId,
+            OperationRemains, PendingStanding, RepositoryService, read::local_action,
+            recovery::JournalRow,
         },
         command::Command,
         dto::{
@@ -115,6 +115,7 @@ impl OperationAbandonBinding {
         let observation = Observation::of(command);
         let observation = match found {
             AbandonableOperation::NotFound => observation.text("standing", "not_found"),
+            AbandonableOperation::AnotherJournal => observation.text("standing", "another_journal"),
             AbandonableOperation::Completed => observation.text("standing", "completed"),
             AbandonableOperation::Rejected => observation.text("standing", "rejected"),
             AbandonableOperation::Abandoned => observation.text("standing", "abandoned"),
@@ -130,25 +131,6 @@ impl OperationAbandonBinding {
         ObservationDigest::of_state(command, observation.finish())
     }
 
-    /// Whether the remote journal of the repository, or the application's
-    /// key journal, holds an operation of the ID: one this command does
-    /// not abandon.
-    fn is_of_another_journal(
-        &self,
-        service: &RepositoryService,
-        scope: &ScopeKey,
-    ) -> Result<bool, Answer> {
-        for family in [OperationFamily::Remote, OperationFamily::KeyMaterial] {
-            let row = service
-                .journal_row(family, scope, self.operation_id)
-                .map_err(|error| Answer::of_read(&error))?;
-            if row != JournalRow::Absent {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     fn data(&self, remains: OperationRemains) -> MutationDataDto {
         let OperationRemains {
             action,
@@ -157,6 +139,7 @@ impl OperationAbandonBinding {
             worktree,
             paths,
             paths_complete,
+            committed,
             owner,
         } = remains;
         MutationDataDto::Operation(OperationMutationDto {
@@ -168,6 +151,7 @@ impl OperationAbandonBinding {
             worktree,
             paths,
             paths_complete,
+            committed,
             released_request_id: owner,
         })
     }
@@ -199,6 +183,16 @@ impl OperationAbandonBinding {
             Ok(AbandonOperationOutcome::AlreadyAbandoned) => Ran {
                 answer: Answer::stopped(ResultCode::AlreadyApplied),
                 standing: Standing::Final,
+            },
+            // The ID is a synchronization's or a key operation's. No
+            // preview is given of one, so this is not reached by a
+            // request that was accepted on a preview; nothing was
+            // changed.
+            Ok(AbandonOperationOutcome::AnotherJournal) => Ran {
+                answer: Answer::stopped(ResultCode::InvalidInput),
+                standing: Standing::Stopped {
+                    journal: Some(NO_ROW),
+                },
             },
             // The row is not what was previewed any more: it ended,
             // advanced or went between the observation and the call.
@@ -276,8 +270,15 @@ impl Binding for OperationAbandonBinding {
     /// Observes. No check is made of what the preview covers: the
     /// boundary compares the digest with the confirmation's, and refuses
     /// a request whose preview is stale as `external_change`.
+    ///
+    /// An ID the remote journal or the key journal holds is no state of
+    /// a preview: no preview is given of one. It is refused here as the
+    /// input it is.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         let (_, found) = self.observe(call.service)?;
+        if found == AbandonableOperation::AnotherJournal {
+            return Err(Answer::stopped(ResultCode::InvalidInput));
+        }
         let observation = Self::digest(&found).to_stored();
         if let AbandonableOperation::Pending(remains) = found {
             self.seen = Some(remains.standing);
@@ -353,6 +354,10 @@ impl Binding for OperationAbandonBinding {
                 self.seen = Some(remains.standing.clone());
                 Ok(Entered::Unfinished)
             }
+            AbandonableOperation::AnotherJournal => Err(Ran {
+                answer: Answer::stopped(ResultCode::InvalidInput),
+                standing: Standing::NotRun { journal: NO_ROW },
+            }),
             AbandonableOperation::NotFound
             | AbandonableOperation::Completed
             | AbandonableOperation::Rejected => Err(changed()),
@@ -365,24 +370,26 @@ impl Binding for OperationAbandonBinding {
 }
 
 impl Confirmed for OperationAbandonBinding {
-    /// A preview is given only of a pending local operation. An ID no
-    /// journal of the repository holds is `operation_not_found`; one the
-    /// remote journal or the key journal holds is `invalid_input`, since
-    /// this command does not abandon those; and a local operation that
-    /// has ended, however it ended, is a no-op.
+    /// A preview is given only of a pending operation of the local
+    /// journal alone. An ID the remote journal or the key journal holds
+    /// is `invalid_input`, asked first: this command does not abandon
+    /// those, and a reservation has `cancel_remote_operation`. An ID no
+    /// journal holds for the repository is `operation_not_found`, and a
+    /// local operation that has ended, however it ended, is a no-op.
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (scope, found) = self.observe(call.service)?;
         let observation = Self::digest(&found).to_stored();
         let remains = match found {
             AbandonableOperation::Pending(remains) => remains,
             AbandonableOperation::NotFound => {
-                return Err(Answer::stopped(
-                    if self.is_of_another_journal(call.service, &scope)? {
-                        ResultCode::InvalidInput
-                    } else {
-                        ResultCode::OperationNotFound
-                    },
-                ));
+                return Err(Answer::stopped(ResultCode::OperationNotFound));
+            }
+            // A synchronization's or a key operation's, whatever the
+            // local journal holds under the ID: the index hand-off of a
+            // synchronization is a local row, and is the
+            // synchronization's to end.
+            AbandonableOperation::AnotherJournal => {
+                return Err(Answer::stopped(ResultCode::InvalidInput));
             }
             // The command's end state holds: the operation refuses
             // nothing.
@@ -399,6 +406,7 @@ impl Confirmed for OperationAbandonBinding {
             worktree,
             paths,
             paths_complete,
+            committed,
             owner,
         } = remains;
         let mut effects = vec![PreviewEffect::OperationClosed];
@@ -418,6 +426,7 @@ impl Confirmed for OperationAbandonBinding {
                 worktree,
                 paths,
                 paths_complete,
+                committed,
                 request_id: owner,
                 files_changed: false,
                 git_state_changed: false,

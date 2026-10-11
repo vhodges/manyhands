@@ -20,7 +20,22 @@
   "message": "What the request was based on has changed.",
   "operation_id": "<operation>",
   "outcome": "blocked",
-  "recovery": [],
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "operation.abandon",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": "<operation>"
+    }
+  ],
   "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
   "schema_version": 1,
   "scope": {

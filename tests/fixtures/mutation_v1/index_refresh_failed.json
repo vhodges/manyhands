@@ -21,6 +21,20 @@
         "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
       },
       "operation_id": null
+    },
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "operation.abandon",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": "<operation>"
     }
   ],
   "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",

@@ -3,6 +3,7 @@
   "command": "operation abandon",
   "data": {
     "action": "save_ticket",
+    "committed": false,
     "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
     "operation_id": "<abandoned>",
     "paths": [

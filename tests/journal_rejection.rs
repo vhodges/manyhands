@@ -522,7 +522,7 @@ fn a_rejected_operation_reads_as_completed_and_rejected() {
 
 use manyhands::repository::{
     AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, FailurePoint,
-    LeaseKind, OperationId, OperationRemains, PendingStanding,
+    LeaseKind, OperationId, OperationRemains, PendingStanding, RebuildRepositoryRequest,
 };
 
 /// A save whose file is written and whose step was not recorded: its row
@@ -604,6 +604,23 @@ impl Stranded {
     }
 }
 
+/// Everything an abandon must leave as it found it: the worktrees, the
+/// index files, the references and the remotes, as Git reads them, and
+/// every file under `.git` by its bytes, which adds the objects, the
+/// packed references, the reflogs and the worktrees' own metadata. The
+/// one file left out is the repository lease's, which taking the lease
+/// makes, empty, where no operation took it before.
+fn everything(
+    fixture: &support::TestRepository,
+) -> (
+    support::RepositoryAndWorktreeSnapshot,
+    std::collections::BTreeMap<std::path::PathBuf, support::FilesystemEntry>,
+) {
+    let mut git = support::repository_git_file_bytes(fixture);
+    git.remove(std::path::Path::new("manyhands-operation.lock"));
+    (support::repository_and_worktree_snapshot(fixture), git)
+}
+
 fn pending(remains: AbandonableOperation) -> OperationRemains {
     match remains {
         AbandonableOperation::Pending(remains) => remains,
@@ -615,7 +632,7 @@ fn pending(remains: AbandonableOperation) -> OperationRemains {
 fn an_abandoned_operation_no_longer_blocks_the_repository_and_nothing_is_touched() {
     let stranded = Stranded::new();
     let root = &stranded.fixture.root;
-    let before = support::repository_and_worktree_snapshot(&stranded.fixture);
+    let before = everything(&stranded.fixture);
 
     // Looking changes nothing, and names what the operation left.
     let seen = pending(
@@ -637,10 +654,7 @@ fn an_abandoned_operation_no_longer_blocks_the_repository_and_nothing_is_touched
         probe_remote(&stranded.service, root),
         Some(RepositoryErrorKind::RecoveryRequired)
     );
-    assert_eq!(
-        before,
-        support::repository_and_worktree_snapshot(&stranded.fixture)
-    );
+    assert_eq!(before, everything(&stranded.fixture));
 
     let outcome = stranded
         .abandon(stranded.operation_id(), Some(seen.standing.clone()))
@@ -648,7 +662,7 @@ fn an_abandoned_operation_no_longer_blocks_the_repository_and_nothing_is_touched
     assert_eq!(outcome, AbandonOperationOutcome::Abandoned(seen));
     assert_eq!(
         before,
-        support::repository_and_worktree_snapshot(&stranded.fixture),
+        everything(&stranded.fixture),
         "the abandon touched a file, a reference or a worktree"
     );
 
@@ -667,7 +681,7 @@ fn an_abandoned_operation_no_longer_blocks_the_repository_and_nothing_is_touched
 fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
     let stranded = Stranded::new();
     stranded.abandon(stranded.operation_id(), None).unwrap();
-    let before = support::repository_and_worktree_snapshot(&stranded.fixture);
+    let before = everything(&stranded.fixture);
     let journal = stranded.journal();
 
     // Neither replayed as completed nor begun again, with any input.
@@ -685,10 +699,7 @@ fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
         Some(RepositoryErrorKind::OperationAbandoned)
     );
 
-    assert_eq!(
-        before,
-        support::repository_and_worktree_snapshot(&stranded.fixture)
-    );
+    assert_eq!(before, everything(&stranded.fixture));
     assert_eq!(
         journal,
         stranded.journal(),
@@ -703,6 +714,7 @@ fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
 #[test]
 fn an_abandoned_operation_reads_as_completed_and_abandoned() {
     let stranded = Stranded::new();
+    let before = everything(&stranded.fixture);
     stranded.abandon(stranded.operation_id(), None).unwrap();
 
     let repo = stranded
@@ -731,13 +743,18 @@ fn an_abandoned_operation_reads_as_completed_and_abandoned() {
             .unwrap(),
         AbandonableOperation::Abandoned
     );
+    assert_eq!(before, everything(&stranded.fixture));
+    assert_eq!(
+        probe_remote(&stranded.service, &stranded.fixture.root),
+        None
+    );
 }
 
 #[test]
 fn only_a_pending_operation_that_stands_as_it_was_seen_is_abandoned() {
     let stranded = Stranded::new();
     let root = stranded.fixture.root.clone();
-    let before = support::repository_and_worktree_snapshot(&stranded.fixture);
+    let before = everything(&stranded.fixture);
     let journal = stranded.journal();
 
     // No row of the ID.
@@ -774,6 +791,7 @@ fn only_a_pending_operation_that_stands_as_it_was_seen_is_abandoned() {
         stranded.abandon(stranded.operation_id(), None).unwrap(),
         AbandonOperationOutcome::AlreadyAbandoned
     );
+    assert_eq!(before, everything(&stranded.fixture));
 
     // A completed operation and a rejected one are left as they are.
     let completed = support::new_operation_id();
@@ -798,6 +816,7 @@ fn only_a_pending_operation_that_stands_as_it_was_seen_is_abandoned() {
     );
     let journal_after = stranded.journal();
     assert_eq!(journal_after.len(), journal.len() + 2);
+    let after_the_operations = everything(&stranded.fixture);
     assert_eq!(
         stranded.abandon(completed, None).unwrap(),
         AbandonOperationOutcome::Completed
@@ -807,6 +826,7 @@ fn only_a_pending_operation_that_stands_as_it_was_seen_is_abandoned() {
         AbandonOperationOutcome::Rejected
     );
     assert_eq!(journal_after, stranded.journal());
+    assert_eq!(after_the_operations, everything(&stranded.fixture));
     // A rejected ID still begins again: abandon did not spend it.
     assert_eq!(
         outcome(stranded.service.add_remote(AddRemoteRequest {
@@ -817,11 +837,9 @@ fn only_a_pending_operation_that_stands_as_it_was_seen_is_abandoned() {
         })),
         Some(RepositoryErrorKind::Git)
     );
-    // Only the remote the completed operation added differs.
-    let after = support::repository_and_worktree_snapshot(&stranded.fixture);
-    assert_eq!(before.root.files, after.root.files);
-    assert_eq!(before.references, after.references);
-    assert_eq!(before.linked_worktrees, after.linked_worktrees);
+    // What the two later operations did is all that differs: the abandons
+    // of them changed nothing.
+    assert_eq!(after_the_operations, everything(&stranded.fixture));
 }
 
 #[test]
@@ -829,6 +847,7 @@ fn an_operation_a_call_is_working_under_is_not_abandoned() {
     let stranded = Stranded::new();
     let root = stranded.fixture.root.clone();
     let journal = stranded.journal();
+    let before = everything(&stranded.fixture);
 
     // A call holds the repository lease.
     let held = RepositoryService::hold_lease_for_testing(
@@ -887,6 +906,7 @@ fn an_operation_a_call_is_working_under_is_not_abandoned() {
         stranded.abandon(stranded.operation_id(), None).unwrap(),
         AbandonOperationOutcome::Abandoned(_)
     ));
+    assert_eq!(before, everything(&stranded.fixture));
     assert_eq!(probe_remote(&stranded.service, &root), None);
 }
 
@@ -930,7 +950,7 @@ fn an_abandoned_enablement_names_the_configuration_file_it_left() {
         .unwrap();
     connection.execute("DELETE FROM repositories", []).unwrap();
     drop(connection);
-    let before = support::repository_and_worktree_snapshot(&fixture);
+    let before = everything(&fixture);
 
     let outcome = service
         .abandon_operation(AbandonOperationRequest {
@@ -946,5 +966,148 @@ fn an_abandoned_enablement_names_the_configuration_file_it_left() {
     assert_eq!(left.item_id, None);
     assert_eq!(left.worktree.as_deref(), Some("."));
     assert_eq!(left.paths, vec![".manyhands/config.toml".to_owned()]);
-    assert_eq!(before, support::repository_and_worktree_snapshot(&fixture));
+    assert!(!left.committed);
+    assert_eq!(before, everything(&fixture));
+
+    // Restored with Git, the repository is enabled by another operation.
+    fs::remove_file(fixture.root.join(".manyhands/config.toml")).unwrap();
+    assert!(
+        service
+            .enable(support::enable_request(&fixture.root))
+            .is_ok()
+    );
+}
+
+// A rebuild observes the repository with no lease held. Its row must show
+// that a call is at work under it, and a row that was closed all the same
+// must stay closed.
+
+fn rebuild_request(root: &std::path::Path, operation_id: OperationId) -> RebuildRepositoryRequest {
+    RebuildRepositoryRequest {
+        root: root.to_owned(),
+        operation_id,
+    }
+}
+
+fn stored_rows(data_directory: &std::path::Path) -> Vec<(String, String, Option<String>)> {
+    let connection = support::items::index(data_directory);
+    let mut statement = connection
+        .prepare("SELECT operation_ulid, state, completed_step FROM operation_records ORDER BY id")
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+#[test]
+fn a_rebuild_that_is_observing_is_not_abandoned() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let operation_id = support::new_operation_id();
+    let (data, root) = (
+        enabled.data_directory.path().to_owned(),
+        fixture.root.clone(),
+    );
+    let (sent, received) = std::sync::mpsc::channel();
+    enabled.service.set_observation_hook_for_testing(move || {
+        let other = RepositoryService::open_at(&data).unwrap();
+        let seen = other.abandonable_operation(&root, operation_id).unwrap();
+        let attempt = other.abandon_operation(AbandonOperationRequest {
+            root: root.clone(),
+            operation_id,
+            expected: None,
+        });
+        sent.send((seen, attempt.map_err(|error| error.kind)))
+            .unwrap();
+    });
+
+    let rebuilt = enabled
+        .service
+        .rebuild_repository(rebuild_request(&fixture.root, operation_id));
+
+    let (seen, attempt) = received.recv().unwrap();
+    assert!(matches!(seen, AbandonableOperation::Pending(_)), "{seen:?}");
+    assert_eq!(attempt, Err(RepositoryErrorKind::RepositoryBusy));
+    assert_eq!(outcome(rebuilt), None, "the rebuild goes on");
+    assert_eq!(
+        stored_rows(enabled.data_directory.path())
+            .into_iter()
+            .filter(|(id, _, _)| *id == operation_id.to_string())
+            .collect::<Vec<_>>(),
+        [(
+            operation_id.to_string(),
+            "completed".to_owned(),
+            Some("completed".to_owned())
+        )]
+    );
+    assert_eq!(probe_remote(&enabled.service, &fixture.root), None);
+}
+
+/// The guard behind the liveness check: a row that was closed as
+/// abandoned under a call that is still running is not reopened by that
+/// call, which stops there and writes nothing more.
+#[test]
+fn a_rebuild_whose_row_was_abandoned_under_it_stops_and_leaves_the_row_closed() {
+    for changed in [false, true] {
+        let fixture = support::born_repository();
+        let enabled = support::enabled_repository(&fixture);
+        let operation_id = support::new_operation_id();
+        let (data, root) = (
+            enabled.data_directory.path().to_owned(),
+            fixture.root.clone(),
+        );
+        enabled.service.set_observation_hook_for_testing(move || {
+            // As an abandon leaves the row, whatever let it through.
+            assert_eq!(
+                support::items::index(&data)
+                    .execute(
+                        "UPDATE operation_records
+                            SET state = 'completed', completed_step = 'abandoned'
+                          WHERE operation_ulid = ?1",
+                        [operation_id.to_string()],
+                    )
+                    .unwrap(),
+                1
+            );
+            if changed {
+                fs::write(root.join("fixture.txt"), "changed while observed\n").unwrap();
+            }
+        });
+        let problems = |data: &std::path::Path| -> i64 {
+            support::items::index(data)
+                .query_row("SELECT COUNT(*) FROM problems", [], |row| row.get(0))
+                .unwrap()
+        };
+        let before = problems(enabled.data_directory.path());
+
+        let rebuilt = enabled
+            .service
+            .rebuild_repository(rebuild_request(&fixture.root, operation_id));
+
+        assert_eq!(
+            outcome(rebuilt),
+            Some(RepositoryErrorKind::OperationAbandoned),
+            "changed {changed}"
+        );
+        assert!(
+            stored_rows(enabled.data_directory.path()).contains(&(
+                operation_id.to_string(),
+                "completed".to_owned(),
+                Some("abandoned".to_owned())
+            )),
+            "changed {changed}"
+        );
+        assert_eq!(problems(enabled.data_directory.path()), before);
+        assert!(
+            enabled
+                .service
+                .recovery_inspection(&fixture.root)
+                .unwrap()
+                .is_empty(),
+            "changed {changed}: the repository is blocked again"
+        );
+        assert_eq!(probe_remote(&enabled.service, &fixture.root), None);
+    }
 }

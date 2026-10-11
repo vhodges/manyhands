@@ -243,7 +243,10 @@ fn a_remote_added_whose_index_hand_off_failed_is_partial_and_finished_by_its_ret
         )
     );
     assert_names_origin(&pending);
-    assert_eq!(recovery_actions(&pending), ["operation.resume"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&pending),
+        ["operation.resume"]
+    );
     assert_eq!(pending.recovery[0].operation_id, pending.operation_id);
     assert_eq!(remote_url(&world, "origin"), Some(location(SECRET)));
     assert_eq!(
@@ -281,7 +284,10 @@ fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
         )
     );
     assert_names_origin(&stopped);
-    assert_eq!(recovery_actions(&stopped), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&stopped),
+        ["request.retry"]
+    );
     assert_eq!(remote_url(&world, "origin"), Some(location(SECRET)));
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
@@ -633,7 +639,10 @@ fn a_failure_after_the_selection_s_commit_is_partial_and_its_retry_reports_that_
             ..committed(commit)
         }
     );
-    assert_eq!(recovery_actions(&partial), ["operation.resume"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&partial),
+        ["operation.resume"]
+    );
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
         RequestState::Accepted
@@ -682,7 +691,10 @@ fn a_selection_whose_registration_failed_is_partial_and_finished_by_its_retry() 
             ..committed(commit)
         }
     );
-    assert_eq!(recovery_actions(&pending), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&pending),
+        ["request.retry"]
+    );
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
         RequestState::Accepted
@@ -856,7 +868,10 @@ fn stopped_inside_git(world: &World) -> String {
     assert!(!text.contains("config.lock"), "{text}");
     assert_eq!(stopped.message, ResultCode::InternalError.message());
     assert_eq!(stopped.effects, Effects::not_requested());
-    assert_eq!(recovery_actions(&stopped), ["request.retry"]);
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&stopped),
+        ["request.retry"]
+    );
     assert_eq!(remote_url(world, "origin"), None);
     let record = world.record(REQUEST_1).expect("a record");
     assert_eq!(record.state, RequestState::Accepted);
@@ -1128,7 +1143,7 @@ fn a_foreign_commit_that_selects_another_remote_is_an_external_change_to_a_selec
             ..committed(own)
         }
     );
-    assert!(retry.recovery.is_empty());
+    assert!(crate::support::mutation::recovery_before_own_abandon(&retry).is_empty());
     // Nothing was written over the other's selection.
     assert_eq!(world.primary_head(), foreign);
     assert_eq!(selected_at(&world, foreign).as_deref(), Some("other"));

@@ -1485,7 +1485,7 @@ fn offered(
 ) -> Vec<(&'static str, Option<String>)> {
     let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
     let own = recovery(code, command, root, None, None, retry);
-    offering_abandon(own, code, root, &pending)
+    offering_abandon(own, code, root, &pending, None)
         .into_iter()
         .map(|action| {
             if action.action == RecoveryActionKind::OperationAbandon {
@@ -1608,12 +1608,19 @@ fn each_pending_operation_is_offered_once() {
         None,
         false,
     );
-    let once = offering_abandon(own, ResultCode::RecoveryRequired, Some(ROOT), &pending);
+    let once = offering_abandon(
+        own,
+        ResultCode::RecoveryRequired,
+        Some(ROOT),
+        &pending,
+        None,
+    );
     let twice = offering_abandon(
         once.clone(),
         ResultCode::RecoveryRequired,
         Some(ROOT),
         &pending,
+        Some(PENDING),
     );
     assert_eq!(once, twice);
     assert_eq!(
@@ -1621,5 +1628,103 @@ fn each_pending_operation_is_offered_once() {
             .map(|action| action.operation_id.as_deref())
             .collect::<Vec<_>>(),
         [None, Some(PENDING), Some(other)]
+    );
+}
+
+/// What a result of `code` that left its request's record accepted with
+/// the request's own operation `own` pending is offered.
+fn offered_with_own(code: ResultCode, command: Command, pending: &[&str]) -> Vec<&'static str> {
+    let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
+    let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
+    let own = recovery(code, command, Some(ROOT), Some(request_id), None, true);
+    offering_abandon(own, code, Some(ROOT), &pending, Some(PENDING))
+        .into_iter()
+        .map(|action| {
+            if action.action == RecoveryActionKind::OperationAbandon {
+                assert_eq!(action.operation_id.as_deref(), Some(PENDING));
+            }
+            action.action.as_str()
+        })
+        .collect()
+}
+
+#[test]
+fn a_result_that_left_its_own_operation_pending_is_offered_its_abandon_whatever_its_code() {
+    // The stranded enablement: the same request, once the file is
+    // restored, or the abandon.
+    assert_eq!(
+        offered_with_own(
+            ResultCode::WorktreeNotClean,
+            Command::RepoEnable,
+            &[PENDING]
+        ),
+        ["request.retry", "repo.inspect", "operation.abandon"]
+    );
+    // An overtaken save: the same request is not offered.
+    assert_eq!(
+        offered_with_own(ResultCode::ExternalChange, Command::TicketSave, &[PENDING]),
+        ["repo.inspect", "operation.abandon"]
+    );
+    // Already told to inspect: the action is not added twice.
+    assert_eq!(
+        offered_with_own(ResultCode::ExternalChange, Command::RepoEnable, &[PENDING]),
+        ["repo.inspect", "operation.abandon"]
+    );
+    // Every code that stops a request, with no exception.
+    for code in ResultCode::ALL {
+        if code.failure_class().is_none() {
+            continue;
+        }
+        let actions = offered_with_own(code, Command::TicketSave, &[PENDING]);
+        assert_eq!(
+            actions[actions.len() - 2..],
+            ["repo.inspect", "operation.abandon"],
+            "{code:?}"
+        );
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| **action == "repo.inspect")
+                .count(),
+            1,
+            "{code:?}"
+        );
+    }
+}
+
+#[test]
+fn an_own_operation_that_is_not_to_be_abandoned_is_not_offered() {
+    // It is not among the operations nothing is seen against abandoning:
+    // a call is at work under it, or another journal holds its ID.
+    assert_eq!(
+        offered_with_own(ResultCode::WorktreeNotClean, Command::RepoEnable, &[]),
+        ["request.retry"]
+    );
+    assert_eq!(
+        offered_with_own(
+            ResultCode::InternalError,
+            Command::TicketSave,
+            &["01ARZ3NDEKTSV4RRFFQ69G5FP2"]
+        ),
+        ["request.retry"]
+    );
+    // A result that names no repository.
+    let own = recovery(
+        ResultCode::RecoveryRequired,
+        Command::KeyGenerate,
+        None,
+        None,
+        None,
+        true,
+    );
+    assert!(
+        offering_abandon(
+            own,
+            ResultCode::RecoveryRequired,
+            None,
+            &[PENDING.to_owned()],
+            Some(PENDING)
+        )
+        .is_empty()
     );
 }

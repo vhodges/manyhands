@@ -390,7 +390,11 @@ fn an_interrupted_request_is_finished_by_its_retry() {
             assert_eq!(first.effects.write, write, "{what}");
             assert_eq!(first.effects.checkpoint, checkpoint, "{what}");
             assert_eq!(first.effects.commit_oid, None, "{what}");
-            assert_eq!(recovery_actions(&first), ["request.retry"], "{what}");
+            assert_eq!(
+                crate::support::mutation::recovery_before_own_abandon(&first),
+                ["request.retry"],
+                "{what}"
+            );
             assert_eq!(world.branch_commits(case.id), case.commits(), "{what}");
             let record = world.record(REQUEST_1).expect("the record stays");
             assert_eq!(
@@ -448,7 +452,11 @@ fn a_failure_after_the_checkpoint_is_partial_and_its_retry_reports_the_commit() 
         );
         let commit = world.branch_tip(case.id).map(|tip| tip.to_string());
         assert_eq!(first.effects.commit_oid, commit, "{command}");
-        assert_eq!(recovery_actions(&first), ["operation.resume"], "{command}");
+        assert_eq!(
+            crate::support::mutation::recovery_before_own_abandon(&first),
+            ["operation.resume"],
+            "{command}"
+        );
         assert_eq!(
             world.record(REQUEST_1).map(|record| record.state),
             Some(RequestState::Accepted),
