@@ -65,7 +65,7 @@ fn stored_name(stored: &str) -> Result<String, ReadError> {
 
 /// The action a local operation record names. The names are the ones the
 /// recovery store writes; the contract strings happen to equal them.
-fn local_action(stored: &str) -> Option<OperationAction> {
+pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
     match stored {
         "create_and_enable" => Some(OperationAction::CreateAndEnable),
         "enable" => Some(OperationAction::Enable),

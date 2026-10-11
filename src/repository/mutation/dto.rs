@@ -7,7 +7,7 @@ use serde::{Serialize, Serializer};
 
 use super::command::Command;
 use crate::{
-    repository::OperationFamily,
+    repository::{OperationAction, OperationFamily},
     results::{Effects, Outcome, ResultCode, Scope, contract_enum},
 };
 
@@ -88,6 +88,13 @@ contract_enum!(
     /// key store, each named in the preview's details.
     /// `key_unregistered` is the key taken out of the key list, with the
     /// record that Manyhands made its files.
+    ///
+    /// `operation_closed` is a pending local operation closed as
+    /// abandoned, so that it no longer refuses other operations on its
+    /// repository. With it goes the record of the unfinished request
+    /// that began the operation, `request_released`, listed when there
+    /// is one: that request's ID is then free. Neither touches a file
+    /// under the repository's root or anything Git holds.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -107,6 +114,8 @@ contract_enum!(
         PrivateKeyFileDeleted => "private_key_file_deleted",
         PublicKeyFileDeleted => "public_key_file_deleted",
         KeyUnregistered => "key_unregistered",
+        OperationClosed => "operation_closed",
+        RequestReleased => "request_released",
     }
 );
 
@@ -162,6 +171,51 @@ pub enum PreviewDetailsDto {
     RemoteRemoval(RemoteRemovalPreviewDto),
     RepositoryRemoval(RepositoryRemovalPreviewDto),
     KeyDeletion(KeyDeletionPreviewDto),
+    OperationAbandon(OperationAbandonPreviewDto),
+}
+
+/// What a preview of `operation abandon` shows: the pending operation
+/// that will be closed, and what it has left on disk, which the command
+/// leaves as it is. It holds names and paths and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationAbandonPreviewDto {
+    /// The repository's root, as the operation's journal names it.
+    pub root: String,
+    /// The operation that will be closed.
+    pub operation_id: String,
+    /// What the operation does, as `operation show` names it. Null for
+    /// an action this version does not know.
+    pub action: Option<OperationAction>,
+    /// The operation's state, as `operation show` gives it.
+    pub state: String,
+    /// The last step the operation recorded as done. Null when it
+    /// recorded none.
+    pub step: Option<String>,
+    /// The item the operation writes. Null for an operation that writes
+    /// no item.
+    pub item_id: Option<String>,
+    /// The worktree the operation writes in, relative to `root` with
+    /// forward slashes: an item's own, or `.` for the primary worktree.
+    /// Null for an operation that writes no file of a worktree, and for
+    /// an item whose worktree is not there.
+    pub worktree: Option<String>,
+    /// The paths of the operation's target that differ from the head of
+    /// their branch, relative to `root` with forward slashes. The
+    /// command leaves every one of them as it is.
+    pub paths: Vec<String>,
+    /// Whether `paths` is all of them. False when there are more than
+    /// are listed, or the worktree could not be read.
+    pub paths_complete: bool,
+    /// The unfinished request that began the operation, whose record
+    /// the command deletes. Null when no such request is recorded.
+    pub request_id: Option<String>,
+    /// Whether the command changes or removes any file under the root.
+    /// It never does: this is false.
+    pub files_changed: bool,
+    /// Whether the command changes anything Git holds: a commit, a
+    /// branch, a worktree, the index or the configuration. It never
+    /// does: this is false.
+    pub git_state_changed: bool,
 }
 
 /// What a preview of `key delete` shows: the key, and the files that
@@ -243,6 +297,80 @@ pub enum MutationDataDto {
     Ticket(TicketMutationDto),
     Remote(RemoteMutationDto),
     Key(KeyMutationDto),
+    Operation(OperationMutationDto),
+}
+
+/// What `operation abandon` reports of the operation it closed: where
+/// the operation stood, and what it left on disk for its user to deal
+/// with in Git. Every effect of an abandon is `not_requested`: this,
+/// with the outcome, is what says what it did. It holds names and paths
+/// and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationMutationDto {
+    /// The operation that was closed.
+    pub operation_id: String,
+    /// What the operation did, as `operation show` names it. Null for
+    /// an action this version does not know.
+    pub action: Option<OperationAction>,
+    /// The state the operation was in when it was closed.
+    pub state: String,
+    /// The last step the operation had recorded as done. Null when it
+    /// had recorded none.
+    pub step: Option<String>,
+    /// The item the operation wrote. Null for an operation that writes
+    /// no item.
+    pub item_id: Option<String>,
+    /// The worktree the operation wrote in, relative to the repository's
+    /// root with forward slashes: an item's own, or `.` for the primary
+    /// worktree. Null for an operation that writes no file of a
+    /// worktree, and for an item whose worktree is not there.
+    pub worktree: Option<String>,
+    /// The paths of the operation's target that differ from the head of
+    /// their branch, relative to the repository's root with forward
+    /// slashes. Each is left exactly as it was.
+    pub paths: Vec<String>,
+    /// Whether `paths` is all of them. False when there are more than
+    /// are listed, or the worktree could not be read.
+    pub paths_complete: bool,
+    /// The request whose record was deleted with the operation: its ID
+    /// is free, and its next use is a new request. Null when no
+    /// unfinished request held the operation.
+    pub released_request_id: Option<String>,
+}
+
+impl OperationMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        Some(Self {
+            operation_id: text("operation_id")??,
+            action: match text("action")? {
+                Some(action) => Some(
+                    OperationAction::ALL
+                        .into_iter()
+                        .find(|known| known.as_str() == action)?,
+                ),
+                None => None,
+            },
+            state: text("state")??,
+            step: text("step")?,
+            item_id: text("item_id")?,
+            worktree: text("worktree")?,
+            paths: stored
+                .get("paths")?
+                .as_array()?
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<_>>()?,
+            paths_complete: stored.get("paths_complete")?.as_bool()?,
+            released_request_id: text("released_request_id")?,
+        })
+    }
 }
 
 contract_enum!(
@@ -452,6 +580,9 @@ impl MutationDataDto {
             | Command::KeyClear
             | Command::KeyRemove
             | Command::KeyDelete => KeyMutationDto::from_stored(stored).map(Self::Key),
+            Command::OperationAbandon => {
+                OperationMutationDto::from_stored(stored).map(Self::Operation)
+            }
             // These report no data, so a record of one stores none.
             Command::IndexRefresh
             | Command::IndexRebuild

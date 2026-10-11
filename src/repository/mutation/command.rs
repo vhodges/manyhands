@@ -50,6 +50,7 @@ commands! {
     RemoteRemove => "remote remove",
     RepoRemove => "repo remove",
     KeyDelete => "key delete",
+    OperationAbandon => "operation abandon",
 }
 
 impl Command {
@@ -83,6 +84,10 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
+            // The operation an abandon names is another request's, and
+            // is its target. The abandon itself is one transaction, with
+            // no operation ID and no row of its own.
+            Self::OperationAbandon => false,
         }
     }
 
@@ -111,7 +116,8 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
-            | Self::KeyDelete => false,
+            | Self::KeyDelete
+            | Self::OperationAbandon => false,
         }
     }
 
@@ -139,7 +145,8 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
-            | Self::KeyDelete => false,
+            | Self::KeyDelete
+            | Self::OperationAbandon => false,
         }
     }
 
@@ -154,7 +161,8 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
-            | Self::KeyDelete => true,
+            | Self::KeyDelete
+            | Self::OperationAbandon => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -203,6 +211,7 @@ mod tests {
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
         assert_eq!(Command::KeyDelete.name(), "key delete");
+        assert_eq!(Command::OperationAbandon.name(), "operation abandon");
     }
 
     #[test]
@@ -217,6 +226,7 @@ mod tests {
                         | Command::RemoteRemove
                         | Command::RepoRemove
                         | Command::KeyDelete
+                        | Command::OperationAbandon
                 ),
                 "{command:?}"
             );
@@ -224,13 +234,19 @@ mod tests {
     }
 
     #[test]
-    fn only_a_change_to_the_key_registry_has_no_operation() {
+    fn only_a_single_transaction_has_no_operation() {
         for command in Command::ALL {
-            let registry_change = matches!(
+            // A change to the key registry, and an abandon, which closes
+            // another request's operation and has none of its own.
+            let single_transaction = matches!(
                 command,
-                Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove
+                Command::KeyImport
+                    | Command::KeySelect
+                    | Command::KeyClear
+                    | Command::KeyRemove
+                    | Command::OperationAbandon
             );
-            assert_eq!(command.has_operation(), !registry_change, "{command:?}");
+            assert_eq!(command.has_operation(), !single_transaction, "{command:?}");
         }
     }
 

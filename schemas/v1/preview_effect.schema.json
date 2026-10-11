@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 preview effect",
-  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in. remote_removed: the remote is taken out of the repository's own Git configuration; with it Git removes the remote's tracking references (remote_tracking_refs_removed) and the upstream of every local branch that follows it (branch_upstreams_removed), each listed when the repository has any. registration_removed: the repository is taken out of the repository list; with it go what Manyhands cached of it: the index of its contexts, items, comments, problems and configuration (index_dropped), the journal of its local operations (operation_records_dropped), and its polling policy, what polling observed of its remote and the records of its synchronizations (remote_state_dropped). None of the four touches a file under the repository's root or anything Git holds. private_key_file_deleted and public_key_file_deleted: the two files of a key Manyhands generated are deleted from the user's key store, each named in the preview's details. key_unregistered: the key is taken out of the key list, with the record that Manyhands made its files.",
+  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in. remote_removed: the remote is taken out of the repository's own Git configuration; with it Git removes the remote's tracking references (remote_tracking_refs_removed) and the upstream of every local branch that follows it (branch_upstreams_removed), each listed when the repository has any. registration_removed: the repository is taken out of the repository list; with it go what Manyhands cached of it: the index of its contexts, items, comments, problems and configuration (index_dropped), the journal of its local operations (operation_records_dropped), and its polling policy, what polling observed of its remote and the records of its synchronizations (remote_state_dropped). None of the four touches a file under the repository's root or anything Git holds. private_key_file_deleted and public_key_file_deleted: the two files of a key Manyhands generated are deleted from the user's key store, each named in the preview's details. key_unregistered: the key is taken out of the key list, with the record that Manyhands made its files. operation_closed: a pending local operation is closed as abandoned, so that it no longer refuses other operations on its repository; with it goes the record of the unfinished request that began the operation (request_released), listed when there is one, and that request's ID is then free. Neither touches a file under the repository's root or anything Git holds.",
   "type": "object",
   "additionalProperties": false,
   "required": ["effect"],
@@ -26,7 +26,9 @@
         "remote_state_dropped",
         "private_key_file_deleted",
         "public_key_file_deleted",
-        "key_unregistered"
+        "key_unregistered",
+        "operation_closed",
+        "request_released"
       ]
     }
   }

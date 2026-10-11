@@ -58,6 +58,7 @@ mod settle;
 
 use bind::{
     Binding, Confirmed,
+    abandon::OperationAbandonBinding,
     document::DocumentBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
@@ -67,6 +68,7 @@ use bind::{
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
+    abandon::OperationAbandonInput,
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{
@@ -82,10 +84,11 @@ use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     DocumentMutationDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
-    KeyMutationDto, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
-    PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
-    RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
+    KeyMutationDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
+    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
+    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto,
+    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -348,6 +351,7 @@ pub enum Mutation {
     RemoteRemove(RemoteRemoveInput),
     RepoRemove(RepoRemoveInput),
     KeyDelete(KeyDeleteInput),
+    OperationAbandon(OperationAbandonInput),
 }
 
 impl Mutation {
@@ -378,6 +382,7 @@ impl Mutation {
             Self::RemoteRemove(_) => Command::RemoteRemove,
             Self::RepoRemove(_) => Command::RepoRemove,
             Self::KeyDelete(_) => Command::KeyDelete,
+            Self::OperationAbandon(_) => Command::OperationAbandon,
         }
     }
 
@@ -391,6 +396,9 @@ impl Mutation {
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
             Self::RepoRemove(input) => Some(Box::new(RepoRemoveBinding::from(input.clone()))),
             Self::KeyDelete(input) => Some(Box::new(KeyDeleteBinding::from(input.clone()))),
+            Self::OperationAbandon(input) => {
+                Some(Box::new(OperationAbandonBinding::from(input.clone())))
+            }
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -431,6 +439,7 @@ impl Mutation {
             Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
             Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
             Self::KeyDelete(input) => Box::new(KeyDeleteBinding::from(input)),
+            Self::OperationAbandon(input) => Box::new(OperationAbandonBinding::from(input)),
         }
     }
 }

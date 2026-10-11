@@ -16,9 +16,10 @@ use manyhands::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
         DocumentMutationDto, DocumentSaveInput, KeyGenerateInput, KeyMutationDto, Mutation,
         MutationCall, MutationDataDto, NoProgress, OperationFamily, OperationId,
-        RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto,
-        RepositoryService, RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership,
-        TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
+        OperationMutationDto, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
+        RelationshipWrite, RemoteMutationDto, RepositoryService, RequestId, ResolvedRepository,
+        SharedKeyId, SharedKeyOwnership, TicketCreateInput, TicketDraft, TicketMutationDto,
+        TicketSaveInput, TicketSlugAssignInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SecretPassphrase,
             SessionCredentialProvider, SessionCredentials, UnlockRequest,
@@ -185,6 +186,10 @@ pub const CASES: &[&str] = &[
     "key_remove_selected",
     "key_select",
     "key_select_noop",
+    "operation_abandon",
+    "operation_abandon_preview",
+    "operation_abandon_preview_noop",
+    "operation_abandon_preview_not_found",
     "remote_add",
     "remote_add_conflict",
     "remote_add_discovery_pending",
@@ -698,6 +703,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
+        MutationDataDto::Operation(_) => panic!("an operation's data"),
     }
 }
 
@@ -708,6 +714,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
+        MutationDataDto::Operation(_) => panic!("an operation's data"),
     }
 }
 
@@ -822,6 +829,18 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
+        MutationDataDto::Operation(_) => panic!("an operation's data"),
+    }
+}
+
+/// What an abandon reported about the operation it closed.
+pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutationDto {
+    match envelope.data.as_ref().expect("operation data") {
+        MutationDataDto::Operation(data) => data,
+        MutationDataDto::Document(_) => panic!("a document's data"),
+        MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+        MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Key(_) => panic!("a key's data"),
     }
 }
 
@@ -832,6 +851,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Operation(_) => panic!("an operation's data"),
     }
 }
 

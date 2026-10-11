@@ -26,6 +26,7 @@ use super::{
     records::{ConfirmationRecord, RequestOperation, RequestRecord},
 };
 
+pub(crate) mod abandon;
 pub(crate) mod document;
 pub(crate) mod index;
 pub(crate) mod key;
@@ -751,6 +752,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // A registration is removed in one transaction: nothing of it is
         // ever done with work remaining.
         Some(Command::RepoRemove) => Recorded::nothing(),
+        // An abandon has no operation, so none is ever found to have
+        // run: this is not reached, and nothing is claimed.
+        Some(Command::OperationAbandon) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

@@ -6,9 +6,9 @@ use manyhands::{
     repository::{
         CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
         KeyClearInput, KeyDeleteInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
-        MutationDataDto, RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
-        RepoCreateInput, RepoEnableInput, RepoRemoveInput, SharedKeyId, TicketCreateInput,
-        TicketSaveInput, TicketSlugAssignInput,
+        MutationDataDto, OperationAbandonInput, OperationId, RelationshipWrite, RemoteAddInput,
+        RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
+        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -1026,6 +1026,82 @@ fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
         REPOSITORY_REMOVAL_SCHEMA,
         &[],
         &noop,
+    );
+}
+
+const OPERATION_ABANDON_SCHEMA: &str = "operation_abandon_preview.schema.json";
+const OPERATION_SCHEMA: &str = "operation_mutation.schema.json";
+
+#[test]
+fn an_operation_abandon_and_its_preview_match_their_schemas_and_goldens() {
+    let mut world = world_with_a_still_clock();
+    // A save that wrote its file and did not record the step: its
+    // operation is pending.
+    let token = world.token(TICKET_A);
+    world.service = FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(world.data.path());
+    let stranded = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    let operation_id = stranded.operation_id.expect("the save's operation");
+    world.service = manyhands::repository::RepositoryService::open_at(world.data.path())
+        .unwrap()
+        .with_clock_for_testing(mutation::TestClock::at(support::operations::STORED_AT));
+    let abandon = |operation_id: &str| {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: world.root.clone(),
+            operation_id: OperationId::parse(operation_id).unwrap(),
+        })
+    };
+    let replaced = [(operation_id.as_str(), "<abandoned>")];
+
+    let preview = world.service.prepare(&abandon(&operation_id));
+    assert_eq!(preview.outcome, Outcome::Success);
+    assert_confirmed_contract_replacing(
+        "operation_abandon_preview",
+        &world.root,
+        OPERATION_ABANDON_SCHEMA,
+        &SENTINELS,
+        &replaced,
+        &preview,
+    );
+    let confirmation = preview.data.as_ref().unwrap().confirmation_id.clone();
+
+    let abandoned = mutation::execute_confirmed(
+        &world.service,
+        REQUEST_2,
+        &confirmation,
+        abandon(&operation_id),
+    );
+    assert_eq!(abandoned.outcome, Outcome::Success);
+    assert_confirmed_contract_replacing(
+        "operation_abandon",
+        &world.root,
+        OPERATION_SCHEMA,
+        &SENTINELS,
+        &replaced,
+        &abandoned,
+    );
+
+    let noop = world.service.prepare(&abandon(&operation_id));
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_confirmed_contract_replacing(
+        "operation_abandon_preview_noop",
+        &world.root,
+        OPERATION_ABANDON_SCHEMA,
+        &SENTINELS,
+        &replaced,
+        &noop,
+    );
+
+    let unknown = world
+        .service
+        .prepare(&abandon("01ARZ3NDEKTSV4RRFFQ69G5FZZ"));
+    assert_eq!(unknown.code, ResultCode::OperationNotFound);
+    assert_confirmed_contract(
+        "operation_abandon_preview_not_found",
+        &world.root,
+        OPERATION_ABANDON_SCHEMA,
+        &SENTINELS,
+        &unknown,
     );
 }
 

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 operation mutation data",
+  "description": "The data of an operation abandon envelope that closed an operation: where the operation stood, and what it left on disk. An abandon changes no file, reference, index entry or worktree, so every effect of its envelope is not_requested, and this and the outcome say what the request did. Any other result of the command carries no data. It holds names and paths and no content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation_id",
+    "action",
+    "state",
+    "step",
+    "item_id",
+    "worktree",
+    "paths",
+    "paths_complete",
+    "released_request_id"
+  ],
+  "properties": {
+    "operation_id": {
+      "description": "The operation that was closed.",
+      "type": "string"
+    },
+    "action": {
+      "description": "What the operation does, as operation show names it. Null for an action this version does not know.",
+      "type": ["string", "null"],
+      "enum": [
+        "create_and_enable",
+        "enable",
+        "remove_registration",
+        "add_remote",
+        "remove_remote",
+        "set_publication_remote",
+        "refresh",
+        "rebuild",
+        "prepare_context",
+        "save_document",
+        "save_ticket",
+        "submit_comment",
+        null
+      ]
+    },
+    "state": {
+      "description": "The state the operation was in when it was closed, as operation show gives it.",
+      "type": "string"
+    },
+    "step": {
+      "description": "The last step the operation recorded as done. Null when it recorded none.",
+      "type": ["string", "null"]
+    },
+    "item_id": {
+      "description": "The item the operation writes. Null for an operation that writes no item.",
+      "type": ["string", "null"]
+    },
+    "worktree": {
+      "description": "The worktree the operation writes in, relative to the repository's root with forward slashes: an item's own, or . for the primary worktree. Null for an operation that writes no file of a worktree, and for an item whose worktree is not there.",
+      "type": ["string", "null"]
+    },
+    "paths": {
+      "description": "The paths of the operation's target that differ from the head of their branch, uncommitted and untracked alike, relative to the repository's root with forward slashes: for an operation that writes an item, every such path of the item's worktree; for one that writes the configuration file, that file when it differs. The command leaves every one of them exactly as it is, for its user to commit or restore with Git. No content is given.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "paths_complete": {
+      "description": "Whether paths is all of them. False when there are more than are listed, or the worktree could not be read: git status in the worktree then says what is there.",
+      "type": "boolean"
+    },
+    "released_request_id": {
+      "description": "The request whose record was deleted with the operation: its ID is free, and its next use is a new request with a new operation. Null when no unfinished request held the operation.",
+      "type": ["string", "null"]
+    }
+  }
+}

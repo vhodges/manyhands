@@ -942,6 +942,22 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             PreviewEffect::ALL.map(PreviewEffect::as_str).to_vec(),
         ),
         (
+            "operation_abandon_preview.schema.json",
+            "details.action",
+            OperationAction::ALL[..12]
+                .iter()
+                .map(|action| action.as_str())
+                .collect(),
+        ),
+        (
+            "operation_mutation.schema.json",
+            "action",
+            OperationAction::ALL[..12]
+                .iter()
+                .map(|action| action.as_str())
+                .collect(),
+        ),
+        (
             "preview.schema.json",
             "details.identity.source",
             PreviewIdentitySource::ALL

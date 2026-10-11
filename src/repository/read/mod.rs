@@ -60,6 +60,7 @@ pub use dto::{
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{is_plain_relative, observe_in_context};
 pub use resolve::ResolvedRepository;
+pub(crate) use status::local_action;
 
 /// The argument of a recovery action that names a repository root.
 const ROOT_ARGUMENT: &str = "root";
