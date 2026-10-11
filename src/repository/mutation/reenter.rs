@@ -35,7 +35,8 @@ impl Reentry {
                 checkpointed: false,
             } => match rule {
                 EndedWithoutCheckpoint::DidNothing => Self::AsNew,
-                // The row is taken as a row that has its checkpoint step is.
+                // Handled as a row that has its checkpoint step is handled:
+                // the record is kept and the binding re-enters it.
                 EndedWithoutCheckpoint::SaysNothing => Self::AsRecorded,
             },
             JournalRow::Absent

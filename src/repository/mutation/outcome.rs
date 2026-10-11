@@ -237,33 +237,44 @@ pub(crate) fn recovery(
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send.
         ResultCode::Busy => vec![retry_request()],
-        // No action of its own: the same request is offered when its
-        // record was left accepted, and nothing otherwise. The codes that
-        // only a command not yet bound returns are here as well, until
-        // the task that binds the command decides what its caller does.
+        // Decided: these have no action of their own. They are the codes
+        // a ticket create or save, or the boundary itself, ends with. The
+        // same request is offered when its record was left accepted, and
+        // nothing otherwise.
         ResultCode::Ok
+        | ResultCode::AlreadyApplied
+        | ResultCode::Cancelled
+        | ResultCode::InternalError
+        | ResultCode::InvalidInput
         | ResultCode::InvalidPath
         | ResultCode::NotRepository
         | ResultCode::NotRepositoryRoot
         | ResultCode::BareRepository
         | ResultCode::RepositoryInaccessible
-        | ResultCode::InvalidId
         | ResultCode::ItemNotFound
+        | ResultCode::RelationshipCycle
+        | ResultCode::InvalidRelationship
+        | ResultCode::RequestMismatch
+        | ResultCode::NotConfirmable
+        | ResultCode::OccupiedPath
+        | ResultCode::TicketClosed
+        | ResultCode::WrongBranch
+        | ResultCode::WorktreeNotClean
+        | ResultCode::WorktreeConflicted
+        // Not decided: the codes only a command that is not bound yet
+        // returns. They share the arm above so that the match is complete,
+        // and for no other reason: the design's recovery table gives
+        // several of them an action, and the task that binds the command
+        // moves its codes to an arm of their own.
+        | ResultCode::InvalidId
         | ResultCode::PathNotFound
         | ResultCode::KeyNotFound
         | ResultCode::PublicKeyUnavailable
         | ResultCode::AuthorityNotFound
         | ResultCode::OperationNotFound
-        | ResultCode::RelationshipCycle
-        | ResultCode::InvalidRelationship
-        | ResultCode::InternalError
-        | ResultCode::InvalidInput
-        | ResultCode::RequestMismatch
         | ResultCode::RequestNotFound
         | ResultCode::ConfirmationMismatch
-        | ResultCode::NotConfirmable
         | ResultCode::SlugAlreadyAssigned
-        | ResultCode::OccupiedPath
         | ResultCode::NotRepairable
         | ResultCode::RemoteNameConflict
         | ResultCode::InvalidRemote
@@ -274,10 +285,6 @@ pub(crate) fn recovery(
         | ResultCode::ConfirmationUsed
         | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
-        | ResultCode::TicketClosed
-        | ResultCode::WrongBranch
-        | ResultCode::WorktreeNotClean
-        | ResultCode::WorktreeConflicted
         | ResultCode::PublicationRemoteRequired
         | ResultCode::PublicationRemoteInUse
         | ResultCode::MergeRequired
@@ -295,9 +302,7 @@ pub(crate) fn recovery(
         | ResultCode::RegistrationPending
         | ResultCode::PollYielding
         | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable
-        | ResultCode::Cancelled
-        | ResultCode::AlreadyApplied => {
+        | ResultCode::TransportUnavailable => {
             if retry {
                 vec![retry_request()]
             } else {

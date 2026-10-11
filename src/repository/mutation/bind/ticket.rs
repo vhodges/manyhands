@@ -1006,6 +1006,9 @@ impl Binding for TicketBinding {
                 ),
                 (report @ SaveReport::Saved { .. }, Ok(after)) => {
                     let (code, effects) = report.result(before.reported(&after));
+                    // The journal is not read here: `standing` asks for
+                    // it only for a save that needs an identity, which is
+                    // matched above.
                     let standing = save::standing(report, || accepted.journal_row(service));
                     (code, effects, standing)
                 }

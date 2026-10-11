@@ -205,6 +205,13 @@ impl Before {
     /// operation's journal row was pending, or was final having recorded a
     /// step of its work. A row that completed with none never reached a
     /// checkpoint, and no commit is that request's, whatever Git shows.
+    ///
+    /// This is the reading of an authoring save, whose operation records
+    /// a checkpoint step on every row that did its work. It is wrong for
+    /// a binding that answers `EndedWithoutCheckpoint::SaysNothing`: the
+    /// completed rows of its operation never have the step, so this would
+    /// say of work that was done that none of it is the request's. Such a
+    /// binding must not use this, `found` or `reported`.
     pub(crate) fn committing(&self) -> bool {
         match self.journal {
             JournalRow::Absent => false,
@@ -213,6 +220,17 @@ impl Before {
         }
     }
 
+    /// What re-entry does about what it read, for an authoring save.
+    ///
+    /// It rests on `committing`, and so on the authoring reading of a
+    /// row without a checkpoint. For a binding that answers
+    /// `EndedWithoutCheckpoint::SaysNothing` a completed row would never
+    /// be `Done` here: it would be `Continue`, and the domain called a
+    /// second time, or `Foreign`, and the request refused as
+    /// `external_change`, for work that completed. Such a binding must
+    /// not use this. It needs evidence of its own that its work is done,
+    /// and answers from `Binding::reenter` with
+    /// `Err(Ran { standing: Standing::Final, .. })` when it is.
     pub(crate) fn found(&self) -> Found {
         // A commit of the intended content is the request's own only when
         // an attempt of the request may have committed.
@@ -248,6 +266,10 @@ impl Before {
 
     /// The commit a call reports, from the evidence read after its domain
     /// call.
+    ///
+    /// For an authoring save only: which commit can be the request's is
+    /// decided by `committing`. A binding that answers
+    /// `EndedWithoutCheckpoint::SaysNothing` must not use this.
     pub(crate) fn reported(&self, after: &PathEvidence) -> Option<git2::Oid> {
         after.reported(self.committing(), &self.evidence)
     }
@@ -263,11 +285,21 @@ pub(crate) enum EndedWithoutCheckpoint {
     /// new request.
     DidNothing,
     /// Nothing: the operation's completed row has no checkpoint step
-    /// whatever it did. The request is re-entered as any other whose
-    /// operation has ended, and is answered from what it did.
+    /// whatever it did. The record is kept and the binding's `reenter`
+    /// is called, as for any other row of an operation that has ended.
+    ///
+    /// The boundary does no more than that. What the request is answered
+    /// with is the binding's to work out: it needs evidence of its own
+    /// that its work is done, and when it is, it answers from `reenter`
+    /// with `Err(Ran { standing: Standing::Final, .. })` and makes no
+    /// domain call. `Before::committing`, `Before::found` and
+    /// `Before::reported` are not that evidence: they read a row
+    /// without a checkpoint as an authoring save's, and would have the
+    /// domain called again or the request refused as `external_change`.
     // Both bound commands are authoring saves. The first binding of a
-    // command that is not one gives this, and removes the attribute.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // command that is not one gives this, and the expectation then fails
+    // until the attribute is removed.
+    #[cfg_attr(not(test), expect(dead_code))]
     SaysNothing,
 }
 
@@ -328,6 +360,13 @@ pub(crate) trait Binding {
     /// An `Err` answers the request without a domain call, and its
     /// standing says what becomes of the record: the request can be
     /// finished here, when the evidence shows its work is done.
+    ///
+    /// `Before::found` decides this for an authoring save and for
+    /// nothing else. A binding that answers
+    /// `EndedWithoutCheckpoint::SaysNothing` is called here with a
+    /// completed row that has no checkpoint step and must decide from
+    /// evidence of its own whether its work is done; when it is, it
+    /// returns `Err(Ran { standing: Standing::Final, .. })`.
     fn reenter(
         &mut self,
         service: &RepositoryService,
