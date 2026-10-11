@@ -143,6 +143,13 @@ impl RepositoryService {
     /// The envelope names no request: `prepare` changes no canonical or
     /// Git state, and the confirmation ID is how a caller refers to it.
     pub fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+        let envelope = self.prepare_call(mutation);
+        self.offering_abandon(envelope)
+    }
+
+    /// One call of `prepare`, before the journal is asked what its
+    /// envelope can offer.
+    fn prepare_call(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
         let command = mutation.kind();
         let Some(mut binding) = mutation.confirmed() else {
             return without_preview(

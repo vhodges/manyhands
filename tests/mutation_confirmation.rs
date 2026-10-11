@@ -43,6 +43,7 @@ const PREVIEW_SCHEMA: &str = "preview.schema.json";
 const REMOTE_REMOVAL_SCHEMA: &str = "remote_removal_preview.schema.json";
 const REPOSITORY_REMOVAL_SCHEMA: &str = "repository_removal_preview.schema.json";
 const KEY_DELETION_SCHEMA: &str = "key_deletion_preview.schema.json";
+const OPERATION_ABANDON_SCHEMA: &str = "operation_abandon_preview.schema.json";
 
 /// The published schema of the preview `command` gives.
 fn preview_schema(command: &str) -> &'static str {
@@ -50,6 +51,7 @@ fn preview_schema(command: &str) -> &'static str {
         "remote remove" => REMOTE_REMOVAL_SCHEMA,
         "repo remove" => REPOSITORY_REMOVAL_SCHEMA,
         "key delete" => KEY_DELETION_SCHEMA,
+        "operation abandon" => OPERATION_ABANDON_SCHEMA,
         "repo create" | "repo enable" => PREVIEW_SCHEMA,
         // `prepare` gives no preview of any other command.
         other => panic!("{other}: no preview schema"),
@@ -389,6 +391,27 @@ fn assert_refused(envelope: &Envelope<MutationDataDto>, code: ResultCode, recove
     assert!(!envelope.effects.is_durable());
     assert_eq!(envelope.effects.commit_oid, None);
     assert_eq!(recovery_actions(envelope), recovery);
+}
+
+/// What a confirmed request is offered when it is refused with its
+/// record left accepted: its own operation is pending, and refuses every
+/// other operation on the repository, a new preview's among them. It is
+/// to look at the repository, and then, if what was previewed is not put
+/// back, to abandon that operation.
+fn assert_offered_its_own_abandon(envelope: &Envelope<MutationDataDto>, what: &str) {
+    assert_eq!(
+        recovery_actions(envelope),
+        ["repo.inspect", "operation.abandon"],
+        "{what}"
+    );
+    let abandon = &envelope.recovery[1];
+    assert!(envelope.operation_id.is_some(), "{what}");
+    assert_eq!(abandon.operation_id, envelope.operation_id, "{what}");
+    assert_eq!(
+        abandon.arguments.get("root").and_then(|root| root.as_str()),
+        envelope.scope.repository.as_deref(),
+        "{what}"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -2237,7 +2260,7 @@ fn a_retry_whose_effective_identity_changed_is_external_change() {
             Some(RequestState::Accepted),
             "{what}"
         );
-        assert_eq!(recovery_actions(&refused), ["repo.inspect"], "{what}");
+        assert_offered_its_own_abandon(&refused, what);
 
         // With the identity that was shown back, the same request
         // completes as it.
@@ -2290,7 +2313,7 @@ fn a_retry_of_repo_enable_before_its_commit_compares_the_identity_it_showed() {
     let refused = desk.execute(REQUEST_1, &confirmation, plain.enable());
 
     assert_eq!(refused.code, ResultCode::ExternalChange);
-    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert_offered_its_own_abandon(&refused, "the retry");
     assert_eq!(plain.initializations(), 0);
     assert_eq!(
         desk.record(REQUEST_1).map(|record| record.state),
@@ -2505,7 +2528,7 @@ fn a_create_killed_after_it_made_its_directory_still_refuses_what_is_put_in_it()
     let refused = desk.execute(REQUEST_1, &confirmation, create());
 
     assert_eq!(refused.code, ResultCode::ExternalChange);
-    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert_offered_its_own_abandon(&refused, "the retry");
     assert!(git2::Repository::open(&site.root).is_err());
 }
 
@@ -4579,7 +4602,7 @@ fn a_remote_added_again_under_an_interrupted_removal_is_not_removed_by_the_retry
 
     assert_eq!(refused.code, ResultCode::ExternalChange);
     assert_eq!(refused.outcome, Outcome::Partial);
-    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert_offered_its_own_abandon(&refused, "the retry");
     assert_eq!(references(home.root()), before);
     assert!(home.remote_url("backup").is_some());
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
@@ -5203,3 +5226,12 @@ fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
     assert_eq!(local_entries(home.root()), entries);
     assert_eq!(fs::read(git_home.join(".gitconfig")).unwrap(), global);
 }
+
+// ---------------------------------------------------------------------
+// `operation abandon`
+// ---------------------------------------------------------------------
+
+/// The way out for a pending local operation that its own repeat cannot
+/// clear.
+#[path = "mutation_confirmation/abandon.rs"]
+mod abandon;

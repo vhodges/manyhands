@@ -758,6 +758,23 @@ pub(super) fn abandon_row(connection: &Connection, record_id: i64) -> rusqlite::
     )? == 1)
 }
 
+/// The operation IDs of the local rows of `root_path` that are pending,
+/// oldest first. A row without an ID, which only an index made before
+/// operations had IDs holds, is left out: nothing can name it.
+pub(super) fn pending_operation_ids(
+    connection: &Connection,
+    root_path: &str,
+) -> rusqlite::Result<Vec<String>> {
+    connection
+        .prepare(
+            "SELECT operation_ulid FROM operation_records
+              WHERE root_path = ?1 AND state != 'completed' AND operation_ulid IS NOT NULL
+              ORDER BY id",
+        )?
+        .query_map([root_path], |row| row.get(0))?
+        .collect()
+}
+
 pub(super) fn advance_after_observation(
     connection: &Connection,
     record_id: i64,

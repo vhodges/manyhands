@@ -14,6 +14,7 @@ use super::{
     super::{
         FailurePoint, OperationId, RepositoryOperation, RepositoryService,
         keys::{SessionCredentialProvider, SessionCredentials},
+        recovery,
     },
     CancellationToken, MutationCall, ProgressSink,
     bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
@@ -48,6 +49,44 @@ impl RepositoryService {
         // and each then reaches its binding through the call context.
         _credentials: &mut SessionCredentials<P>,
         _progress: &mut dyn ProgressSink,
+        cancel: &CancellationToken,
+    ) -> Envelope<MutationDataDto> {
+        let envelope = self.execute_call(call, cancel);
+        self.offering_abandon(envelope)
+    }
+
+    /// Adds `operation.abandon` to an envelope that says to look at a
+    /// repository on which a local operation is pending; see
+    /// `outcome::offering_abandon`. The journal is read only for such an
+    /// envelope, after everything the call did, so the action names what
+    /// is pending now. A journal that cannot be read adds nothing: the
+    /// envelope still says to inspect the repository.
+    pub(super) fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
+        if !outcome::abandon_may_be_offered(envelope.code, &envelope.recovery) {
+            return envelope;
+        }
+        let Some(root) = envelope.scope.repository.clone() else {
+            return envelope;
+        };
+        let Ok(pending) = self.read_session(RepositoryOperation::Read, |connection| {
+            Ok(recovery::pending_operation_ids(connection, &root)?)
+        }) else {
+            return envelope;
+        };
+        envelope.recovery = outcome::offering_abandon(
+            std::mem::take(&mut envelope.recovery),
+            envelope.code,
+            Some(&root),
+            &pending,
+        );
+        envelope
+    }
+
+    /// One call of `execute`, before the journal is asked what its
+    /// envelope can offer.
+    fn execute_call(
+        &self,
+        call: MutationCall,
         cancel: &CancellationToken,
     ) -> Envelope<MutationDataDto> {
         let MutationCall {

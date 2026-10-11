@@ -1472,3 +1472,154 @@ fn a_result_of_no_request_is_never_offered_a_retry() {
         }
     }
 }
+
+/// The actions `code` is offered for a request of `command` on a
+/// repository with these pending local operations, each with the
+/// operation it names.
+fn offered(
+    code: ResultCode,
+    command: Command,
+    root: Option<&str>,
+    retry: bool,
+    pending: &[&str],
+) -> Vec<(&'static str, Option<String>)> {
+    let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
+    let own = recovery(code, command, root, None, None, retry);
+    offering_abandon(own, code, root, &pending)
+        .into_iter()
+        .map(|action| {
+            if action.action == RecoveryActionKind::OperationAbandon {
+                assert_eq!(
+                    action.arguments.get("root").and_then(|root| root.as_str()),
+                    root
+                );
+            }
+            (action.action.as_str(), action.operation_id)
+        })
+        .collect()
+}
+
+const PENDING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP1";
+const ROOT: &str = "/repository";
+
+#[test]
+fn a_pending_local_operation_is_offered_to_be_abandoned_after_the_repository_is_inspected() {
+    let abandon = ("operation.abandon", Some(PENDING.to_owned()));
+    // Refused for another request's pending operation.
+    assert_eq!(
+        offered(
+            ResultCode::RecoveryRequired,
+            Command::TicketSave,
+            Some(ROOT),
+            false,
+            &[PENDING]
+        ),
+        [("repo.inspect", None), abandon.clone()]
+    );
+    // A confirmed request refused with its own operation pending.
+    assert_eq!(
+        offered(
+            ResultCode::ExternalChange,
+            Command::RepoEnable,
+            Some(ROOT),
+            true,
+            &[PENDING]
+        ),
+        [("repo.inspect", None), abandon]
+    );
+}
+
+#[test]
+fn an_abandon_is_offered_only_where_a_pending_local_operation_can_be_the_cause() {
+    // Nothing is pending.
+    assert_eq!(
+        offered(
+            ResultCode::RecoveryRequired,
+            Command::TicketSave,
+            Some(ROOT),
+            false,
+            &[]
+        ),
+        [("repo.inspect", None)]
+    );
+    // The result names no repository: the action takes its root.
+    assert_eq!(
+        offered(
+            ResultCode::RecoveryRequired,
+            Command::KeyGenerate,
+            None,
+            false,
+            &[PENDING]
+        ),
+        []
+    );
+    // A stale preview with nothing of the request in flight: a new
+    // preview is what is offered.
+    assert_eq!(
+        offered(
+            ResultCode::ExternalChange,
+            Command::RepoEnable,
+            Some(ROOT),
+            false,
+            &[PENDING]
+        ),
+        [("request.prepare", None)]
+    );
+    // An item write that was overtaken: the item is read again.
+    assert_eq!(
+        offered(
+            ResultCode::ExternalChange,
+            Command::TicketSave,
+            Some(ROOT),
+            true,
+            &[PENDING]
+        ),
+        []
+    );
+    // Any other code keeps what it has, whatever is pending.
+    for code in ResultCode::ALL {
+        if matches!(
+            code,
+            ResultCode::RecoveryRequired | ResultCode::ExternalChange
+        ) {
+            continue;
+        }
+        for retry in [false, true] {
+            let actions = offered(code, Command::RepoEnable, Some(ROOT), retry, &[PENDING]);
+            assert!(
+                actions
+                    .iter()
+                    .all(|(action, _)| *action != "operation.abandon"),
+                "{code:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn each_pending_operation_is_offered_once() {
+    let other = "01ARZ3NDEKTSV4RRFFQ69G5FP2";
+    let pending = vec![PENDING.to_owned(), other.to_owned()];
+    let own = recovery(
+        ResultCode::RecoveryRequired,
+        Command::TicketSave,
+        Some(ROOT),
+        None,
+        None,
+        false,
+    );
+    let once = offering_abandon(own, ResultCode::RecoveryRequired, Some(ROOT), &pending);
+    let twice = offering_abandon(
+        once.clone(),
+        ResultCode::RecoveryRequired,
+        Some(ROOT),
+        &pending,
+    );
+    assert_eq!(once, twice);
+    assert_eq!(
+        once.iter()
+            .map(|action| action.operation_id.as_deref())
+            .collect::<Vec<_>>(),
+        [None, Some(PENDING), Some(other)]
+    );
+}
