@@ -13,6 +13,19 @@ pub struct NewIdDto {
     pub id: String,
 }
 
+/// What `path observe` found at a path in a context, as a token a write
+/// takes: a file's is the token the item reads give for it, and a path
+/// where nothing exists has one too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PathObservationDto {
+    /// Relative to the context, with forward slashes.
+    pub path: String,
+    /// Whether a file is at the path.
+    pub exists: bool,
+    pub observation: String,
+    pub context: ItemContextDto,
+}
+
 /// A problem found in observed content.
 ///
 /// `guidance` is written from the code's registry entry when the problem

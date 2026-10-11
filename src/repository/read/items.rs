@@ -17,14 +17,18 @@ use time::OffsetDateTime;
 
 use super::{
     ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
-    IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
-    ReadError, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
+    IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto,
+    PathObservationDto, ProblemDto, ReadError, ReadinessState, RelationshipCheckDto,
+    RelationshipRejectionDto, ResolvedRepository,
     graph::{TicketGraph, TicketNode},
     index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
-    repository::{GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
+    repository::{
+        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
+        mutation::absent_token,
+    },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
         timestamp_string,
@@ -1793,34 +1797,10 @@ impl RepositoryService {
             .to_str()
             .filter(|path| is_plain_relative(path))
             .ok_or_else(ReadError::invalid_path)?;
-        let root = absolute_path_string(repo.root()).ok_or_else(ReadError::invalid_path)?;
-        let worktree = match context {
-            None => root.clone(),
-            Some(context) => fs::canonicalize(context)
-                .ok()
-                .and_then(|context| absolute_path_string(&context))
-                .ok_or_else(ReadError::invalid_path)?,
-        };
+        let worktree = named_worktree(repo, context)?;
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
-            let context = match stored_contexts(connection, repo)?
-                .into_iter()
-                .find(|context| context.worktree == worktree)
-            {
-                Some(context) if worktree == root || context.kind == ItemContextKind::Active => {
-                    context
-                }
-                Some(_) => return Err(ReadError::invalid_path()),
-                // The root is a context whether or not it has been
-                // observed; unobserved, nothing has verified its branch.
-                None if worktree == root => StoredContext {
-                    kind: ItemContextKind::Unverified,
-                    branch: None,
-                    worktree: root.clone(),
-                    head_oid: None,
-                },
-                None => return Err(ReadError::invalid_path()),
-            };
+            let context = named_context(connection, repo, &worktree)?;
             // What the index holds for this file in this context.
             let here: Vec<ProblemCode> = stored_problems(connection, repo)?
                 .into_iter()
@@ -1914,6 +1894,53 @@ impl RepositoryService {
             item.observation = Some(observation);
             Ok(item)
         })
+    }
+
+    /// `path observe`: the observation token of `path` in a context,
+    /// whether or not anything is there.
+    ///
+    /// A file has the token `show_item` and `show_path` give for it. A
+    /// path where nothing exists has the absent token of the context's
+    /// branch and the path, which a write that expects absence takes.
+    /// Anything else at the path, a directory or a symbolic link among
+    /// them, is `invalid_path`.
+    ///
+    /// `path` and `context` are written as `show_path` takes them, and
+    /// are `invalid_path` where they are there. Unlike that read, the
+    /// path need not be one an item can be at: only a digest of what is
+    /// there is returned, never its content. Nothing is parsed, and the
+    /// index is asked only for the context.
+    pub fn observe_path(
+        &self,
+        repo: &ResolvedRepository,
+        context: Option<&Path>,
+        path: &Path,
+    ) -> Result<PathObservationDto, ReadError> {
+        let observe = || -> Result<PathObservationDto, ReadError> {
+            let path = path
+                .to_str()
+                .filter(|path| is_plain_relative(path))
+                .ok_or_else(ReadError::invalid_path)?;
+            let worktree = named_worktree(repo, context)?;
+            let context = self.read_session(RepositoryOperation::Read, |connection| {
+                stored_index_state(connection, repo)?;
+                named_context(connection, repo, &worktree)
+            })?;
+            let observed =
+                observe_in_context(repo, context.branch.as_deref(), &context.worktree, path)?;
+            Ok(PathObservationDto {
+                path: path.to_owned(),
+                exists: observed.bytes.is_some(),
+                observation: observed.token,
+                context: ItemContextDto {
+                    kind: context.kind,
+                    branch: context.branch,
+                    worktree: context.worktree,
+                    head_oid: context.head_oid,
+                },
+            })
+        };
+        observe().map_err(|error| repo.failure(error))
     }
 
     /// Whether a save that gave the ticket `id` the `deps` and `parent` of
@@ -2032,6 +2059,74 @@ pub(super) fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadEr
 }
 
 /// The recovery that refreshes this repository's index.
+/// The worktree a caller named as a read's context, as the index writes
+/// one: `None` is the repository root.
+fn named_worktree(repo: &ResolvedRepository, context: Option<&Path>) -> Result<String, ReadError> {
+    match context {
+        None => absolute_path_string(repo.root()),
+        Some(context) => fs::canonicalize(context)
+            .ok()
+            .and_then(|context| absolute_path_string(&context)),
+    }
+    .ok_or_else(ReadError::invalid_path)
+}
+
+/// The context whose worktree is `worktree`: the repository root, or an
+/// item context the index holds as active. Any other is `invalid_path`.
+fn named_context(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    worktree: &str,
+) -> Result<StoredContext, ReadError> {
+    let root = absolute_path_string(repo.root()).ok_or_else(ReadError::invalid_path)?;
+    match stored_contexts(connection, repo)?
+        .into_iter()
+        .find(|context| context.worktree == worktree)
+    {
+        Some(context) if worktree == root || context.kind == ItemContextKind::Active => Ok(context),
+        Some(_) => Err(ReadError::invalid_path()),
+        // The root is a context whether or not it has been observed;
+        // unobserved, nothing has verified its branch.
+        None if worktree == root => Ok(StoredContext {
+            kind: ItemContextKind::Unverified,
+            branch: None,
+            worktree: root,
+            head_oid: None,
+        }),
+        None => Err(ReadError::invalid_path()),
+    }
+}
+
+/// What is at a path in a context, as a write's precondition states it.
+pub(crate) struct ObservedPath {
+    /// The file's token, or the absent token of the branch and the path.
+    pub(crate) token: String,
+    /// The file's bytes. `None` when nothing is at the path.
+    pub(crate) bytes: Option<Vec<u8>>,
+}
+
+/// Observes `path` in the context whose worktree is `worktree` and whose
+/// branch the index holds as `branch`. Something at the path that is not a
+/// regular file reached through real directories is `invalid_path`.
+pub(crate) fn observe_in_context(
+    repo: &ResolvedRepository,
+    branch: Option<&str>,
+    worktree: &str,
+    path: &str,
+) -> Result<ObservedPath, ReadError> {
+    match read_item_file(repo, worktree, path)? {
+        ItemFileRead::Found(file) => Ok(ObservedPath {
+            token: observation_token(branch, path, &file.bytes),
+            bytes: Some(file.bytes),
+        }),
+        ItemFileRead::Missing => Ok(ObservedPath {
+            token: absent_token(branch, path),
+            bytes: None,
+        }),
+        ItemFileRead::NotAFile => Err(ReadError::invalid_path()),
+    }
+}
+
 fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
     let root = absolute_path_string(repo.root());
     root_action(RecoveryActionKind::IndexRefresh, root.as_deref())

@@ -2869,6 +2869,52 @@ fn a_path_with_nothing_at_it_matches_the_failure_golden() {
     assert_git_transport_uninitialized();
 }
 
+#[test]
+fn path_observe_matches_its_schema_and_goldens() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let root = repo.root().to_str().unwrap().to_owned();
+
+    for (name, path, exists) in [
+        ("path_observe", "docs/guide.md", true),
+        ("path_observe_absent", "docs/absent.md", false),
+    ] {
+        let observed = enabled
+            .service
+            .observe_path(&repo, None, Path::new(path))
+            .unwrap();
+        assert_eq!(observed.exists, exists, "{name}");
+        let head = observed.context.head_oid.clone().unwrap();
+        let envelope = Envelope::read_success("path observe", repo.scope(), observed);
+        golden::assert_contract(
+            &ContractCase {
+                name,
+                data_schema: Some("path_observation.schema.json"),
+                // The tokens are pinned: a caller stores one and sends it
+                // back.
+                placeholders: &[(&root, "<repository>"), (&head, "<head-oid>")],
+                // No part of the file is in the result.
+                sentinels: &["Guide", "audience"],
+            },
+            &envelope,
+        );
+    }
+
+    let error = enabled
+        .service
+        .observe_path(&repo, None, Path::new("docs"))
+        .unwrap_err();
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_failure_contract(
+        "path_observe_directory",
+        "path observe",
+        &error,
+        Some(repo.root()),
+        &[],
+    );
+    assert_git_transport_uninitialized();
+}
+
 fn proposed(deps: &[&str], parent: Option<&str>) -> ProposedRelationships {
     ProposedRelationships {
         deps: deps.iter().map(|id| items::item_id(id)).collect(),

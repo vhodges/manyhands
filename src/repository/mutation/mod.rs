@@ -61,6 +61,7 @@ pub use dto::{
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
+pub(crate) use observe::absent_token;
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 
