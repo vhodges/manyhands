@@ -17,7 +17,8 @@ use manyhands::{
         CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput, LeaseKind,
         Mutation, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
         PreviewIdentitySource, RemoteRemovalPreviewDto, RemoteRemoveInput, RemoteSelectInput,
-        RepoCreateInput, RepoEnableInput, RepositoryPreviewDto, RepositoryService, RequestId,
+        RemoveRegistrationRequest, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
+        RepositoryPreviewDto, RepositoryRemovalPreviewDto, RepositoryService, RequestId,
         RequestState, TicketCreateInput, request_store::RequestRecord,
     },
     results::{
@@ -39,11 +40,13 @@ use support::{
 
 const PREVIEW_SCHEMA: &str = "preview.schema.json";
 const REMOTE_REMOVAL_SCHEMA: &str = "remote_removal_preview.schema.json";
+const REPOSITORY_REMOVAL_SCHEMA: &str = "repository_removal_preview.schema.json";
 
 /// The published schema of the preview `command` gives.
 fn preview_schema(command: &str) -> &'static str {
     match command {
         "remote remove" => REMOTE_REMOVAL_SCHEMA,
+        "repo remove" => REPOSITORY_REMOVAL_SCHEMA,
         _ => PREVIEW_SCHEMA,
     }
 }
@@ -3489,4 +3492,294 @@ fn a_retry_of_a_remote_removal_another_has_done_is_a_no_op() {
     assert_noop(&answered);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);
+}
+
+// ---------------------------------------------------------------------
+// `repo remove`
+// ---------------------------------------------------------------------
+
+impl Home {
+    fn remove_repository(&self) -> Mutation {
+        Mutation::RepoRemove(RepoRemoveInput {
+            root: self.root().to_owned(),
+        })
+    }
+
+    fn registered(&self) -> bool {
+        self.service()
+            .list_repositories()
+            .unwrap()
+            .items
+            .iter()
+            .any(|repository| Path::new(&repository.root) == self.root())
+    }
+
+    /// Removes the registration as another process would: through the
+    /// domain operation, under an operation of its own.
+    fn remove_registration_by_hand(&self) {
+        self.service()
+            .remove_registration(RemoveRegistrationRequest {
+                root: self.root().to_owned(),
+                operation_id: manyhands::repository::OperationId::new(),
+            })
+            .unwrap();
+    }
+}
+
+fn repository_removal(preview: &PreviewDto) -> &RepositoryRemovalPreviewDto {
+    match &preview.details {
+        PreviewDetailsDto::RepositoryRemoval(details) => details,
+        other => panic!("not a preview of a registration's removal: {other:?}"),
+    }
+}
+
+#[test]
+fn a_preview_of_repo_remove_names_the_registration_and_changes_nothing() {
+    let home = Home::new();
+    let files = tree(home.root());
+    let repositories = serde_json::to_string(&home.service().list_repositories().unwrap()).unwrap();
+
+    let (_, preview) = home.preview(&home.remove_repository());
+
+    assert_eq!(tree(home.root()), files);
+    assert_eq!(
+        serde_json::to_string(&home.service().list_repositories().unwrap()).unwrap(),
+        repositories
+    );
+    assert_eq!(home.confirmation_rows(), 1);
+    assert_eq!(home.world.request_rows(), 0);
+    assert_eq!(preview.command, "repo remove");
+    assert_eq!(
+        preview.scope.repository.as_deref(),
+        Some(home.root().to_str().unwrap())
+    );
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::RegistrationRemoved,
+            PreviewEffect::IndexDropped,
+            PreviewEffect::OperationRecordsDropped,
+            PreviewEffect::RemoteStateDropped,
+        ]
+    );
+    let details = repository_removal(&preview);
+    assert_eq!(details.root, home.root().to_str().unwrap());
+    // What the repository list says of the same registration.
+    let listed = home.service().list_repositories().unwrap();
+    assert_eq!(details.enabled_at, listed.items[0].enabled_at);
+    assert!(details.enabled_at.is_some());
+    assert!(!details.files_changed);
+    assert!(!details.git_state_changed);
+}
+
+/// The registration is removed and what was cached with it, and no file
+/// and nothing of Git's is touched. A retry of the same request is given
+/// the stored result at any later time, although the registration that
+/// scoped it is gone.
+#[test]
+fn a_confirmed_repo_remove_touches_no_file_and_is_replayed_once_the_registration_is_gone() {
+    let home = Home::new();
+    home.add_remote(
+        "origin",
+        &format!("ssh://git:{URL_SENTINEL}@example.invalid/repository.git"),
+    );
+    let prepared = home.prepare(&home.remove_repository());
+    assert_eq!(
+        golden::find_sentinel(&serde_json::to_value(&prepared).unwrap(), &[URL_SENTINEL]),
+        None
+    );
+    let confirmation = prepared.data.unwrap().confirmation_id;
+    let files = tree(home.root());
+    assert!(home.count("SELECT COUNT(*) FROM discovered_items") > 0);
+
+    let removed = home.execute(REQUEST_1, &confirmation, home.remove_repository());
+
+    assert_done(&removed);
+    assert_eq!(removed.data, None);
+    assert_eq!(
+        removed.scope.repository.as_deref(),
+        Some(home.root().to_str().unwrap())
+    );
+    // Every file, the Git directory's among them, is byte for byte what
+    // it was.
+    assert_eq!(tree(home.root()), files);
+    assert!(!home.registered());
+    for table in [
+        "repositories",
+        "contexts",
+        "discovered_items",
+        "operation_records",
+        "remote_polling_state",
+    ] {
+        assert_eq!(
+            home.count(&format!("SELECT COUNT(*) FROM {table}")),
+            0,
+            "{table}"
+        );
+    }
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    mutation::assert_request_stores_exclude(home.world.data.path(), &[URL_SENTINEL]);
+
+    home.clock.set(START + 86_400);
+    assert_eq!(
+        home.execute(REQUEST_1, &confirmation, home.remove_repository()),
+        removed
+    );
+    assert_eq!(home.retry(REQUEST_1, home.remove_repository()), removed);
+    assert_eq!(tree(home.root()), files);
+
+    // The same request ID for another repository is another request.
+    let plain = Plain::new();
+    let changed = home.retry(
+        REQUEST_1,
+        Mutation::RepoRemove(RepoRemoveInput {
+            root: plain.root.clone(),
+        }),
+    );
+    assert_eq!(changed.code, ResultCode::RequestMismatch);
+    assert_eq!(changed.effects, Effects::not_requested());
+    // And the confirmation is used.
+    let reused = home.execute(REQUEST_2, &confirmation, home.remove_repository());
+    assert_refused(&reused, ResultCode::ConfirmationUsed, &[]);
+}
+
+/// The removal happens and its result is lost. Its operation's row went
+/// with the registration, so nothing says whose work it was: the retry
+/// is a no-op, and is not refused for a registration that is gone.
+#[test]
+fn a_repo_remove_whose_result_was_lost_is_a_no_op_and_not_external_change() {
+    let mut home = Home::new();
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    let files = tree(home.root());
+    home.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let lost = home.execute(REQUEST_1, &confirmation, home.remove_repository());
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert!(!home.registered());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    let answered = home.retry(REQUEST_1, home.remove_repository());
+
+    assert_noop(&answered);
+    assert_eq!(answered.data, None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(tree(home.root()), files);
+    assert_eq!(home.retry(REQUEST_1, home.remove_repository()), answered);
+}
+
+/// The journal fix does not cover `remove_registration`: a failure
+/// before its transaction leaves its row pending, and so the request's
+/// record accepted. The same request then removes the registration.
+#[test]
+fn a_repo_remove_that_fails_before_its_transaction_stays_pending_and_its_retry_succeeds() {
+    let mut home = Home::new();
+    home.add_remote(
+        "origin",
+        &format!("ssh://git:{URL_SENTINEL}@example.invalid/repository.git"),
+    );
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    let files = tree(home.root());
+    home.fail_once_at(FailurePoint::BeforeRegistrationRemovalTransaction);
+
+    let failed = home.execute(REQUEST_1, &confirmation, home.remove_repository());
+
+    assert_eq!(failed.code, ResultCode::InternalError);
+    assert_eq!(failed.outcome, Outcome::Error);
+    assert_eq!(failed.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&failed), ["request.retry"]);
+    assert!(home.registered());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    assert_eq!(home.world.pending_journal_rows(), 1);
+    assert_eq!(
+        golden::find_sentinel(&serde_json::to_value(&failed).unwrap(), &[URL_SENTINEL]),
+        None
+    );
+    mutation::assert_request_stores_exclude(home.world.data.path(), &[URL_SENTINEL]);
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    let removed = home.retry(REQUEST_1, home.remove_repository());
+
+    assert_done(&removed);
+    assert_eq!(failed.operation_id, removed.operation_id);
+    assert!(!home.registered());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.count("SELECT COUNT(*) FROM operation_records"), 0);
+    assert_eq!(tree(home.root()), files);
+}
+
+#[test]
+fn prepare_for_a_repository_that_is_not_registered_is_a_no_op_with_no_confirmation() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let remove = |root: &Path| {
+        Mutation::RepoRemove(RepoRemoveInput {
+            root: root.to_owned(),
+        })
+    };
+
+    let noop = desk.prepare(&remove(&plain.root));
+    assert_eq!(noop.code, ResultCode::AlreadyApplied);
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_eq!(noop.data, None);
+
+    let directory = tempfile::tempdir().unwrap();
+    let refused = desk.prepare(&remove(directory.path()));
+    assert_eq!(refused.code, ResultCode::NotRepository);
+    assert_eq!(refused.data, None);
+    assert_eq!(desk.confirmation_rows(), 0);
+}
+
+/// Someone else removes the registration after the preview. A request
+/// that no record holds is refused: its preview is of a state that is
+/// gone, and a new one says that nothing is left to do.
+#[test]
+fn a_registration_removed_by_another_after_the_preview_is_external_change() {
+    let home = Home::new();
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    home.remove_registration_by_hand();
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_repository());
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(
+        home.prepare(&home.remove_repository()).code,
+        ResultCode::AlreadyApplied
+    );
+}
+
+/// A request is accepted and stops before its first effect, and someone
+/// else removes the registration. The request's end state holds: the
+/// retry is a no-op.
+#[test]
+fn a_retry_of_a_repo_remove_another_has_done_is_a_no_op() {
+    let mut home = Home::new();
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    home.execute(REQUEST_1, &confirmation, home.remove_repository());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    home.remove_registration_by_hand();
+
+    let answered = home.retry(REQUEST_1, home.remove_repository());
+
+    assert_noop(&answered);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+}
+
+#[test]
+fn repo_remove_without_a_confirmation_is_confirmation_required_and_does_nothing() {
+    let home = Home::new();
+    home.preview(&home.remove_repository());
+
+    let refused = home.retry(REQUEST_1, home.remove_repository());
+
+    assert_refused(
+        &refused,
+        ResultCode::ConfirmationRequired,
+        &["request.prepare"],
+    );
+    assert!(home.registered());
+    home.assert_nothing_left(REQUEST_1);
 }

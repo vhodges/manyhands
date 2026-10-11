@@ -740,6 +740,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RepoCreate | Command::RepoEnable) => {
             repo::recorded_effects(service, &accepted, journal.as_ref())
         }
+        // A registration is removed in one transaction: nothing of it is
+        // ever done with work remaining.
+        Some(Command::RepoRemove) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

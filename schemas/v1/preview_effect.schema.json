@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 preview effect",
-  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in. remote_removed: the remote is taken out of the repository's own Git configuration; with it Git removes the remote's tracking references (remote_tracking_refs_removed) and the upstream of every local branch that follows it (branch_upstreams_removed), each listed when the repository has any.",
+  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in. remote_removed: the remote is taken out of the repository's own Git configuration; with it Git removes the remote's tracking references (remote_tracking_refs_removed) and the upstream of every local branch that follows it (branch_upstreams_removed), each listed when the repository has any. registration_removed: the repository is taken out of the repository list; with it go what Manyhands cached of it: the index of its contexts, items, comments, problems and configuration (index_dropped), the journal of its local operations (operation_records_dropped), and its polling policy, what polling observed of its remote and the records of its synchronizations (remote_state_dropped). None of the four touches a file under the repository's root or anything Git holds.",
   "type": "object",
   "additionalProperties": false,
   "required": ["effect"],
@@ -19,7 +19,11 @@
         "repository_registered",
         "remote_removed",
         "remote_tracking_refs_removed",
-        "branch_upstreams_removed"
+        "branch_upstreams_removed",
+        "registration_removed",
+        "index_dropped",
+        "operation_records_dropped",
+        "remote_state_dropped"
       ]
     }
   }

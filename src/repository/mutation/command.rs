@@ -48,6 +48,7 @@ commands! {
     RepoCreate => "repo create",
     RepoEnable => "repo enable",
     RemoteRemove => "remote remove",
+    RepoRemove => "repo remove",
 }
 
 impl Command {
@@ -77,7 +78,8 @@ impl Command {
             | Self::KeyGenerate
             | Self::RepoCreate
             | Self::RepoEnable
-            | Self::RemoteRemove => true,
+            | Self::RemoteRemove
+            | Self::RepoRemove => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
         }
     }
@@ -105,7 +107,8 @@ impl Command {
             | Self::KeyRemove
             | Self::RepoCreate
             | Self::RepoEnable
-            | Self::RemoteRemove => false,
+            | Self::RemoteRemove
+            | Self::RepoRemove => false,
         }
     }
 
@@ -131,7 +134,8 @@ impl Command {
             | Self::KeyClear
             | Self::KeyRemove
             | Self::RepoEnable
-            | Self::RemoteRemove => false,
+            | Self::RemoteRemove
+            | Self::RepoRemove => false,
         }
     }
 
@@ -142,7 +146,7 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
-            Self::RepoCreate | Self::RepoEnable | Self::RemoteRemove => true,
+            Self::RepoCreate | Self::RepoEnable | Self::RemoteRemove | Self::RepoRemove => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -189,6 +193,7 @@ mod tests {
         assert_eq!(Command::RepoCreate.name(), "repo create");
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
+        assert_eq!(Command::RepoRemove.name(), "repo remove");
     }
 
     #[test]
@@ -198,7 +203,10 @@ mod tests {
                 command.needs_confirmation(),
                 matches!(
                     command,
-                    Command::RepoCreate | Command::RepoEnable | Command::RemoteRemove
+                    Command::RepoCreate
+                        | Command::RepoEnable
+                        | Command::RemoteRemove
+                        | Command::RepoRemove
                 ),
                 "{command:?}"
             );

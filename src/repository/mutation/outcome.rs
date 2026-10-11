@@ -275,6 +275,15 @@ pub(crate) fn unregister_key_outcome_code(outcome: UnregisterSharedKeyOutcome) -
     }
 }
 
+/// The code of what `remove_registration` returns. A root that is not
+/// registered is the request's end state, whoever removed it.
+pub(crate) fn remove_registration_outcome_code(outcome: &RemoveRegistrationOutcome) -> ResultCode {
+    match outcome {
+        RemoveRegistrationOutcome::Removed => ResultCode::Ok,
+        RemoveRegistrationOutcome::NotRegistered => ResultCode::AlreadyApplied,
+    }
+}
+
 /// The codes of the outcomes of the commands that are not bound yet. Each
 /// is a `match` with no wildcard arm, as every mapping here is.
 #[cfg_attr(not(test), expect(dead_code))]
@@ -290,15 +299,6 @@ pub(crate) mod unbound {
             EnableRepositoryOutcome::RegistrationPending { commit_oid: _ } => {
                 ResultCode::RegistrationPending
             }
-        }
-    }
-
-    pub(crate) fn remove_registration_outcome_code(
-        outcome: &RemoveRegistrationOutcome,
-    ) -> ResultCode {
-        match outcome {
-            RemoveRegistrationOutcome::Removed => ResultCode::Ok,
-            RemoveRegistrationOutcome::NotRegistered => ResultCode::AlreadyApplied,
         }
     }
 
@@ -630,8 +630,8 @@ pub(crate) fn recovery(
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
         // refreshed or rebuilt, a key generated, imported, selected,
-        // cleared or removed, a repository created or enabled, a remote
-        // removed. The same
+        // cleared or removed, a repository created, enabled or removed
+        // from the list, a remote removed. The same
         // request is offered when its record was left accepted, and
         // nothing otherwise.
         ResultCode::Ok

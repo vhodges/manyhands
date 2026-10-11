@@ -7,7 +7,8 @@ use manyhands::{
         CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
         KeyClearInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
         RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
-        RepoEnableInput, SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        RepoEnableInput, RepoRemoveInput, SharedKeyId, TicketCreateInput, TicketSaveInput,
+        TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -798,9 +799,22 @@ fn assert_confirmed_contract<T: serde::Serialize>(
     sentinels: &[&str],
     envelope: &Envelope<T>,
 ) {
+    assert_confirmed_contract_replacing(name, root, data_schema, sentinels, &[], envelope);
+}
+
+/// The same, with `replaced` added to what differs from run to run.
+fn assert_confirmed_contract_replacing<T: serde::Serialize>(
+    name: &str,
+    root: &std::path::Path,
+    data_schema: &str,
+    sentinels: &[&str],
+    replaced: &[(&str, &str)],
+    envelope: &Envelope<T>,
+) {
     let value = serde_json::to_value(envelope).unwrap();
     let text = |pointer: &str| value.pointer(pointer).and_then(|found| found.as_str());
     let mut placeholders = vec![(root.to_str().unwrap(), "<root>")];
+    placeholders.extend_from_slice(replaced);
     for (pointer, placeholder) in [
         ("/effects/commit_oid", "<commit>"),
         ("/operation_id", "<operation>"),
@@ -960,6 +974,57 @@ fn a_remote_remove_and_its_preview_match_their_schemas_and_goldens() {
         &world.root,
         REMOTE_REMOVAL_SCHEMA,
         &secret,
+        &noop,
+    );
+}
+
+const REPOSITORY_REMOVAL_SCHEMA: &str = "repository_removal_preview.schema.json";
+
+#[test]
+fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
+    let world = world_with_a_still_clock();
+    let remove = || {
+        Mutation::RepoRemove(RepoRemoveInput {
+            root: world.root.clone(),
+        })
+    };
+
+    let preview = world.service.prepare(&remove());
+    assert_eq!(preview.outcome, Outcome::Success);
+    // When the repository was registered differs from run to run.
+    let enabled_at = match &preview.data.as_ref().unwrap().details {
+        manyhands::repository::PreviewDetailsDto::RepositoryRemoval(details) => {
+            details.enabled_at.clone().unwrap()
+        }
+        other => panic!("not a preview of a registration's removal: {other:?}"),
+    };
+    assert_confirmed_contract_replacing(
+        "repo_remove_preview",
+        &world.root,
+        REPOSITORY_REMOVAL_SCHEMA,
+        &[],
+        &[(&enabled_at, "<enabled-at>")],
+        &preview,
+    );
+    let confirmation = preview.data.as_ref().unwrap().confirmation_id.clone();
+
+    let removed = mutation::execute_confirmed(&world.service, REQUEST_1, &confirmation, remove());
+    assert_eq!(removed.outcome, Outcome::Success);
+    assert_confirmed_contract(
+        "repo_remove",
+        &world.root,
+        REPOSITORY_REMOVAL_SCHEMA,
+        &[],
+        &removed,
+    );
+
+    let noop = world.service.prepare(&remove());
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_confirmed_contract(
+        "repo_remove_preview_noop",
+        &world.root,
+        REPOSITORY_REMOVAL_SCHEMA,
+        &[],
         &noop,
     );
 }

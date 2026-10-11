@@ -62,7 +62,7 @@ use bind::{
     index::IndexBinding,
     key::{KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
-    repo::RepoBinding,
+    repo::{RepoBinding, RepoRemoveBinding},
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
@@ -70,7 +70,7 @@ pub use bind::{
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{KeyClearInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
-    repo::{RepoCreateInput, RepoEnableInput},
+    repo::{RepoCreateInput, RepoEnableInput, RepoRemoveInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
@@ -78,8 +78,8 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, PreviewDetailsDto,
     PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
+    RequestDto, RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -339,6 +339,7 @@ pub enum Mutation {
     RepoCreate(RepoCreateInput),
     RepoEnable(RepoEnableInput),
     RemoteRemove(RemoteRemoveInput),
+    RepoRemove(RepoRemoveInput),
 }
 
 impl Mutation {
@@ -367,6 +368,7 @@ impl Mutation {
             Self::RepoCreate(_) => Command::RepoCreate,
             Self::RepoEnable(_) => Command::RepoEnable,
             Self::RemoteRemove(_) => Command::RemoteRemove,
+            Self::RepoRemove(_) => Command::RepoRemove,
         }
     }
 
@@ -378,6 +380,7 @@ impl Mutation {
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
+            Self::RepoRemove(input) => Some(Box::new(RepoRemoveBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -416,6 +419,7 @@ impl Mutation {
             Self::RepoCreate(input) => Box::new(RepoBinding::from(input)),
             Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
             Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
+            Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
         }
     }
 }

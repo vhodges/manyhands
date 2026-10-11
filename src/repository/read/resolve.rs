@@ -240,6 +240,29 @@ impl RepositoryService {
         }
     }
 
+    /// The registration whose stored root is exactly `root`, for the
+    /// mutation boundary: its ID and the time it was made, which together
+    /// tell it from a later registration of the same root. `None` when
+    /// no registration has that root.
+    pub(in super::super) fn registration(
+        &self,
+        root: &Path,
+    ) -> Result<Option<(i64, i64)>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            // A root that is not UTF-8 cannot have been stored.
+            let Some(root_path) = root.to_str() else {
+                return Ok(None);
+            };
+            Ok(connection
+                .query_row(
+                    "SELECT id, enabled_at FROM repositories WHERE root_path = ?1",
+                    [root_path],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?)
+        })
+    }
+
     /// The registration whose stored root is exactly `root`, the canonical
     /// string stored at enablement.
     pub(super) fn registration_id(&self, root: &Path) -> Result<Option<i64>, ReadError> {

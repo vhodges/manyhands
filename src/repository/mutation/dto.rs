@@ -73,6 +73,15 @@ contract_enum!(
     /// references, `remote_tracking_refs_removed`, and the upstream of
     /// every local branch that follows it, `branch_upstreams_removed`:
     /// each is listed when the repository has any.
+    ///
+    /// `registration_removed` is the repository taken out of the
+    /// repository list. With it go what Manyhands cached of it:
+    /// `index_dropped`, the index of its contexts, items, comments and
+    /// problems and of its configuration; `operation_records_dropped`,
+    /// the journal of its local operations; and `remote_state_dropped`,
+    /// its polling policy, what polling observed of its remote and the
+    /// records of its synchronizations. None of the four touches a file
+    /// under the repository's root or anything Git holds.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -85,6 +94,10 @@ contract_enum!(
         RemoteRemoved => "remote_removed",
         RemoteTrackingRefsRemoved => "remote_tracking_refs_removed",
         BranchUpstreamsRemoved => "branch_upstreams_removed",
+        RegistrationRemoved => "registration_removed",
+        IndexDropped => "index_dropped",
+        OperationRecordsDropped => "operation_records_dropped",
+        RemoteStateDropped => "remote_state_dropped",
     }
 );
 
@@ -138,6 +151,26 @@ pub struct RepositoryPreviewDto {
 pub enum PreviewDetailsDto {
     Repository(RepositoryPreviewDto),
     RemoteRemoval(RemoteRemovalPreviewDto),
+    RepositoryRemoval(RepositoryRemovalPreviewDto),
+}
+
+/// What a preview of `repo remove` shows: the registration that will be
+/// removed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RepositoryRemovalPreviewDto {
+    /// The registered root, as the repository list gives it.
+    pub root: String,
+    /// When the repository was registered, as the repository list gives
+    /// it. Null when the stored time cannot be written as one.
+    pub enabled_at: Option<String>,
+    /// Whether the command changes or removes any file under the root,
+    /// the directory Manyhands keeps its worktrees in among them. It
+    /// never does: this is false.
+    pub files_changed: bool,
+    /// Whether the command changes anything Git holds: a commit, a
+    /// branch, a worktree, the index or the configuration. It never
+    /// does: this is false.
+    pub git_state_changed: bool,
 }
 
 /// What a preview of `remote remove` shows.
@@ -372,7 +405,8 @@ impl MutationDataDto {
             Command::IndexRefresh
             | Command::IndexRebuild
             | Command::RepoCreate
-            | Command::RepoEnable => None,
+            | Command::RepoEnable
+            | Command::RepoRemove => None,
         }
     }
 }
