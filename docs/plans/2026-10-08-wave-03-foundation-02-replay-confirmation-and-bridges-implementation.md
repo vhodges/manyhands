@@ -652,6 +652,15 @@ Stop here. Before Task 8:
 Every later binding reuses this machinery, so an error left here is copied
 twenty-six times.
 
+**Outcome (2026-10-11).** The checkpoint was held. The design was rewritten
+as built and independently reviewed against the code. The review found one
+Critical finding, resolved as a correction to the document, and nine
+Important ones. A structural task, 7c, was inserted before Task 8: a closed
+command enum, exhaustive destructuring of drafts, the effect derivation
+hoisted out of the ticket binding, the split of `mod.rs`, an exhaustive
+recovery match, a single source for context names, and the run-as-new rule
+made each binding's choice.
+
 ## Task 8: Observations And Document Bindings
 
 **Files:** `src/repository/mutation/observe.rs`, `bind/document.rs`,
