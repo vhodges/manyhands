@@ -703,7 +703,16 @@ impl save::Save for DocumentBinding {
                 accepted.expectation(),
             ),
             Verb::Move => {
-                let source = PathBuf::from(self.source.as_ref().ok_or_else(not_set_up)?);
+                // A move entered again whose source is nowhere to be
+                // found: see `resume`. There is nothing to move.
+                let source = PathBuf::from(self.source.as_ref().ok_or_else(|| {
+                    RepositoryError::new(
+                        RepositoryOperation::SaveDocument,
+                        Some(accepted.root()),
+                        RepositoryErrorKind::ExternalChange,
+                        "the document is no longer where the move takes it from",
+                    )
+                })?);
                 let root = accepted.root();
                 let context = self.worktree(&root);
                 let removed = context.is_dir()
@@ -753,9 +762,37 @@ impl save::Save for DocumentBinding {
             Verb::Create => {}
             Verb::Save => self.source = Some(self.locate(accepted).ok_or_else(changed)?),
             Verb::Move => {
-                let source = self.locate(accepted).ok_or_else(changed)?;
                 let root = accepted.root();
                 let context = self.worktree(&root);
+                let Some(source) = self.locate(accepted) else {
+                    // Nothing holds the document anywhere but at the
+                    // destination: the file it was moved from was in no
+                    // commit, and an attempt has removed it. Where it was
+                    // is then not to be had, and nothing is left there to
+                    // do. The request is judged at the destination alone,
+                    // by the document that is there; should the domain
+                    // have to be called after all, the call is refused.
+                    let moved = self
+                        .destination()
+                        .and_then(|destination| {
+                            let bytes = owned_file_bytes(
+                                &context,
+                                Path::new(&destination),
+                                RepositoryOperation::Read,
+                                &root,
+                            )
+                            .ok()
+                            .flatten()?;
+                            parse_document(&destination, &bytes)
+                        })
+                        .filter(|document| document.id == self.id)
+                        .ok_or_else(changed)?;
+                    self.kept = Some(DocumentDraft {
+                        title: moved.title,
+                        body: moved.body,
+                    });
+                    return Ok(());
+                };
                 let found = save::found_file(
                     accepted,
                     &context,

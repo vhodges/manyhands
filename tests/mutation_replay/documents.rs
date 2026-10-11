@@ -779,3 +779,57 @@ fn a_hand_commit_that_copies_a_document_to_a_move_s_destination_is_not_the_move_
     );
     assert_eq!(world.branch_tip(DOCUMENT), Some(copied));
 }
+
+#[test]
+fn a_lost_result_of_a_move_of_a_file_that_was_never_committed_is_answered_with_its_commit() {
+    // A document whose file is in its context and in no commit: the
+    // context's branch is taken back to where primary is, and the file is
+    // written there by hand.
+    let mut world = World::new();
+    let created = world.execute(
+        REQUEST_2,
+        world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+    );
+    assert_eq!(created.code, ResultCode::Ok);
+    let source = world
+        .context_source(DOCUMENT_NEW, DOCUMENT_NEW_PATH)
+        .unwrap();
+    world.reset_context(DOCUMENT_NEW, world.primary_head());
+    items::write(&world.worktree(DOCUMENT_NEW), DOCUMENT_NEW_PATH, &source);
+    items::refresh_completely(&world.service, &world.root);
+    assert_eq!(world.branch_commits(DOCUMENT_NEW), 0);
+
+    // The move completes and its output is lost.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let destination = "docs/notes/moved.md";
+    let (token, absent) = (
+        world.token(DOCUMENT_NEW),
+        world.observe(DOCUMENT_NEW, destination),
+    );
+    let request = |world: &World| world.document_move(DOCUMENT_NEW, &token, destination, &absent);
+    let lost = world.execute(REQUEST_1, request(&world));
+    assert_eq!(
+        (lost.outcome, lost.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(world.branch_commits(DOCUMENT_NEW), 1, "the move committed");
+    let commit = world.branch_tip(DOCUMENT_NEW).unwrap();
+    assert_eq!(world.documents_at(commit), [DOCUMENT_PATH, destination]);
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // Nothing holds the path it was moved from any more: not the context
+    // and not the commit the request was accepted at.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, request(&world));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.branch_tip(DOCUMENT_NEW), Some(commit));
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
