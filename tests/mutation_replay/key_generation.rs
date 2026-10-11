@@ -11,7 +11,7 @@
 use manyhands::{
     repository::{
         FailurePoint, KeyGenerationState, KeyMutationDto, MutationDataDto, OperationFamily,
-        OperationId, RequestState, SharedKeyId,
+        OperationId, RepositoryService, RequestState, SharedKeyId,
         keys::KeyMaterialPhase,
         request_store::{FinalKind, JournalRow, PendingOperation, ScopeKey},
     },
@@ -21,8 +21,8 @@ use manyhands::{
 use crate::support::{
     FailOnce,
     mutation::{
-        self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, REQUEST_1, REQUEST_2, key_data,
-        recovery_actions,
+        self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, REQUEST_1, REQUEST_2, generate_in,
+        key_data, recovery_actions,
     },
 };
 
@@ -647,4 +647,77 @@ fn a_generation_s_record_that_lost_its_operation_is_not_run_or_replayed() {
     let replayed = world.execute(REQUEST_1, world.generate(LABEL, None));
     assert_eq!(replayed.code, ResultCode::InternalError);
     assert_eq!(world.key_operations(), 1);
+}
+
+/// Has a second call of `REQUEST_1` run whole, on a service `open` gives,
+/// while the world's next call of it sits between its acceptance and its
+/// domain call. What the second call returned is left in the slot.
+fn run_beside(
+    world: &KeyWorld,
+    open: impl FnOnce(&std::path::Path) -> RepositoryService + Send + 'static,
+) -> std::sync::Arc<std::sync::Mutex<Option<Envelope<MutationDataDto>>>> {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (data, home) = (world.data.path().to_owned(), world.home.path().to_owned());
+    let returned = slot.clone();
+    world.service.set_request_hook_for_testing(move || {
+        let beside =
+            mutation::execute_with(&open(&data), REQUEST_1, generate_in(&home, LABEL, None));
+        *returned.lock().unwrap() = Some(beside);
+    });
+    slot
+}
+
+/// The same request arrives twice at once: one key, and both callers are
+/// given it.
+#[test]
+fn two_calls_of_one_generation_at_once_make_one_key() {
+    let world = KeyWorld::new();
+    let beside = run_beside(&world, |data| RepositoryService::open_at(data).unwrap());
+
+    let first = world.execute(REQUEST_1, world.generate(LABEL, None));
+    let id = assert_generated(&world, &first);
+    let beside = beside.lock().unwrap().take().expect("the second call ran");
+    assert_eq!(assert_generated(&world, &beside), id);
+    assert_eq!(beside.operation_id, first.operation_id);
+    assert_eq!(world.private_key_files(), [id.to_string()]);
+    assert_eq!(world.key_operations(), 1);
+    // The second call entered the record and settled it.
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!((record.state, record.attempt), (RequestState::Finished, 2));
+}
+
+/// The second of two calls at once fails before the generation has a
+/// row. It cannot know that the call it entered beside has stopped, so
+/// it does not release the record: released, the first call's key would
+/// belong to no record, and the second caller's retry would be a new
+/// request and generate another.
+#[test]
+fn a_call_that_fails_beside_a_generation_that_has_not_begun_does_not_release_its_record() {
+    let mut world = KeyWorld::new();
+    let beside = run_beside(&world, |data| {
+        FailOnce::at(FailurePoint::GenerationEntropyUnavailable).open_service(data)
+    });
+
+    let first = world.execute(REQUEST_1, world.generate(LABEL, None));
+    let id = assert_generated(&world, &first);
+    let beside = beside.lock().unwrap().take().expect("the second call ran");
+    assert_eq!(
+        (beside.outcome, beside.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_of_the_application(&beside);
+    assert_eq!(beside.operation_id, first.operation_id);
+    // The record is still there, and the same request is what settles it.
+    assert_eq!(recovery_actions(&beside), ["request.retry"]);
+    let record = world.record(REQUEST_1).expect("the record is kept");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+
+    // The second caller sends its request again and is given the one key.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(assert_generated(&world, &retry), id);
+    assert_eq!(retry.operation_id, first.operation_id);
+    assert_eq!(world.private_key_files(), [id.to_string()]);
+    assert_eq!(world.key_operations(), 1);
+    assert_eq!(state(&world, REQUEST_1), Some(RequestState::Finished));
 }

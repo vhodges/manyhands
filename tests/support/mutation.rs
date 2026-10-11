@@ -825,6 +825,21 @@ pub const PUBLIC_KEY_FINGERPRINT: &str = "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8
 pub const PASSPHRASE: &str = "correct horse SENTINEL-PASSPHRASE-c07a";
 pub const PASSPHRASE_SENTINEL: &str = "SENTINEL-PASSPHRASE-c07a";
 
+/// A generation of a key labelled `label` into the key store of `home`,
+/// protected by `passphrase` or not protected.
+pub fn generate_in(home: &Path, label: &str, passphrase: Option<&str>) -> Mutation {
+    Mutation::KeyGenerate(KeyGenerateInput {
+        store: KeyStore::for_home(home).unwrap(),
+        label: label.to_owned(),
+        protection: match passphrase {
+            Some(passphrase) => {
+                KeyProtection::Passphrase(SecretPassphrase::new(passphrase.to_owned()).unwrap())
+            }
+            None => KeyProtection::Unencrypted,
+        },
+    })
+}
+
 /// A service with no repository, and a home for key files: the key
 /// commands belong to the application.
 ///
@@ -909,16 +924,7 @@ impl KeyWorld {
     /// A generation of a key labelled `label`, protected by `passphrase`
     /// or not protected.
     pub fn generate(&self, label: &str, passphrase: Option<&str>) -> Mutation {
-        Mutation::KeyGenerate(KeyGenerateInput {
-            store: self.store(),
-            label: label.to_owned(),
-            protection: match passphrase {
-                Some(passphrase) => {
-                    KeyProtection::Passphrase(SecretPassphrase::new(passphrase.to_owned()).unwrap())
-                }
-                None => KeyProtection::Unencrypted,
-            },
-        })
+        generate_in(self.home.path(), label, passphrase)
     }
 
     /// Where the key store keeps the files of generated keys.

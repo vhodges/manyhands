@@ -658,8 +658,21 @@ impl KeyGenerateBinding {
                     ..Answer::stopped(code).with_data(self.data(None, None, None))
                 };
                 let standing = match journal {
-                    // The generation never began, or has not ended: the
-                    // row says whether anything is in flight.
+                    // No row, on a call that entered a record another
+                    // call accepted. That call may be running still,
+                    // between its acceptance and its reservation, and
+                    // this one cannot know that it has stopped. Were the
+                    // record released, that call's key would belong to
+                    // no record, and this request sent again would be a
+                    // new one and generate a second key. The record is
+                    // kept: the same request, under the same operation
+                    // ID, finds the key or generates the one.
+                    Some(JournalRow::Absent) if accepted.attempt > 1 => Standing::Unconfirmed,
+                    // The generation never began, on the call that
+                    // accepted it, or has not ended: the row says whether
+                    // anything is in flight. A first call's release is
+                    // conditional on its attempt, and changes nothing
+                    // once another call has entered.
                     Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
                         Standing::Stopped { journal }
                     }
