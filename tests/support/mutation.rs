@@ -1096,19 +1096,6 @@ pub fn recovery_before_own_abandon(envelope: &Envelope<MutationDataDto>) -> Vec<
     own.to_vec()
 }
 
-/// As `recovery_before_own_abandon`, for an assertion shared by results
-/// that left the request's own operation pending and results that left
-/// nothing: the two closing actions are checked where they are there,
-/// and the actions before them returned either way.
-pub fn recovery_apart_from_own_abandon(envelope: &Envelope<MutationDataDto>) -> Vec<&'static str> {
-    let actions = recovery_actions(envelope);
-    if actions.contains(&"operation.abandon") {
-        recovery_before_own_abandon(envelope)
-    } else {
-        actions
-    }
-}
-
 static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
     std::sync::OnceLock::new();
 

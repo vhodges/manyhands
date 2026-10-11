@@ -15559,3 +15559,87 @@ fn a_local_synchronization_whose_row_was_abandoned_is_refused_and_not_replayed_a
         SynchronizationResult::Complete(_)
     ));
 }
+
+/// The second place a synchronization reads its local row: the index
+/// hand-off of a synchronization whose authority is recorded. Its repeat
+/// does not pass through the local replay, which refuses an abandoned row
+/// first for a synchronization with no remote; here the check in the
+/// refresh itself is the only one. A hand-off row that was closed as
+/// abandoned is `completed` and is not a hand-off that was done: the
+/// repeat is refused, and the hand-off stays owed.
+///
+/// `abandon_operation` refuses an ID the remote journal holds, so the row
+/// is closed here as an abandon would leave it.
+#[test]
+fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
+    use RemoteOperationSafePoint as Point;
+    let (fixture, candidate, tip) = open_attempt_fixture(true);
+    fixture.prepare(candidate, Some(tip), false).unwrap();
+    fixture.point(Point::BeforePush);
+    fixture
+        .advance(state::PublicationPhase::Returned, None)
+        .unwrap();
+    fixture.point(Point::AfterPushReturn);
+    fixture
+        .advance(state::PublicationPhase::Verified, Some(candidate))
+        .unwrap();
+    fixture.point(Point::AfterPushVerification);
+    let authority = fixture.authority();
+    fixture
+        .service
+        .classify_synchronization(fixture.root.path(), &fixture.owner, authority)
+        .unwrap();
+    let root = fixture.root.path();
+    let mut replay = request(root);
+    replay.operation_id = fixture.operation;
+    // A hand-off that stopped: its local row is left pending.
+    let service = RepositoryService::open_at(fixture.data.path()).unwrap();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+    assert!(matches!(
+        service
+            .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::IndexPending(_)
+    ));
+    *service.failure_point.lock().unwrap() = None;
+    let db = rusqlite::Connection::open(fixture.data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE operation_records SET state = 'completed', completed_step = 'abandoned'
+              WHERE operation_ulid = ?1 AND state != 'completed'",
+            [fixture.operation.to_string()],
+        )
+        .unwrap(),
+        1
+    );
+    let image = local_binding_image(root);
+    assert_eq!(fixture.envelope().4, 1, "the hand-off is owed");
+
+    for restart in [false, true] {
+        let mut repeat = replay.clone();
+        repeat.restart = restart;
+        let repeated = service.synchronize_remote(repeat, &mut SessionCredentials::new(NoPrompt));
+        assert!(
+            matches!(
+                repeated,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::OperationAbandoned,
+                    ..
+                }))
+            ),
+            "restart {restart}: {repeated:?}"
+        );
+    }
+
+    // Not reported as done, and nothing written.
+    assert_eq!(fixture.envelope().4, 1, "the hand-off is still owed");
+    assert_eq!(local_binding_image(root), image);
+    let row: (String, Option<String>) = db
+        .query_row(
+            "SELECT state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+            [fixture.operation.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("completed".to_owned(), Some("abandoned".to_owned())));
+}

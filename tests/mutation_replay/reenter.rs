@@ -438,11 +438,23 @@ fn foreign_source() -> String {
     crate::support::items::ticket_source(TICKET_A, "Changed by someone else", "")
 }
 
+/// What a refused request left of its own operation, which decides what
+/// its result offers.
+#[derive(Clone, Copy)]
+enum Own {
+    /// Its operation is still pending, and its record accepted: the
+    /// result ends with `repo.inspect` and the abandon of that operation.
+    Pending,
+    /// Nothing is in flight: the result offers nothing.
+    Nothing,
+}
+
 /// Asserts that `envelope` is `external_change` with nothing done, and
 /// that it does not offer the same request again: the caller reads the
-/// item again and submits a new request. Where the request's own
-/// operation was left pending, it is offered to be abandoned.
-fn assert_external_change(envelope: &Envelope<MutationDataDto>, what: &str) {
+/// item again and submits a new request. Whether the request's own
+/// operation is offered to be abandoned is `own`, which each caller
+/// knows; it is asserted both ways.
+fn assert_external_change(envelope: &Envelope<MutationDataDto>, what: &str, own: Own) {
     assert_eq!(
         (envelope.outcome, envelope.code, envelope.failure_class()),
         (
@@ -453,10 +465,11 @@ fn assert_external_change(envelope: &Envelope<MutationDataDto>, what: &str) {
         "{what}"
     );
     assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
-    assert!(
-        crate::support::mutation::recovery_apart_from_own_abandon(envelope).is_empty(),
-        "{what}"
-    );
+    let offered = match own {
+        Own::Pending => crate::support::mutation::recovery_before_own_abandon(envelope),
+        Own::Nothing => recovery_actions(envelope),
+    };
+    assert!(offered.is_empty(), "{what}: {offered:?}");
 }
 
 #[test]
@@ -486,7 +499,7 @@ fn a_foreign_commit_to_the_file_of_a_request_in_flight_is_an_external_change() {
 
             world.reopen();
             let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-            assert_external_change(&retry, &what);
+            assert_external_change(&retry, &what, Own::Pending);
             // Nothing is written and nothing is run.
             assert_eq!(world.branch_tip(TICKET_A), Some(foreign), "{what}");
             assert_eq!(world.worktree_source(TICKET_A), left, "{what}");
@@ -502,7 +515,7 @@ fn a_foreign_commit_to_the_file_of_a_request_in_flight_is_an_external_change() {
             );
             // The same answer again, and still nothing written.
             let again = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-            assert_external_change(&again, &what);
+            assert_external_change(&again, &what, Own::Pending);
             assert_eq!(world.branch_tip(TICKET_A), Some(foreign), "{what}");
             assert_eq!(world.worktree_source(TICKET_A), left, "{what}");
         }
@@ -545,7 +558,7 @@ fn a_foreign_commit_to_the_file_of_a_request_that_never_ran_frees_the_request() 
 
         world.reopen();
         let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-        assert_external_change(&retry, &what);
+        assert_external_change(&retry, &what, Own::Nothing);
         // Nothing is in flight, so nothing is left of the request.
         assert!(world.record(REQUEST_1).is_none(), "{what}");
         assert_eq!(world.pending_journal_rows(), 0, "{what}");
@@ -693,7 +706,7 @@ fn intended_content_that_is_not_committed_is_an_external_change_for_a_request_th
 
     world.reopen();
     let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-    assert_external_change(&retry, "the retry");
+    assert_external_change(&retry, "the retry", Own::Nothing);
     assert_eq!(world.branch_commits(TICKET_A), 1);
     assert_eq!(world.worktree_source(TICKET_A), edited);
     assert!(world.record(REQUEST_1).is_none());
@@ -808,7 +821,7 @@ fn a_foreign_commit_of_a_created_ticket_without_a_short_code_is_not_the_request_
     let retry = world.execute(REQUEST_1, world.create(TICKET_NEW));
     // A create's own commit holds a short code. This one is someone
     // else's: it is not reported, and the request is not run over it.
-    assert_external_change(&retry, "the retry");
+    assert_external_change(&retry, "the retry", Own::Pending);
     assert_eq!(retry.effects.commit_oid, None);
     assert_eq!(world.branch_tip(TICKET_NEW), Some(foreign));
     assert_eq!(world.slug(TICKET_NEW), None);
@@ -1947,7 +1960,7 @@ fn a_rejected_attempt_that_died_before_its_record_was_deleted_leaves_nothing_on_
     // The same input again: rejected again, and this time nothing is left.
     world.reopen();
     let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
-    assert_external_change(&retry, "the retry");
+    assert_external_change(&retry, "the retry", Own::Nothing);
     assert!(world.record(REQUEST_1).is_none());
     assert_eq!(world.request_rows(), 1, "only the earlier request's");
     assert_eq!(world.pending_journal_rows(), 0);

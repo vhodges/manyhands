@@ -1417,17 +1417,28 @@ mod abandoned_row_tests {
         assert!(
             !record_owned_persisted_context(&connection, owner, Path::new("/context")).unwrap()
         );
+        // The time the row was closed at is set apart from any time a
+        // heartbeat could write, so that a statement that moved it shows.
+        const CLOSED_AT: i64 = 424_242;
+        connection
+            .execute("UPDATE operation_records SET observed_at = ?1", [CLOSED_AT])
+            .unwrap();
         record_persisted_context(&connection, 1, Path::new("/context")).unwrap();
         touch_pending(&connection, 1).unwrap();
+        rest_pending(&connection, 1, 0).unwrap();
         assert!(!abandon_row(&connection, 1).unwrap());
         assert_eq!(row(&connection), abandoned_row());
-        let observed_at: i64 = connection
-            .query_row("SELECT observed_at FROM operation_records", [], |row| {
-                row.get(0)
-            })
+        let (observed_at, context): (i64, Option<String>) = connection
+            .query_row(
+                "SELECT observed_at, context_path FROM operation_records",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
-        // Still the time it was abandoned at: no heartbeat moved it.
-        assert!(observed_at > 7);
+        // No heartbeat, rest or claim moved it, and no context was
+        // recorded on it.
+        assert_eq!(observed_at, CLOSED_AT);
+        assert_eq!(context, None);
         assert!(lookup_row(&connection).standing() == LocalStanding::Abandoned);
     }
 

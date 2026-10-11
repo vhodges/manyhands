@@ -957,16 +957,33 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
         world.record(REQUEST_1).map(|record| record.state),
         Some(RequestState::Accepted)
     );
-    // While the lease is held, no result offers the abandon: the call
-    // that holds it may be the one at work under the operation.
+    // Another request cannot take the lease either, and is told so.
     let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
-    assert!(
-        !recovery_actions(&blocked).contains(&"operation.abandon"),
-        "{:?}",
-        recovery_actions(&blocked)
-    );
+    assert_eq!(blocked.code, ResultCode::Busy);
+    assert_eq!(recovery_actions(&blocked), ["request.retry"]);
     before.assert_unchanged(world, "the busy abandon");
     drop(held);
+
+    // A creation holds the bootstrap lease of the root, which a save
+    // does not take: another request reaches the journal and is refused
+    // for the pending operation, as ever. It is told to look, and is not
+    // told to abandon, for one reason alone: a lease is held, and its
+    // holder may be the call at work under the operation.
+    let held = RepositoryService::hold_lease_for_testing(
+        &world.root,
+        world.data.path(),
+        LeaseKind::Bootstrap,
+    )
+    .unwrap();
+    let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
+    assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
+    let busy = stranded.execute(REQUEST_3, &confirmation);
+    assert_eq!(busy.code, ResultCode::Busy);
+    before.assert_unchanged(world, "the busy abandon");
+    drop(held);
+    // With no lease held the same request is offered the abandon.
+    assert_blocked_and_offered_the_abandon(&stranded, REQUEST_2);
 
     let abandoned = stranded.execute(REQUEST_3, &confirmation);
     assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);

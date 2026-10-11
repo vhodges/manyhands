@@ -680,8 +680,9 @@ fn an_abandoned_operation_no_longer_blocks_the_repository_and_nothing_is_touched
 #[test]
 fn a_repeat_of_an_abandoned_operation_is_refused_and_writes_nothing() {
     let stranded = Stranded::new();
-    stranded.abandon(stranded.operation_id(), None).unwrap();
     let before = everything(&stranded.fixture);
+    stranded.abandon(stranded.operation_id(), None).unwrap();
+    assert_eq!(before, everything(&stranded.fixture), "the abandon");
     let journal = stranded.journal();
 
     // Neither replayed as completed nor begun again, with any input.
@@ -1010,6 +1011,7 @@ fn a_rebuild_that_is_observing_is_not_abandoned() {
         enabled.data_directory.path().to_owned(),
         fixture.root.clone(),
     );
+    let before = everything(&fixture);
     let (sent, received) = std::sync::mpsc::channel();
     enabled.service.set_observation_hook_for_testing(move || {
         let other = RepositoryService::open_at(&data).unwrap();
@@ -1031,6 +1033,9 @@ fn a_rebuild_that_is_observing_is_not_abandoned() {
     assert!(matches!(seen, AbandonableOperation::Pending(_)), "{seen:?}");
     assert_eq!(attempt, Err(RepositoryErrorKind::RepositoryBusy));
     assert_eq!(outcome(rebuilt), None, "the rebuild goes on");
+    // Neither the busy abandon nor the rebuild, which writes the index
+    // alone, touched the repository.
+    assert_eq!(before, everything(&fixture));
     assert_eq!(
         stored_rows(enabled.data_directory.path())
             .into_iter()
@@ -1081,6 +1086,11 @@ fn a_rebuild_whose_row_was_abandoned_under_it_stops_and_leaves_the_row_closed() 
                 .unwrap()
         };
         let before = problems(enabled.data_directory.path());
+        // Taken before the row is closed under the rebuild. What the
+        // hook itself writes to the worktree is put back before the
+        // comparison, so that only what Manyhands did can differ.
+        let everything_before = everything(&fixture);
+        let fixture_file = fs::read(fixture.root.join("fixture.txt")).unwrap();
 
         let rebuilt = enabled
             .service
@@ -1100,6 +1110,8 @@ fn a_rebuild_whose_row_was_abandoned_under_it_stops_and_leaves_the_row_closed() 
             "changed {changed}"
         );
         assert_eq!(problems(enabled.data_directory.path()), before);
+        fs::write(fixture.root.join("fixture.txt"), &fixture_file).unwrap();
+        assert_eq!(everything_before, everything(&fixture), "changed {changed}");
         assert!(
             enabled
                 .service

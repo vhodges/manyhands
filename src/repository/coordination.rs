@@ -79,18 +79,17 @@ pub(super) fn cache_write_guard(
 /// Whether no call holds the repository's lease or the bootstrap lease
 /// of its root at this instant. Neither is waited for, and each is let go
 /// at once: this is a look, for a read that must not offer to end an
-/// operation a call is at work under. A lease that cannot be looked at
-/// is taken to be held.
+/// operation a call is at work under. A lease whose file is not there has
+/// no holder, and looking never makes the file. A lease that cannot be
+/// looked at for any other reason is taken to be held.
 pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
     let free = |path: std::path::PathBuf| -> bool {
-        let Ok(file) = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-        else {
-            return false;
+        let file = match OpenOptions::new().read(true).write(true).open(path) {
+            Ok(file) => file,
+            // No file: no call has ever taken this lease, or its root
+            // is gone. None is made here.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
+            Err(_) => return false,
         };
         match FileExt::try_lock_exclusive(&file) {
             Ok(true) => {
@@ -100,10 +99,7 @@ pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
             Ok(false) | Err(_) => false,
         }
     };
-    let bootstrap = data_directory.join(bootstrap_lease_name(root));
-    // The bootstrap lease is only ever of a root whose creation was
-    // begun: one that has no lock file has none held.
-    if bootstrap.exists() && !free(bootstrap) {
+    if !free(data_directory.join(bootstrap_lease_name(root))) {
         return false;
     }
     match Repository::open_ext(
@@ -111,12 +107,7 @@ pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
         git2::RepositoryOpenFlags::NO_SEARCH,
         &[] as &[&std::ffi::OsStr],
     ) {
-        Ok(repository) => {
-            let lock = repository.commondir().join(REPOSITORY_LOCK_FILE);
-            // As for the bootstrap lease: no file, no holder, and none
-            // is made by looking.
-            !lock.exists() || free(lock)
-        }
+        Ok(repository) => free(repository.commondir().join(REPOSITORY_LOCK_FILE)),
         // No repository is there to have a lease.
         Err(_) => true,
     }
@@ -199,5 +190,55 @@ fn acquire(
             }
             Err(error) => return Err(RepositoryError::io(operation, Some(root.to_owned()), error)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files(directory: &Path) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_look_at_the_leases_makes_no_file_and_sees_who_holds_one() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let operation = RepositoryOperation::Inspect;
+
+        // No repository and no lock file: free, and nothing is made.
+        assert!(leases_are_free(data.path(), &root_path));
+        assert!(files(data.path()).is_empty());
+
+        let repository = Repository::init(&root_path).unwrap();
+        let git_before = files(repository.path());
+        assert!(leases_are_free(data.path(), &root_path));
+        assert_eq!(files(repository.path()), git_before, "no lock file is made");
+        assert!(files(data.path()).is_empty());
+
+        // The repository lease, held and then let go.
+        let held = repository_lease(&repository, &root_path, operation).unwrap();
+        assert!(repository.path().join(REPOSITORY_LOCK_FILE).exists());
+        assert!(!leases_are_free(data.path(), &root_path));
+        drop(held);
+        assert!(leases_are_free(data.path(), &root_path));
+        // The look let the lease go: it can be taken at once.
+        drop(repository_lease(&repository, &root_path, operation).unwrap());
+
+        // The bootstrap lease, held and then let go.
+        let held = bootstrap_lease(data.path(), &root_path, operation).unwrap();
+        assert!(!leases_are_free(data.path(), &root_path));
+        // Another root's bootstrap lease is not this one's.
+        assert!(leases_are_free(data.path(), &root_path.join("elsewhere")));
+        drop(held);
+        assert!(leases_are_free(data.path(), &root_path));
+        drop(bootstrap_lease(data.path(), &root_path, operation).unwrap());
     }
 }
