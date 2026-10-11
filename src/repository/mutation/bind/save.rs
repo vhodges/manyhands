@@ -158,8 +158,8 @@ pub(crate) fn primary_is_committed(
 
 /// What Git shows of the save's path since the request was accepted.
 ///
-/// For a request that changes another path in the same commit, a commit
-/// is its own only if it is the request's at that path too.
+/// For a request that empties another path in the same commit, a commit
+/// that still holds a file there is not its own.
 fn path_evidence<S: Save + ?Sized>(
     save: &S,
     accepted: &Accepted,

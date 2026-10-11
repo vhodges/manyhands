@@ -191,10 +191,12 @@ pub(crate) struct PathEvidence {
     /// expected: whatever history shows, the file has not been changed
     /// from elsewhere.
     tip_as_expected: bool,
-    /// The commits that can be the request's own at another path the
-    /// request changes in the same commit, when it changes one: a commit
-    /// is the request's own only if it is among them too.
-    together_with: Option<Vec<Oid>>,
+    /// The commits in range that hold a file at the path.
+    holding: Vec<Oid>,
+    /// For a request that also empties another path in the same commit:
+    /// the commits in range that hold a file at that path. None of them
+    /// is the request's own.
+    not_among: Option<Vec<Oid>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,17 +229,22 @@ impl PathEvidence {
             anchored: false,
             settled_at_acceptance: false,
             tip_as_expected: false,
-            together_with: None,
+            holding: Vec::new(),
+            not_among: None,
         }
     }
 
-    /// This evidence, for a request that changes the path of `other` in
-    /// the same commit, as a move changes the path it moves from: a
-    /// commit can be the request's own only if it can be at both paths.
-    /// One that brought this path to what the request intends and left
-    /// the other as it was is not the request's.
+    /// This evidence, for a request that in the same commit leaves no
+    /// file at the path of `other`, as a move does of the path it moves
+    /// from. A commit that brought this path to what the request intends
+    /// and still holds a file at the other is not the request's: the
+    /// request's commit leaves none there.
+    ///
+    /// Whether the commit itself removed that file is not asked. Someone
+    /// can have committed the removal first, and the request's commit
+    /// then only adds this path.
     pub(crate) fn together_with(mut self, other: &Self) -> Self {
-        self.together_with = Some(other.candidates().collect());
+        self.not_among = Some(other.holding.clone());
         self
     }
 
@@ -256,9 +263,9 @@ impl PathEvidence {
                     && change.intended
                     && (!self.anchored || change.from_expected)
                     && self
-                        .together_with
+                        .not_among
                         .as_ref()
-                        .is_none_or(|both| both.contains(&change.commit))
+                        .is_none_or(|holding| !holding.contains(&change.commit))
             })
             .map(|change| change.commit)
     }
@@ -348,7 +355,11 @@ pub(crate) fn path_evidence_of(
             Ok(observed_at(&repository, &repository.find_commit(commit)?, path)? == *expected)
         };
         let mut changes = Vec::new();
+        let mut holding = Vec::new();
         for commit in &commits {
+            if blob_at(&repository.find_commit(*commit)?, path)?.is_some() {
+                holding.push(*commit);
+            }
             if !changed_path(&repository, *commit, path)? {
                 continue;
             }
@@ -383,7 +394,8 @@ pub(crate) fn path_evidence_of(
             anchored,
             settled_at_acceptance: anchored && base_intended,
             tip_as_expected: tip.map(holds_expected).transpose()?.unwrap_or(false),
-            together_with: None,
+            holding,
+            not_among: None,
         })
     };
     read().map_err(|_| Unreadable)

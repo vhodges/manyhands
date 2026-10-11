@@ -839,3 +839,29 @@ fn a_commit_is_a_move_s_own_only_if_it_is_at_both_of_its_paths() {
     assert_eq!(both.own(), Some(moved));
     assert!(!both.superseded(true));
 }
+
+#[test]
+fn a_move_s_commit_that_only_adds_the_destination_is_its_own_once_the_source_is_gone() {
+    const DESTINATION: &str = "tickets/b.md";
+    let fixture = fixture();
+    // Someone commits the removal of the file the move takes; the move's
+    // own commit then adds the destination and nothing else.
+    let removed = remove(&fixture.repository, BRANCH, fixture.base, PATH);
+    let added = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(removed),
+        DESTINATION,
+        "before\n",
+    );
+    let at_destination = path_evidence(
+        fixture.root(),
+        &fixture.position(),
+        DESTINATION,
+        &ExpectedPathObservation::Missing,
+        &|bytes| bytes == b"before\n",
+    )
+    .unwrap();
+    let both = at_destination.together_with(&removal_evidence(&fixture));
+    assert_eq!(both.own(), Some(added));
+}

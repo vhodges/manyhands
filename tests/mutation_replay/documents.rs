@@ -689,3 +689,93 @@ fn a_move_whose_removal_was_never_committed_is_not_answered_as_a_no_op() {
         assert_eq!(world.branch_tip(DOCUMENT), Some(tip), "{what}");
     }
 }
+
+/// Commits the removal of `path` on the branch checked out in the
+/// document's context, as `git rm --cached` and a commit would: the
+/// worktree is left as it is.
+fn commit_removal_in_context(world: &World, id: &str, path: &str) -> git2::Oid {
+    let repository = git2::Repository::open(world.worktree(id)).unwrap();
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    let mut index = repository.index().unwrap();
+    index.read_tree(&head.tree().unwrap()).unwrap();
+    index.remove(std::path::Path::new(path), 0).unwrap();
+    let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+    index.write().unwrap();
+    let signature = git2::Signature::new(
+        "Someone Else",
+        "someone-else@example.invalid",
+        &git2::Time::new(items::COMMITTED_AT + 60, 0),
+    )
+    .unwrap();
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "by hand",
+            &tree,
+            &[&head],
+        )
+        .unwrap()
+}
+
+#[test]
+fn a_move_whose_removal_someone_else_committed_reports_its_own_commit() {
+    // The move wrote the destination and removed the file it moved from,
+    // and died before its commit.
+    let mut world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeCheckpointCommit).open_service(data)
+    });
+    let (token, absent) = (
+        world.token(DOCUMENT),
+        world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+    );
+    let request =
+        |world: &World| world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent);
+    let first = world.execute(REQUEST_1, request(&world));
+    assert_eq!(first.outcome, Outcome::Partial);
+    // Someone commits the removal, and only that.
+    let removal = commit_removal_in_context(&world, DOCUMENT, DOCUMENT_PATH);
+    assert!(world.documents_at(removal).is_empty());
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, request(&world));
+    // The retry commits the destination: that commit is the request's.
+    assert_committed(&world, DOCUMENT, &retry, "the retry");
+    let tip = world.branch_tip(DOCUMENT).unwrap();
+    assert_ne!(tip, removal);
+    assert_eq!(world.documents_at(tip), [DOCUMENT_MOVED_PATH]);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
+
+#[test]
+fn a_hand_commit_that_copies_a_document_to_a_move_s_destination_is_not_the_move_s_own() {
+    let (world, retry) = interrupted_move();
+    // Someone commits the document at the destination, as the move would
+    // write it, and leaves it where it was.
+    let copied = world.commit_in_context(
+        DOCUMENT,
+        DOCUMENT_MOVED_PATH,
+        &world.primary_source_at(DOCUMENT_PATH),
+    );
+    assert_eq!(
+        world.documents_at(copied),
+        [DOCUMENT_PATH, DOCUMENT_MOVED_PATH]
+    );
+
+    let envelope = world.execute(REQUEST_1, retry);
+    // The domain refuses the retry: the file at the destination is not
+    // the bytes the move writes. The copy still holds the document where
+    // the move takes it from, so it is not named as the move's commit.
+    assert_eq!(envelope.code, ResultCode::ExternalChange);
+    assert_eq!(envelope.effects.commit_oid, None);
+    assert_eq!(
+        envelope.effects.checkpoint,
+        CheckpointEffect::Pending,
+        "no commit is the request's"
+    );
+    assert_eq!(world.branch_tip(DOCUMENT), Some(copied));
+}
