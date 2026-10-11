@@ -25,13 +25,14 @@ use super::{
         },
         command::Command,
         dto::{MutationDataDto, TicketMutationDto},
-        evidence::{self, Claim, PathEvidence, Position, Unreadable},
+        evidence::{self, PathEvidence, Position, Unreadable},
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
     Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Found, Prepared, Ran, Standing,
+    save,
 };
 
 /// Where item worktrees are, below the repository root.
@@ -186,28 +187,20 @@ fn context_file(root: &Path, id: &str) -> Option<Vec<u8>> {
 }
 
 /// What the repository shows of an unfinished ticket request whose
-/// operation ran: a checkpoint when a commit in range changed the ticket's
-/// file, and a write when the file in the editing context is no longer
-/// what it was before the request.
-///
-/// A file that is not there was not written: with no editing context, or
-/// no file in it, nothing is reported, whatever the request expected. A
-/// range that cannot be read shows no commit.
+/// operation ran: the effects of a save of the ticket's file, as its
+/// editing context holds it now.
 pub(crate) fn recorded_effects(record: &RequestRecord, accepted: &Accepted) -> Effects {
     let Some(root) = record.scope.repository() else {
         return Effects::not_requested();
     };
     let root = Path::new(root);
-    let commit = evidence::path_commit(root, &accepted.position, &ticket_path(&record.target))
-        .ok()
-        .flatten();
-    let written = context_file(root, &record.target).is_some_and(|bytes| {
-        record
-            .expected_digest
-            .as_ref()
-            .is_some_and(|expected| ExpectedPathObservation::from_bytes(&bytes) != *expected)
-    });
-    outcome::stopped_save_effects(commit, written)
+    save::recorded_effects(
+        root,
+        &accepted.position,
+        &ticket_path(&record.target),
+        context_file(root, &record.target).as_deref(),
+        record.expected_digest.as_ref(),
+    )
 }
 
 /// Which call of a request is checking its relationships.
@@ -511,7 +504,7 @@ impl TicketBinding {
         let code = observe::stale_token_code(true, committed);
         let mut answer = Answer::stopped(code).with_data(data);
         if code == ResultCode::AlreadyApplied {
-            (_, answer.effects) = settled_save(None);
+            (_, answer.effects) = save::settled(None);
         }
         Err(answer)
     }
@@ -583,11 +576,7 @@ impl TicketBinding {
             )
             .unwrap_or(false);
             let code = observe::stale_token_code(self.holds(&current), committed);
-            let (_, effects) = SaveReport::Saved {
-                claimed: None,
-                discovered: true,
-            }
-            .result(None);
+            let (_, effects) = save::settled(None);
             let mut answer =
                 Answer::stopped(code).with_data(self.data(slug_of(&current), Vec::new()));
             if code == ResultCode::AlreadyApplied {
@@ -622,30 +611,6 @@ fn current_relationships(
     }
 }
 
-/// The root as it is registered: what the scope key holds.
-fn registered_root(accepted: &Accepted) -> PathBuf {
-    PathBuf::from(accepted.scope.as_str())
-}
-
-/// What the domain operation is to expect at the ticket's path: the
-/// recorded expectation.
-fn expectation(accepted: &Accepted) -> ExpectedPathObservation {
-    accepted
-        .expected
-        .clone()
-        .unwrap_or(ExpectedPathObservation::Missing)
-}
-
-/// The code and effects of a save that left nothing to do, with the commit
-/// the evidence shows to be the request's, if it made one.
-fn settled_save(commit: Option<git2::Oid>) -> (ResultCode, Effects) {
-    SaveReport::Saved {
-        claimed: None,
-        discovered: true,
-    }
-    .result(commit)
-}
-
 impl TicketBinding {
     /// The one domain call, under the recorded operation ID and
     /// expectation.
@@ -657,14 +622,14 @@ impl TicketBinding {
         service.save_ticket_with(
             SaveTicketRequest {
                 target: AuthoringTarget {
-                    root: registered_root(accepted),
+                    root: accepted.root(),
                     kind: AuthoringKind::Ticket,
                     item_id: self.id.clone(),
                     intent: self.intent,
                     operation_id: accepted.operation_id,
                 },
                 draft: self.draft.clone(),
-                expected_path: expectation(accepted),
+                expected_path: accepted.expectation(),
             },
             self.options.clone(),
         )
@@ -689,10 +654,10 @@ impl TicketBinding {
     /// What Git shows of the ticket's path since the request was accepted.
     fn evidence(&self, accepted: &Accepted) -> Result<PathEvidence, Unreadable> {
         evidence::path_evidence(
-            &registered_root(accepted),
+            &accepted.root(),
             &accepted.position,
             &ticket_path(&self.id_text()),
-            &expectation(accepted),
+            &accepted.expectation(),
             &|bytes| self.holds_bytes(bytes),
         )
     }
@@ -909,8 +874,8 @@ impl Binding for TicketBinding {
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
         let id = self.id_text();
         let path = ticket_path(&id);
-        let root = registered_root(accepted);
-        let expected = expectation(accepted);
+        let root = accepted.root();
+        let expected = accepted.expectation();
         let result = self.call_domain(service, accepted);
         let file = context_file(&root, &id);
         let slug = file
@@ -923,31 +888,10 @@ impl Binding for TicketBinding {
                 // The commit and the effects come from what Git shows, made
                 // after the domain call: a save that changed nothing can
                 // name a commit it did not make.
-                let claim = report.claimed().map(|claimed| {
-                    (
-                        claimed,
-                        evidence::confirms(&root, &accepted.position, claimed, &path),
-                    )
-                });
-                let commit = match claim {
-                    Some((claimed, Claim::Confirmed)) => Ok(Some(claimed)),
-                    Some((_, Claim::NotThisRequests)) | None => Ok(None),
-                    Some((_, Claim::Unreadable)) => Err(Unreadable),
-                };
-                match commit {
+                match save::confirmed(&root, &accepted.position, &path, report.claimed()) {
                     Ok(commit) => {
                         let (code, effects) = report.result(commit);
-                        let standing = match report {
-                            SaveReport::IdentityRequired => Standing::Stopped {
-                                journal: accepted.journal_row(service),
-                            },
-                            SaveReport::Saved {
-                                discovered: true, ..
-                            } => Standing::Final,
-                            SaveReport::Saved {
-                                discovered: false, ..
-                            } => Standing::Owed,
-                        };
+                        let standing = save::standing(report, || accepted.journal_row(service));
                         (code, effects, standing)
                     }
                     // The domain names a commit and Git cannot be read to
@@ -967,28 +911,21 @@ impl Binding for TicketBinding {
                 // or a backend's message.
                 let code = outcome::repository_error_code(error.kind);
                 let journal = accepted.journal_row(service);
-                // The domain returns the same kinds before and after an
-                // effect, so what was done is read from the journal row
-                // and the repository. A row that could not be read is
-                // taken to be in flight.
-                let effects = if journal.as_ref().is_none_or(JournalRow::in_flight) {
+                let holds = |bytes: &[u8]| self.holds_bytes(bytes);
+                let effects = save::stopped_effects(
+                    journal.as_ref(),
                     // A range that cannot be read shows no commit. The
                     // record stays accepted either way: the row is in
                     // flight.
-                    let commit =
-                        evidence::intended_commit(&root, &accepted.position, &path, &|bytes| {
-                            self.holds_bytes(bytes)
-                        })
-                        .ok()
-                        .flatten();
-                    let written = file.as_deref().is_some_and(|bytes| {
-                        ExpectedPathObservation::from_bytes(bytes) != expected
-                            && self.holds_bytes(bytes)
-                    });
-                    outcome::stopped_save_effects(commit, commit.is_some() || written)
-                } else {
-                    Effects::not_requested()
-                };
+                    || {
+                        evidence::intended_commit(&root, &accepted.position, &path, &holds)
+                            .ok()
+                            .flatten()
+                    },
+                    file.as_deref(),
+                    &expected,
+                    &holds,
+                );
                 (code, effects, Standing::Stopped { journal })
             }
         };
@@ -1007,7 +944,7 @@ impl Binding for TicketBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Before, Ran> {
-        let root = registered_root(accepted);
+        let root = accepted.root();
         if let Err(answer) = self.resume(service) {
             return Err(Ran {
                 answer,
@@ -1030,7 +967,7 @@ impl Binding for TicketBinding {
         match before.found() {
             Found::Continue => Ok(before),
             Found::Done { commit } => {
-                let (code, effects) = settled_save(Some(commit));
+                let (code, effects) = save::settled(Some(commit));
                 Err(Ran {
                     answer: self.answer(code, effects, &root),
                     standing: Standing::Final,
@@ -1051,7 +988,7 @@ impl Binding for TicketBinding {
 
     fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
         let id = self.id_text();
-        let root = registered_root(accepted);
+        let root = accepted.root();
         let result = self.call_domain(service, accepted);
         // What Git shows now. The commit is taken from this and from what
         // it showed before the call, never from what the domain names: a
@@ -1067,13 +1004,9 @@ impl Binding for TicketBinding {
                         journal: accepted.journal_row(service),
                     },
                 ),
-                (report @ SaveReport::Saved { discovered, .. }, Ok(after)) => {
+                (report @ SaveReport::Saved { .. }, Ok(after)) => {
                     let (code, effects) = report.result(before.reported(&after));
-                    let standing = if discovered {
-                        Standing::Final
-                    } else {
-                        Standing::Owed
-                    };
+                    let standing = save::standing(report, || accepted.journal_row(service));
                     (code, effects, standing)
                 }
                 // The save returned and Git cannot be read to say whether
@@ -1098,7 +1031,7 @@ impl Binding for TicketBinding {
                     };
                 match applied {
                     Some(Ok(true)) => {
-                        let (code, effects) = settled_save(None);
+                        let (code, effects) = save::settled(None);
                         (code, effects, Standing::Final)
                     }
                     Some(Err(Unreadable)) => (
@@ -1126,7 +1059,7 @@ impl Binding for TicketBinding {
                             // request that ran beside this one. What is
                             // true of the request is its result.
                             (true, Some(commit), _) => {
-                                let (code, effects) = settled_save(Some(commit));
+                                let (code, effects) = save::settled(Some(commit));
                                 (code, effects, Standing::Final)
                             }
                             // The operation completed and Git cannot be
@@ -1137,23 +1070,16 @@ impl Binding for TicketBinding {
                                 (code, Effects::not_requested(), Standing::Unconfirmed)
                             }
                             (true, None, Ok(_)) | (false, _, _) => {
-                                let in_flight = journal.as_ref().is_none_or(JournalRow::in_flight);
-                                let effects = if in_flight {
-                                    // A range that cannot be read shows no
-                                    // commit. The record stays accepted
-                                    // either way: the row is in flight.
-                                    let written = file.as_deref().is_some_and(|bytes| {
-                                        ExpectedPathObservation::from_bytes(bytes)
-                                            != expectation(accepted)
-                                            && self.holds_bytes(bytes)
-                                    });
-                                    outcome::stopped_save_effects(
-                                        commit,
-                                        commit.is_some() || written,
-                                    )
-                                } else {
-                                    Effects::not_requested()
-                                };
+                                // A range that cannot be read shows no
+                                // commit. The record stays accepted either
+                                // way: the row is in flight.
+                                let effects = save::stopped_effects(
+                                    journal.as_ref(),
+                                    || commit,
+                                    file.as_deref(),
+                                    &accepted.expectation(),
+                                    &|bytes| self.holds_bytes(bytes),
+                                );
                                 (code, effects, Standing::Stopped { journal })
                             }
                         }

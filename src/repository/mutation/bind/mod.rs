@@ -6,7 +6,7 @@
 //! request up, answers a finished one from its record, rejects a changed
 //! one, accepts a new one and settles its record.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::results::{Effects, RecoveryAction, ResultCode, Scope};
 
@@ -22,6 +22,7 @@ use super::{
     records::RequestRecord,
 };
 
+pub(crate) mod save;
 pub(crate) mod ticket;
 
 /// What a request is answered with, before the boundary classifies it: the
@@ -103,6 +104,20 @@ impl Accepted {
             },
             expected: record.expected_digest.clone(),
         })
+    }
+
+    /// The repository's root as it is registered: what the scope key
+    /// holds.
+    pub(crate) fn root(&self) -> PathBuf {
+        PathBuf::from(self.scope.as_str())
+    }
+
+    /// What the domain operation is to expect at the request's path: the
+    /// recorded expectation.
+    pub(crate) fn expectation(&self) -> ExpectedPathObservation {
+        self.expected
+            .clone()
+            .unwrap_or(ExpectedPathObservation::Missing)
     }
 
     /// Where the request's operation stands in its journal. `None` when
