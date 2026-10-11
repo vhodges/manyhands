@@ -404,60 +404,53 @@ pub(crate) fn rerun<S: Save + ?Sized>(
             } else {
                 None
             };
-            match applied {
-                Some(Ok(true)) => {
+            let code = outcome::repository_error_code(error.kind);
+            let journal = accepted.journal_row(service);
+            let (completed, checkpointed) = match journal {
+                Some(JournalRow::Final {
+                    kind: FinalKind::Completed,
+                    owes_work: false,
+                    checkpointed,
+                }) => (true, checkpointed),
+                Some(
+                    JournalRow::Absent
+                    | JournalRow::Pending(_)
+                    | JournalRow::Final {
+                        kind: _,
+                        owes_work: _,
+                        checkpointed: _,
+                    },
+                )
+                | None => (false, false),
+            };
+            let commit = after.as_ref().ok().and_then(|after| before.reported(after));
+            match refused(completed, checkpointed, commit, after.is_ok(), applied) {
+                Refused::Done(commit) => {
+                    let (code, effects) = settled(Some(commit));
+                    (code, effects, Standing::Final)
+                }
+                Refused::AlreadyApplied => {
                     let (code, effects) = settled(None);
                     (code, effects, Standing::Final)
                 }
-                Some(Err(Unreadable)) => (
+                Refused::Unreadable => (
                     ResultCode::InternalError,
                     Effects::not_requested(),
                     Standing::Unconfirmed,
                 ),
-                Some(Ok(false)) | None => {
-                    let code = outcome::repository_error_code(error.kind);
-                    let journal = accepted.journal_row(service);
-                    let completed = matches!(
-                        journal,
-                        Some(JournalRow::Final {
-                            kind: FinalKind::Completed,
-                            owes_work: false,
-                            checkpointed: _,
-                        })
+                Refused::CompletedUnread => (code, Effects::not_requested(), Standing::Unconfirmed),
+                Refused::Stopped => {
+                    // A range that cannot be read shows no commit. The
+                    // record stays accepted either way: the row is in
+                    // flight.
+                    let effects = stopped_effects(
+                        journal.as_ref(),
+                        || commit,
+                        file.as_deref(),
+                        &save.expected(accepted),
+                        &|bytes| save.holds_bytes(bytes),
                     );
-                    let commit = after.as_ref().ok().and_then(|after| before.reported(after));
-                    match (completed, commit, after) {
-                        // This call was refused, and the request's work
-                        // is done all the same: its operation has
-                        // completed and its commit is there, made by an
-                        // earlier attempt or by a call of the same
-                        // request that ran beside this one. What is
-                        // true of the request is its result.
-                        (true, Some(commit), _) => {
-                            let (code, effects) = settled(Some(commit));
-                            (code, effects, Standing::Final)
-                        }
-                        // The operation completed and Git cannot be
-                        // read to say whether the request committed.
-                        // Deleting the record now could lose a commit's
-                        // report: it is left for a retry to settle.
-                        (true, None, Err(Unreadable)) => {
-                            (code, Effects::not_requested(), Standing::Unconfirmed)
-                        }
-                        (true, None, Ok(_)) | (false, _, _) => {
-                            // A range that cannot be read shows no
-                            // commit. The record stays accepted either
-                            // way: the row is in flight.
-                            let effects = stopped_effects(
-                                journal.as_ref(),
-                                || commit,
-                                file.as_deref(),
-                                &save.expected(accepted),
-                                &|bytes| save.holds_bytes(bytes),
-                            );
-                            (code, effects, Standing::Stopped { journal })
-                        }
-                    }
+                    (code, effects, Standing::Stopped { journal })
                 }
             }
         }
@@ -558,4 +551,134 @@ pub(crate) fn recorded_effects(
         expected.is_some_and(|expected| ExpectedPathObservation::from_bytes(bytes) != *expected)
     });
     outcome::stopped_save_effects(commit, written)
+}
+
+/// What a re-run the domain refused comes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refused {
+    /// The request's work is done all the same, with this commit.
+    Done(Oid),
+    /// The request's end state already holds and no commit is its own.
+    AlreadyApplied,
+    /// Git could not be read to say whether the end state holds.
+    Unreadable,
+    /// The operation completed and Git cannot be read to say whether the
+    /// request committed. Deleting the record now could lose a commit's
+    /// report: it is left for a retry to settle.
+    CompletedUnread,
+    /// The request stopped: what it left is the journal row's to say.
+    Stopped,
+}
+
+/// Decides what a refused re-run comes to. `completed` says the
+/// operation's row is final, completed and owes no work, and
+/// `checkpointed` that it passed its checkpoint; `commit` is the commit
+/// the evidence reports as the request's, and `evidence_read` says the
+/// evidence after the call could be read. `applied` is the
+/// already-applied rule's answer, where it was asked: only of a request
+/// no attempt of which had started, refused as an external change.
+fn refused(
+    completed: bool,
+    checkpointed: bool,
+    commit: Option<Oid>,
+    evidence_read: bool,
+    applied: Option<Result<bool, Unreadable>>,
+) -> Refused {
+    // This call was refused, and the request committed all the same: its
+    // operation has completed, having passed its checkpoint, and its
+    // commit is there. This is asked first. A call that ran beside this
+    // one can have committed between this call's reading and its domain
+    // call; the file is then as intended and committed, and the
+    // already-applied rule, asked first, would finish the record as a
+    // no-op with no commit, for a request that made one.
+    if let (true, true, Some(commit)) = (completed, checkpointed, commit) {
+        return Refused::Done(commit);
+    }
+    match applied {
+        Some(Ok(true)) => return Refused::AlreadyApplied,
+        Some(Err(Unreadable)) => return Refused::Unreadable,
+        Some(Ok(false)) | None => {}
+    }
+    match (completed, commit, evidence_read) {
+        // Its operation has completed and its commit is there, made by an
+        // earlier attempt or by a call of the same request that ran
+        // beside this one. What is true of the request is its result.
+        (true, Some(commit), _) => Refused::Done(commit),
+        (true, None, false) => Refused::CompletedUnread,
+        (true, None, true) | (false, _, _) => Refused::Stopped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit() -> Oid {
+        Oid::from_bytes(&[7; 20]).unwrap()
+    }
+
+    #[test]
+    fn a_refused_re_run_of_a_request_that_committed_is_not_a_no_op() {
+        // The file is as intended and committed, so the already-applied
+        // rule would say the end state holds: it does, because a call of
+        // this request that ran beside this one committed it.
+        assert_eq!(
+            refused(true, true, Some(commit()), true, Some(Ok(true))),
+            Refused::Done(commit())
+        );
+        assert_eq!(
+            refused(true, true, Some(commit()), true, Some(Err(Unreadable))),
+            Refused::Done(commit())
+        );
+    }
+
+    #[test]
+    fn a_refused_re_run_is_already_applied_only_with_no_commit_of_its_own() {
+        // Content from elsewhere: no commit is the request's.
+        assert_eq!(
+            refused(false, false, None, true, Some(Ok(true))),
+            Refused::AlreadyApplied
+        );
+        assert_eq!(
+            refused(true, false, None, true, Some(Ok(true))),
+            Refused::AlreadyApplied
+        );
+        // A row that never passed its checkpoint made no commit, whatever
+        // the evidence shows: the rule is asked as before.
+        assert_eq!(
+            refused(true, false, Some(commit()), true, Some(Ok(true))),
+            Refused::AlreadyApplied
+        );
+        assert_eq!(
+            refused(false, false, None, true, Some(Err(Unreadable))),
+            Refused::Unreadable
+        );
+    }
+
+    #[test]
+    fn a_refused_re_run_the_rule_does_not_answer_follows_its_row_and_its_evidence() {
+        for applied in [None, Some(Ok(false))] {
+            assert_eq!(
+                refused(true, true, Some(commit()), true, applied),
+                Refused::Done(commit())
+            );
+            assert_eq!(
+                refused(true, false, Some(commit()), true, applied),
+                Refused::Done(commit())
+            );
+            assert_eq!(
+                refused(true, true, None, false, applied),
+                Refused::CompletedUnread
+            );
+            assert_eq!(refused(true, true, None, true, applied), Refused::Stopped);
+            assert_eq!(
+                refused(false, false, Some(commit()), true, applied),
+                Refused::Stopped
+            );
+            assert_eq!(
+                refused(false, false, None, false, applied),
+                Refused::Stopped
+            );
+        }
+    }
 }
