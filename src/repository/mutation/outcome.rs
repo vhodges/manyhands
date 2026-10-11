@@ -184,7 +184,8 @@ const ROOT_ARGUMENT: &str = "root";
 /// The argument of `request.retry`.
 const REQUEST_ARGUMENT: &str = "request_id";
 
-/// What a client does about a code that stopped a request.
+/// What a client does about a code that stopped a request. Every code is
+/// named: one added later does not compile until its action is decided.
 ///
 /// `root` is the repository the result names, when it names one. `retry`
 /// says the request's record was left accepted, so repeating the same
@@ -205,10 +206,10 @@ pub(crate) fn recovery(
             [(REQUEST_ARGUMENT, request_id.to_string().into())],
         )
     };
-    if code == ResultCode::DiscoveryPending {
+    match code {
         // The authoritative work is recorded and the hand-off is owed,
         // which needs no input from the caller.
-        return operation_id
+        ResultCode::DiscoveryPending => operation_id
             .map(|operation_id| {
                 RecoveryAction::for_operation(
                     RecoveryActionKind::OperationResume,
@@ -217,39 +218,93 @@ pub(crate) fn recovery(
                 )
             })
             .into_iter()
-            .collect();
-    }
-    if matches!(
-        code,
-        ResultCode::IdentityRequired | ResultCode::InitialsRequired
-    ) {
-        return vec![at_root(RecoveryActionKind::RepoIdentitySet)];
-    }
-    if matches!(
-        code,
+            .collect(),
+        ResultCode::IdentityRequired | ResultCode::InitialsRequired => {
+            vec![at_root(RecoveryActionKind::RepoIdentitySet)]
+        }
         ResultCode::RecoveryRequired
-            | ResultCode::InvalidSlugConfiguration
-            | ResultCode::InvalidConfiguration
-    ) {
-        return vec![at_root(RecoveryActionKind::RepoInspect)];
+        | ResultCode::InvalidSlugConfiguration
+        | ResultCode::InvalidConfiguration => vec![at_root(RecoveryActionKind::RepoInspect)],
+        ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable => {
+            vec![at_root(RecoveryActionKind::IndexRebuild)]
+        }
+        // An external change to an item is not answered by the same
+        // request: it is refused again for as long as the change stands,
+        // also when its record stays accepted because its operation is
+        // still in flight. The caller reads the item again and submits a
+        // new request.
+        ResultCode::ExternalChange => Vec::new(),
+        // Nothing was accepted, or what was accepted is still there:
+        // either way the same request is the one to send.
+        ResultCode::Busy => vec![retry_request()],
+        // No action of its own: the same request is offered when its
+        // record was left accepted, and nothing otherwise. The codes that
+        // only a command not yet bound returns are here as well, until
+        // the task that binds the command decides what its caller does.
+        ResultCode::Ok
+        | ResultCode::InvalidPath
+        | ResultCode::NotRepository
+        | ResultCode::NotRepositoryRoot
+        | ResultCode::BareRepository
+        | ResultCode::RepositoryInaccessible
+        | ResultCode::InvalidId
+        | ResultCode::ItemNotFound
+        | ResultCode::PathNotFound
+        | ResultCode::KeyNotFound
+        | ResultCode::PublicKeyUnavailable
+        | ResultCode::AuthorityNotFound
+        | ResultCode::OperationNotFound
+        | ResultCode::RelationshipCycle
+        | ResultCode::InvalidRelationship
+        | ResultCode::InternalError
+        | ResultCode::InvalidInput
+        | ResultCode::RequestMismatch
+        | ResultCode::RequestNotFound
+        | ResultCode::ConfirmationMismatch
+        | ResultCode::NotConfirmable
+        | ResultCode::SlugAlreadyAssigned
+        | ResultCode::OccupiedPath
+        | ResultCode::NotRepairable
+        | ResultCode::RemoteNameConflict
+        | ResultCode::InvalidRemote
+        | ResultCode::KeyNotDeletable
+        | ResultCode::ConfirmationRequired
+        | ResultCode::ConfirmationExpired
+        | ResultCode::ConfirmationNotFound
+        | ResultCode::ConfirmationUsed
+        | ResultCode::OriginalRequestRequired
+        | ResultCode::IdentityAmbiguous
+        | ResultCode::TicketClosed
+        | ResultCode::WrongBranch
+        | ResultCode::WorktreeNotClean
+        | ResultCode::WorktreeConflicted
+        | ResultCode::PublicationRemoteRequired
+        | ResultCode::PublicationRemoteInUse
+        | ResultCode::MergeRequired
+        | ResultCode::RemoteBranchDeleted
+        | ResultCode::PushRejected
+        | ResultCode::NoSelectedKey
+        | ResultCode::KeyUnavailable
+        | ResultCode::KeyRejected
+        | ResultCode::SelectedKeyInUse
+        | ResultCode::UnlockRequired
+        | ResultCode::UnlockFailed
+        | ResultCode::HostApprovalRequired
+        | ResultCode::HostReplacementRequired
+        | ResultCode::HostMismatch
+        | ResultCode::RegistrationPending
+        | ResultCode::PollYielding
+        | ResultCode::RemoteUnavailable
+        | ResultCode::TransportUnavailable
+        | ResultCode::Cancelled
+        | ResultCode::AlreadyApplied => {
+            if retry {
+                vec![retry_request()]
+            } else {
+                Vec::new()
+            }
+        }
     }
-    if matches!(
-        code,
-        ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable
-    ) {
-        return vec![at_root(RecoveryActionKind::IndexRebuild)];
-    }
-    // An external change to an item is not answered by the same request:
-    // it is refused again for as long as the change stands, also when its
-    // record stays accepted because its operation is still in flight. The
-    // caller reads the item again and submits a new request.
-    if code == ResultCode::ExternalChange {
-        return Vec::new();
-    }
-    if retry || code == ResultCode::Busy {
-        return vec![retry_request()];
-    }
-    Vec::new()
 }
 
 #[cfg(test)]
