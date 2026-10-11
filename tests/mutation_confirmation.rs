@@ -389,6 +389,7 @@ fn a_preview_of_repo_enable_shows_what_will_happen_and_writes_one_confirmation()
     assert_eq!(
         effects(&preview),
         [
+            PreviewEffect::WorktreeExclusionWritten,
             PreviewEffect::ConfigurationWritten,
             PreviewEffect::InitializationCommitted,
             PreviewEffect::RepositoryRegistered,
@@ -1712,6 +1713,7 @@ fn a_preview_of_repo_create_creates_nothing() {
             PreviewEffect::DirectoryCreated,
             PreviewEffect::RepositoryInitialized,
             PreviewEffect::IdentityWritten,
+            PreviewEffect::WorktreeExclusionWritten,
             PreviewEffect::ConfigurationWritten,
             PreviewEffect::InitializationCommitted,
             PreviewEffect::RepositoryRegistered,
@@ -2630,4 +2632,81 @@ fn a_lost_refusal_whose_cause_stands_is_answered_with_the_cause() {
     assert_eq!(answered.code, ResultCode::IdentityRequired);
     assert_eq!(recovery_actions(&answered), ["repo.identity_set"]);
     desk.assert_nothing_left(REQUEST_1);
+}
+
+/// The preview is what is consented to, so it names everything the
+/// command does to the repository: here also that HEAD, which names a
+/// branch with no commit that is not the primary, is moved onto the
+/// primary, and that Git's own exclude file is written.
+#[test]
+fn a_preview_of_an_unborn_repository_says_that_head_is_moved() {
+    let desk = Desk::new();
+    let fixture = support::unborn_repository();
+    {
+        let mut config = fixture.repository.config().unwrap();
+        config.set_str("user.name", "Manyhands Test").unwrap();
+        config
+            .set_str("user.email", "manyhands-test@example.invalid")
+            .unwrap();
+    }
+    fixture.repository.set_head("refs/heads/elsewhere").unwrap();
+    let plain = Plain {
+        root: fixture.root.canonicalize().unwrap(),
+        fixture,
+    };
+    let exclude = plain.root.join(".git/info/exclude");
+    let excluded = fs::read(&exclude).ok();
+
+    let (confirmation, preview) = desk.preview(&plain.enable());
+
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::HeadMoved,
+            PreviewEffect::WorktreeExclusionWritten,
+            PreviewEffect::ConfigurationWritten,
+            PreviewEffect::InitializationCommitted,
+            PreviewEffect::RepositoryRegistered,
+        ]
+    );
+    // The preview did neither.
+    assert_eq!(fs::read(&exclude).ok(), excluded);
+    assert_eq!(
+        plain
+            .fixture
+            .repository
+            .find_reference("HEAD")
+            .unwrap()
+            .symbolic_target(),
+        Some("refs/heads/elsewhere")
+    );
+
+    let enabled = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_enabled(&enabled, &plain.root);
+    assert_eq!(
+        plain
+            .fixture
+            .repository
+            .find_reference("HEAD")
+            .unwrap()
+            .symbolic_target(),
+        Some("refs/heads/main")
+    );
+    assert!(
+        String::from_utf8(fs::read(&exclude).unwrap())
+            .unwrap()
+            .contains(".manyhands/worktrees/")
+    );
+}
+
+/// On the primary branch, born or not, HEAD stays where it is, and the
+/// preview does not say otherwise.
+#[test]
+fn a_preview_on_the_primary_branch_moves_no_head() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let (_, preview) = desk.preview(&plain.enable());
+    assert!(!effects(&preview).contains(&PreviewEffect::HeadMoved));
+    assert!(effects(&preview).contains(&PreviewEffect::WorktreeExclusionWritten));
 }

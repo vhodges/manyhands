@@ -23,6 +23,9 @@
         "effect": "identity_written"
       },
       {
+        "effect": "worktree_exclusion_written"
+      },
+      {
         "effect": "configuration_written"
       },
       {

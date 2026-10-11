@@ -1233,7 +1233,23 @@ impl Confirmed for RepoBinding {
         if written_locally {
             effects.push(PreviewEffect::IdentityWritten);
         }
+        // Enablement moves an unborn HEAD onto the primary branch when it
+        // names another.
+        if let State::Enable {
+            head:
+                Head::Unborn {
+                    name,
+                    primary_exists: _,
+                },
+            worktree: _,
+            configuration: _,
+        } = &observed.state
+            && *name != self.primary_branch
+        {
+            effects.push(PreviewEffect::HeadMoved);
+        }
         effects.extend([
+            PreviewEffect::WorktreeExclusionWritten,
             PreviewEffect::ConfigurationWritten,
             PreviewEffect::InitializationCommitted,
             PreviewEffect::RepositoryRegistered,

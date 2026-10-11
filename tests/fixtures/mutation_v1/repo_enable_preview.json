@@ -17,6 +17,9 @@
     },
     "effects": [
       {
+        "effect": "worktree_exclusion_written"
+      },
+      {
         "effect": "configuration_written"
       },
       {

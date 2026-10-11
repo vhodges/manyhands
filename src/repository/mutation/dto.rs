@@ -61,10 +61,18 @@ pub struct RequestDto {
 
 contract_enum!(
     /// One thing a confirmed command will do, as its preview lists it.
+    ///
+    /// `head_moved` is HEAD made to name the primary branch, in a
+    /// repository whose HEAD names another branch that has no commit.
+    /// `worktree_exclusion_written` is the repository's own exclude file,
+    /// `.git/info/exclude`, made to ignore the directory Manyhands keeps
+    /// its worktrees in.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
         IdentityWritten => "identity_written",
+        HeadMoved => "head_moved",
+        WorktreeExclusionWritten => "worktree_exclusion_written",
         ConfigurationWritten => "configuration_written",
         InitializationCommitted => "initialization_committed",
         RepositoryRegistered => "repository_registered",

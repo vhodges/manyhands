@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 preview effect",
-  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects.",
+  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in.",
   "type": "object",
   "additionalProperties": false,
   "required": ["effect"],
@@ -12,6 +12,8 @@
         "directory_created",
         "repository_initialized",
         "identity_written",
+        "head_moved",
+        "worktree_exclusion_written",
         "configuration_written",
         "initialization_committed",
         "repository_registered"
