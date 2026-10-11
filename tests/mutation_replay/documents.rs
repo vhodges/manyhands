@@ -536,3 +536,64 @@ fn an_edit_made_under_an_interrupted_move_is_not_committed_as_its_own() {
         Some(edited)
     );
 }
+
+#[test]
+fn a_create_s_own_file_in_a_context_the_index_has_not_seen_is_not_an_occupied_path() {
+    // An earlier attempt wrote the file and did not commit; one that
+    // committed and did not reach the index. Either way the index does not
+    // hold the document, and another request for the same create finds
+    // the file in the context the attempt left.
+    for (point, outcome, code) in [
+        (
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+        ),
+        (
+            FailurePoint::BeforeIndexTransactionCommit,
+            Outcome::Noop,
+            ResultCode::AlreadyApplied,
+        ),
+    ] {
+        let what = format!("{point:?}");
+        let world = World::with_service(|data| FailOnce::at(point).open_service(data));
+        let first = world.execute(
+            REQUEST_1,
+            world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+        );
+        assert_eq!(first.outcome, Outcome::Partial, "{what}");
+        assert!(
+            world
+                .service
+                .show_item(&world.resolved(), &items::item_id(DOCUMENT_NEW))
+                .is_err(),
+            "{what}: the index does not hold the document"
+        );
+        let tip = world.branch_tip(DOCUMENT_NEW);
+
+        let again = world.execute(
+            REQUEST_2,
+            world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+        );
+        assert_eq!((again.outcome, again.code), (outcome, code), "{what}");
+        assert_eq!(again.effects.commit_oid, None, "{what}");
+        assert_eq!(again.operation_id, None, "{what}");
+        assert!(world.record(REQUEST_2).is_none(), "{what}");
+        assert_eq!(world.branch_tip(DOCUMENT_NEW), tip, "{what}");
+
+        // Other content at the path, in that context, is in the way.
+        let other = world.execute(
+            REQUEST_3,
+            Mutation::DocumentCreate(manyhands::repository::DocumentCreateInput {
+                root: world.root.clone(),
+                id: items::item_id(DOCUMENT_NEW),
+                path: DOCUMENT_NEW_PATH.into(),
+                draft: manyhands::repository::DocumentDraft {
+                    title: "Another title".to_owned(),
+                    body: BODY.to_owned(),
+                },
+            }),
+        );
+        assert_eq!(other.code, ResultCode::OccupiedPath, "{what}");
+    }
+}

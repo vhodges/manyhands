@@ -328,6 +328,11 @@ impl DocumentBinding {
             }
     }
 
+    /// Whether `bytes`, a file at `path`, are what the request intends.
+    fn holds_bytes_at(&self, path: &str, bytes: &[u8]) -> bool {
+        parse_document(path, bytes).is_some_and(|document| self.holds(&document))
+    }
+
     /// The input is checked before anything is read: a save or a move
     /// without the caller's observation, a path no document can be at and
     /// a draft that cannot be written as a document are the caller's
@@ -405,28 +410,40 @@ impl DocumentBinding {
                 let intended = (item.kind == ItemDtoKind::Document && item.path == path)
                     .then_some(item.source.as_deref())
                     .flatten()
-                    .filter(|source| {
-                        parse_document(&path, source.as_bytes())
-                            .is_some_and(|document| self.holds(&document))
-                    });
+                    .filter(|source| self.holds_bytes_at(&path, source.as_bytes()));
                 return Err(match intended {
                     Some(source) => self.already_applied(&item, source.as_bytes(), true),
                     None => Answer::stopped(ResultCode::OccupiedPath).with_data(self.data()),
                 });
             }
         }
-        // Where the document's context is made from, and in a context an
-        // earlier attempt left.
+        // The path must be free where the document's context is made
+        // from, and in a context an earlier attempt left. The index may
+        // not have seen such a context: a file there that is what the
+        // request intends is the earlier attempt's own, and is answered
+        // as the item above is. Anything else at the path is in the way.
         let root = repository.root();
         let context = document_context(root, &self.id_text()).worktree;
-        for directory in [Some(root), context.is_dir().then_some(context.as_path())] {
-            let Some(worktree) = directory.and_then(Path::to_str) else {
+        for (directory, leftover) in [(root, false), (context.as_path(), true)] {
+            let (true, Some(worktree)) = (directory.is_dir(), directory.to_str()) else {
                 continue;
             };
             let observed = observe_in_context(repository, None, worktree, &path)
                 .map_err(|error| Answer::of_read(&error))?;
-            if observed.bytes.is_some() {
-                return Err(Answer::stopped(ResultCode::OccupiedPath).with_data(self.data()));
+            match observed.bytes {
+                None => {}
+                Some(bytes) if leftover && self.holds_bytes_at(&path, &bytes) => {
+                    return Err(save::stale_token_answer(
+                        directory,
+                        &path,
+                        &bytes,
+                        true,
+                        self.data(),
+                    ));
+                }
+                Some(_) => {
+                    return Err(Answer::stopped(ResultCode::OccupiedPath).with_data(self.data()));
+                }
             }
         }
         // A create always expects absence.
@@ -586,7 +603,7 @@ impl save::Save for DocumentBinding {
     }
 
     fn holds_bytes(&self, bytes: &[u8]) -> bool {
-        parse_document(&self.path(), bytes).is_some_and(|document| self.holds(&document))
+        self.holds_bytes_at(&self.path(), bytes)
     }
 
     /// A create and a move expect that nothing is at the path they write.
