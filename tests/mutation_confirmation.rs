@@ -4292,3 +4292,47 @@ fn a_retry_of_a_key_delete_before_any_effect_runs_when_nothing_has_changed() {
     assert_done(&finished);
     assert!(!private.exists() && !public.exists());
 }
+
+/// The remote is deleted and the step that says so never reaches the
+/// journal: the row is pending and holds no step. No fault point stands
+/// between the two, so the row is put in that state by hand. An hour
+/// later, with the confirmation's own record of what was previewed
+/// overwritten, the same request ends its operation and compares
+/// nothing: the remote it was to remove is gone. Nothing says the
+/// removal was its own, so the retry is a no-op.
+#[test]
+fn a_removal_whose_step_never_reached_the_journal_is_completed_without_observing_again() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::AfterRemoteMutation);
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    let index = items::index(home.world.data.path());
+    let unrecorded = index
+        .execute(
+            "UPDATE operation_records SET completed_step = NULL
+              WHERE state != 'completed' AND action = 'remove_remote'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(unrecorded, 1);
+    assert_eq!(
+        index
+            .execute(
+                "UPDATE confirmation_records SET observation_digest = ?1",
+                ["0".repeat(64)],
+            )
+            .unwrap(),
+        1
+    );
+    drop(index);
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_noop(&answered);
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.world.pending_journal_rows(), 0);
+}
