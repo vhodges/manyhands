@@ -4,10 +4,10 @@
 
 use manyhands::{
     repository::{
-        DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, KeyClearInput,
-        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
-        RelationshipWrite, RemoteAddInput, RemoteSelectInput, SharedKeyId, TicketCreateInput,
-        TicketSaveInput, TicketSlugAssignInput,
+        CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
+        KeyClearInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
+        RelationshipWrite, RemoteAddInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -725,4 +725,169 @@ fn an_interrupted_key_generate_matches_its_schema_and_goldens() {
     );
     assert_eq!(retained.code, ResultCode::RecoveryRequired);
     assert_generation_contract("key_generate_retained", &retained);
+}
+
+const PREVIEW_SCHEMA: &str = "preview.schema.json";
+
+/// A repository that is not enabled, a service with nothing registered
+/// and a clock that stands still, so that a preview's expiry is fixed.
+struct Unregistered {
+    fixture: support::TestRepository,
+    root: std::path::PathBuf,
+    data: tempfile::TempDir,
+    service: manyhands::repository::RepositoryService,
+}
+
+impl Unregistered {
+    fn new() -> Self {
+        let fixture = support::born_repository();
+        let root = fixture.root.canonicalize().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = Self::open(data.path(), None);
+        Self {
+            fixture,
+            root,
+            data,
+            service,
+        }
+    }
+
+    fn open(
+        data: &std::path::Path,
+        point: Option<FailurePoint>,
+    ) -> manyhands::repository::RepositoryService {
+        let clock = mutation::TestClock::at(support::operations::STORED_AT);
+        match point {
+            Some(point) => FailOnce::at(point).open_service(data),
+            None => manyhands::repository::RepositoryService::open_at(data).unwrap(),
+        }
+        .with_clock_for_testing(clock)
+    }
+
+    fn fail_once_at(&mut self, point: FailurePoint) {
+        self.service = Self::open(self.data.path(), Some(point));
+    }
+
+    fn enable(&self) -> Mutation {
+        Mutation::RepoEnable(RepoEnableInput {
+            root: self.root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: None,
+            slug_prefix: Some("mh".to_owned()),
+        })
+    }
+}
+
+/// Checks an envelope of a repository command, or of its preview,
+/// against its fixture. What differs from run to run is replaced: the
+/// root, the commit, and the operation and confirmation IDs.
+fn assert_repository_contract<T: serde::Serialize>(
+    name: &str,
+    root: &std::path::Path,
+    envelope: &Envelope<T>,
+) {
+    let value = serde_json::to_value(envelope).unwrap();
+    let text = |pointer: &str| value.pointer(pointer).and_then(|found| found.as_str());
+    let mut placeholders = vec![(root.to_str().unwrap(), "<root>")];
+    for (pointer, placeholder) in [
+        ("/effects/commit_oid", "<commit>"),
+        ("/operation_id", "<operation>"),
+        ("/data/confirmation_id", "<confirmation>"),
+    ] {
+        if let Some(found) = text(pointer) {
+            placeholders.push((found, placeholder));
+        }
+    }
+    mutation::assert_contract(
+        &ContractCase {
+            name,
+            data_schema: (!value["data"].is_null()).then_some(PREVIEW_SCHEMA),
+            placeholders: &placeholders,
+            sentinels: &[],
+        },
+        envelope,
+    );
+}
+
+#[test]
+fn a_repo_enable_and_its_preview_match_their_schemas_and_goldens() {
+    let world = Unregistered::new();
+
+    let required = mutation::execute_with(&world.service, REQUEST_1, world.enable());
+    assert_eq!(required.code, ResultCode::ConfirmationRequired);
+    assert_repository_contract("repo_enable_confirmation_required", &world.root, &required);
+
+    let stale = world.service.prepare(&world.enable());
+    assert_eq!(stale.outcome, Outcome::Success);
+    assert_repository_contract("repo_enable_preview", &world.root, &stale);
+    let stale = stale.data.unwrap().confirmation_id;
+    std::fs::write(world.root.join("untracked.txt"), "new\n").unwrap();
+    let changed = mutation::execute_confirmed(&world.service, REQUEST_1, &stale, world.enable());
+    assert_eq!(changed.code, ResultCode::ExternalChange);
+    assert_repository_contract("repo_enable_external_change", &world.root, &changed);
+    std::fs::remove_file(world.root.join("untracked.txt")).unwrap();
+
+    let enabled = mutation::execute_confirmed(&world.service, REQUEST_1, &stale, world.enable());
+    assert_eq!(enabled.outcome, Outcome::Success);
+    assert_repository_contract("repo_enable", &world.root, &enabled);
+
+    let noop = world.service.prepare(&world.enable());
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_repository_contract("repo_enable_preview_noop", &world.root, &noop);
+    drop(world.fixture);
+}
+
+#[test]
+fn a_repo_enable_whose_registration_is_pending_matches_its_golden() {
+    let mut world = Unregistered::new();
+    let confirmation = world
+        .service
+        .prepare(&world.enable())
+        .data
+        .unwrap()
+        .confirmation_id;
+    world.fail_once_at(FailurePoint::BeforeRegistryWrite);
+    let pending =
+        mutation::execute_confirmed(&world.service, REQUEST_1, &confirmation, world.enable());
+    assert_eq!(pending.outcome, Outcome::Partial);
+    assert_repository_contract("repo_enable_registration_pending", &world.root, &pending);
+}
+
+#[test]
+fn a_repo_create_and_its_preview_match_their_schemas_and_goldens() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().canonicalize().unwrap().join("new");
+    let data = tempfile::tempdir().unwrap();
+    let create = || {
+        Mutation::RepoCreate(RepoCreateInput {
+            root: root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: Some(CommitIdentity {
+                name: "Ada Example".to_owned(),
+                email: "ada@example.invalid".to_owned(),
+            }),
+            slug_prefix: None,
+        })
+    };
+    // The directory is there and empty, so that a failure after the
+    // repository is initialized leaves it.
+    std::fs::create_dir(&root).unwrap();
+    let service = Unregistered::open(data.path(), None);
+    let preview = service.prepare(&create());
+    assert_eq!(preview.outcome, Outcome::Success);
+    assert_repository_contract("repo_create_preview", &root, &preview);
+    let confirmation = preview.data.unwrap().confirmation_id;
+
+    let service = Unregistered::open(
+        data.path(),
+        Some(FailurePoint::AfterRepositoryInitialization),
+    );
+    let partial = mutation::execute_confirmed(&service, REQUEST_1, &confirmation, create());
+    assert_eq!(partial.outcome, Outcome::Partial);
+    assert_repository_contract("repo_create_partial", &root, &partial);
+
+    let service = Unregistered::open(data.path(), None);
+    let created = mutation::execute_confirmed(&service, REQUEST_1, &confirmation, create());
+    assert_eq!(created.outcome, Outcome::Success);
+    assert_repository_contract("repo_create", &root, &created);
 }
