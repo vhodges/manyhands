@@ -8,7 +8,7 @@ use serde::{Serialize, Serializer};
 use super::command::Command;
 use crate::{
     repository::OperationFamily,
-    results::{Effects, Outcome, ResultCode, contract_enum},
+    results::{Effects, Outcome, ResultCode, Scope, contract_enum},
 };
 
 contract_enum!(
@@ -57,6 +57,84 @@ pub struct RequestDto {
     pub operations: Vec<RequestOperationDto>,
     /// Set exactly when `state` is `finished`.
     pub result: Option<RequestResultDto>,
+}
+
+contract_enum!(
+    /// One thing a confirmed command will do, as its preview lists it.
+    PreviewEffect {
+        DirectoryCreated => "directory_created",
+        RepositoryInitialized => "repository_initialized",
+        IdentityWritten => "identity_written",
+        ConfigurationWritten => "configuration_written",
+        InitializationCommitted => "initialization_committed",
+        RepositoryRegistered => "repository_registered",
+    }
+);
+
+contract_enum!(
+    /// Where the identity a preview shows comes from: the request itself,
+    /// or the level of Git configuration that holds it.
+    PreviewIdentitySource {
+        Supplied => "supplied",
+        Repository => "repository",
+        Global => "global",
+        Xdg => "xdg",
+        System => "system",
+        ProgramData => "program_data",
+        Application => "application",
+    }
+);
+
+/// One entry of a preview's `effects`. The entries are in the order the
+/// command makes them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PreviewEffectDto {
+    pub effect: PreviewEffect,
+}
+
+/// The identity that will author the initialization commit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PreviewIdentityDto {
+    pub name: String,
+    pub email: String,
+    pub source: PreviewIdentitySource,
+    /// Whether the command writes this identity to the repository's own
+    /// Git configuration. It never writes any other configuration.
+    pub written_locally: bool,
+}
+
+/// What a preview of `repo create` or `repo enable` shows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RepositoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub primary_branch: String,
+    pub identity: PreviewIdentityDto,
+    /// The short code prefix the configuration will hold. Null when the
+    /// request supplies none: the configuration then holds no prefix.
+    pub slug_prefix: Option<String>,
+}
+
+/// A preview's `details`: the command's own fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum PreviewDetailsDto {
+    Repository(RepositoryPreviewDto),
+}
+
+/// What `prepare` returns for a command that needs confirmation: what
+/// the command will do, and the confirmation an `execute` of the same
+/// command, repository, target and input presents to do it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PreviewDto {
+    pub confirmation_id: String,
+    /// When the confirmation stops being accepted by a new request.
+    pub expires_at: String,
+    /// The command the confirmation is for, as an envelope names it.
+    pub command: String,
+    pub scope: Scope,
+    pub effects: Vec<PreviewEffectDto>,
+    pub details: PreviewDetailsDto,
 }
 
 /// The `data` of a mutation's envelope: the shape of the command's family.
@@ -251,7 +329,10 @@ impl MutationDataDto {
             | Command::KeyClear
             | Command::KeyRemove => KeyMutationDto::from_stored(stored).map(Self::Key),
             // These report no data, so a record of one stores none.
-            Command::IndexRefresh | Command::IndexRebuild => None,
+            Command::IndexRefresh
+            | Command::IndexRebuild
+            | Command::RepoCreate
+            | Command::RepoEnable => None,
         }
     }
 }

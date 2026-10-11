@@ -126,7 +126,22 @@ impl RepositoryService {
             }
             Reentry::AsRecorded => {}
         }
-        let call = self.call_context();
+        // The consent the request was accepted with. It is the record's,
+        // whatever this call presents: a confirmation is not part of what
+        // identifies a request, and one that was accepted is the
+        // request's for as long as its record stands, however old it is.
+        let consent = match record.confirmation.map(|id| self.confirmation_record(id)) {
+            Some(Ok(consent)) => consent,
+            Some(Err(error)) => {
+                let ran = Ran {
+                    answer: Answer::of_read(&error),
+                    standing: Standing::Stopped { journal: None },
+                };
+                return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
+            }
+            None => None,
+        };
+        let call = self.call_context(consent.as_ref());
         let entered = binding.reenter(&call, &accepted, journal);
         let reply = Reply { binding, identity };
         Some(match entered {

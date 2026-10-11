@@ -221,6 +221,7 @@ impl Binding for IndexBinding {
             }
         }
         Ok(Prepared {
+            observation: None,
             family: Some(OperationFamily::Local),
             // Nothing is committed, so there is no branch to bound.
             position: Position {

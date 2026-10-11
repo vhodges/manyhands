@@ -45,6 +45,8 @@ commands! {
     KeySelect => "key select",
     KeyClear => "key clear",
     KeyRemove => "key remove",
+    RepoCreate => "repo create",
+    RepoEnable => "repo enable",
 }
 
 impl Command {
@@ -71,7 +73,9 @@ impl Command {
             | Self::RemoteSelect
             | Self::IndexRefresh
             | Self::IndexRebuild
-            | Self::KeyGenerate => true,
+            | Self::KeyGenerate
+            | Self::RepoCreate
+            | Self::RepoEnable => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
         }
     }
@@ -92,6 +96,59 @@ impl Command {
             | Self::RemoteAdd
             | Self::RemoteSelect
             | Self::IndexRefresh
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable => false,
+        }
+    }
+
+    /// Whether the command makes the repository it works in. Before it
+    /// has, there is no repository to set anything on: an identity it
+    /// lacks is supplied with the request.
+    pub(crate) const fn creates_its_repository(self) -> bool {
+        match self {
+            Self::RepoCreate => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoEnable => false,
+        }
+    }
+
+    /// Whether the command changes something its caller must first be
+    /// shown: `prepare` gives a preview of it and a confirmation, and
+    /// `execute` runs it only for a request that presents that
+    /// confirmation. For any other command `prepare` is
+    /// `not_confirmable`, and so is an `execute` that presents one.
+    pub(crate) const fn needs_confirmation(self) -> bool {
+        match self {
+            Self::RepoCreate | Self::RepoEnable => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
             | Self::KeyGenerate
             | Self::KeyImport
             | Self::KeySelect
@@ -125,6 +182,19 @@ mod tests {
         assert_eq!(Command::KeySelect.name(), "key select");
         assert_eq!(Command::KeyClear.name(), "key clear");
         assert_eq!(Command::KeyRemove.name(), "key remove");
+        assert_eq!(Command::RepoCreate.name(), "repo create");
+        assert_eq!(Command::RepoEnable.name(), "repo enable");
+    }
+
+    #[test]
+    fn only_creating_and_enabling_a_repository_need_confirmation() {
+        for command in Command::ALL {
+            assert_eq!(
+                command.needs_confirmation(),
+                matches!(command, Command::RepoCreate | Command::RepoEnable),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

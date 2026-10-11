@@ -18,16 +18,17 @@ use super::{
     },
     command::Command,
     context::context_names,
-    dto::MutationDataDto,
+    dto::{MutationDataDto, PreviewDetailsDto, PreviewEffect},
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
-    records::{RequestOperation, RequestRecord},
+    records::{ConfirmationRecord, RequestOperation, RequestRecord},
 };
 
 pub(crate) mod document;
 pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod remote;
+pub(crate) mod repo;
 pub(crate) mod save;
 pub(crate) mod ticket;
 
@@ -67,6 +68,7 @@ pub(crate) fn prepared(
         family: Some(OperationFamily::Local),
         position,
         expected: Some(expected),
+        observation: None,
     })
 }
 
@@ -91,12 +93,18 @@ pub(crate) fn resolve_root(
 ///
 /// It is the one way anything of the call reaches a binding: what a
 /// command needs of its call is a field here, and no binding is given a
-/// parameter of its own. Today that is the service alone. The confirmation
-/// a call presents, the sink its progress goes to, the token that stops it
-/// and the session's credentials are the call's as well, and each is added
-/// here with the first command that reads it.
+/// parameter of its own. The sink a call's progress goes to, the token
+/// that stops it and the session's credentials are the call's as well,
+/// and each is added here with the first command that reads it.
 pub(crate) struct CallContext<'a> {
     pub(crate) service: &'a RepositoryService,
+    /// The consent the request runs with: the confirmation its first
+    /// call presents, once the boundary has found it to be this
+    /// request's to use, and on a later call the one its record holds.
+    /// `None` for a request of a command that needs none, and in
+    /// `prepare`, which is what makes one. The boundary reads the time
+    /// a confirmation is judged by; a binding is given none.
+    pub(crate) confirmation: Option<&'a ConfirmationRecord>,
 }
 
 /// Where a request works: what its scope key is made from.
@@ -104,6 +112,10 @@ pub(crate) struct CallContext<'a> {
 pub(crate) enum Place<'a> {
     /// One repository, by its root as the caller gave it.
     Repository(&'a Path),
+    /// A repository the request is to make, by the root it will have.
+    /// Nothing need be there yet: the scope key is made from the parent,
+    /// which exists, and is the root's own once the root does.
+    NewRepository(&'a Path),
     /// The application: a command that belongs to no repository, as the
     /// key commands do. Its record's scope is the literal `application`,
     /// and its results name no repository, item, branch or worktree.
@@ -163,6 +175,40 @@ pub(crate) struct Prepared {
     /// The digest of the canonical file's bytes as they were before the
     /// request, which the domain operation is given as its expectation.
     pub(crate) expected: Option<ExpectedPathObservation>,
+    /// For a command that needs confirmation, the digest of the state
+    /// the request found: the boundary accepts the request only when it
+    /// is the digest its confirmation holds. `None` for every other
+    /// command.
+    pub(crate) observation: Option<String>,
+}
+
+/// What a preview shows of a command that needs confirmation, and the
+/// digest of the state it observed.
+pub(crate) struct Previewed {
+    pub(crate) observation: String,
+    pub(crate) effects: Vec<PreviewEffect>,
+    pub(crate) details: PreviewDetailsDto,
+}
+
+/// A binding of a command that needs confirmation: what `prepare` asks
+/// of it. The rest of what it owes is in `Binding`:
+///
+/// - Its `Binding::prepare` makes no check of the state the preview
+///   covers. It observes that state and gives its digest in
+///   `Prepared::observation`, and the boundary refuses a request whose
+///   digest is not its confirmation's as `external_change`. A check
+///   there would answer a stale preview with the check's own code.
+/// - Its `Binding::reenter` first asks whether the command's end state
+///   holds, and finishes the request when it does. Otherwise it observes
+///   again and compares with `CallContext::confirmation`, unless the
+///   request's operation has recorded a step: from then on the request's
+///   own work has changed what would be observed.
+pub(crate) trait Confirmed: Binding {
+    /// Validates the input, observes, and makes the checks the command's
+    /// domain operation would refuse it for. It changes nothing and takes
+    /// no lease. An `Err` answers `prepare` with no confirmation: a
+    /// rejection, or a no-op when the command's end state already holds.
+    fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer>;
 }
 
 /// An accepted request, as the call that is running it holds it. A first
@@ -622,6 +668,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             effects: Effects::not_requested(),
             local_change: key::written_and_unfinished(journal.as_ref()),
         },
+        Some(Command::RepoCreate | Command::RepoEnable) => {
+            repo::recorded_effects(service, &accepted, journal.as_ref())
+        }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

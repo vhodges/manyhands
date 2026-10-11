@@ -23,8 +23,9 @@ use super::{
 };
 use crate::{
     repository::{
-        ExpectedPathObservation, OperationFamily, OperationId, ReadError, RepositoryError,
-        RepositoryOperation, RepositoryService, cache_write_guard, migrate_registry, open_registry,
+        ExpectedPathObservation, FailurePoint, OperationFamily, OperationId, ReadError,
+        RepositoryError, RepositoryOperation, RepositoryService, cache_write_guard,
+        migrate_registry, open_registry,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect, Outcome,
@@ -549,6 +550,7 @@ fn insert_request(
     transaction: &Transaction<'_>,
     request: &NewRequest,
     now: i64,
+    fails_after_confirmation: bool,
 ) -> Result<InsertRequestOutcome, ReadError> {
     let id = request.request_id.to_string();
     let exists: bool = transaction.query_row(
@@ -569,6 +571,11 @@ fn insert_request(
         )?;
         if accepted == 0 {
             return Ok(InsertRequestOutcome::ConfirmationUnavailable);
+        }
+        // A test's failure between the two writes. The transaction is
+        // not committed, so neither stands.
+        if fails_after_confirmation {
+            return Err(ReadError::new(ResultCode::InternalError));
         }
     }
     transaction.execute(
@@ -682,7 +689,8 @@ fn delete_request(
 }
 
 impl RepositoryService {
-    fn record_time(&self) -> i64 {
+    /// The time records are timed by, in seconds: the clock's.
+    pub(super) fn record_time(&self) -> i64 {
         self.clock.now().unix_timestamp()
     }
 
@@ -716,7 +724,17 @@ impl RepositoryService {
     #[doc(hidden)]
     pub fn insert_request(&self, request: &NewRequest) -> Result<InsertRequestOutcome, ReadError> {
         let now = self.record_time();
-        self.write_records(|transaction| insert_request(transaction, request, now))
+        let fails_after_confirmation = request.confirmation.is_some()
+            && self
+                .should_inject(
+                    FailurePoint::AfterConfirmationAcceptance,
+                    RepositoryOperation::OpenRegistry,
+                    Path::new(request.scope.as_str()),
+                )
+                .unwrap_or(false);
+        self.write_records(|transaction| {
+            insert_request(transaction, request, now, fails_after_confirmation)
+        })
     }
 
     /// The record of a request, or `None` when no record holds its ID.

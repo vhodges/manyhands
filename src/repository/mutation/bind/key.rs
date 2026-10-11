@@ -391,6 +391,7 @@ impl Binding for KeyRegistryBinding {
             Change::Import { .. } | Change::Clear => {}
         }
         Ok(Prepared {
+            observation: None,
             family: None,
             position: no_position(),
             expected: None,
@@ -750,6 +751,7 @@ impl Binding for KeyGenerateBinding {
             );
         }
         Ok(Prepared {
+            observation: None,
             family: Some(OperationFamily::KeyMaterial),
             position: no_position(),
             expected: None,

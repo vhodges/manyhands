@@ -1,0 +1,277 @@
+//! Two-phase confirmation: a command whose caller must first be shown
+//! what it will do is prepared, and then executed with the confirmation
+//! the preview gave.
+//!
+//! `prepare` validates the input, observes and returns a preview. It
+//! writes one confirmation record and nothing else: no directory, no
+//! repository, no registration and no Git configuration, and it takes no
+//! lease, so nothing waits on a preview that is outstanding.
+//!
+//! `execute` runs such a command only for a request that presents a
+//! confirmation, and `consent` is what it asks of the one presented. The
+//! last of the conditions, that a fresh observation gives the digest the
+//! preview stored, is asked in `execute` itself once the binding has
+//! observed; and the confirmation is marked as accepted in the
+//! transaction that writes the request's record.
+//!
+//! A confirmation is no part of what identifies a request. It is checked
+//! once, when a request no record holds presents it. From then on it
+//! belongs to that request: the record holds it, a retry of the request is
+//! honored however old the confirmation has become, and any other request
+//! that presents it is `confirmation_used`. A request that is rejected
+//! with nothing left behind has its record deleted, which releases its
+//! confirmation in the same transaction for as long as it has to run.
+
+use crate::results::{Effects, Envelope, ResultCode, Scope, absolute_path_string};
+
+use super::{
+    super::RepositoryService,
+    Mutation,
+    bind::{Answer, Binding, CallContext, Place, Previewed},
+    command::Command,
+    dto::{MutationDataDto, PreviewDto, PreviewEffectDto},
+    identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
+    outcome,
+    records::{ConfirmationRecord, NewConfirmation},
+    reply::Reply,
+    stored_time,
+};
+
+/// How long a confirmation is there for a request to accept: ten minutes
+/// from its creation. Once a request has accepted it, it is that
+/// request's for as long as the request's record stands.
+pub const CONFIRMATION_LIFETIME_SECONDS: i64 = 600;
+
+/// Whether a confirmation made at `created_at`, to expire at
+/// `expires_at`, can no longer be accepted at `now`. It lasts from its
+/// creation up to its expiry and not at it. A clock that reads earlier
+/// than the creation has been set back, and the confirmation is expired
+/// then too, so that setting a clock back cannot extend one.
+const fn expired(created_at: i64, expires_at: i64, now: i64) -> bool {
+    now < created_at || now >= expires_at
+}
+
+/// The digest a confirmation `confirmation_id` holds for the request
+/// `binding` makes in `scope`: the request's command, repository, target
+/// and input, salted with the confirmation's ID.
+fn confirmed_digest(
+    binding: &dyn Binding,
+    scope: &ScopeKey,
+    confirmation_id: ConfirmationId,
+) -> IntentDigest {
+    binding
+        .fields(IntentDigest::builder(
+            DigestSalt::Confirmation(confirmation_id),
+            binding.command().name(),
+            scope,
+            &binding.target(),
+        ))
+        .finish()
+}
+
+/// The scope key of the place a binding works in. `None` when the place
+/// names a root that cannot be resolved.
+pub(super) fn scope_key(place: Place<'_>) -> Option<ScopeKey> {
+    match place {
+        Place::Repository(root) => ScopeKey::for_repository(root),
+        Place::NewRepository(root) => ScopeKey::for_new_repository(root),
+        Place::Application => Some(ScopeKey::application()),
+    }
+}
+
+/// The envelope of a `prepare` that gave no preview: a rejection, or a
+/// no-op for a command whose end state already holds. It names no
+/// request, since `prepare` is of none.
+fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<PreviewDto> {
+    let Answer {
+        code,
+        effects,
+        // A preview is the only data `prepare` gives.
+        data: _,
+        // The action is the code's own, made with this result's root.
+        recovery: _,
+        local_change,
+    } = answer;
+    let recovery = outcome::recovery(
+        code,
+        command,
+        scope.repository.as_deref(),
+        None,
+        None,
+        false,
+    );
+    Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
+        .with_recovery(recovery)
+}
+
+impl RepositoryService {
+    /// Previews a mutation that needs confirmation, and returns the
+    /// confirmation an `execute` of the same command, repository, target
+    /// and input presents to run it. Every handled outcome is an envelope.
+    ///
+    /// It validates the input and observes, and makes the checks the
+    /// command itself would be refused for, so a preview is given only of
+    /// something that can be done as things stand. It writes one
+    /// confirmation record and nothing else, and takes no lease. A command
+    /// whose end state already holds is a no-op, and gets no confirmation.
+    /// A command that needs no confirmation is `not_confirmable`.
+    ///
+    /// The envelope names no request: `prepare` changes no canonical or
+    /// Git state, and the confirmation ID is how a caller refers to it.
+    pub fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+        let command = mutation.kind();
+        let Some(mut binding) = mutation.confirmed() else {
+            return without_preview(
+                command,
+                Scope::default(),
+                Answer::stopped(ResultCode::NotConfirmable),
+            );
+        };
+        let scope_key = scope_key(binding.place());
+        let repository = match (&scope_key, binding.place()) {
+            (Some(key), _) => key.repository().map(str::to_owned),
+            (None, Place::Repository(root) | Place::NewRepository(root)) => {
+                absolute_path_string(root)
+            }
+            (None, Place::Application) => None,
+        };
+        let scope = binding.scope(repository, None);
+        let call = CallContext {
+            service: self,
+            confirmation: None,
+        };
+        let Previewed {
+            observation,
+            effects,
+            details,
+        } = match binding.preview(&call) {
+            Ok(previewed) => previewed,
+            Err(answer) => return without_preview(command, scope, answer),
+        };
+        let failed = |code| without_preview(command, scope.clone(), Answer::stopped(code));
+        // `preview` resolved the root, so the place has a scope key.
+        let Some(scope_key) = scope_key else {
+            return failed(ResultCode::InternalError);
+        };
+        let confirmation_id = ConfirmationId::new();
+        let expires_at = self.record_time() + CONFIRMATION_LIFETIME_SECONDS;
+        let Ok(expires) = stored_time(expires_at) else {
+            return failed(ResultCode::InternalError);
+        };
+        let inserted = self.insert_confirmation(&NewConfirmation {
+            confirmation_id,
+            intent_digest: confirmed_digest(binding.as_ref(), &scope_key, confirmation_id),
+            scope: scope_key,
+            command: command.name().to_owned(),
+            target: binding.target(),
+            observation_digest: Some(observation),
+            expires_at,
+        });
+        match inserted {
+            Ok(true) => {}
+            // A new ID that a record already holds: no preview is given
+            // under another's confirmation.
+            Ok(false) => return failed(ResultCode::InternalError),
+            Err(error) => return failed(error.code()),
+        }
+        Envelope::classified_mutation(
+            command.name(),
+            scope.clone(),
+            false,
+            ResultCode::Ok,
+            Effects::not_requested(),
+            false,
+        )
+        .with_data(PreviewDto {
+            confirmation_id: confirmation_id.to_string(),
+            expires_at: expires,
+            command: command.name().to_owned(),
+            scope,
+            effects: effects
+                .into_iter()
+                .map(|effect| PreviewEffectDto { effect })
+                .collect(),
+            details,
+        })
+    }
+
+    /// The consent a request no record holds runs with: the confirmation
+    /// it presents, when that is this request's to use. `None` for a
+    /// command that needs none. An `Err` answers the request, with nothing
+    /// recorded and nothing done.
+    ///
+    /// In order: a command that needs no confirmation presents none, or
+    /// is `not_confirmable`; one that needs it and presents none is
+    /// `confirmation_required`; the record must exist, or it is
+    /// `confirmation_not_found`; its command, scope, target and input must
+    /// be the request's, compared through the digest salted with the
+    /// confirmation's ID, or it is `confirmation_mismatch`; no request may
+    /// have accepted it, or it is `confirmation_used`; and it must not
+    /// have expired, or it is `confirmation_expired`.
+    ///
+    /// The state the preview observed is compared afterwards, by
+    /// `execute`, once the binding has observed again.
+    pub(super) fn consent(
+        &self,
+        reply: &Reply<'_>,
+        presented: Option<ConfirmationId>,
+    ) -> Result<Option<ConfirmationRecord>, Envelope<MutationDataDto>> {
+        let binding = reply.binding;
+        let confirmation_id = match (binding.command().needs_confirmation(), presented) {
+            (false, None) => return Ok(None),
+            (false, Some(_)) => return Err(reply.stopped(ResultCode::NotConfirmable)),
+            (true, None) => return Err(reply.stopped(ResultCode::ConfirmationRequired)),
+            (true, Some(confirmation_id)) => confirmation_id,
+        };
+        // A root that cannot be resolved has no scope key, and no
+        // confirmation can be of it: the binding's own check answers.
+        let Some(scope) = &reply.identity.scope else {
+            return Ok(None);
+        };
+        let record = match self.confirmation_record(confirmation_id) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Err(reply.stopped(ResultCode::ConfirmationNotFound)),
+            Err(error) => return Err(reply.read_failure(&error)),
+        };
+        let of_this_request = record.scope == *scope
+            && record.command == binding.command().name()
+            && record.target == binding.target()
+            && record.intent_digest == confirmed_digest(binding, scope, confirmation_id);
+        if !of_this_request {
+            return Err(reply.stopped(ResultCode::ConfirmationMismatch));
+        }
+        // A request that has accepted it has a record, and this request
+        // has none: it is another's.
+        if record.accepted_by.is_some() {
+            return Err(reply.stopped(ResultCode::ConfirmationUsed));
+        }
+        if expired(record.created_at, record.expires_at, self.record_time()) {
+            return Err(reply.stopped(ResultCode::ConfirmationExpired));
+        }
+        Ok(Some(record))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CONFIRMATION_LIFETIME_SECONDS, expired};
+
+    #[test]
+    fn a_confirmation_lasts_ten_minutes_from_its_creation() {
+        let created = 1_700_000_000;
+        let expires = created + CONFIRMATION_LIFETIME_SECONDS;
+        assert_eq!(CONFIRMATION_LIFETIME_SECONDS, 600);
+        assert!(!expired(created, expires, created));
+        assert!(!expired(created, expires, expires - 1));
+        assert!(expired(created, expires, expires));
+        assert!(expired(created, expires, expires + 3600));
+    }
+
+    #[test]
+    fn a_clock_set_back_before_its_creation_does_not_extend_a_confirmation() {
+        let created = 1_700_000_000;
+        let expires = created + CONFIRMATION_LIFETIME_SECONDS;
+        assert!(expired(created, expires, created - 1));
+        assert!(expired(created, expires, 0));
+    }
+}

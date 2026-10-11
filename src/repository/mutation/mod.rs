@@ -13,6 +13,9 @@
 //!
 //! - `execute` looks a request up, decides what the call is, and accepts
 //!   and runs a new one;
+//! - `confirm` is two-phase confirmation: `prepare`, which gives a
+//!   preview and a confirmation, and what `execute` asks of the
+//!   confirmation a request presents;
 //! - `replay` answers from a record without running anything;
 //! - `reenter` takes up an accepted record again;
 //! - `settle` finishes, deletes or leaves the record afterwards;
@@ -39,6 +42,7 @@ use super::{
 
 mod bind;
 mod command;
+mod confirm;
 mod context;
 mod dto;
 mod evidence;
@@ -53,11 +57,12 @@ mod reply;
 mod settle;
 
 use bind::{
-    Binding,
+    Binding, Confirmed,
     document::DocumentBinding,
     index::IndexBinding,
     key::{KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteSelectBinding},
+    repo::RepoBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
@@ -65,12 +70,16 @@ pub use bind::{
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{KeyClearInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput},
     remote::{RemoteAddInput, RemoteSelectInput},
+    repo::{RepoCreateInput, RepoEnableInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
+pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, RemoteMutationDto,
-    RequestDto, RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
+    DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, PreviewDetailsDto,
+    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    RemoteMutationDto, RepositoryPreviewDto, RequestDto, RequestOperationDto, RequestResultDto,
+    RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -252,6 +261,12 @@ impl RepositoryService {
 
 /// One request to change Manyhands state: the caller's request ID, the
 /// confirmation it presents, if any, and the typed mutation.
+///
+/// The confirmation is the request's consent and no part of what
+/// identifies it. A request seen for the first time is accepted with the
+/// one it presents. From then on the request's record holds it, and a
+/// later call of the same request is answered from the record whatever
+/// it presents: the same confirmation, another, or none.
 pub struct MutationCall {
     pub request_id: RequestId,
     pub confirmation: Option<ConfirmationId>,
@@ -277,6 +292,8 @@ pub enum Mutation {
     KeySelect(KeySelectInput),
     KeyClear(KeyClearInput),
     KeyRemove(KeyRemoveInput),
+    RepoCreate(RepoCreateInput),
+    RepoEnable(RepoEnableInput),
 }
 
 impl Mutation {
@@ -302,6 +319,33 @@ impl Mutation {
             Self::KeySelect(_) => Command::KeySelect,
             Self::KeyClear(_) => Command::KeyClear,
             Self::KeyRemove(_) => Command::KeyRemove,
+            Self::RepoCreate(_) => Command::RepoCreate,
+            Self::RepoEnable(_) => Command::RepoEnable,
+        }
+    }
+
+    /// The binding `prepare` previews the mutation through, for a
+    /// command that needs confirmation. `None` for every other command:
+    /// there is nothing to preview, and nothing is read of its input.
+    fn confirmed(&self) -> Option<Box<dyn Confirmed>> {
+        match self {
+            Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
+            Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
+            Self::DocumentCreate(_)
+            | Self::DocumentSave(_)
+            | Self::DocumentMove(_)
+            | Self::TicketCreate(_)
+            | Self::TicketSave(_)
+            | Self::TicketSlugAssign(_)
+            | Self::RemoteAdd(_)
+            | Self::RemoteSelect(_)
+            | Self::IndexRefresh(_)
+            | Self::IndexRebuild(_)
+            | Self::KeyGenerate(_)
+            | Self::KeyImport(_)
+            | Self::KeySelect(_)
+            | Self::KeyClear(_)
+            | Self::KeyRemove(_) => None,
         }
     }
 
@@ -322,6 +366,8 @@ impl Mutation {
             Self::KeySelect(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::KeyClear(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::KeyRemove(input) => Box::new(KeyRegistryBinding::from(input)),
+            Self::RepoCreate(input) => Box::new(RepoBinding::from(input)),
+            Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
         }
     }
 }

@@ -805,6 +805,11 @@ pub enum FailurePoint {
     /// The mutation boundary, after the domain call and before the record
     /// is settled: the result is discarded and the record left as it was.
     BeforeRequestSettlement,
+    /// The mutation boundary, in the transaction that accepts a request
+    /// with its confirmation: after the confirmation is marked as accepted
+    /// and before the request's record is written. The transaction fails
+    /// there, so neither is written.
+    AfterConfirmationAcceptance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

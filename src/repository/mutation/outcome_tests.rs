@@ -290,10 +290,17 @@ fn a_stopped_save_reports_what_the_repository_shows_of_it() {
 
 fn actions(code: ResultCode, retry: bool) -> Vec<&'static str> {
     let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
-    recovery(code, Some("/repository"), request_id, None, retry)
-        .iter()
-        .map(|action| action.action.as_str())
-        .collect()
+    recovery(
+        code,
+        Command::TicketSave,
+        Some("/repository"),
+        Some(request_id),
+        None,
+        retry,
+    )
+    .iter()
+    .map(|action| action.action.as_str())
+    .collect()
 }
 
 #[test]
@@ -1226,7 +1233,16 @@ fn clone_selection(outcome: &PublicationRemoteOutcome) -> PublicationRemoteOutco
 #[test]
 fn recovery_required_with_no_repository_offers_the_request_or_nothing() {
     let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
-    let offered = |retry| recovery(ResultCode::RecoveryRequired, None, request_id, None, retry);
+    let offered = |retry| {
+        recovery(
+            ResultCode::RecoveryRequired,
+            Command::KeyGenerate,
+            None,
+            Some(request_id),
+            None,
+            retry,
+        )
+    };
     let accepted = offered(true);
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].action.as_str(), "request.retry");
@@ -1278,11 +1294,26 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
     ] {
         for retry in [false, true] {
             assert!(
-                recovery(code, None, request_id, None, retry).is_empty(),
+                recovery(
+                    code,
+                    Command::KeySelect,
+                    None,
+                    Some(request_id),
+                    None,
+                    retry
+                )
+                .is_empty(),
                 "{code:?}, retry {retry}"
             );
         }
-        let offered = recovery(code, Some("/repository"), request_id, None, false);
+        let offered = recovery(
+            code,
+            Command::KeySelect,
+            Some("/repository"),
+            Some(request_id),
+            None,
+            false,
+        );
         assert_eq!(offered.len(), 1, "{code:?}");
         assert_eq!(offered[0].action, RecoveryActionKind::IndexRebuild);
         assert_eq!(
@@ -1292,5 +1323,110 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
                 .and_then(|root| root.as_str()),
             Some("/repository")
         );
+    }
+}
+
+/// The actions of `code` for a request of `command` on a repository.
+fn actions_of(command: Command, code: ResultCode, retry: bool) -> Vec<&'static str> {
+    recovery(
+        code,
+        command,
+        Some("/repository"),
+        Some(RequestId::new()),
+        None,
+        retry,
+    )
+    .into_iter()
+    .map(|action| action.action.as_str())
+    .collect()
+}
+
+#[test]
+fn a_request_with_no_usable_consent_is_offered_a_new_preview() {
+    for code in [
+        ResultCode::ConfirmationRequired,
+        ResultCode::ConfirmationExpired,
+        ResultCode::ConfirmationNotFound,
+    ] {
+        for command in [Command::RepoCreate, Command::RepoEnable] {
+            assert_eq!(
+                actions_of(command, code, false),
+                ["request.prepare"],
+                "{code:?}"
+            );
+        }
+    }
+    // A caller error: no action corrects it.
+    for code in [
+        ResultCode::ConfirmationMismatch,
+        ResultCode::ConfirmationUsed,
+        ResultCode::NotConfirmable,
+    ] {
+        assert!(
+            actions_of(Command::RepoEnable, code, false).is_empty(),
+            "{code:?}"
+        );
+    }
+}
+
+/// What was previewed is no longer there: a confirmed command is offered
+/// a new preview, also when its record was left accepted. An item write
+/// is offered nothing, as before.
+#[test]
+fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview() {
+    for command in Command::ALL {
+        for retry in [false, true] {
+            let expected: &[&str] = if command.needs_confirmation() {
+                &["request.prepare"]
+            } else {
+                &[]
+            };
+            assert_eq!(
+                actions_of(command, ResultCode::ExternalChange, retry),
+                expected,
+                "{command:?}, retry {retry}"
+            );
+        }
+    }
+}
+
+/// `repo create` has no repository yet to set an identity on.
+#[test]
+fn an_identity_is_set_on_a_repository_that_exists() {
+    for command in Command::ALL {
+        let expected: &[&str] = if command == Command::RepoCreate {
+            &[]
+        } else {
+            &["repo.identity_set"]
+        };
+        assert_eq!(
+            actions_of(command, ResultCode::IdentityRequired, false),
+            expected,
+            "{command:?}"
+        );
+    }
+}
+
+/// A result of `prepare` is of no request: nothing is offered to be
+/// sent again.
+#[test]
+fn a_result_of_no_request_is_never_offered_a_retry() {
+    for code in ResultCode::ALL {
+        for retry in [false, true] {
+            let offered = recovery(
+                code,
+                Command::RepoEnable,
+                Some("/repository"),
+                None,
+                None,
+                retry,
+            );
+            assert!(
+                offered
+                    .iter()
+                    .all(|action| action.action != RecoveryActionKind::RequestRetry),
+                "{code:?}"
+            );
+        }
     }
 }

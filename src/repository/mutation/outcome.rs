@@ -19,6 +19,7 @@ use super::{
         keys::{DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, KeyMaterialErrorKind},
         transport::SshTransportErrorKind,
     },
+    command::Command,
     identity::RequestId,
 };
 
@@ -519,25 +520,35 @@ const REQUEST_ARGUMENT: &str = "request_id";
 /// What a client does about a code that stopped a request. Every code is
 /// named: one added later does not compile until its action is decided.
 ///
-/// `root` is the repository the result names, when it names one. `retry`
-/// says the request's record was left accepted, so repeating the same
-/// request continues it; a code with an action of its own keeps that one,
-/// and `external_change` is offered none.
+/// `command` is the command the result is of. `root` is the repository
+/// the result names, when it names one. `request_id` is the request's,
+/// and `None` for a result of `prepare`, which has none: nothing is
+/// then offered to be sent again. `retry` says the request's record was
+/// left accepted, so repeating the same request continues it; a code with
+/// an action of its own keeps that one, and `external_change` is never
+/// offered the same request.
 pub(crate) fn recovery(
     code: ResultCode,
+    command: Command,
     root: Option<&str>,
-    request_id: RequestId,
+    request_id: Option<RequestId>,
     operation_id: Option<OperationId>,
     retry: bool,
 ) -> Vec<RecoveryAction> {
     let at_root =
         |action| RecoveryAction::new(action, root.map(|root| (ROOT_ARGUMENT, root.into())));
-    let retry_request = || {
-        RecoveryAction::new(
-            RecoveryActionKind::RequestRetry,
-            [(REQUEST_ARGUMENT, request_id.to_string().into())],
-        )
+    let retry_request = || -> Vec<RecoveryAction> {
+        request_id
+            .map(|request_id| {
+                RecoveryAction::new(
+                    RecoveryActionKind::RequestRetry,
+                    [(REQUEST_ARGUMENT, request_id.to_string().into())],
+                )
+            })
+            .into_iter()
+            .collect()
     };
+    let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
     match code {
         // The authoritative work is recorded and the hand-off is owed,
         // which needs no input from the caller.
@@ -552,8 +563,20 @@ pub(crate) fn recovery(
             .into_iter()
             .collect(),
         ResultCode::IdentityRequired | ResultCode::InitialsRequired => {
-            vec![at_root(RecoveryActionKind::RepoIdentitySet)]
+            // A command that makes its repository has none yet to set an
+            // identity on: the request is sent again with one.
+            if command.creates_its_repository() {
+                Vec::new()
+            } else {
+                vec![at_root(RecoveryActionKind::RepoIdentitySet)]
+            }
         }
+        // No consent the request could be run with: none was presented,
+        // or the one presented is gone or too old. A new preview gives
+        // one.
+        ResultCode::ConfirmationRequired
+        | ResultCode::ConfirmationExpired
+        | ResultCode::ConfirmationNotFound => prepare_again(),
         // A result that names no repository has none to inspect: it is
         // of a request of the application, as a key generation is. When
         // its record was left accepted, as that of a generation that was
@@ -563,7 +586,7 @@ pub(crate) fn recovery(
         // says what the operation left.
         ResultCode::RecoveryRequired if root.is_none() => {
             if retry {
-                vec![retry_request()]
+                retry_request()
             } else {
                 Vec::new()
             }
@@ -579,24 +602,33 @@ pub(crate) fn recovery(
             Some(_) => vec![at_root(RecoveryActionKind::IndexRebuild)],
             None => Vec::new(),
         },
-        // An external change to an item is not answered by the same
-        // request: it is refused again for as long as the change stands,
-        // also when its record stays accepted because its operation is
-        // still in flight. The caller reads the item again and submits a
-        // new request.
-        ResultCode::ExternalChange => Vec::new(),
+        // An external change is not answered by the same request: it is
+        // refused again for as long as the change stands, also when its
+        // record stays accepted because its operation is still in flight.
+        // For a command that needs confirmation, what was previewed is no
+        // longer what is there, and a new preview shows what is. For an
+        // item write the caller reads the item again and submits a new
+        // request, and no action is offered.
+        ResultCode::ExternalChange => {
+            if command.needs_confirmation() {
+                prepare_again()
+            } else {
+                Vec::new()
+            }
+        }
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send.
-        ResultCode::Busy => vec![retry_request()],
+        ResultCode::Busy => retry_request(),
         // The commit exists and the registry write failed: the same
         // request completes the registration.
-        ResultCode::RegistrationPending => vec![retry_request()],
+        ResultCode::RegistrationPending => retry_request(),
         // Decided: these have no action of their own. They are the codes
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
         // refreshed or rebuilt, a key generated, imported, selected,
-        // cleared or removed. The same request is offered when its record
-        // was left accepted, and nothing otherwise.
+        // cleared or removed, a repository created or enabled. The same
+        // request is offered when its record was left accepted, and
+        // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
         | ResultCode::Cancelled
@@ -626,6 +658,11 @@ pub(crate) fn recovery(
         | ResultCode::KeyNotFound
         | ResultCode::SelectedKeyInUse
         | ResultCode::KeyUnavailable
+        // A caller error, which no action corrects: a confirmation that
+        // is of another command, repository or input, or that another
+        // request has used. The caller uses a new preview.
+        | ResultCode::ConfirmationMismatch
+        | ResultCode::ConfirmationUsed
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -637,13 +674,8 @@ pub(crate) fn recovery(
         | ResultCode::AuthorityNotFound
         | ResultCode::OperationNotFound
         | ResultCode::RequestNotFound
-        | ResultCode::ConfirmationMismatch
         | ResultCode::NotRepairable
         | ResultCode::KeyNotDeletable
-        | ResultCode::ConfirmationRequired
-        | ResultCode::ConfirmationExpired
-        | ResultCode::ConfirmationNotFound
-        | ResultCode::ConfirmationUsed
         | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
         | ResultCode::PublicationRemoteRequired
@@ -662,7 +694,7 @@ pub(crate) fn recovery(
         | ResultCode::RemoteUnavailable
         | ResultCode::TransportUnavailable => {
             if retry {
-                vec![retry_request()]
+                retry_request()
             } else {
                 Vec::new()
             }

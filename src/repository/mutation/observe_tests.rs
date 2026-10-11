@@ -102,3 +102,51 @@ fn a_token_that_matches_gives_the_digest_of_the_bytes_it_was_made_from() {
     assert_eq!(observed.check("v1:stale"), None);
     assert_eq!(observed.check(""), None);
 }
+
+fn enable() -> Observation {
+    Observation::of("repo enable")
+}
+
+#[test]
+fn an_observation_digest_is_stable_and_is_what_a_record_holds() {
+    let digest = || enable().text("head", "main").absent("identity").finish();
+    assert_eq!(digest(), digest());
+    assert_eq!(digest().len(), 64);
+    assert!(
+        digest()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+}
+
+#[test]
+fn an_observation_digest_differs_for_each_changed_part() {
+    let base = enable().text("head", "main").text("worktree", "clean");
+    let changed = [
+        enable().text("head", "other").text("worktree", "clean"),
+        enable().text("head", "main").text("worktree", "dirty"),
+        // The same bytes under other names, and split elsewhere.
+        enable().text("worktree", "main").text("head", "clean"),
+        enable().text("head", "mainworktree").text("", "clean"),
+        enable().text("head", "main").absent("worktree"),
+        enable().text("head", "main").text("worktree", ""),
+        Observation::of("repo create")
+            .text("head", "main")
+            .text("worktree", "clean"),
+    ];
+    let base = base.finish();
+    let mut seen = vec![base.clone()];
+    for observation in changed {
+        let digest = observation.finish();
+        assert!(!seen.contains(&digest));
+        seen.push(digest);
+    }
+}
+
+#[test]
+fn an_absent_part_is_not_an_empty_one() {
+    assert_ne!(
+        enable().absent("identity").finish(),
+        enable().text("identity", "").finish()
+    );
+}

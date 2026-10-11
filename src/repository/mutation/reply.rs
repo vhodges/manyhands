@@ -31,6 +31,7 @@ impl RequestIdentity {
     pub(super) fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
         let scope = match binding.place() {
             Place::Repository(root) => ScopeKey::for_repository(root),
+            Place::NewRepository(root) => ScopeKey::for_new_repository(root),
             Place::Application => Some(ScopeKey::application()),
         };
         let digest = scope.as_ref().map(|scope| {
@@ -55,7 +56,9 @@ impl RequestIdentity {
     fn repository(&self, binding: &dyn Binding) -> Option<String> {
         match (&self.scope, binding.place()) {
             (Some(scope), _) => scope.repository().map(str::to_owned),
-            (None, Place::Repository(root)) => absolute_path_string(root),
+            (None, Place::Repository(root) | Place::NewRepository(root)) => {
+                absolute_path_string(root)
+            }
             (None, Place::Application) => None,
         }
     }
@@ -109,8 +112,9 @@ impl Reply<'_> {
         let recovery = if recovery.is_empty() || rootless {
             outcome::recovery(
                 code,
+                self.binding.command(),
                 scope.repository.as_deref(),
-                self.identity.request_id,
+                Some(self.identity.request_id),
                 operation.map(|operation| operation.operation_id),
                 retry,
             )

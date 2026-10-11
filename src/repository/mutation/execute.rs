@@ -20,7 +20,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
-    records::{InsertRequestOutcome, NewRequest},
+    records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
 
@@ -43,7 +43,8 @@ impl RepositoryService {
         &self,
         call: MutationCall,
         // No bound command needs a credential, reports a stage or can be
-        // stopped once it is accepted; the commands that do use these.
+        // stopped once it is accepted; the commands that do use these,
+        // and each then reaches its binding through the call context.
         _credentials: &mut SessionCredentials<P>,
         _progress: &mut dyn ProgressSink,
         cancel: &CancellationToken,
@@ -169,6 +170,11 @@ impl RepositoryService {
 
     /// A request no record holds: validate, check, accept, run, settle.
     /// `None` when another call accepted the same request ID meanwhile.
+    ///
+    /// A command that needs confirmation is run only with a confirmation
+    /// that is this request's to use, and only while the state its preview
+    /// showed is still the state there is. Its confirmation is marked as
+    /// accepted in the transaction that writes the request's record.
     fn first_call(
         &self,
         binding: &mut dyn Binding,
@@ -176,11 +182,12 @@ impl RepositoryService {
         confirmation: Option<ConfirmationId>,
         cancel: &CancellationToken,
     ) -> Option<Envelope<MutationDataDto>> {
-        // No bound command takes a confirmation.
-        if confirmation.is_some() {
-            return Some(Reply { binding, identity }.stopped(ResultCode::NotConfirmable));
-        }
-        let prepared = match binding.prepare(&self.call_context()) {
+        let consent = match self.consent(&Reply { binding, identity }, confirmation) {
+            Ok(consent) => consent,
+            Err(envelope) => return Some(envelope),
+        };
+        let call = self.call_context(consent.as_ref());
+        let prepared = match binding.prepare(&call) {
             Ok(prepared) => prepared,
             Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
         };
@@ -190,6 +197,14 @@ impl RepositoryService {
         let (Some(scope), Some(digest)) = (identity.scope.clone(), identity.digest) else {
             return Some(reply.stopped(ResultCode::InternalError));
         };
+        // What the preview observed is compared with what is there now,
+        // before anything is accepted. A command with no confirmation
+        // observes nothing of the kind.
+        if let Some(consent) = &consent
+            && prepared.observation != consent.observation_digest
+        {
+            return Some(reply.stopped(ResultCode::ExternalChange));
+        }
         if cancel.is_cancelled() {
             return Some(reply.stopped(ResultCode::Cancelled));
         }
@@ -210,7 +225,7 @@ impl RepositoryService {
             command: binding.command().name().to_owned(),
             target: binding.target(),
             intent_digest: digest,
-            confirmation: None,
+            confirmation: consent.as_ref().map(|consent| consent.confirmation_id),
             base_ref: accepted.position.base_ref.clone(),
             base_oid: accepted.position.base_oid,
             expected_digest: accepted.expected.clone(),
@@ -219,26 +234,32 @@ impl RepositoryService {
         match inserted {
             Ok(InsertRequestOutcome::Inserted) => {}
             Ok(InsertRequestOutcome::RequestExists) => return None,
-            // No confirmation was presented.
+            // The confirmation was there to accept when it was looked
+            // at, and is not now: another request accepted it meanwhile.
+            // With no confirmation presented nothing is asked of one, and
+            // this is not reached.
             Ok(InsertRequestOutcome::ConfirmationUnavailable) => {
-                return Some(reply.stopped(ResultCode::InternalError));
+                return Some(reply.stopped(if consent.is_some() {
+                    ResultCode::ConfirmationUsed
+                } else {
+                    ResultCode::InternalError
+                }));
             }
             Err(error) => return Some(reply.read_failure(&error)),
         }
-        Some(self.run_accepted(&reply, &accepted))
+        Some(self.called(&reply, &accepted, || reply.binding.run(&call, &accepted)))
     }
 
-    /// Makes the binding's domain call for an accepted request and settles
-    /// its record from what the call left.
-    fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
-        self.called(reply, accepted, || {
-            reply.binding.run(&self.call_context(), accepted)
-        })
-    }
-
-    /// What this call gives a binding to work with.
-    pub(super) fn call_context(&self) -> CallContext<'_> {
-        CallContext { service: self }
+    /// What this call gives a binding to work with: the service, and the
+    /// consent the request runs with, when its command needs one.
+    pub(super) fn call_context<'a>(
+        &'a self,
+        confirmation: Option<&'a ConfirmationRecord>,
+    ) -> CallContext<'a> {
+        CallContext {
+            service: self,
+            confirmation,
+        }
     }
 
     /// Makes a domain call, `call`, for an accepted request and settles its

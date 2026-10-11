@@ -47,6 +47,55 @@ pub(crate) fn absent_token(branch: Option<&str>, path: &str) -> String {
     format!("v1:{}", hasher.finalize().to_hex())
 }
 
+/// What the observation digest is begun with.
+const OBSERVATION_DOMAIN: &[u8] = b"manyhands observation v1";
+
+/// The state a command that needs confirmation binds, reduced to one
+/// digest: `prepare` stores it in the confirmation, and `execute`
+/// observes again and compares. No item token covers this state.
+///
+/// Each part is fed under its name with its length, and a part that is
+/// absent is told apart from one that is empty, so no two different
+/// observations feed the same bytes. The digest holds nothing that can be
+/// read back.
+pub(crate) struct Observation(blake3::Hasher);
+
+impl Observation {
+    /// Begins the observation of `command`.
+    pub(crate) fn of(command: &str) -> Self {
+        let mut observation = Self(blake3::Hasher::new());
+        observation.part(OBSERVATION_DOMAIN);
+        observation.part(command.as_bytes());
+        observation
+    }
+
+    fn part(&mut self, bytes: &[u8]) {
+        self.0.update(&(bytes.len() as u64).to_le_bytes());
+        self.0.update(bytes);
+    }
+
+    /// What was observed under `name`.
+    pub(crate) fn text(mut self, name: &str, value: &str) -> Self {
+        self.part(name.as_bytes());
+        self.0.update(&[1]);
+        self.part(value.as_bytes());
+        self
+    }
+
+    /// Nothing was there to observe under `name`.
+    pub(crate) fn absent(mut self, name: &str) -> Self {
+        self.part(name.as_bytes());
+        self.0.update(&[0]);
+        self
+    }
+
+    /// The digest, as a confirmation record holds it: 64 lowercase
+    /// hexadecimal digits.
+    pub(crate) fn finish(self) -> String {
+        self.0.finalize().to_hex().to_string()
+    }
+}
+
 /// A file as a read found it: its bytes and the token the read gives.
 pub(crate) struct ObservedFile {
     pub(crate) token: String,

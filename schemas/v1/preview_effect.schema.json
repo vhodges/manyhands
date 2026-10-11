@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 preview effect",
+  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["effect"],
+  "properties": {
+    "effect": {
+      "type": "string",
+      "enum": [
+        "directory_created",
+        "repository_initialized",
+        "identity_written",
+        "configuration_written",
+        "initialization_committed",
+        "repository_registered"
+      ]
+    }
+  }
+}

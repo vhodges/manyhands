@@ -225,6 +225,7 @@ impl Binding for RemoteAddBinding {
         self.validate()?;
         resolve_root(service, &self.root)?;
         Ok(Prepared {
+            observation: None,
             family: Some(OperationFamily::Local),
             // Nothing is committed, so there is no branch to bound.
             position: Position {
@@ -558,6 +559,7 @@ impl Binding for RemoteSelectBinding {
             })
             .map_err(inaccessible)?;
         Ok(Prepared {
+            observation: None,
             family: Some(OperationFamily::Local),
             position: Position::of(root, &head).map_err(inaccessible)?,
             expected: Some(match configuration_file(root) {
