@@ -795,6 +795,10 @@ pub enum FailurePoint {
     BeforeRegistryWrite,
     BeforeRegistrationRemovalTransaction,
     AfterRemoteMutation,
+    /// `remove_remote`, after the remote is deleted and before the step
+    /// that records it: the call ends there with the remote gone and its
+    /// row pending with no step.
+    AfterRemoteDeletion,
     AfterContextObservation,
     BeforeIndexTransactionCommit,
     AfterIndexClaim,
@@ -3664,6 +3668,11 @@ impl RepositoryService {
         repository.remote_delete(name).map_err(|error| {
             RepositoryError::git(RepositoryOperation::RemoveRemote, Some(root.clone()), error)
         })?;
+        self.check_failure(
+            FailurePoint::AfterRemoteDeletion,
+            RepositoryOperation::RemoveRemote,
+            &root,
+        )?;
         self.advance_lifecycle(
             &root,
             RepositoryOperation::RemoveRemote,

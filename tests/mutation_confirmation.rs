@@ -4786,3 +4786,52 @@ fn a_stored_key_result_without_a_deletion_state_is_replayed() {
 
     assert_eq!(keyring.retry(REQUEST_1, keyring.delete_key()), deleted);
 }
+
+/// The remote is deleted and the call fails before the step that says
+/// so reaches the journal: the row is pending and holds no step. That
+/// the remote is gone under the request's own pending row is what says
+/// something was done: the result is `partial`, and the record stays
+/// accepted. The retry compares nothing with the preview, whose record
+/// is overwritten here, and ends the operation. The domain, which has no
+/// step to go by, reports no change, so the retry is a no-op.
+#[test]
+fn a_removal_that_fails_before_its_step_is_recorded_is_partial_and_its_retry_is_a_no_op() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::AfterRemoteDeletion);
+
+    let partial = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_eq!(partial.code, ResultCode::InternalError);
+    assert_eq!(partial.outcome, Outcome::Partial);
+    assert_eq!(partial.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&partial), ["request.retry"]);
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    assert_eq!(
+        home.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE state != 'completed' AND completed_step IS NULL"
+        ),
+        1
+    );
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    assert_eq!(
+        items::index(home.world.data.path())
+            .execute(
+                "UPDATE confirmation_records SET observation_digest = ?1",
+                ["0".repeat(64)],
+            )
+            .unwrap(),
+        1
+    );
+    let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_noop(&answered);
+    assert_eq!(partial.operation_id, answered.operation_id);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.world.pending_journal_rows(), 0);
+}
