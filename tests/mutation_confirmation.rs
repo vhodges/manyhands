@@ -12,10 +12,11 @@ use std::{
 use manyhands::{
     canonical,
     repository::{
-        CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput, Mutation,
-        MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewIdentitySource,
-        RepoCreateInput, RepoEnableInput, RepositoryPreviewDto, RepositoryService, RequestId,
-        RequestState, request_store::RequestRecord,
+        CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput, LeaseKind,
+        Mutation, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
+        PreviewIdentitySource, RepoCreateInput, RepoEnableInput, RepositoryPreviewDto,
+        RepositoryService, RequestId, RequestState, TicketCreateInput,
+        request_store::RequestRecord,
     },
     results::{CheckpointEffect, DiscoveryEffect, Envelope, Outcome, ResultCode, WriteEffect},
 };
@@ -1463,62 +1464,132 @@ fn repo_enable_with_no_identity_at_all_is_identity_required() {
 // No lock, and nothing kept that should not be
 // ---------------------------------------------------------------------
 
-/// A preview holds nothing: with previews outstanding, a save and an
-/// `index refresh` on a repository of the same service succeed, and the
-/// previews are as good afterwards.
+/// The process that holds a lease for `an_outstanding_preview...`.
 #[test]
-fn an_outstanding_preview_holds_no_lock() {
-    let world = World::new();
-    let plain = Plain::new();
-    let parent = tempfile::tempdir().unwrap();
-    let create = || {
-        Mutation::RepoCreate(RepoCreateInput {
-            root: parent.path().join("new"),
-            primary_branch: "main".to_owned(),
-            identity: Some(identity()),
-            slug_prefix: None,
-        })
+fn common_git_lease_child() {
+    let Ok(root) = std::env::var("MANYHANDS_LEASE_ROOT") else {
+        return;
     };
-    let previewed = |mutation: &Mutation| {
-        world
-            .service
-            .prepare(mutation)
-            .data
-            .expect("a preview")
-            .confirmation_id
-    };
-    let enable_confirmation = previewed(&plain.enable());
-    let create_confirmation = previewed(&create());
+    let variable = |name: &str| PathBuf::from(std::env::var(name).unwrap());
+    let kind = LeaseKind::parse(&std::env::var("MANYHANDS_LEASE_KIND").unwrap()).unwrap();
+    let _holder = RepositoryService::hold_lease_for_testing(
+        Path::new(&root),
+        &variable("MANYHANDS_LEASE_DATA_DIRECTORY"),
+        kind,
+    )
+    .unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(variable("MANYHANDS_LEASE_READY"))
+        .unwrap();
+    let release = variable("MANYHANDS_LEASE_RELEASE");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !release.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for lease release"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
-    let token = world.token(TICKET_A);
-    let saved = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+/// `prepare` takes no lease: it gives its preview while another process
+/// holds the lease of the very repository it previews, which an
+/// `execute` on that repository is refused for.
+#[test]
+fn prepare_takes_no_lease_of_the_repository_it_previews() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let site = Site::new();
+
+    let held = support::hold_lease_in_child(&plain.root, desk.data.path(), LeaseKind::Repository);
+    let (confirmation, _) = desk.preview(&plain.enable());
+    // The lease is in the way of the command itself, so it would have
+    // been in the way of a preview that asked for it.
+    let busy = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(busy.code, ResultCode::Busy);
+    desk.assert_nothing_left(REQUEST_1);
+    assert_eq!(plain.configuration(), None);
+    held.release();
+
+    let held = support::hold_lease_in_child(&site.root, desk.data.path(), LeaseKind::Bootstrap);
+    let (create_confirmation, _) = desk.preview(&site.create());
+    assert_eq!(
+        desk.execute(REQUEST_2, &create_confirmation, site.create())
+            .code,
+        ResultCode::Busy
+    );
+    assert!(!site.root.exists());
+    held.release();
+
+    // Both previews are as good as they were.
+    assert_enabled(
+        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+    assert_enabled(
+        &desk.execute(REQUEST_2, &create_confirmation, site.create()),
+        &site.root,
+    );
+}
+
+/// A preview that is outstanding holds nothing on the repository it is
+/// of. The repository is enabled by other means while its preview
+/// stands, and a save and an `index refresh` on that same repository
+/// succeed at once.
+#[test]
+fn a_save_and_a_refresh_succeed_on_a_repository_whose_preview_is_outstanding() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    assert_eq!(desk.confirmation_rows(), 1);
+    assert_eq!(desk.accepted_confirmations(), 0);
+    desk.service
+        .enable(support::enable_request(&plain.root))
+        .unwrap();
+    // Enabling commits the configuration without refreshing Git's own
+    // index, and a context is not prepared while that path looks changed.
+    let mut index = plain.fixture.repository.index().unwrap();
+    index
+        .read_tree(
+            &plain
+                .fixture
+                .repository
+                .find_commit(plain.head())
+                .unwrap()
+                .tree()
+                .unwrap(),
+        )
+        .unwrap();
+    index.write().unwrap();
+
+    let saved = execute_with(
+        &desk.service,
+        REQUEST_1,
+        Mutation::TicketCreate(TicketCreateInput {
+            root: plain.root.clone(),
+            id: items::item_id(mutation::TICKET_NEW),
+            draft: World::draft("A ticket", "Its body.\n"),
+            deps: Vec::new(),
+            parent: None,
+            initials: Some("ab".to_owned()),
+        }),
+    );
     assert_eq!(saved.outcome, Outcome::Success, "{}", saved.message);
-    let refreshed = world.execute(
+    assert_eq!(saved.effects.checkpoint, CheckpointEffect::Committed);
+    let refreshed = execute_with(
+        &desk.service,
         REQUEST_2,
         Mutation::IndexRefresh(IndexRefreshInput {
-            root: world.root.clone(),
+            root: plain.root.clone(),
         }),
     );
     assert_eq!(refreshed.outcome, Outcome::Success, "{}", refreshed.message);
 
-    assert_enabled(
-        &execute_confirmed(
-            &world.service,
-            REQUEST_3,
-            &enable_confirmation,
-            plain.enable(),
-        ),
-        &plain.root,
-    );
-    assert_enabled(
-        &execute_confirmed(
-            &world.service,
-            "01ARZ3NDEKTSV4RRFFQ69G5FX4",
-            &create_confirmation,
-            create(),
-        ),
-        &parent.path().canonicalize().unwrap().join("new"),
-    );
+    // The preview is still outstanding, and is of a state that is gone.
+    let stale = desk.execute(REQUEST_3, &confirmation, plain.enable());
+    assert_refused(&stale, ResultCode::ExternalChange, &["request.prepare"]);
 }
 
 const URL_SENTINEL: &str = "SENTINEL-URL-PASSWORD-5b1e";
