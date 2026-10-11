@@ -73,12 +73,6 @@ impl Settlement {
     }
 }
 
-/// Whether settling leaves the record of a call that ended with
-/// `standing` accepted, for a retry to continue.
-pub(super) fn leaves_accepted(standing: &Standing) -> bool {
-    Settlement::of(standing) == Settlement::Leave
-}
-
 impl RepositoryService {
     /// The envelope of what a call found or did, with its record settled
     /// from it.

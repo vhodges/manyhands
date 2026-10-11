@@ -49,9 +49,10 @@ impl Command {
         Self::ALL.into_iter().find(|command| command.name() == name)
     }
 
-    /// Whether the command is how the index comes back, and so runs when
-    /// the index is unavailable and no request record can be read or
-    /// written.
+    /// Whether the command is how the index comes back. When the index is
+    /// unavailable and no request record can be read, the boundary brings
+    /// the index back for such a command, and for no other, before it
+    /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
             Self::IndexRebuild => true,

@@ -350,7 +350,7 @@ fn assert_registered_again(world: &World) {
 }
 
 #[test]
-fn a_rebuild_with_a_corrupt_database_runs_without_a_record_and_registers_the_repository() {
+fn a_rebuild_with_a_corrupt_database_is_recorded_and_registers_the_repository() {
     let mut world = World::new();
     corrupt_index(&mut world, |data| {
         manyhands::repository::RepositoryService::open_at(data).unwrap()
@@ -372,12 +372,24 @@ fn a_rebuild_with_a_corrupt_database_runs_without_a_record_and_registers_the_rep
         assert_eq!(refused.operation_id, None);
     }
 
+    // Those refusals replaced nothing: the index is still not a database.
+    assert_eq!(
+        fs::read(world.data.path().join("manyhands.sqlite3")).unwrap(),
+        b"not sqlite"
+    );
+
     let rebuilt = world.execute(REQUEST_2, rebuild(&world));
     assert_current(&world, "index rebuild", &rebuilt);
-    // It ran under an operation, and no record was written for it.
+    // The index was brought back first, so the request was recorded
+    // before its operation began, as any request is.
     let operation = rebuilt.operation_id.clone().expect("an operation");
-    assert_eq!(world.request_rows(), 0);
-    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(operation_of(&world, REQUEST_2), operation);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.request_rows(), 1);
+    assert_eq!(world.execute(REQUEST_2, rebuild(&world)), rebuilt);
     assert!(matches!(
         world.journal_row(&operation),
         JournalRow::Final {
@@ -390,35 +402,53 @@ fn a_rebuild_with_a_corrupt_database_runs_without_a_record_and_registers_the_rep
 }
 
 /// The index deleted under a service that is still open. No record can
-/// be read, so the rebuild runs with none. The domain operation refuses:
-/// it finds a database with no tables, which only opening the index anew
-/// gives it. The request stopped with nothing known of its operation, so
-/// it is recorded as soon as the index can hold a record, and its retry
-/// rebuilds.
+/// be read, so the index is made anew, and the rebuild is recorded and
+/// runs.
 #[test]
-fn a_rebuild_with_the_database_deleted_under_an_open_service_is_finished_by_its_retry() {
+fn a_rebuild_with_the_database_deleted_under_an_open_service_registers_the_repository() {
     let world = World::new();
     remove_index(&world);
     let refused = world.execute(REQUEST_1, refresh(&world));
     assert_eq!(refused.code, ResultCode::IndexUnavailable);
+    assert!(!world.data.path().join("manyhands.sqlite3").exists());
 
-    let first = world.execute(REQUEST_2, rebuild(&world));
-    assert_eq!(
-        (first.outcome, first.code),
-        (Outcome::Blocked, ResultCode::RecoveryRequired)
-    );
-    assert_eq!(first.effects, Effects::not_requested());
-    let operation = first.operation_id.clone().expect("an operation");
+    let rebuilt = world.execute(REQUEST_2, rebuild(&world));
+    assert_current(&world, "index rebuild", &rebuilt);
     assert_eq!(
         world.record(REQUEST_2).unwrap().state,
-        RequestState::Accepted
+        RequestState::Finished
     );
-
-    let retry = world.execute(REQUEST_2, rebuild(&world));
-    assert_current(&world, "index rebuild", &retry);
-    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(world.pending_journal_rows(), 0);
     assert_registered_again(&world);
+}
+
+/// A root a rebuild would refuse brings nothing back: the corrupt index
+/// is left as it is.
+#[test]
+fn a_rebuild_of_what_is_not_a_repository_does_not_replace_a_corrupt_database() {
+    let mut world = World::new();
+    corrupt_index(&mut world, |data| {
+        manyhands::repository::RepositoryService::open_at(data).unwrap()
+    });
+    let elsewhere = tempfile::tempdir().unwrap();
+    let refused = world.execute(
+        REQUEST_1,
+        Mutation::IndexRebuild(IndexRebuildInput {
+            root: elsewhere.path().to_owned(),
+        }),
+    );
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Error, ResultCode::NotRepository)
+    );
+    assert_eq!(refused.operation_id, None);
+    assert_eq!(
+        fs::read(world.data.path().join("manyhands.sqlite3")).unwrap(),
+        b"not sqlite"
+    );
+    // The world's own scan needs a database to read.
+    let rebuilt = world.execute(REQUEST_2, rebuild(&world));
+    assert_current(&world, "index rebuild", &rebuilt);
 }
 
 #[test]
@@ -442,12 +472,11 @@ fn a_rebuild_after_the_database_was_deleted_and_made_anew_registers_the_reposito
     assert_eq!(world.execute(REQUEST_2, rebuild(&world)), rebuilt);
 }
 
-/// A rebuild that ran with no record and stopped with its row pending
-/// would refuse every later operation, its own retry among them, since
-/// the retry would begin another operation. Its record is written when it
-/// stops, so the same request finishes it.
+/// A rebuild of a corrupt database that fails after the database was
+/// replaced: its record was written before its operation began, so the
+/// same request finishes it.
 #[test]
-fn a_rebuild_that_fails_with_no_record_is_recorded_so_that_its_retry_finishes_it() {
+fn a_rebuild_of_a_corrupt_database_that_fails_is_finished_by_its_retry() {
     let mut world = World::new();
     corrupt_index(&mut world, |data| {
         FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
@@ -475,5 +504,118 @@ fn a_rebuild_that_fails_with_no_record_is_recorded_so_that_its_retry_finishes_it
     assert_current(&world, "index rebuild", &retry);
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(world.pending_journal_rows(), 0);
+    assert_registered_again(&world);
+}
+
+const KILLED_ROOT: &str = "MANYHANDS_KILLED_INDEX_ROOT";
+const KILLED_DATA: &str = "MANYHANDS_KILLED_INDEX_DATA";
+const KILLED_POINT: &str = "MANYHANDS_KILLED_INDEX_POINT";
+const KILLED_REQUEST: &str = "MANYHANDS_KILLED_INDEX_REQUEST";
+
+/// The fault points a test of this file or of `remotes` has a process end
+/// at.
+const KILL_POINTS: [FailurePoint; 3] = [
+    FailurePoint::BeforeIndexTransactionCommit,
+    FailurePoint::BeforePublicationConfigurationCommit,
+    FailurePoint::AfterIndexClaim,
+];
+
+/// The process `killed_at` starts: it submits `REQUEST_1` and ends at the
+/// fault point, inside the domain operation, with nothing after it run.
+#[test]
+fn killed_at_fault_point_child() {
+    let Some(root) = std::env::var_os(KILLED_ROOT) else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let name = std::env::var(KILLED_POINT).unwrap();
+    let point = KILL_POINTS
+        .into_iter()
+        .find(|point| format!("{point:?}") == name)
+        .expect("a known fault point");
+    let service = manyhands::repository::RepositoryService::open_at_with_exit_point_for_testing(
+        std::path::Path::new(&std::env::var_os(KILLED_DATA).unwrap()),
+        point,
+    )
+    .unwrap();
+    let mutation = match std::env::var(KILLED_REQUEST).unwrap().as_str() {
+        "index refresh" => Mutation::IndexRefresh(IndexRefreshInput { root }),
+        "index rebuild" => Mutation::IndexRebuild(IndexRebuildInput { root }),
+        "remote select origin" => {
+            Mutation::RemoteSelect(manyhands::repository::RemoteSelectInput {
+                root,
+                name: Some("origin".to_owned()),
+            })
+        }
+        other => panic!("{other}: not a request the child makes"),
+    };
+    crate::support::mutation::execute_with(&service, REQUEST_1, mutation);
+    // Not reached: the process ended at the fault point.
+}
+
+/// Runs `request` as `REQUEST_1` in a child process that ends at `point`.
+pub(super) fn killed_at(world: &World, request: &str, point: FailurePoint) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "index::killed_at_fault_point_child",
+            "--nocapture",
+        ])
+        .env(KILLED_ROOT, &world.root)
+        .env(KILLED_DATA, world.data.path())
+        .env(KILLED_POINT, format!("{point:?}"))
+        .env(KILLED_REQUEST, request)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(manyhands::repository::FAILURE_POINT_EXIT_STATUS),
+        "{request} at {point:?}: the child ended at the fault point"
+    );
+}
+
+/// A rebuild whose process dies after its journal row was begun leaves
+/// that row pending. Only a call under its operation ID takes it up
+/// again, and only a record holds that ID: so the request is recorded
+/// before its domain call, on a corrupt database too.
+#[test]
+fn a_rebuild_killed_on_a_corrupt_database_after_its_row_began_is_finished_by_its_retry() {
+    let mut world = World::new();
+    corrupt_index(&mut world, |data| {
+        manyhands::repository::RepositoryService::open_at(data).unwrap()
+    });
+    killed_at(
+        &world,
+        "index rebuild",
+        FailurePoint::BeforeIndexTransactionCommit,
+    );
+    world.reopen();
+
+    // What the dead process left: the record, and its row pending.
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 1));
+    let operation = operation_of(&world, REQUEST_1);
+    assert!(matches!(
+        world.journal_row(&operation),
+        JournalRow::Pending(_)
+    ));
+
+    // A different request is refused while the row is pending.
+    let refused = world.execute(REQUEST_2, rebuild(&world));
+    assert_eq!(refused.code, ResultCode::RecoveryRequired);
+    assert!(world.record(REQUEST_2).is_none());
+
+    let retry = world.execute(REQUEST_1, rebuild(&world));
+    assert_current(&world, "index rebuild", &retry);
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(world.pending_journal_rows(), 0);
+    // And nothing is refused any longer.
+    assert_current(
+        &world,
+        "index rebuild",
+        &world.execute(REQUEST_2, rebuild(&world)),
+    );
     assert_registered_again(&world);
 }

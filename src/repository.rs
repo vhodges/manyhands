@@ -1256,10 +1256,7 @@ impl RepositoryService {
         let root = &request.root;
         let operation = RepositoryOperation::RebuildRepository;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        if self.requires_corrupt_cache_replacement()? {
-            self.run_corrupt_cache_hook(&self.corrupt_cache_decision_hook, operation, &root)?;
-            self.reconcile_corrupt_cache_replacement(operation, &root)?;
-        }
+        self.replace_corrupt_cache(operation, &root)?;
         let operation_id = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             begin_operation(&self.registry_path, &root, operation, request.operation_id)?.id
@@ -1309,6 +1306,43 @@ impl RepositoryService {
                 Err(error)
             }
         }
+    }
+
+    /// The first step of a rebuild: an index that is not a usable
+    /// database is set aside and an empty one put in its place.
+    fn replace_corrupt_cache(
+        &self,
+        operation: RepositoryOperation,
+        root: &Path,
+    ) -> Result<(), RepositoryError> {
+        if self.requires_corrupt_cache_replacement()? {
+            self.run_corrupt_cache_hook(&self.corrupt_cache_decision_hook, operation, root)?;
+            self.reconcile_corrupt_cache_replacement(operation, root)?;
+        }
+        Ok(())
+    }
+
+    /// Brings the index back to a database that can be read and written,
+    /// for a rebuild of the repository at `root`, before that rebuild is
+    /// begun: a corrupt index is replaced, exactly as a rebuild replaces
+    /// it, and one whose file is gone is created empty. Nothing is done
+    /// for a root that a rebuild would refuse.
+    ///
+    /// A rebuild does this itself. The mutation boundary does it first
+    /// because it records a request before the request's operation
+    /// begins, and has nowhere to record one until the index is back.
+    pub(crate) fn restore_index_for_rebuild(&self, root: &Path) -> Result<(), RepositoryError> {
+        let operation = RepositoryOperation::RebuildRepository;
+        let (_repository, root) = canonical_repository_root(root, operation)?;
+        if self.requires_corrupt_cache_replacement()? {
+            return self.replace_corrupt_cache(operation, &root);
+        }
+        // The index is not known to be corrupt and cannot be read: its
+        // file is gone. Opening it for writing creates it.
+        let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, &root))?;
+        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, &root))
     }
 
     pub fn repository_snapshot(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {
