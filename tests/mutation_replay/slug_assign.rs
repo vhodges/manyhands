@@ -368,3 +368,89 @@ fn a_foreign_commit_that_carries_a_short_code_is_not_the_assignment_s_own() {
     assert_eq!(world.branch_tip(TICKET_A), Some(foreign));
     assert_eq!(world.worktree_source(TICKET_A), foreign_source);
 }
+
+/// A short code assignment that completed and whose output was lost, of a
+/// ticket whose file was edited and not committed when the request was
+/// accepted: no copy of the bytes the request was accepted against is
+/// left once it has written. Returns the world, the caller's token and
+/// the assigning commit.
+fn lost_assignment_of_an_uncommitted_ticket() -> (World, String, git2::Oid) {
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(earlier.code, ResultCode::Ok);
+    let path = world
+        .worktree(TICKET_A)
+        .join(crate::support::items::ticket_path(TICKET_A));
+    let edited = world
+        .worktree_source(TICKET_A)
+        .replace("\n---\n", "\n---\nEdited and not committed. ");
+    std::fs::write(&path, &edited).unwrap();
+
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    // The caller has seen the edited file.
+    let token = world.token(TICKET_A);
+    let lost = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
+    assert_eq!(
+        (lost.outcome, lost.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(
+        world.branch_commits(TICKET_A),
+        2,
+        "the assignment committed"
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap();
+    world.reopen();
+    (world, token, commit)
+}
+
+fn assert_reports_the_assigning_commit(world: &World, token: &str, commit: git2::Oid, what: &str) {
+    let commits = world.branch_commits(TICKET_A);
+    let retry = world.execute(REQUEST_1, world.slug_assign(TICKET_A, token));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{what}"
+    );
+    assert_eq!(retry.effects.commit_oid, Some(commit.to_string()), "{what}");
+    assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished),
+        "{what}"
+    );
+}
+
+#[test]
+fn a_lost_assignment_of_an_uncommitted_ticket_is_reported_after_a_later_edit() {
+    let (world, token, commit) = lost_assignment_of_an_uncommitted_ticket();
+    // Someone edits the file again and does not commit.
+    let path = world
+        .worktree(TICKET_A)
+        .join(crate::support::items::ticket_path(TICKET_A));
+    let edited = world
+        .worktree_source(TICKET_A)
+        .replace("\n---\n", "\n---\nEdited again. ");
+    std::fs::write(&path, &edited).unwrap();
+
+    assert_reports_the_assigning_commit(&world, &token, commit, "a later edit");
+    assert_eq!(world.worktree_source(TICKET_A), edited);
+}
+
+#[test]
+fn a_lost_assignment_of_an_uncommitted_ticket_is_reported_after_a_later_save() {
+    let (world, token, commit) = lost_assignment_of_an_uncommitted_ticket();
+    // Another request saves the ticket and commits.
+    let later = world.execute(
+        REQUEST_3,
+        Mutation::TicketSave(manyhands::repository::TicketSaveInput {
+            draft: World::draft("A later title", "A later body.\n"),
+            ..world.save_input(TICKET_A, &world.token(TICKET_A))
+        }),
+    );
+    assert_eq!(later.code, ResultCode::Ok);
+    assert_ne!(world.branch_tip(TICKET_A), Some(commit));
+
+    assert_reports_the_assigning_commit(&world, &token, commit, "a later save");
+}

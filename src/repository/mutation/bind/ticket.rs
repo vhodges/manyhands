@@ -888,6 +888,11 @@ pub(crate) struct SlugAssignBinding {
     /// request intends its file to be but for a short code, and the short
     /// code to write where the file has none.
     found: Option<canonical::Ticket>,
+    /// Whether `found` is the file the request was accepted against, by
+    /// its recorded digest. It is not when that file was edited and not
+    /// committed at acceptance and has been written since: no copy of it
+    /// is left, and `found` is then the ticket as it is now.
+    found_is_accepted: bool,
     slug: Option<String>,
 }
 
@@ -906,6 +911,7 @@ impl From<TicketSlugAssignInput> for SlugAssignBinding {
             observation,
             initials,
             found: None,
+            found_is_accepted: false,
             slug: None,
         }
     }
@@ -995,6 +1001,12 @@ impl save::Save for SlugAssignBinding {
     /// against, and a short code is there. Which code is not asked: it is
     /// written once, and the initials or the prefix it was composed from
     /// may have changed since.
+    ///
+    /// When the file the request was accepted against is not to be had,
+    /// there is nothing to compare the other fields with: the ticket as
+    /// it is now would rule out the request's own commit as soon as
+    /// anyone changed the ticket after it. A short code alone is then
+    /// what the request intends.
     fn holds_bytes(&self, bytes: &[u8]) -> bool {
         let (Some(mut file), Some(mut found)) = (
             parse_ticket(&ticket_path(&self.id_text()), bytes),
@@ -1004,6 +1016,9 @@ impl save::Save for SlugAssignBinding {
         };
         if !has_slug(&file) {
             return false;
+        }
+        if !self.found_is_accepted {
+            return true;
         }
         file.unknown.shift_remove("slug");
         found.unknown.shift_remove("slug");
@@ -1070,13 +1085,12 @@ impl save::Save for SlugAssignBinding {
             .map_err(|error| Answer::of_read(&error))?;
         let id = self.id_text();
         let path = ticket_path(&id);
-        let found = self
-            .found_file(accepted)
-            .as_deref()
-            .and_then(|bytes| parse_ticket(&path, bytes))
-            // The file is gone or is no ticket any more.
-            .ok_or_else(|| Answer::stopped(ResultCode::ExternalChange))?;
-        self.found = Some(found);
+        // The file is gone or is no ticket any more.
+        let changed = || Answer::stopped(ResultCode::ExternalChange);
+        let bytes = self.found_file(accepted).ok_or_else(changed)?;
+        self.found = Some(parse_ticket(&path, &bytes).ok_or_else(changed)?);
+        self.found_is_accepted =
+            ExpectedPathObservation::from_bytes(&bytes) == accepted.expectation();
         let written = context_file(repository.root(), &id)
             .as_deref()
             .and_then(|bytes| parse_ticket(&path, bytes))
@@ -1118,6 +1132,7 @@ impl Binding for SlugAssignBinding {
             // Worked out from the repository: no part of what the caller
             // asked for.
             found: _,
+            found_is_accepted: _,
             slug: _,
         } = self;
         builder
@@ -1189,6 +1204,7 @@ impl Binding for SlugAssignBinding {
             &observed.bytes,
         )?;
         self.found = Some(current);
+        self.found_is_accepted = true;
         self.slug = Some(slug);
         prepared(repository.root(), &id, expected)
     }
