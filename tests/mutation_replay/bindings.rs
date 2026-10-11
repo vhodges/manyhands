@@ -180,7 +180,60 @@ const CASES: [Case; 6] = [
     },
 ];
 
-impl Case {
+/// One run of a case: from the fixture as it is, where the item has no
+/// editing context, or after the case's seed.
+struct Run {
+    case: &'static Case,
+    seeded: bool,
+}
+
+impl std::ops::Deref for Run {
+    type Target = Case;
+
+    fn deref(&self) -> &Case {
+        self.case
+    }
+}
+
+/// Every case from the fixture as it is, and each case that has a seed
+/// once more after it. The first set drives every command from an item
+/// with no editing context; the second is what gives the privacy scans
+/// of a move and a short code assignment content to find.
+fn runs() -> Vec<Run> {
+    let unseeded = CASES.iter().map(|case| Run {
+        case,
+        seeded: false,
+    });
+    let seeded = CASES
+        .iter()
+        .filter(|case| case.seed.is_some())
+        .map(|case| Run { case, seeded: true });
+    unseeded.chain(seeded).collect()
+}
+
+impl Run {
+    /// The command, and whether this run is the seeded one.
+    fn label(&self) -> String {
+        format!(
+            "{}{}",
+            self.command,
+            if self.seeded { ", seeded" } else { "" }
+        )
+    }
+
+    /// The item's file in its editing context, if it has one, and the
+    /// file at a move's destination there.
+    fn context_files(&self, world: &World) -> [Option<String>; 2] {
+        let path = match self.id {
+            DOCUMENT => DOCUMENT_PATH.to_owned(),
+            id => items::ticket_path(id),
+        };
+        [
+            world.context_source(self.id, &path),
+            world.context_source(self.id, DOCUMENT_MOVED_PATH),
+        ]
+    }
+
     fn tokens(&self, world: &World) -> Tokens {
         Tokens {
             item: if self.exists {
@@ -194,13 +247,13 @@ impl Case {
 
     /// How many commits the item's branch has before the case's request.
     fn commits(&self) -> usize {
-        usize::from(self.seed.is_some())
+        usize::from(self.seeded)
     }
 
     /// A world for the case, seeded, with what its caller read from it.
     fn world(&self) -> (World, Tokens) {
         let world = World::new();
-        if let Some(seed) = self.seed {
+        if let (true, Some(seed)) = (self.seeded, self.seed) {
             let seeded = world.execute(REQUEST_2, seed(&world));
             assert_eq!(seeded.code, ResultCode::Ok, "{}: the seed", self.command);
             // What the request will carry holds the sentinels.
@@ -229,7 +282,7 @@ impl Case {
         envelope: &manyhands::results::Envelope<manyhands::repository::MutationDataDto>,
         what: &str,
     ) {
-        let what = format!("{}: {what}", self.command);
+        let what = format!("{}: {what}", self.label());
         assert_eq!(
             (envelope.outcome, envelope.code),
             (Outcome::Success, ResultCode::Ok),
@@ -268,8 +321,8 @@ impl Case {
 
 #[test]
 fn a_finished_request_is_replayed_and_a_changed_one_is_refused() {
-    for case in &CASES {
-        let command = case.command;
+    for case in &runs() {
+        let command = case.label();
         let (world, tokens) = case.world();
         let first = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Same));
         case.assert_finished(&world, &first, "the first call");
@@ -312,9 +365,9 @@ const INTERRUPTIONS: [(FailurePoint, bool); 3] = [
 
 #[test]
 fn an_interrupted_request_is_finished_by_its_retry() {
-    for case in &CASES {
+    for case in &runs() {
         for (point, written) in INTERRUPTIONS {
-            let what = format!("{}, {point:?}", case.command);
+            let what = format!("{}, {point:?}", case.label());
             let (mut world, tokens) = case.failing_at(point);
             let first = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Same));
             // Written and not committed is an effect, so the result is
@@ -368,8 +421,8 @@ fn an_interrupted_request_is_finished_by_its_retry() {
 
 #[test]
 fn a_failure_after_the_checkpoint_is_partial_and_its_retry_reports_the_commit() {
-    for case in &CASES {
-        let command = case.command;
+    for case in &runs() {
+        let command = case.label();
         let (mut world, tokens) = case.failing_at(FailurePoint::BeforeIndexTransactionCommit);
         let first = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Same));
         assert_eq!(
@@ -411,8 +464,8 @@ fn a_failure_after_the_checkpoint_is_partial_and_its_retry_reports_the_commit() 
 
 #[test]
 fn a_lost_result_is_answered_with_the_request_s_commit() {
-    for case in &CASES {
-        let command = case.command;
+    for case in &runs() {
+        let command = case.label();
         let (mut world, tokens) = case.failing_at(FailurePoint::BeforeRequestSettlement);
         let lost = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Same));
         assert_eq!(
@@ -436,18 +489,23 @@ fn a_lost_result_is_answered_with_the_request_s_commit() {
 
 #[test]
 fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
-    for case in &CASES {
-        let command = case.command;
+    for case in &runs() {
+        let command = case.label();
         let (world, tokens) = case.world();
         let primary = world.primary_head();
         let document = world.primary_source_at(DOCUMENT_PATH);
         let tip = world.branch_tip(case.id);
+        let context = case.context_files(&world);
 
         let rejected = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Rejected));
         assert_eq!(rejected.code, case.rejection, "{command}");
         assert_eq!(rejected.effects, Effects::not_requested(), "{command}");
         assert_eq!(rejected.operation_id, None, "{command}");
-        if case.seed.is_none() {
+        if case.seeded {
+            // The item has a context: nothing was written in it.
+            assert_eq!(case.context_files(&world), context, "{command}");
+            assert_eq!(context[1], None, "{command}");
+        } else {
             world.assert_nothing_exists(REQUEST_1, case.id);
         }
         assert!(world.record(REQUEST_1).is_none(), "{command}");
