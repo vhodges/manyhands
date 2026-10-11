@@ -736,230 +736,487 @@ fn snapshot() -> RepositorySnapshot {
     }
 }
 
+/// Checks one outcome enum's table: it names each variant once, `count`
+/// being how many there are, and `code` gives each the code beside it.
+fn assert_outcomes<T>(
+    name: &str,
+    table: Vec<(T, ResultCode)>,
+    count: fn(&T) -> usize,
+    code: impl Fn(&T) -> ResultCode,
+) {
+    assert_complete(&table, count(&table[0].0));
+    for (index, (outcome, expected)) in table.iter().enumerate() {
+        assert_eq!(code(outcome), *expected, "{name}, entry {index}");
+    }
+}
+
+// How many variants each outcome enum has. Each match has no wildcard
+// arm, so a variant added later does not compile until it is counted,
+// and the table test then fails until the variant is in its table.
+
+fn remote_outcomes(outcome: &RemoteOutcome) -> usize {
+    match outcome {
+        RemoteOutcome::Changed | RemoteOutcome::NoChange | RemoteOutcome::IndexPending { .. } => 3,
+    }
+}
+
+fn refresh_outcomes(outcome: &RefreshOutcome) -> usize {
+    match outcome {
+        RefreshOutcome::IndexPending { .. }
+        | RefreshOutcome::Refreshed { .. }
+        | RefreshOutcome::RetryRequired { .. } => 3,
+    }
+}
+
+fn publication_remote_outcomes(outcome: &PublicationRemoteOutcome) -> usize {
+    match outcome {
+        PublicationRemoteOutcome::Changed { .. }
+        | PublicationRemoteOutcome::NoChange
+        | PublicationRemoteOutcome::RegistrationPending { .. }
+        | PublicationRemoteOutcome::IndexPending { .. } => 4,
+    }
+}
+
+fn enable_outcomes(outcome: &EnableRepositoryOutcome) -> usize {
+    match outcome {
+        EnableRepositoryOutcome::Enabled { .. }
+        | EnableRepositoryOutcome::AlreadyEnabled
+        | EnableRepositoryOutcome::IdentityRequired
+        | EnableRepositoryOutcome::IndexPending(_)
+        | EnableRepositoryOutcome::RegistrationPending { .. } => 5,
+    }
+}
+
+fn remove_registration_outcomes(outcome: &RemoveRegistrationOutcome) -> usize {
+    match outcome {
+        RemoveRegistrationOutcome::Removed | RemoveRegistrationOutcome::NotRegistered => 2,
+    }
+}
+
+fn synchronization_outcomes(outcome: &SynchronizationOutcome) -> usize {
+    match outcome {
+        SynchronizationOutcome::Published { .. }
+        | SynchronizationOutcome::AlreadyCurrent { .. }
+        | SynchronizationOutcome::PublishPending { .. } => 3,
+    }
+}
+
+fn synchronization_results(result: &SynchronizationResult) -> usize {
+    match result {
+        SynchronizationResult::Complete(_) | SynchronizationResult::IndexPending(_) => 2,
+    }
+}
+
+fn register_key_outcomes(outcome: &RegisterSharedKeyOutcome) -> usize {
+    match outcome {
+        RegisterSharedKeyOutcome::Registered(_)
+        | RegisterSharedKeyOutcome::SourceAlreadyRegistered { .. } => 2,
+    }
+}
+
+fn key_selection_outcomes(outcome: &SharedKeySelectionOutcome) -> usize {
+    match outcome {
+        SharedKeySelectionOutcome::Selected(_)
+        | SharedKeySelectionOutcome::Cleared
+        | SharedKeySelectionOutcome::AlreadyCleared => 3,
+    }
+}
+
+fn unregister_key_outcomes(outcome: &UnregisterSharedKeyOutcome) -> usize {
+    match outcome {
+        UnregisterSharedKeyOutcome::Unregistered
+        | UnregisterSharedKeyOutcome::NotRegistered
+        | UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared => 3,
+    }
+}
+
+fn generate_key_outcomes(outcome: &GenerateSharedKeyOutcome) -> usize {
+    match outcome {
+        GenerateSharedKeyOutcome::Created(_)
+        | GenerateSharedKeyOutcome::AlreadyCreated(_)
+        | GenerateSharedKeyOutcome::RecoveryRequired(_) => 3,
+    }
+}
+
+fn delete_key_outcomes(outcome: &DeleteGeneratedKeyOutcome) -> usize {
+    match outcome {
+        DeleteGeneratedKeyOutcome::Deleted
+        | DeleteGeneratedKeyOutcome::AlreadyDeleted
+        | DeleteGeneratedKeyOutcome::Cancelled
+        | DeleteGeneratedKeyOutcome::RecoveryRequired(_) => 4,
+    }
+}
+
+fn key_deletion_preflights(preflight: &GeneratedKeyDeletionPreflight) -> usize {
+    match preflight {
+        GeneratedKeyDeletionPreflight::ConfirmationRequired(_)
+        | GeneratedKeyDeletionPreflight::NotRegistered
+        | GeneratedKeyDeletionPreflight::ImportedKey
+        | GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => 4,
+    }
+}
+
+fn save_outcomes(outcome: &SaveOutcome) -> usize {
+    match outcome {
+        SaveOutcome::IdentityRequired { .. }
+        | SaveOutcome::Saved { .. }
+        | SaveOutcome::IndexPending { .. } => 3,
+    }
+}
+
 #[test]
 fn every_domain_outcome_has_its_code() {
     use ResultCode as Code;
     use unbound::*;
+    let commit_oid = oid(1);
+    let root = || std::path::PathBuf::from("/repository");
 
-    assert_eq!(remote_outcome_code(&RemoteOutcome::Changed), Code::Ok);
-    assert_eq!(
-        remote_outcome_code(&RemoteOutcome::NoChange),
-        Code::AlreadyApplied
+    assert_outcomes(
+        "RemoteOutcome",
+        vec![
+            (RemoteOutcome::Changed, Code::Ok),
+            (RemoteOutcome::NoChange, Code::AlreadyApplied),
+            (
+                RemoteOutcome::IndexPending {
+                    authoritative: RemoteChange::Changed,
+                },
+                Code::DiscoveryPending,
+            ),
+        ],
+        remote_outcomes,
+        remote_outcome_code,
     );
-    for authoritative in [RemoteChange::Changed, RemoteChange::NoChange] {
-        assert_eq!(
-            remote_outcome_code(&RemoteOutcome::IndexPending { authoritative }),
-            Code::DiscoveryPending
-        );
-    }
+    assert_eq!(
+        remote_outcome_code(&RemoteOutcome::IndexPending {
+            authoritative: RemoteChange::NoChange
+        }),
+        Code::DiscoveryPending
+    );
 
-    assert_eq!(
-        refresh_outcome_code(&RefreshOutcome::Refreshed {
-            snapshot: snapshot()
-        }),
-        Code::Ok
-    );
-    assert_eq!(
-        refresh_outcome_code(&RefreshOutcome::IndexPending {
-            root: "/repository".into()
-        }),
-        Code::Busy
-    );
-    assert_eq!(
-        refresh_outcome_code(&RefreshOutcome::RetryRequired {
-            root: "/repository".into(),
-            context: None
-        }),
-        Code::Busy
+    assert_outcomes(
+        "RefreshOutcome",
+        vec![
+            (
+                RefreshOutcome::Refreshed {
+                    snapshot: snapshot(),
+                },
+                Code::Ok,
+            ),
+            (RefreshOutcome::IndexPending { root: root() }, Code::Busy),
+            (
+                RefreshOutcome::RetryRequired {
+                    root: root(),
+                    context: None,
+                },
+                Code::Busy,
+            ),
+        ],
+        refresh_outcomes,
+        refresh_outcome_code,
     );
 
     // A selection is read as a save of the configuration file: its code
-    // is the save's, given the commit the evidence check found.
-    let commit_oid = oid(1);
-    for (outcome, with_commit, without) in [
-        (
-            PublicationRemoteOutcome::Changed { commit_oid },
-            Code::Ok,
-            // The head it names is not this request's commit.
-            Code::AlreadyApplied,
-        ),
-        (
-            PublicationRemoteOutcome::NoChange,
-            Code::Ok,
-            Code::AlreadyApplied,
-        ),
-        (
-            PublicationRemoteOutcome::RegistrationPending { commit_oid },
-            Code::RegistrationPending,
-            Code::RegistrationPending,
-        ),
-        (
-            PublicationRemoteOutcome::IndexPending {
-                commit_oid: Some(commit_oid),
-            },
-            Code::DiscoveryPending,
-            Code::DiscoveryPending,
-        ),
-        (
-            PublicationRemoteOutcome::IndexPending { commit_oid: None },
-            Code::DiscoveryPending,
-            Code::DiscoveryPending,
-        ),
-    ] {
-        let report = SaveReport::of_publication_remote(outcome);
-        assert_eq!(report.result(Some(commit_oid)).0, with_commit);
-        assert_eq!(report.result(None).0, without);
-    }
+    // is the save's, given the commit the evidence check found. Each
+    // table is the code with a commit found, then with none.
+    let selections = || {
+        vec![
+            (
+                PublicationRemoteOutcome::Changed { commit_oid },
+                Code::Ok,
+                // The head it names is not this request's commit.
+                Code::AlreadyApplied,
+            ),
+            (
+                PublicationRemoteOutcome::NoChange,
+                Code::Ok,
+                Code::AlreadyApplied,
+            ),
+            (
+                PublicationRemoteOutcome::RegistrationPending { commit_oid },
+                Code::RegistrationPending,
+                Code::RegistrationPending,
+            ),
+            (
+                PublicationRemoteOutcome::IndexPending {
+                    commit_oid: Some(commit_oid),
+                },
+                Code::DiscoveryPending,
+                Code::DiscoveryPending,
+            ),
+        ]
+    };
+    assert_outcomes(
+        "PublicationRemoteOutcome, with its commit",
+        selections()
+            .into_iter()
+            .map(|(outcome, with_commit, _)| (outcome, with_commit))
+            .collect(),
+        publication_remote_outcomes,
+        |outcome| {
+            SaveReport::of_publication_remote(clone_selection(outcome))
+                .result(Some(commit_oid))
+                .0
+        },
+    );
+    assert_outcomes(
+        "PublicationRemoteOutcome, with no commit",
+        selections()
+            .into_iter()
+            .map(|(outcome, _, without)| (outcome, without))
+            .collect(),
+        publication_remote_outcomes,
+        |outcome| {
+            SaveReport::of_publication_remote(clone_selection(outcome))
+                .result(None)
+                .0
+        },
+    );
 
-    for (outcome, code) in [
-        (EnableRepositoryOutcome::Enabled { commit_oid }, Code::Ok),
+    let context = || crate::repository::ItemContext {
+        root: root(),
+        kind: crate::repository::AuthoringKind::Ticket,
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        branch: "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
+        worktree: root(),
+    };
+    // A report is made from a save's outcome by value.
+    let saves = vec![
         (
-            EnableRepositoryOutcome::AlreadyEnabled,
-            Code::AlreadyApplied,
-        ),
-        (
-            EnableRepositoryOutcome::IdentityRequired,
+            SaveOutcome::IdentityRequired { context: context() },
             Code::IdentityRequired,
         ),
         (
-            EnableRepositoryOutcome::IndexPending(IndexPending::new(commit_oid)),
+            SaveOutcome::Saved {
+                context: context(),
+                checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            },
+            Code::Ok,
+        ),
+        (
+            SaveOutcome::IndexPending {
+                context: context(),
+                checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+            },
             Code::DiscoveryPending,
         ),
-        (
-            EnableRepositoryOutcome::RegistrationPending { commit_oid },
-            Code::RegistrationPending,
-        ),
-    ] {
-        assert_eq!(enable_outcome_code(&outcome), code);
+    ];
+    assert_complete(&saves, save_outcomes(&saves[0].0));
+    for (outcome, code) in saves {
+        assert_eq!(SaveReport::of(outcome).result(Some(commit_oid)).0, code);
     }
 
-    assert_eq!(
-        remove_registration_outcome_code(&RemoveRegistrationOutcome::Removed),
-        Code::Ok
-    );
-    assert_eq!(
-        remove_registration_outcome_code(&RemoveRegistrationOutcome::NotRegistered),
-        Code::AlreadyApplied
+    assert_outcomes(
+        "EnableRepositoryOutcome",
+        vec![
+            (EnableRepositoryOutcome::Enabled { commit_oid }, Code::Ok),
+            (
+                EnableRepositoryOutcome::AlreadyEnabled,
+                Code::AlreadyApplied,
+            ),
+            (
+                EnableRepositoryOutcome::IdentityRequired,
+                Code::IdentityRequired,
+            ),
+            (
+                EnableRepositoryOutcome::IndexPending(IndexPending::new(commit_oid)),
+                Code::DiscoveryPending,
+            ),
+            (
+                EnableRepositoryOutcome::RegistrationPending { commit_oid },
+                Code::RegistrationPending,
+            ),
+        ],
+        enable_outcomes,
+        enable_outcome_code,
     );
 
-    let target = context_target;
+    assert_outcomes(
+        "RemoveRegistrationOutcome",
+        vec![
+            (RemoveRegistrationOutcome::Removed, Code::Ok),
+            (
+                RemoveRegistrationOutcome::NotRegistered,
+                Code::AlreadyApplied,
+            ),
+        ],
+        remove_registration_outcomes,
+        remove_registration_outcome_code,
+    );
+
     let published = || SynchronizationOutcome::Published {
-        target: target(),
+        target: context_target(),
         oid: commit_oid,
     };
-    for (outcome, code) in [
-        (published(), Code::Ok),
-        (
-            SynchronizationOutcome::AlreadyCurrent {
-                target: target(),
-                oid: commit_oid,
-            },
-            Code::AlreadyApplied,
-        ),
-        (
-            SynchronizationOutcome::PublishPending {
-                target: target(),
-                local_oid: commit_oid,
-                reason: PublishPendingReason::NoPublicationRemote,
-            },
-            Code::PublicationRemoteRequired,
-        ),
-    ] {
-        assert_eq!(synchronization_outcome_code(&outcome), code);
+    let synchronizations = || {
+        vec![
+            (published(), Code::Ok),
+            (
+                SynchronizationOutcome::AlreadyCurrent {
+                    target: context_target(),
+                    oid: commit_oid,
+                },
+                Code::AlreadyApplied,
+            ),
+            (
+                SynchronizationOutcome::PublishPending {
+                    target: context_target(),
+                    local_oid: commit_oid,
+                    reason: PublishPendingReason::NoPublicationRemote,
+                },
+                Code::PublicationRemoteRequired,
+            ),
+        ]
+    };
+    assert_outcomes(
+        "SynchronizationOutcome",
+        synchronizations(),
+        synchronization_outcomes,
+        synchronization_outcome_code,
+    );
+    for (outcome, code) in synchronizations() {
         assert_eq!(
             synchronization_result_code(&SynchronizationResult::Complete(outcome)),
             code
         );
     }
-    assert_eq!(
-        synchronization_result_code(&SynchronizationResult::IndexPending(IndexPending::new(
-            published()
-        ))),
-        Code::DiscoveryPending
+    assert_outcomes(
+        "SynchronizationResult",
+        vec![
+            (SynchronizationResult::Complete(published()), Code::Ok),
+            (
+                SynchronizationResult::IndexPending(IndexPending::new(published())),
+                Code::DiscoveryPending,
+            ),
+        ],
+        synchronization_results,
+        synchronization_result_code,
     );
 
-    assert_eq!(
-        register_key_outcome_code(&RegisterSharedKeyOutcome::Registered(registration())),
-        Code::Ok
+    assert_outcomes(
+        "RegisterSharedKeyOutcome",
+        vec![
+            (
+                RegisterSharedKeyOutcome::Registered(registration()),
+                Code::Ok,
+            ),
+            (
+                RegisterSharedKeyOutcome::SourceAlreadyRegistered {
+                    existing: SharedKeyId::new(),
+                },
+                Code::AlreadyApplied,
+            ),
+        ],
+        register_key_outcomes,
+        register_key_outcome_code,
     );
-    assert_eq!(
-        register_key_outcome_code(&RegisterSharedKeyOutcome::SourceAlreadyRegistered {
-            existing: SharedKeyId::new()
-        }),
-        Code::AlreadyApplied
+    assert_outcomes(
+        "SharedKeySelectionOutcome",
+        vec![
+            (
+                SharedKeySelectionOutcome::Selected(registration()),
+                Code::Ok,
+            ),
+            (SharedKeySelectionOutcome::Cleared, Code::Ok),
+            (
+                SharedKeySelectionOutcome::AlreadyCleared,
+                Code::AlreadyApplied,
+            ),
+        ],
+        key_selection_outcomes,
+        key_selection_outcome_code,
     );
-    for (outcome, code) in [
-        (
-            SharedKeySelectionOutcome::Selected(registration()),
-            Code::Ok,
-        ),
-        (SharedKeySelectionOutcome::Cleared, Code::Ok),
-        (
-            SharedKeySelectionOutcome::AlreadyCleared,
-            Code::AlreadyApplied,
-        ),
-    ] {
-        assert_eq!(key_selection_outcome_code(&outcome), code);
-    }
-    for (outcome, code) in [
-        (UnregisterSharedKeyOutcome::Unregistered, Code::Ok),
-        (
-            UnregisterSharedKeyOutcome::NotRegistered,
-            Code::AlreadyApplied,
-        ),
-        (
-            UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared,
-            Code::SelectedKeyInUse,
-        ),
-    ] {
-        assert_eq!(unregister_key_outcome_code(outcome), code);
-    }
-    for (outcome, code) in [
-        (GenerateSharedKeyOutcome::Created(registration()), Code::Ok),
-        (
-            GenerateSharedKeyOutcome::AlreadyCreated(registration()),
-            Code::AlreadyApplied,
-        ),
-        (
-            GenerateSharedKeyOutcome::RecoveryRequired(key_recovery()),
-            Code::RecoveryRequired,
-        ),
-    ] {
-        assert_eq!(generate_key_outcome_code(&outcome), code);
-    }
-    for (outcome, code) in [
-        (DeleteGeneratedKeyOutcome::Deleted, Code::Ok),
-        (
-            DeleteGeneratedKeyOutcome::AlreadyDeleted,
-            Code::AlreadyApplied,
-        ),
-        (DeleteGeneratedKeyOutcome::Cancelled, Code::Cancelled),
-        (
-            DeleteGeneratedKeyOutcome::RecoveryRequired(key_recovery()),
-            Code::RecoveryRequired,
-        ),
-    ] {
-        assert_eq!(delete_key_outcome_code(&outcome), code);
-    }
-    for (preflight, code) in [
-        (
-            GeneratedKeyDeletionPreflight::ConfirmationRequired(registration()),
-            Code::ConfirmationRequired,
-        ),
-        (
-            GeneratedKeyDeletionPreflight::NotRegistered,
-            Code::KeyNotFound,
-        ),
-        (
-            GeneratedKeyDeletionPreflight::ImportedKey,
-            Code::KeyNotDeletable,
-        ),
-        (
-            GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared,
-            Code::SelectedKeyInUse,
-        ),
-    ] {
-        assert_eq!(key_deletion_preflight_code(&preflight), code);
+    assert_outcomes(
+        "UnregisterSharedKeyOutcome",
+        vec![
+            (UnregisterSharedKeyOutcome::Unregistered, Code::Ok),
+            (
+                UnregisterSharedKeyOutcome::NotRegistered,
+                Code::AlreadyApplied,
+            ),
+            (
+                UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared,
+                Code::SelectedKeyInUse,
+            ),
+        ],
+        unregister_key_outcomes,
+        |outcome| unregister_key_outcome_code(*outcome),
+    );
+    assert_outcomes(
+        "GenerateSharedKeyOutcome",
+        vec![
+            (GenerateSharedKeyOutcome::Created(registration()), Code::Ok),
+            (
+                GenerateSharedKeyOutcome::AlreadyCreated(registration()),
+                Code::AlreadyApplied,
+            ),
+            (
+                GenerateSharedKeyOutcome::RecoveryRequired(key_recovery()),
+                Code::RecoveryRequired,
+            ),
+        ],
+        generate_key_outcomes,
+        generate_key_outcome_code,
+    );
+    assert_outcomes(
+        "DeleteGeneratedKeyOutcome",
+        vec![
+            (DeleteGeneratedKeyOutcome::Deleted, Code::Ok),
+            (
+                DeleteGeneratedKeyOutcome::AlreadyDeleted,
+                Code::AlreadyApplied,
+            ),
+            (DeleteGeneratedKeyOutcome::Cancelled, Code::Cancelled),
+            (
+                DeleteGeneratedKeyOutcome::RecoveryRequired(key_recovery()),
+                Code::RecoveryRequired,
+            ),
+        ],
+        delete_key_outcomes,
+        delete_key_outcome_code,
+    );
+    assert_outcomes(
+        "GeneratedKeyDeletionPreflight",
+        vec![
+            (
+                GeneratedKeyDeletionPreflight::ConfirmationRequired(registration()),
+                Code::ConfirmationRequired,
+            ),
+            (
+                GeneratedKeyDeletionPreflight::NotRegistered,
+                Code::KeyNotFound,
+            ),
+            (
+                GeneratedKeyDeletionPreflight::ImportedKey,
+                Code::KeyNotDeletable,
+            ),
+            (
+                GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared,
+                Code::SelectedKeyInUse,
+            ),
+        ],
+        key_deletion_preflights,
+        key_deletion_preflight_code,
+    );
+}
+
+/// `PublicationRemoteOutcome` is not `Clone`, and a report is made from
+/// one by value.
+fn clone_selection(outcome: &PublicationRemoteOutcome) -> PublicationRemoteOutcome {
+    match outcome {
+        PublicationRemoteOutcome::Changed { commit_oid } => PublicationRemoteOutcome::Changed {
+            commit_oid: *commit_oid,
+        },
+        PublicationRemoteOutcome::NoChange => PublicationRemoteOutcome::NoChange,
+        PublicationRemoteOutcome::RegistrationPending { commit_oid } => {
+            PublicationRemoteOutcome::RegistrationPending {
+                commit_oid: *commit_oid,
+            }
+        }
+        PublicationRemoteOutcome::IndexPending { commit_oid } => {
+            PublicationRemoteOutcome::IndexPending {
+                commit_oid: *commit_oid,
+            }
+        }
     }
 }
 
