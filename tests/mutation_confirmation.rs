@@ -4835,3 +4835,205 @@ fn a_removal_that_fails_before_its_step_is_recorded_is_partial_and_its_retry_is_
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);
 }
+
+// ---------------------------------------------------------------------
+// `remote remove`: what Git removes of a sibling remote
+// ---------------------------------------------------------------------
+
+/// Every entry of the repository's own configuration file, in order.
+fn local_entries(root: &Path) -> Vec<(String, String)> {
+    let config = git2::Config::open(&root.join(".git/config")).unwrap();
+    let mut entries = config.entries(None).unwrap();
+    let mut found = Vec::new();
+    while let Some(entry) = entries.next() {
+        let entry = entry.unwrap();
+        found.push((
+            entry.name().unwrap().to_owned(),
+            entry.value().unwrap_or_default().to_owned(),
+        ));
+    }
+    found
+}
+
+const SIBLING: &str = "git@example.invalid:team/sibling.git";
+
+/// A remote and a sibling whose name begins with its name, the sibling
+/// with a tracking reference. Returns the sibling's configuration and
+/// every reference, as they are.
+fn with_sibling(
+    home: &Home,
+    name: &str,
+    sibling: &str,
+) -> (Vec<(String, String)>, BTreeMap<String, String>) {
+    if home.remote_url(name).is_none() {
+        home.add_remote(name, BACKUP);
+    }
+    home.add_remote(sibling, SIBLING);
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference(&format!("refs/remotes/{sibling}/main"), head, false, "test")
+        .unwrap();
+    (sibling_entries(home, sibling), references(home.root()))
+}
+
+fn sibling_entries(home: &Home, sibling: &str) -> Vec<(String, String)> {
+    local_entries(home.root())
+        .into_iter()
+        .filter(|(key, _)| key.starts_with(&format!("remote.{sibling}.")))
+        .collect()
+}
+
+/// Git removes a remote's configuration by a pattern that is not
+/// anchored, and its tracking references by a pattern whose `*` crosses
+/// `/`. So removing `origin` took the whole configuration of
+/// `origin.bak`, and removing `team` took the tracking references of
+/// `team/fork`, each behind a preview that named neither. No preview is
+/// given of such a remote, and nothing is removed.
+#[test]
+fn a_remote_whose_removal_would_take_part_of_a_sibling_remote_is_refused_at_prepare() {
+    for (name, sibling) in [("origin", "origin.bak"), ("team", "team/fork")] {
+        let home = Home::new();
+        let (config, refs) = with_sibling(&home, name, sibling);
+        assert_eq!(config.len(), 2, "{name}");
+
+        let refused = home.prepare(&home.remove_remote(name));
+
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{name}");
+        assert_eq!(refused.data, None, "{name}");
+        assert_eq!(home.confirmation_rows(), 0, "{name}");
+        assert_eq!(sibling_entries(&home, sibling), config, "{name}");
+        assert_eq!(references(home.root()), refs, "{name}");
+        assert_eq!(home.remote_url(name).as_deref(), Some(BACKUP), "{name}");
+
+        // The sibling itself takes nothing of the first, and is removed.
+        let (confirmation, _) = home.preview(&home.remove_remote(sibling));
+        assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote(sibling)));
+        assert_eq!(home.remote_url(name).as_deref(), Some(BACKUP), "{name}");
+        assert_eq!(home.remote_url(sibling), None, "{name}");
+    }
+}
+
+/// The sibling is added after the preview: the request is refused
+/// before it is accepted. Added under a request that is accepted and
+/// has done nothing: its retry is refused before the domain call.
+#[test]
+fn a_sibling_remote_added_after_the_preview_is_refused_at_execute_and_on_a_retry() {
+    for (name, sibling) in [("origin", "origin.bak"), ("team", "team/fork")] {
+        let home = Home::new();
+        home.add_remote(name, BACKUP);
+        let (confirmation, _) = home.preview(&home.remove_remote(name));
+        let (config, refs) = with_sibling(&home, name, sibling);
+
+        let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote(name));
+
+        assert_refused(&refused, ResultCode::InvalidRemote, &[]);
+        home.assert_nothing_left(REQUEST_1);
+        assert_eq!(sibling_entries(&home, sibling), config, "{name}");
+        assert_eq!(references(home.root()), refs, "{name}");
+
+        let mut home = Home::new();
+        home.add_remote(name, BACKUP);
+        let (confirmation, _) = home.preview(&home.remove_remote(name));
+        home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+        home.execute(REQUEST_1, &confirmation, home.remove_remote(name));
+        assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+        let (config, refs) = with_sibling(&home, name, sibling);
+
+        let refused = home.retry(REQUEST_1, home.remove_remote(name));
+
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{name}");
+        home.assert_nothing_left(REQUEST_1);
+        assert_eq!(sibling_entries(&home, sibling), config, "{name}");
+        assert_eq!(references(home.root()), refs, "{name}");
+        assert_eq!(home.remote_url(name).as_deref(), Some(BACKUP), "{name}");
+    }
+}
+
+/// A sibling that has no tracking reference yet has nothing under the
+/// remote's prefix for Git to take, and its name is still observed: one
+/// that is added after the preview is not what was shown.
+#[test]
+fn a_sibling_remote_with_nothing_to_lose_is_still_part_of_what_was_observed() {
+    let home = Home::new();
+    home.add_remote("team", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("team"));
+    home.add_remote("team/fork", SIBLING);
+    let config = sibling_entries(&home, "team/fork");
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("team"));
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    // A new preview is given, and the removal leaves the sibling whole.
+    let (confirmation, _) = home.preview(&home.remove_remote("team"));
+    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team")));
+    assert_eq!(sibling_entries(&home, "team/fork"), config);
+    assert_eq!(home.remote_url("team/fork").as_deref(), Some(SIBLING));
+}
+
+/// The same unanchored pattern takes any entry whose name holds the
+/// remote's section: here the upstream of a branch named
+/// `remote.backup`. That is refused too.
+#[test]
+fn a_remote_whose_section_name_occurs_in_another_entry_is_refused() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let mut config = home.git().config().unwrap();
+    config
+        .set_str("branch.remote.backup.merge", "refs/heads/main")
+        .unwrap();
+    let entries = local_entries(home.root());
+
+    let refused = home.prepare(&home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::InvalidRemote);
+    assert_eq!(home.confirmation_rows(), 0);
+    assert_eq!(local_entries(home.root()), entries);
+}
+
+/// A push refspec with no destination has its source as its
+/// destination: `push = refs/heads/main` names that branch, and
+/// `push = refs/heads/*` every branch. Both are refused.
+#[test]
+fn a_push_refspec_with_no_destination_is_refused_for_the_branches_it_names() {
+    for push in ["refs/heads/main", "refs/heads/*"] {
+        let home = Home::new();
+        let before = remote_over_local_refs(&home, USUAL_FETCH, Some(push));
+
+        let refused = home.prepare(&home.remove_remote("backup"));
+
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{push}");
+        assert_eq!(home.confirmation_rows(), 0, "{push}");
+        assert_eq!(references(home.root()), before, "{push}");
+    }
+}
+
+/// A negative refspec has no destination and names nothing Git removes:
+/// it is no reason to refuse, and the removal leaves every branch.
+#[test]
+fn a_negative_refspec_does_not_refuse_a_removal_by_itself() {
+    let home = Home::new();
+    let mut expected = remote_over_local_refs(&home, USUAL_FETCH, None);
+    let repository = home.git();
+    repository
+        .remote_add_fetch("backup", "^refs/heads/main")
+        .unwrap();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/backup/topic", head, false, "test")
+        .unwrap();
+
+    let (confirmation, preview) = home.preview(&home.remove_remote("backup"));
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::RemoteRemoved,
+            PreviewEffect::RemoteTrackingRefsRemoved,
+        ]
+    );
+    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
+
+    expected.remove("refs/remotes/backup/topic");
+    assert_eq!(references(home.root()), expected);
+    assert_eq!(home.remote_url("backup"), None);
+}

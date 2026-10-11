@@ -623,6 +623,13 @@ pub struct RemoteRemoveInput {
 /// remote is refused, at `prepare` and before every domain call, and
 /// is never removed through this command.
 ///
+/// Two more things are not the remote's and go with it. A remote named
+/// `<name>/<more>` keeps its tracking references under this remote's
+/// own prefix, where this remote's refspec matches them. And Git removes
+/// the remote's configuration by a pattern that is not anchored, which
+/// takes every entry of a remote named `<name>.<more>`. Either is
+/// refused in the same way.
+///
 /// **A row that ended without a checkpoint step** says nothing here, as
 /// for `remote add`: `remove_remote` records `remote_changed` when it
 /// removed the remote, and completes a row with no step both when it
@@ -666,9 +673,16 @@ struct Removal {
     /// Whether Git would remove any reference with the remote: one that
     /// matches the destination of one of its refspecs.
     tracking_refs: bool,
-    /// Whether any of those is outside `refs/remotes/<name>/`: a
-    /// reference that is not the remote's own tracking reference.
+    /// Whether any of those is outside `refs/remotes/<name>/`, or is
+    /// under it and is the tracking reference of another remote, one
+    /// named `<name>/...`: a reference that is not the remote's own.
     foreign_refs: bool,
+    /// The other remotes whose names begin with this one's and a `.` or
+    /// a `/`, in name order: the ones Git could take a part of.
+    siblings: Vec<String>,
+    /// Whether Git would remove with the remote's section a
+    /// configuration entry that is not the remote's own.
+    foreign_config: bool,
     /// Whether any local branch has the remote as its upstream's.
     upstreams: bool,
     polling: Option<PollingPolicy>,
@@ -736,6 +750,26 @@ impl RemoteRemoveBinding {
         let root = resolved.root().to_owned();
         let repository = git2::Repository::open(&root).map_err(unreadable)?;
         let own = format!("refs/remotes/{}/", self.name);
+        let mut siblings: Vec<String> = repository
+            .remotes()
+            .map_err(unreadable)?
+            .iter()
+            .flatten()
+            .filter(|other| {
+                other
+                    .strip_prefix(self.name.as_str())
+                    .is_some_and(|rest| rest.starts_with(['.', '/']))
+            })
+            .map(str::to_owned)
+            .collect();
+        siblings.sort_unstable();
+        // The references of a remote named `<name>/...` are under this
+        // remote's own prefix, and are not this remote's.
+        let of_a_sibling: Vec<String> = siblings
+            .iter()
+            .filter(|other| other[self.name.len()..].starts_with('/'))
+            .map(|other| format!("refs/remotes/{other}/"))
+            .collect();
         let mut refspecs = Vec::new();
         let (mut tracking_refs, mut foreign_refs) = (false, false);
         let remote = match repository.find_remote(&self.name) {
@@ -767,7 +801,11 @@ impl RemoteRemoveBinding {
                     };
                     if removed {
                         tracking_refs = true;
-                        if !name.is_some_and(|name| name.starts_with(&own)) {
+                        let own = name.is_some_and(|name| {
+                            name.starts_with(&own)
+                                && !of_a_sibling.iter().any(|other| name.starts_with(other))
+                        });
+                        if !own {
                             foreign_refs = true;
                         }
                     }
@@ -802,6 +840,33 @@ impl RemoteRemoveBinding {
             .config()
             .and_then(|mut config| config.snapshot())
             .map_err(unreadable)?;
+        // Git removes the remote's section by deleting every entry whose
+        // name matches `remote\.<name>\..+` anywhere in it: the pattern
+        // is not anchored. Besides the remote's own `remote.<name>.<key>`
+        // that takes every entry of a remote named `<name>.<more>`, and
+        // of anything else whose name holds that text.
+        let mut foreign_config = false;
+        if remote.is_some() {
+            let section = format!("remote.{}.", self.name);
+            let mut entries = config.entries(None).map_err(unreadable)?;
+            while let Some(entry) = entries.next() {
+                let entry = entry.map_err(unreadable)?;
+                // A name that is not text is taken to be matched.
+                let Some(key) = entry.name() else {
+                    foreign_config = true;
+                    continue;
+                };
+                let matched = key
+                    .find(&section)
+                    .is_some_and(|at| key.len() > at + section.len());
+                let own = key
+                    .strip_prefix(&section)
+                    .is_some_and(|rest| !rest.is_empty() && !rest.contains('.'));
+                if matched && !own {
+                    foreign_config = true;
+                }
+            }
+        }
         let mut upstreams = false;
         let mut entries = config
             // The entries `git_remote_delete` looks through.
@@ -822,6 +887,8 @@ impl RemoteRemoveBinding {
             refspecs,
             tracking_refs,
             foreign_refs,
+            siblings,
+            foreign_config,
             upstreams,
             polling,
         })
@@ -838,6 +905,8 @@ impl RemoteRemoveBinding {
             refspecs,
             tracking_refs,
             foreign_refs,
+            siblings,
+            foreign_config,
             upstreams,
             polling,
         } = removal;
@@ -870,6 +939,11 @@ impl RemoteRemoveBinding {
         }
         let observation = flag(observation, "tracking_refs", *tracking_refs);
         let observation = flag(observation, "foreign_refs", *foreign_refs);
+        let mut observation = observation.text("siblings", &siblings.len().to_string());
+        for sibling in siblings {
+            observation = observation.text("sibling", sibling);
+        }
+        let observation = flag(observation, "foreign_config", *foreign_config);
         let observation = flag(observation, "upstreams", *upstreams);
         let observation = match polling {
             Some(PollingPolicy {
@@ -905,12 +979,13 @@ impl RemoteRemoveBinding {
         self.removable(removal)
     }
 
-    /// Refuses a remote whose removal would take with it a reference
-    /// that is not its own tracking reference: a branch, a tag, or
-    /// another remote's. No preview is given of it and it is not
-    /// removed; it is not a remote this command can remove.
+    /// Refuses a remote whose removal would take with it something that
+    /// is not its own: a reference that is not its tracking reference (a
+    /// branch, a tag, another remote's), or a configuration entry of
+    /// another remote. No preview is given of it and it is not removed;
+    /// it is not a remote this command can remove.
     fn removable(&self, removal: &Removal) -> Result<(), Answer> {
-        if removal.foreign_refs {
+        if removal.foreign_refs || removal.foreign_config {
             Err(self.answer(ResultCode::InvalidRemote, false))
         } else {
             Ok(())
