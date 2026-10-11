@@ -480,6 +480,13 @@ fn a_foreign_commit_to_either_path_of_a_move_in_flight_is_an_external_change() {
         assert!(recovery_actions(&envelope).is_empty(), "{what}");
         // Nothing was written, and the other commit is the branch's tip.
         assert_eq!(world.branch_tip(DOCUMENT), Some(foreign), "{what}");
+        // The operation's row is still pending, so the record stays
+        // accepted and names no result: this is open case 1.
+        let record = world.record(REQUEST_1).expect("the record stays");
+        assert_eq!(record.state, RequestState::Accepted, "{what}");
+        assert_eq!(record.result, None, "{what}");
+        assert_eq!(world.pending_journal_rows(), 1, "{what}");
+        assert_eq!(world.request_rows(), 1, "{what}");
         assert_eq!(
             world.context_source(DOCUMENT, path),
             Some(items::document_source(DOCUMENT, "Someone else's", "")),
@@ -528,9 +535,27 @@ fn an_edit_made_under_an_interrupted_move_is_not_committed_as_its_own() {
         REQUEST_1,
         world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent),
     );
-    assert_eq!(retry.code, ResultCode::ExternalChange);
+    // The file at the destination is no longer what the request intends,
+    // so no write is reported as the request's.
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+            Some(FailureClass::Blocked)
+        )
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
     assert!(recovery_actions(&retry).is_empty());
+    // The row is pending, having recorded the steps that made the
+    // context: the record stays accepted.
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    assert_eq!(record.result, None);
+    assert_eq!(world.pending_journal_rows(), 1);
     assert_eq!(world.branch_commits(DOCUMENT), 0, "nothing was committed");
+    // The file it moved from is where it was.
+    assert!(world.context_source(DOCUMENT, DOCUMENT_PATH).is_some());
     assert_eq!(
         world.context_source(DOCUMENT, DOCUMENT_MOVED_PATH),
         Some(edited)

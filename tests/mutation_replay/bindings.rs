@@ -16,8 +16,8 @@ use crate::support::{
     FailOnce,
     items::{self, TICKET_A},
     mutation::{
-        DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH, REQUEST_1,
-        TICKET_NEW, TITLE, World, recovery_actions,
+        BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
+        REQUEST_1, REQUEST_2, TICKET_NEW, TITLE, World, recovery_actions,
     },
 };
 
@@ -47,6 +47,14 @@ struct Case {
     id: &'static str,
     /// Whether the fixture holds the item before the request.
     exists: bool,
+    /// A request made before the case's own, for a command that writes
+    /// content its caller did not send: a move writes the document's
+    /// title and body where it takes it, and a short code assignment
+    /// writes the ticket's fields back. The fixture's own items hold no
+    /// sentinel, so without this the privacy scans of those two cases
+    /// could not fail. It saves the sentinel title and body, which the
+    /// case's request then reads from the file and carries.
+    seed: Option<fn(&World) -> Mutation>,
     request: fn(&World, &Tokens, Input) -> Mutation,
     /// The code `Input::Rejected` is rejected with.
     rejection: ResultCode,
@@ -66,6 +74,7 @@ const CASES: [Case; 6] = [
         command: "document create",
         id: DOCUMENT_NEW,
         exists: false,
+        seed: None,
         request: |world, _, input| {
             let create = |path: &str, draft| {
                 Mutation::DocumentCreate(DocumentCreateInput {
@@ -88,6 +97,7 @@ const CASES: [Case; 6] = [
         command: "document save",
         id: DOCUMENT,
         exists: true,
+        seed: None,
         request: |world, tokens, input| match input {
             Input::Same => world.document_save(DOCUMENT, &tokens.item),
             Input::Changed => Mutation::DocumentSave(DocumentSaveInput {
@@ -102,6 +112,7 @@ const CASES: [Case; 6] = [
         command: "document move",
         id: DOCUMENT,
         exists: true,
+        seed: Some(|world| world.document_save(DOCUMENT, &world.token(DOCUMENT))),
         request: |world, tokens, input| match input {
             Input::Same => {
                 world.document_move(DOCUMENT, &tokens.item, DOCUMENT_MOVED_PATH, &tokens.absent)
@@ -122,6 +133,7 @@ const CASES: [Case; 6] = [
         command: "ticket slug-assign",
         id: TICKET_A,
         exists: true,
+        seed: Some(|world| world.save(TICKET_A, &world.token(TICKET_A))),
         request: |world, tokens, input| match input {
             Input::Same => world.slug_assign(TICKET_A, &tokens.item),
             Input::Changed => Mutation::TicketSlugAssign(TicketSlugAssignInput {
@@ -136,6 +148,7 @@ const CASES: [Case; 6] = [
         command: "ticket create",
         id: TICKET_NEW,
         exists: false,
+        seed: None,
         request: |world, _, input| match input {
             Input::Same => world.create(TICKET_NEW),
             Input::Changed => Mutation::TicketCreate(TicketCreateInput {
@@ -154,6 +167,7 @@ const CASES: [Case; 6] = [
         command: "ticket save",
         id: TICKET_A,
         exists: true,
+        seed: None,
         request: |world, tokens, input| match input {
             Input::Same => world.save(TICKET_A, &tokens.item),
             Input::Changed => Mutation::TicketSave(TicketSaveInput {
@@ -178,9 +192,32 @@ impl Case {
         }
     }
 
-    fn failing_at(&self, point: FailurePoint) -> (World, Tokens) {
-        let world = World::with_service(|data| FailOnce::at(point).open_service(data));
+    /// How many commits the item's branch has before the case's request.
+    fn commits(&self) -> usize {
+        usize::from(self.seed.is_some())
+    }
+
+    /// A world for the case, seeded, with what its caller read from it.
+    fn world(&self) -> (World, Tokens) {
+        let world = World::new();
+        if let Some(seed) = self.seed {
+            let seeded = world.execute(REQUEST_2, seed(&world));
+            assert_eq!(seeded.code, ResultCode::Ok, "{}: the seed", self.command);
+            // What the request will carry holds the sentinels.
+            let source = match self.id {
+                DOCUMENT => world.context_source(DOCUMENT, DOCUMENT_PATH).unwrap(),
+                id => world.worktree_source(id),
+            };
+            assert!(source.contains(TITLE) && source.contains(BODY), "{source}");
+        }
         let tokens = self.tokens(&world);
+        (world, tokens)
+    }
+
+    /// The same, with a service that fails once at `point`.
+    fn failing_at(&self, point: FailurePoint) -> (World, Tokens) {
+        let (mut world, tokens) = self.world();
+        world.service = FailOnce::at(point).open_service(world.data.path());
         (world, tokens)
     }
 
@@ -210,7 +247,7 @@ impl Case {
             DiscoveryEffect::Current,
             "{what}"
         );
-        assert_eq!(world.branch_commits(self.id), 1, "{what}");
+        assert_eq!(world.branch_commits(self.id), self.commits() + 1, "{what}");
         assert_eq!(
             envelope.effects.commit_oid,
             world.branch_tip(self.id).map(|tip| tip.to_string()),
@@ -233,8 +270,7 @@ impl Case {
 fn a_finished_request_is_replayed_and_a_changed_one_is_refused() {
     for case in &CASES {
         let command = case.command;
-        let world = World::new();
-        let tokens = case.tokens(&world);
+        let (world, tokens) = case.world();
         let first = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Same));
         case.assert_finished(&world, &first, "the first call");
         let tip = world.branch_tip(case.id);
@@ -259,7 +295,7 @@ fn a_finished_request_is_replayed_and_a_changed_one_is_refused() {
         assert!(recovery_actions(&changed).is_empty(), "{command}");
         assert_eq!(world.branch_tip(case.id), tip, "{command}");
         assert_eq!(world.record(REQUEST_1), record, "{command}");
-        assert_eq!(world.request_rows(), 1, "{command}");
+        assert_eq!(world.request_rows(), 1 + case.commits() as i64, "{command}");
     }
 }
 
@@ -302,7 +338,7 @@ fn an_interrupted_request_is_finished_by_its_retry() {
             assert_eq!(first.effects.checkpoint, checkpoint, "{what}");
             assert_eq!(first.effects.commit_oid, None, "{what}");
             assert_eq!(recovery_actions(&first), ["request.retry"], "{what}");
-            assert_eq!(world.branch_commits(case.id), 0, "{what}");
+            assert_eq!(world.branch_commits(case.id), case.commits(), "{what}");
             let record = world.record(REQUEST_1).expect("the record stays");
             assert_eq!(
                 (record.state, record.attempt),
@@ -352,7 +388,11 @@ fn a_failure_after_the_checkpoint_is_partial_and_its_retry_reports_the_commit() 
             DiscoveryEffect::Pending,
             "{command}"
         );
-        assert_eq!(world.branch_commits(case.id), 1, "{command}");
+        assert_eq!(
+            world.branch_commits(case.id),
+            case.commits() + 1,
+            "{command}"
+        );
         let commit = world.branch_tip(case.id).map(|tip| tip.to_string());
         assert_eq!(first.effects.commit_oid, commit, "{command}");
         assert_eq!(recovery_actions(&first), ["operation.resume"], "{command}");
@@ -380,7 +420,11 @@ fn a_lost_result_is_answered_with_the_request_s_commit() {
             (Outcome::Error, ResultCode::InternalError),
             "{command}"
         );
-        assert_eq!(world.branch_commits(case.id), 1, "{command}");
+        assert_eq!(
+            world.branch_commits(case.id),
+            case.commits() + 1,
+            "{command}"
+        );
         let commit = world.branch_tip(case.id).map(|tip| tip.to_string());
 
         world.reopen();
@@ -394,17 +438,22 @@ fn a_lost_result_is_answered_with_the_request_s_commit() {
 fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
     for case in &CASES {
         let command = case.command;
-        let world = World::new();
-        let tokens = case.tokens(&world);
+        let (world, tokens) = case.world();
         let primary = world.primary_head();
         let document = world.primary_source_at(DOCUMENT_PATH);
+        let tip = world.branch_tip(case.id);
 
         let rejected = world.execute(REQUEST_1, (case.request)(&world, &tokens, Input::Rejected));
         assert_eq!(rejected.code, case.rejection, "{command}");
         assert_eq!(rejected.effects, Effects::not_requested(), "{command}");
         assert_eq!(rejected.operation_id, None, "{command}");
-        world.assert_nothing_exists(REQUEST_1, case.id);
-        assert_eq!(world.request_rows(), 0, "{command}");
+        if case.seed.is_none() {
+            world.assert_nothing_exists(REQUEST_1, case.id);
+        }
+        assert!(world.record(REQUEST_1).is_none(), "{command}");
+        assert_eq!(world.pending_journal_rows(), 0, "{command}");
+        assert_eq!(world.request_rows(), case.commits() as i64, "{command}");
+        assert_eq!(world.branch_tip(case.id), tip, "{command}");
         assert_eq!(world.primary_head(), primary, "{command}");
         assert_eq!(
             world.primary_source_at(DOCUMENT_PATH),
