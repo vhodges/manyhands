@@ -157,17 +157,24 @@ pub(crate) fn primary_is_committed(
 }
 
 /// What Git shows of the save's path since the request was accepted.
+///
+/// For a request that changes another path in the same commit, a commit
+/// is its own only if it is the request's at that path too.
 fn path_evidence<S: Save + ?Sized>(
     save: &S,
     accepted: &Accepted,
 ) -> Result<PathEvidence, Unreadable> {
-    evidence::path_evidence(
+    let evidence = evidence::path_evidence(
         &accepted.root(),
         &accepted.position,
         &save.path(),
         &save.expected(accepted),
         &|bytes| save.holds_bytes(bytes),
-    )
+    )?;
+    Ok(match save.other_path(accepted)? {
+        Some(other) => evidence.together_with(&other),
+        None => evidence,
+    })
 }
 
 /// The file a request that is entered again was accepted against: the

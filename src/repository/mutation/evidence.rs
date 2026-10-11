@@ -191,6 +191,10 @@ pub(crate) struct PathEvidence {
     /// expected: whatever history shows, the file has not been changed
     /// from elsewhere.
     tip_as_expected: bool,
+    /// The commits that can be the request's own at another path the
+    /// request changes in the same commit, when it changes one: a commit
+    /// is the request's own only if it is among them too.
+    together_with: Option<Vec<Oid>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,7 +227,18 @@ impl PathEvidence {
             anchored: false,
             settled_at_acceptance: false,
             tip_as_expected: false,
+            together_with: None,
         }
+    }
+
+    /// This evidence, for a request that changes the path of `other` in
+    /// the same commit, as a move changes the path it moves from: a
+    /// commit can be the request's own only if it can be at both paths.
+    /// One that brought this path to what the request intends and left
+    /// the other as it was is not the request's.
+    pub(crate) fn together_with(mut self, other: &Self) -> Self {
+        self.together_with = Some(other.candidates().collect());
+        self
     }
 
     /// The commits that can be the request's own, oldest first: each left
@@ -240,6 +255,10 @@ impl PathEvidence {
                 !self.settled_at_acceptance
                     && change.intended
                     && (!self.anchored || change.from_expected)
+                    && self
+                        .together_with
+                        .as_ref()
+                        .is_none_or(|both| both.contains(&change.commit))
             })
             .map(|change| change.commit)
     }
@@ -364,6 +383,7 @@ pub(crate) fn path_evidence_of(
             anchored,
             settled_at_acceptance: anchored && base_intended,
             tip_as_expected: tip.map(holds_expected).transpose()?.unwrap_or(false),
+            together_with: None,
         })
     };
     read().map_err(|_| Unreadable)

@@ -778,3 +778,64 @@ fn the_files_of_a_commit_are_read_by_path_and_below_a_directory() {
         Err(Unreadable)
     );
 }
+
+#[test]
+fn a_commit_is_a_move_s_own_only_if_it_is_at_both_of_its_paths() {
+    const DESTINATION: &str = "tickets/b.md";
+    let fixture = fixture();
+    let at_destination = |fixture: &Fixture| {
+        path_evidence(
+            fixture.root(),
+            &fixture.position(),
+            DESTINATION,
+            &ExpectedPathObservation::Missing,
+            &|bytes| bytes == b"before\n",
+        )
+        .unwrap()
+    };
+    // By hand: the file appears at the destination and stays where it was.
+    let copied = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        DESTINATION,
+        "before\n",
+    );
+    assert_eq!(at_destination(&fixture).own(), Some(copied));
+    let both = at_destination(&fixture).together_with(&removal_evidence(&fixture));
+    assert_eq!(both.own(), None);
+    assert_eq!(both.reported(true, &at_destination(&fixture)), None);
+
+    // A commit that does both is the move's own.
+    let fixture = self::fixture();
+    let moved = {
+        let signature = Signature::new("Test", "test@example.invalid", &Time::new(0, 0)).unwrap();
+        let parent = fixture.repository.find_commit(fixture.base).unwrap();
+        let mut index = git2::Index::new().unwrap();
+        index.read_tree(&parent.tree().unwrap()).unwrap();
+        let entry = index.get_path(Path::new(PATH), 0).unwrap();
+        index.remove(Path::new(PATH), 0).unwrap();
+        index
+            .add(&git2::IndexEntry {
+                path: DESTINATION.as_bytes().to_vec(),
+                ..entry
+            })
+            .unwrap();
+        let tree = fixture
+            .repository
+            .find_tree(index.write_tree_to(&fixture.repository).unwrap())
+            .unwrap();
+        let oid = fixture
+            .repository
+            .commit(None, &signature, &signature, "c", &tree, &[&parent])
+            .unwrap();
+        fixture
+            .repository
+            .reference(BRANCH, oid, true, "test")
+            .unwrap();
+        oid
+    };
+    let both = at_destination(&fixture).together_with(&removal_evidence(&fixture));
+    assert_eq!(both.own(), Some(moved));
+    assert!(!both.superseded(true));
+}
