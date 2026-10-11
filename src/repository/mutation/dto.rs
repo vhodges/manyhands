@@ -66,6 +66,35 @@ pub struct RequestDto {
 pub enum MutationDataDto {
     Document(DocumentMutationDto),
     Ticket(TicketMutationDto),
+    Remote(RemoteMutationDto),
+}
+
+/// What `remote add` reports about the remote. The effects of such a
+/// request are all `not_requested`: this, with the outcome, is what says
+/// what it did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteMutationDto {
+    /// The remote the request names.
+    pub name: Option<String>,
+    /// The location the request gave the remote, redacted: it is not a
+    /// location to connect to.
+    pub location: Option<String>,
+}
+
+impl RemoteMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        Some(Self {
+            name: text("name")?,
+            location: text("location")?,
+        })
+    }
 }
 
 /// What `document create`, `document save` and `document move` report
@@ -148,6 +177,7 @@ impl MutationDataDto {
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
+            Command::RemoteAdd => RemoteMutationDto::from_stored(stored).map(Self::Remote),
             // These report no data, so a record of one stores none.
             Command::IndexRefresh | Command::IndexRebuild => None,
         }

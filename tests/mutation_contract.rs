@@ -5,7 +5,7 @@
 use manyhands::{
     repository::{
         DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, Mutation,
-        MutationDataDto, RelationshipWrite, TicketCreateInput, TicketSaveInput,
+        MutationDataDto, RelationshipWrite, RemoteAddInput, TicketCreateInput, TicketSaveInput,
         TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
@@ -44,6 +44,18 @@ fn assert_data_contract(
     world: &World,
     envelope: &Envelope<MutationDataDto>,
 ) {
+    assert_contract_excluding(name, schema, world, envelope, &SENTINELS);
+}
+
+/// As `assert_data_contract`, for an envelope that may hold none of
+/// `sentinels`.
+fn assert_contract_excluding(
+    name: &str,
+    schema: &str,
+    world: &World,
+    envelope: &Envelope<MutationDataDto>,
+    sentinels: &[&str],
+) {
     let root = world.root.to_str().unwrap().to_owned();
     let commit = envelope.effects.commit_oid.clone();
     let operation = envelope.operation_id.clone();
@@ -59,7 +71,7 @@ fn assert_data_contract(
             name,
             data_schema: envelope.data.as_ref().map(|_| schema),
             placeholders: &placeholders,
-            sentinels: &SENTINELS,
+            sentinels,
         },
         envelope,
     );
@@ -411,4 +423,60 @@ fn a_failed_index_refresh_matches_the_envelope_schema_and_its_golden() {
     let failed = world.execute(REQUEST_1, index_refresh(&world));
     assert_eq!(failed.outcome, Outcome::Error);
     assert_contract("index_refresh_failed", &world, &failed);
+}
+
+const REMOTE_SCHEMA: &str = "remote_mutation.schema.json";
+/// A password in a remote's location, which no envelope may hold.
+const REMOTE_SECRET: &str = "SENTINEL-PASSWORD-3b7c";
+
+fn remote_location() -> String {
+    format!("https://deploy:{REMOTE_SECRET}@example.invalid/team/project.git")
+}
+
+fn remote_add(world: &World, name: &str, url: &str) -> Mutation {
+    Mutation::RemoteAdd(RemoteAddInput {
+        root: world.root.clone(),
+        name: name.to_owned(),
+        url: url.to_owned(),
+    })
+}
+
+fn assert_remote_contract(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
+    assert_contract_excluding(name, REMOTE_SCHEMA, world, envelope, &[REMOTE_SECRET]);
+}
+
+#[test]
+fn a_remote_add_matches_its_schema_and_goldens() {
+    let world = World::new();
+    let added = world.execute(REQUEST_1, remote_add(&world, "origin", &remote_location()));
+    assert_eq!(added.outcome, Outcome::Success);
+    assert_remote_contract("remote_add", &world, &added);
+
+    let again = world.execute(REQUEST_2, remote_add(&world, "origin", &remote_location()));
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert_remote_contract("remote_add_noop", &world, &again);
+
+    let conflict = world.execute(
+        support::mutation::REQUEST_3,
+        remote_add(&world, "origin", "git@example.invalid:team/other.git"),
+    );
+    assert_eq!(conflict.code, ResultCode::RemoteNameConflict);
+    assert_remote_contract("remote_add_conflict", &world, &conflict);
+
+    let invalid = world.execute(
+        support::mutation::REQUEST_3,
+        remote_add(&world, "not a name", &remote_location()),
+    );
+    assert_eq!(invalid.code, ResultCode::InvalidRemote);
+    assert_remote_contract("remote_add_invalid", &world, &invalid);
+}
+
+#[test]
+fn a_remote_add_whose_discovery_is_pending_matches_its_schema_and_golden() {
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let pending = world.execute(REQUEST_1, remote_add(&world, "origin", &remote_location()));
+    assert_eq!(pending.outcome, Outcome::Partial);
+    assert_remote_contract("remote_add_discovery_pending", &world, &pending);
 }

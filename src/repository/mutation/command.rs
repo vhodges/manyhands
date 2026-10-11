@@ -36,6 +36,7 @@ commands! {
     TicketCreate => "ticket create",
     TicketSave => "ticket save",
     TicketSlugAssign => "ticket slug-assign",
+    RemoteAdd => "remote add",
     IndexRefresh => "index refresh",
     IndexRebuild => "index rebuild",
 }
@@ -59,6 +60,7 @@ impl Command {
             | Self::TicketCreate
             | Self::TicketSave
             | Self::TicketSlugAssign
+            | Self::RemoteAdd
             | Self::IndexRefresh => false,
         }
     }
@@ -79,6 +81,7 @@ mod tests {
     fn the_published_names_are_the_ones_records_hold() {
         assert_eq!(Command::TicketCreate.name(), "ticket create");
         assert_eq!(Command::TicketSave.name(), "ticket save");
+        assert_eq!(Command::RemoteAdd.name(), "remote add");
         assert_eq!(Command::IndexRefresh.name(), "index refresh");
         assert_eq!(Command::IndexRebuild.name(), "index rebuild");
     }

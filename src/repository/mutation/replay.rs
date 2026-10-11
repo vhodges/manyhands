@@ -96,13 +96,17 @@ impl RepositoryService {
         reply: &Reply<'_>,
         record: &RequestRecord,
     ) -> Envelope<MutationDataDto> {
-        let effects = match record.state {
-            RequestState::Accepted => bind::recorded_effects(self, record),
-            RequestState::Finished => Effects::not_requested(),
+        let (effects, local_change) = match record.state {
+            RequestState::Accepted => {
+                let recorded = bind::recorded_effects(self, record);
+                (recorded.effects, recorded.local_change)
+            }
+            RequestState::Finished => (Effects::not_requested(), false),
         };
         reply.envelope(
             Answer {
                 effects,
+                local_change,
                 ..Answer::stopped(ResultCode::RequestMismatch)
             },
             None,

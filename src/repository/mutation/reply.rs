@@ -88,6 +88,7 @@ impl Reply<'_> {
             effects,
             data,
             recovery,
+            local_change,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A read suggests its action with the root it knows. One that
@@ -114,7 +115,7 @@ impl Reply<'_> {
             code == ResultCode::Cancelled,
             code,
             effects,
-            false,
+            local_change,
         )
         .with_request_id(self.identity.request_id.to_string())
         .with_recovery(recovery);

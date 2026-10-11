@@ -26,6 +26,7 @@ use super::{
 
 pub(crate) mod document;
 pub(crate) mod index;
+pub(crate) mod remote;
 pub(crate) mod save;
 pub(crate) mod ticket;
 
@@ -93,6 +94,10 @@ pub(crate) struct Answer {
     /// The recovery a read suggested for its own failure. The boundary
     /// adds the actions that follow from the code.
     pub(crate) recovery: Vec<RecoveryAction>,
+    /// The request made a durable change that no effect shows: a remote,
+    /// which is no canonical content and no commit. A request that
+    /// stopped after one is `partial`, as after a durable effect.
+    pub(crate) local_change: bool,
 }
 
 impl Answer {
@@ -103,6 +108,7 @@ impl Answer {
             effects: Effects::not_requested(),
             data: None,
             recovery: Vec::new(),
+            local_change: false,
         }
     }
 
@@ -477,6 +483,26 @@ pub(crate) trait Binding {
     fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran;
 }
 
+/// What the repository shows of an unfinished request, without its input.
+pub(crate) struct Recorded {
+    pub(crate) effects: Effects,
+    /// A durable change that no effect shows; see `Answer::local_change`.
+    pub(crate) local_change: bool,
+}
+
+impl Recorded {
+    fn nothing() -> Self {
+        Self::of(Effects::not_requested())
+    }
+
+    fn of(effects: Effects) -> Self {
+        Self {
+            effects,
+            local_change: false,
+        }
+    }
+}
+
 /// The effects the repository shows of the unfinished request `record`
 /// holds. The original input is not needed, and is not available when the
 /// request is being reused with another.
@@ -488,28 +514,35 @@ pub(crate) trait Binding {
 /// With no row, no attempt reached the domain and there is no effect. A
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
-pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Effects {
+pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
-        return Effects::not_requested();
+        return Recorded::nothing();
     };
-    let ran = match accepted.journal_row(service) {
+    let journal = accepted.journal_row(service);
+    let ran = match journal {
         Some(JournalRow::Absent) => false,
         Some(JournalRow::Pending(_) | JournalRow::Final { .. }) | None => true,
     };
     if !ran {
-        return Effects::not_requested();
+        return Recorded::nothing();
     }
     match Command::parse(&record.command) {
         Some(Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove) => {
-            document::recorded_effects(record, &accepted)
+            Recorded::of(document::recorded_effects(record, &accepted))
         }
         Some(Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign) => {
-            ticket::recorded_effects(record, &accepted)
+            Recorded::of(ticket::recorded_effects(record, &accepted))
         }
+        // A remote is shown by no effect. Its row says whether it was
+        // added with work remaining.
+        Some(Command::RemoteAdd) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: remote::added_and_unfinished(journal.as_ref()),
+        },
         // A refresh or a rebuild in flight has made no durable effect.
-        Some(Command::IndexRefresh | Command::IndexRebuild) => Effects::not_requested(),
+        Some(Command::IndexRefresh | Command::IndexRebuild) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
-        None => Effects::not_requested(),
+        None => Recorded::nothing(),
     }
 }
 

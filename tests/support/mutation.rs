@@ -15,9 +15,9 @@ use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
         DocumentMutationDto, DocumentSaveInput, Mutation, MutationCall, MutationDataDto,
-        NoProgress, OperationFamily, OperationId, RelationshipWrite, RepositoryService, RequestId,
-        ResolvedRepository, TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput,
-        TicketSlugAssignInput,
+        NoProgress, OperationFamily, OperationId, RelationshipWrite, RemoteMutationDto,
+        RepositoryService, RequestId, ResolvedRepository, TicketCreateInput, TicketDraft,
+        TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         request_store::{Clock, JournalRow, RequestRecord, ScopeKey},
     },
@@ -164,6 +164,11 @@ pub const CASES: &[&str] = &[
     "index_refresh",
     "index_refresh_failed",
     "index_refresh_mismatch",
+    "remote_add",
+    "remote_add_conflict",
+    "remote_add_discovery_pending",
+    "remote_add_invalid",
+    "remote_add_noop",
     "request_show_accepted",
     "request_show_finished",
     "ticket_create",
@@ -650,6 +655,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::Ticket(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
+        MutationDataDto::Remote(_) => panic!("a remote's data"),
     }
 }
 
@@ -658,6 +664,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
     match envelope.data.as_ref().expect("document data") {
         MutationDataDto::Document(data) => data,
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+        MutationDataDto::Remote(_) => panic!("a remote's data"),
     }
 }
 
@@ -762,6 +769,15 @@ impl World {
         .unwrap();
         paths.sort();
         paths
+    }
+}
+
+/// What a remote request reported about its remote.
+pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
+    match envelope.data.as_ref().expect("remote data") {
+        MutationDataDto::Remote(data) => data,
+        MutationDataDto::Document(_) => panic!("a document's data"),
+        MutationDataDto::Ticket(_) => panic!("a ticket's data"),
     }
 }
 

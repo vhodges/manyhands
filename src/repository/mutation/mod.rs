@@ -56,17 +56,19 @@ use bind::{
     Binding,
     document::DocumentBinding,
     index::IndexBinding,
+    remote::RemoteAddBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
+    remote::RemoteAddInput,
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
 pub use dto::{
-    DocumentMutationDto, MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto,
-    RequestState, TicketMutationDto,
+    DocumentMutationDto, MutationDataDto, RemoteMutationDto, RequestDto, RequestOperationDto,
+    RequestResultDto, RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -237,6 +239,7 @@ pub enum Mutation {
     TicketCreate(TicketCreateInput),
     TicketSave(TicketSaveInput),
     TicketSlugAssign(TicketSlugAssignInput),
+    RemoteAdd(RemoteAddInput),
     IndexRefresh(IndexRefreshInput),
     IndexRebuild(IndexRebuildInput),
 }
@@ -255,6 +258,7 @@ impl Mutation {
             Self::TicketCreate(_) => Command::TicketCreate,
             Self::TicketSave(_) => Command::TicketSave,
             Self::TicketSlugAssign(_) => Command::TicketSlugAssign,
+            Self::RemoteAdd(_) => Command::RemoteAdd,
             Self::IndexRefresh(_) => Command::IndexRefresh,
             Self::IndexRebuild(_) => Command::IndexRebuild,
         }
@@ -268,6 +272,7 @@ impl Mutation {
             Self::TicketCreate(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSave(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSlugAssign(input) => Box::new(SlugAssignBinding::from(input)),
+            Self::RemoteAdd(input) => Box::new(RemoteAddBinding::from(input)),
             Self::IndexRefresh(input) => Box::new(IndexBinding::from(input)),
             Self::IndexRebuild(input) => Box::new(IndexBinding::from(input)),
         }

@@ -205,8 +205,6 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
 }
 
 /// The code of what `add_remote` and `remove_remote` return.
-// Used by the remote bindings.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn remote_outcome_code(outcome: &RemoteOutcome) -> ResultCode {
     match outcome {
         RemoteOutcome::Changed => ResultCode::Ok,
