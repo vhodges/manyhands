@@ -144,3 +144,241 @@ Document status changed from proposed to approved in all four artifacts. The
 approval does not authorize implementation, push, CI dispatch, merge, closure
 or cleanup. The planning commit is local; the published ticket ref still holds
 the pre-rebase checkpoint and was not force-pushed.
+
+## Task 0 Execution — 2026-10-11
+
+### Authority, Scope And Base
+
+The owner explicitly authorized rebase, Tasks 0–8 implementation, local commits
+and canonical ticket/comment/ledger updates. This implementer was assigned
+**Task 0 only**, inline with no subagents, followed by independent spec and
+quality reviews. The 2026-10-11 document approval and D1–D4 answers at
+`2026-10-11T14:39:22Z` were re-read, not reopened:
+
+- D1: never delete tracking refs.
+- D2: resume only an intent's branch at its recorded OID with no path and no
+  registration; retain and report all half-created worktrees.
+- D3: a pending synchronization conflict blocks the new full poll before
+  transport, with a typed non-failure result.
+- D4: a local action during an automatic poll requests yield and receives
+  retryable `RepositoryBusy`.
+
+All shell commands used the assigned workdir
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DG`
+and branch `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DG`. Read current
+`AGENTS.md`, the implementing skill's preflight/verification references, all
+three approved documents, this ledger and the ticket's existing comments.
+The CLI remains startup-only, so canonical files were used for bookkeeping.
+
+Preflight, before mutation:
+
+- `git worktree list --porcelain` confirmed the assigned registration and branch.
+- Ticket status was clean. Main status was read for preflight only: unrelated
+  untracked `.superpowers/` was preserved; other worktrees were untouched.
+- `git rev-list --left-right --count main...origin/main` returned `0 0`.
+- Fresh `git fetch origin main` succeeded. Rebase onto `origin/main` was a
+  clean no-op, with no conflicts and no `AGENTS.md` change.
+- Base: `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`.
+- Before and after rebase / **Task 0 base HEAD**:
+  `094e5734d1d4480ee29e6f675aaba4a8883b9060`.
+- `git merge-base --is-ancestor origin/main HEAD` returned success;
+  post-rebase `git status --short --branch` showed a clean ticket branch.
+
+### Caller Re-Scan And Wave 03 Compatibility
+
+Re-scanned `src/` and `tests/` for `observe_publication_remote`,
+`reserve_remote_operation*`, `remote_safe_point`, `finish_remote_operation`
+and `RemoteSnapshot`; also re-read the Wave 03 API audit's C2/C4, E-observe,
+E-policy, E-reserve and `poll once` rows. `git diff origin/main -- src tests
+docs/research/wave-03-api-audit.md` was empty before characterization: no new
+caller or changed production assumption since the approved planning base.
+
+Production consumers remain observation orchestration in `remote/observation.rs`,
+reservation/safe-point consumers in `remote/sync.rs`, and snapshot construction,
+read and re-exports in `remote/state.rs`, `remote/mod.rs` and `repository.rs`.
+The other direct callers are existing library and acceptance tests (including
+comment publication and read-status tests). Neither frontend calls the remote
+operations, and no implemented Wave 03 consumer was found.
+
+Carry these compatibility items into the later tasks:
+
+1. Wave 03 W3-02/W3-12 maps service-owned reservation tokens and durable
+   cancel/yield acknowledgement into bounded-worker progress; a request is not
+   an immediate cancellation of a blocking SSH call.
+2. E-observe remains advertisement-only, with its existing replay, policy and
+   safe-point behavior unchanged. The new full poll must be a separate API.
+3. E-policy/E-reserve and W3-06/W3-12 `poll once` need the new eligibility,
+   disposition and attempt-time accessors later; existing `RemoteSnapshot`
+   publication/history fields and stored-row validation must retain their meaning.
+4. The desktop scheduler/session attention state and unsaved-draft protection
+   remain downstream obligations. This Linux characterization is not native
+   matrix proof.
+
+### Five Executed Throwaway Characterizations
+
+Temporary assertions were added only to existing test targets. No production
+behavior, dependency, target or workflow was changed. Real transport claims
+used the in-process `russh` fixture and Git upload-pack, isolated homes and
+pre-thread initialization. No fake transport, sleeps in test/controller code,
+developer keys or global Git configuration were used; transfer pacing is the
+existing fixture facility. No `cfg(test)` hook was used by a harness-false target.
+
+**1. Stored tracking OID and snapshot equality — PASS.**
+`task0_tracking_batch_equality` in `remote/reservation_tests.rs` created two
+real local commits, committed an observation with tracking OID A, then moved
+the actual context tracking ref to B before another batch. The ordinary
+snapshot and a freshly reopened service still returned the unchanged A
+snapshot. Committing the next batch with tracking OID B put B in both its
+observation and context snapshot. A negative control changed only the stored
+`remote_context_states.tracking_oid` back to A: snapshot returned
+`RecoveryRequired`. Thus tracking OID is the value captured when the observation
+is constructed, not a live ref or an expected pre-fetch value. The equality
+check in `state.rs:4567–4582` compares the two **stored** rows, not Git refs.
+Writing tracking refs before constructing/committing the complete batch is
+compatible, and a crash between those stages does not itself corrupt a snapshot.
+
+**2. Interrupted and failed synchronization after tracking movement — PASS.**
+`task0_restart_moved_tracking` in `tests/remote_synchronization.rs` ran two
+real-SSH two-clone scenarios. A fixture SQL trigger requested yield on
+`AfterFetch`; the service returned `Interrupted` after fetching A, with local
+main still at the base. The interrupted variant retained that state. The
+failed variant explicitly reacquired the reservation, reached `BeforeFetch`
+and used the public `finish_remote_operation(ProtocolRejected)` transition;
+SQL confirmed literal `failed` rather than merely a failed call. This is a
+synthetic durable failure boundary, not a claim about a network failure.
+In both variants the fixture rewound the tracking ref to the base and the
+peer published a newer B whose commit was absent locally. A reopened service
+with the same operation ID and `restart=true` opened **13 fresh Git helpers**,
+downloaded B, advanced local main and tracking to B, and returned
+`Complete(AlreadyCurrent { oid: B })`. No receiver update occurred during the
+restart. No stale result was replayed, and no deletion was inferred.
+Runner evidence: `0 13` (interrupted) and `1 13` (failed).
+
+**3. Parked conflict resolution and tracking refs (D3) — PASS.**
+`task0_conflict_tracking_movement` in `tests/remote_merge_recovery.rs` parked
+a real canonical ticket conflict with recorded local/incoming parents L/R.
+It captured the inspection token, then moved both primary and context tracking
+refs to L. Inspection still returned the same observation token; the incoming
+side still matched the blob at R. `resolve_all` made a local checkpoint with
+ordered parents `[L, R]`, kept both tracking refs at L, and made zero new
+authenticated connections and zero receiver updates. Resolution uses the
+recorded integration parents and conflict evidence, not current tracking tips.
+Source grounding: `resolve_synchronization`/recovery inspection in `sync.rs`
+and the fixed HEAD/branch/packed-ref storage checks in `RefLogSnapshot`.
+This finding does **not** repeal D3: the approved full poll still refuses before
+transport during a pending conflict. Runner evidence: `1 1 1` for unchanged
+token, frozen-parent resolution and no transport.
+
+**4. Part-way git2 worktree checkout failure (D2) — PASS.**
+`task0_partial_worktree_checkout` used real `git2::Repository::worktree` with
+the same default `WorktreeAddOptions::reference` as local authoring. The tree
+contained ordinary file `a` and symlink `z` with a 5,000-byte target, causing a
+real Linux filesystem failure after `a` was written. `worktree` returned
+`GenericError`; the path, `a`, worktree `.git` file, admin directory and worktree
+registration all remained. `z` was not created. The admin directory contained
+exactly `gitdir`, `HEAD`, `commondir` (no index); the branch remained at its
+created OID. Observed output:
+`path=true a=true z=false gitfile=true admin=true registered=true`.
+A targeted recheck replaced the initial directory predicate for `z` with
+`symlink_metadata(...).kind() == NotFound`, asserted the exact sorted admin
+entry set, and opened the registered worktree to assert its original symbolic
+branch and OID. All those explicit assertions passed.
+This is a retained half-created worktree, not the branch-only resumable case.
+No cleanup/adoption was attempted. This proves the Linux failure shape only,
+not Windows path-length behavior or every possible checkout failure.
+
+**5. Transfer-progress false return during paced SSH download — PASS.**
+`task0_progress_abort` in `tests/ssh_fixture.rs` put a deterministic
+incompressible 320,000-byte blob on remote main and paced outgoing fixture
+chunks at 50 ms. It called real `Remote::download` with the exact forced
+primary mapping, FETCH_HEAD disabled, tags off, prune off, a selected fixture
+key and an exact host-key callback. `transfer_progress` returned false once
+received bytes reached at least 16,384. The final measured run reached the
+callback once at **65,931 bytes**, returned in **61 µs after false** and
+**362 ms from download start**, with `GenericError` (enum ordinal 0). Assertions
+proved: incomplete download; zero local refs; no FETCH_HEAD; advertised commit
+absent locally; exactly one helper; zero receiver updates. No guarded tracking
+write stage was entered. Runner tuple:
+`1 65931 61 362 0 1 0` = callbacks, bytes, stop-to-return µs, elapsed ms, refs,
+helpers, error-code ordinal. This is callback-to-return latency on this fixture,
+not a universal 250-ms wall-clock cancellation bound. Existing 10-s TCP/30-s
+blocking SSH limits remain; no total deadline was added.
+
+### Characterization Commands And Honest Trial History
+
+All used `devenv shell -- cargo`:
+
+| Command suffix | Final result |
+| --- | --- |
+| `test --all-features --locked --lib task0_ -- --nocapture` | 2 passed, 504 filtered; 0.11 s |
+| `test --all-features --locked --lib task0_partial_worktree_checkout -- --nocapture` | 1 passed, 504 filtered; 0.01 s; explicit absence/admin/HEAD recheck |
+| `test --all-features --locked --test remote_synchronization task0_` | 1 SSH case passed; both interrupted/failed scenarios |
+| `test --all-features --locked --test remote_merge_recovery task0_` | 1 SSH case passed |
+| `test --all-features --locked --test ssh_fixture task0_` | 1 SSH case passed |
+
+Five named tests executed, covering all five gate questions. Initial throwaway
+compilation failed on a missing qualified `AuthoringKind` and an assumed
+`WorktreeAddOptions::checkout_options` method that git2 0.20.4 does not expose.
+The test was corrected to use the real filesystem checkout failure above.
+The first three SSH cases passed but arbitrary stdout was filtered by the
+runner, so numeric observations were added and the cases rerun. An extra
+speculative assertion that callback abort returns `ErrorCode::User` failed at
+line 143; investigation measured `GenericError` instead. That unsupported
+assertion was removed; the actual abort/no-ref/latency assertions passed in
+both the original and final run. The approved design does not require a
+libgit2 `User` code, so this is not a design contradiction; later transport
+code must not identify cancellation solely by that code.
+
+One parallel Devenv invocation printed an enter-shell `load-exports` chmod
+race although Cargo and its case passed. All three SSH commands were then run
+sequentially; their final passing evidence had successful shell setup. No
+production fix or design amendment was made for a test assumption or shell race.
+
+All temporary tests and registrations, including the explicit worktree
+recheck, were removed using patches. The post-removal
+`git diff --exit-code -- src tests Cargo.toml Cargo.lock devenv.lock`
+passed: the original Rust/tests/lockfiles are byte-for-byte
+the Task 0 base. The final commit contains no characterization test.
+
+### Baseline On The Original Rust Tree
+
+| Required command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | PASS; successful retry finished in 1m 35s |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS; 1m 31s |
+| `devenv shell -- cargo test --all-features --locked` | PASS; 1,568 passed, 0 failed, 1 existing ignored characterization |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS; exit 0, no window; build 1m 35s |
+
+Test breakdown: 504 library; 775 ordinary integration; 280 real-SSH cases
+(comment publication 41, merge recovery 25, observation 15, synchronization 63,
+SSH fixture 31, SSH transport 105); 9 compile-fail doctests. Both binary test
+targets had zero tests. The existing ignored test is the thousand-item read
+characterization. Existing sync/merge/comment suites passed without edits.
+
+The initial check reached the 120-s tool timeout during compilation, then
+passed with a longer tool limit. The initial full test command compiled in
+6m 23s, passed library and preceding suites, then hit the 1,200-s **tool**
+timeout part-way through merge recovery; it did not report a test failure.
+The complete rerun used a 3,600-s tool limit and exited 0 through doctests.
+These tool-limit changes do not change runtime transport limits.
+
+Lockfile SHA-256 (unchanged):
+
+- `Cargo.lock`: `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`.
+- `devenv.lock`: `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`.
+
+### Checkpoint And Review Handoff
+
+No gate contradiction or unresolved blocker was found. Task 0 is complete and
+ready for independent spec review, then quality review; Tasks 1–8 were not
+started. The ticket stays open and native evidence remains pending separate
+authorization. The local checkpoint changes only this ledger, the ticket and
+its Task 0 comment `01M4NV86AZMAVANZ2G8RJQM6FZ`. Its exact head SHA is reported
+by the final handoff (`git rev-parse HEAD` after commit), avoiding a self-referential
+commit identifier in its own contents.
+
+`scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` validated/rendered the open
+ticket and all four canonical comments successfully. `git diff --check` passed;
+status, full diff and `git log --oneline -10` were inspected before staging
+only these three evidence files for the local checkpoint.

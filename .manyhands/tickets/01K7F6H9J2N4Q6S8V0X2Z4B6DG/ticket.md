@@ -25,12 +25,15 @@ discovered conforming shared contexts.
   branch-only materialization; refuse to poll during a pending conflict; a
   local action during an automatic poll requests yield and gets `RepositoryBusy`.
 - [x] User approval of Cycle, design, and implementation plan (2026-10-11).
-- [ ] Explicit implementation authorization.
+- [x] Explicit implementation authorization (2026-10-11): Tasks 0–8, rebase,
+  local commits and canonical ticket/comment/ledger updates; execute Task 0
+  only in this session, then return for independent spec and quality reviews.
 
-The owner approved the planning documents on 2026-10-11 and authorized the
-local planning commit. Implementation is not yet authorized. The
+The owner approved the planning documents and D1–D4 on 2026-10-11, then
+separately authorized implementation and local commits. The
 [execution ledger](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md)
-records the preflight, the decision matrix and the internal rulings.
+records the preflight, the decision matrix, the internal rulings and Task 0
+execution evidence.
 
 ## Entry Gate
 
@@ -39,6 +42,18 @@ is approved and Wave 01 verification evidence is current. Cycles 01–07 are
 present on the planning base `d1ca887`. Implementation Task 0 repeats the
 rebase, records the decisions, runs the characterizations named in the plan
 and the baseline.
+
+## Implementation Progress
+
+- [x] Task 0: fresh fetch/rebase and ancestry/clean-status checks; authorization
+  and D1–D4 recorded; caller compatibility re-scan; all five throwaway
+  characterizations executed and removed; all five Devenv baseline commands
+  passed. No design contradiction or blocker found.
+- [ ] Independent Task 0 spec review.
+- [ ] Independent Task 0 quality review.
+
+Task 0 is ready for the two independent reviews before Task 1. Ticket remains
+open. Native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence
 
