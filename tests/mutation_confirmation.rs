@@ -2071,3 +2071,277 @@ fn an_enablement_made_by_another_is_not_reported_as_the_request_s() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// What a retry still compares once its operation has begun
+// ---------------------------------------------------------------------
+
+/// The identity a preview showed is what the request commits as, on
+/// every call of it. A create that supplied none is interrupted after
+/// its repository is initialized, and the global identity changes: the
+/// retry is refused and writes nothing more. The request's own work
+/// never changes the global configuration, so nothing excuses the
+/// difference.
+#[test]
+fn a_retry_whose_effective_identity_changed_is_external_change() {
+    let Some(home) = in_a_process_with_its_own_git_home(
+        "a_retry_whose_effective_identity_changed_is_external_change",
+    ) else {
+        return;
+    };
+    let shown = write_global_identity(&home);
+    let others: [(&str, Option<&str>); 2] = [
+        (
+            "another identity",
+            Some("[user]\n\tname = Someone Else\n\temail = else@example.invalid\n"),
+        ),
+        ("no identity", None),
+    ];
+    for (what, other) in others {
+        fs::write(home.join(".gitconfig"), &shown).unwrap();
+        let mut desk = Desk::new();
+        let site = Site::new();
+        fs::create_dir(&site.root).unwrap();
+        let create = || {
+            Mutation::RepoCreate(RepoCreateInput {
+                identity: None,
+                ..site.input()
+            })
+        };
+        let (confirmation, _) = desk.preview(&create());
+        desk.fail_once_at(FailurePoint::AfterRepositoryInitialization);
+        let partial = desk.execute(REQUEST_1, &confirmation, create());
+        assert_eq!(partial.outcome, Outcome::Partial, "{what}");
+        match other {
+            Some(other) => fs::write(home.join(".gitconfig"), other).unwrap(),
+            None => fs::remove_file(home.join(".gitconfig")).unwrap(),
+        }
+        let before = tree(&site.root);
+
+        desk.reopen();
+        desk.clock.set(START + 3600);
+        let refused = desk.execute(REQUEST_1, &confirmation, create());
+
+        assert_eq!(refused.code, ResultCode::ExternalChange, "{what}");
+        assert_eq!(refused.effects.commit_oid, None, "{what}");
+        // Nothing more is written: no identity, no configuration, no
+        // commit.
+        assert_eq!(tree(&site.root), before, "{what}");
+        assert_eq!(local_config(&site.root, "user.name"), None, "{what}");
+        assert_eq!(site.configuration(), None, "{what}");
+        // The request is still there, with its operation in the way of
+        // any other: a new preview could not be used.
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Accepted),
+            "{what}"
+        );
+        assert_eq!(recovery_actions(&refused), ["repo.inspect"], "{what}");
+
+        // With the identity that was shown back, the same request
+        // completes as it.
+        fs::write(home.join(".gitconfig"), &shown).unwrap();
+        let finished = desk.execute(REQUEST_1, &confirmation, create());
+        assert_enabled(&finished, &site.root);
+        assert_eq!(
+            local_config(&site.root, "user.name").as_deref(),
+            Some("Global Person"),
+            "{what}"
+        );
+        let repository = git2::Repository::open(&site.root).unwrap();
+        assert_eq!(
+            repository.find_commit(site.head()).unwrap().author().name(),
+            Some("Global Person"),
+            "{what}"
+        );
+        assert_eq!(initializations(&site.root), 1, "{what}");
+    }
+}
+
+/// The same for `repo enable`, which finds its identity itself: the
+/// repository's own identity is replaced while the request's hand-off is
+/// owed. Nothing is left to commit, and the retry still answers that
+/// what was shown is not what is there.
+#[test]
+fn a_retry_of_repo_enable_compares_the_identity_it_showed() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeRegistryWrite);
+    desk.execute(REQUEST_1, &confirmation, plain.enable());
+    let mut config = git2::Config::open(&plain.root.join(".git/config")).unwrap();
+    config.set_str("user.name", "Someone Else").unwrap();
+
+    desk.reopen();
+    let refused = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert!(!desk.registered(&plain.root));
+    config.set_str("user.name", "Manyhands Test").unwrap();
+    assert_enabled(
+        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+    assert_eq!(plain.initializations(), 1);
+}
+
+const KILLED_PARENT: &str = "MANYHANDS_KILLED_PARENT";
+const KILLED_DATA: &str = "MANYHANDS_KILLED_DATA";
+const KILLED_CONFIRMATION: &str = "MANYHANDS_KILLED_CONFIRMATION";
+const KILLED_POINT: &str = "MANYHANDS_KILLED_POINT";
+const KILLED_EXISTING: &str = "MANYHANDS_KILLED_EXISTING";
+
+/// The points a child process can be made to end at.
+const KILL_POINTS: [FailurePoint; 3] = [
+    FailurePoint::BeforeRepositoryInitialization,
+    FailurePoint::BeforeInitializationCommit,
+    FailurePoint::AfterInitializationCommit,
+];
+
+/// The create a killed child makes, and its parent retries.
+fn killed_create(parent: &Path) -> Mutation {
+    Mutation::RepoCreate(RepoCreateInput {
+        root: parent.join("new"),
+        primary_branch: "main".to_owned(),
+        identity: Some(identity()),
+        slug_prefix: None,
+    })
+}
+
+/// The enable a killed child makes, and its parent retries.
+fn killed_enable(root: &Path) -> Mutation {
+    Mutation::RepoEnable(RepoEnableInput {
+        root: root.to_owned(),
+        primary_branch: "main".to_owned(),
+        identity: None,
+        slug_prefix: None,
+    })
+}
+
+/// The process `killed_at` starts: it submits the request and its
+/// process ends at the fault point, inside the domain operation, with
+/// nothing after it run: no rollback, and no settlement.
+#[test]
+fn killed_at_fault_point_child() {
+    let Some(parent) = std::env::var_os(KILLED_PARENT) else {
+        return;
+    };
+    let name = std::env::var(KILLED_POINT).unwrap();
+    let point = KILL_POINTS
+        .into_iter()
+        .find(|point| format!("{point:?}") == name)
+        .expect("a known fault point");
+    let service = RepositoryService::open_at_with_exit_point_for_testing(
+        Path::new(&std::env::var_os(KILLED_DATA).unwrap()),
+        point,
+    )
+    .unwrap()
+    .with_clock_for_testing(TestClock::at(START));
+    let mutation = if std::env::var_os(KILLED_EXISTING).is_some() {
+        killed_enable(Path::new(&parent))
+    } else {
+        killed_create(Path::new(&parent))
+    };
+    execute_confirmed(
+        &service,
+        REQUEST_1,
+        &std::env::var(KILLED_CONFIRMATION).unwrap(),
+        mutation,
+    );
+    // Not reached: the process ended at the fault point.
+}
+
+/// Runs `REQUEST_1` in a child process that ends at `point`: a create
+/// of `new` under `directory`, or with `existing` an enable of it.
+fn killed_at(
+    desk: &Desk,
+    directory: &Path,
+    existing: bool,
+    confirmation: &str,
+    point: FailurePoint,
+) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "killed_at_fault_point_child", "--nocapture"])
+        .env(KILLED_PARENT, directory)
+        .env(KILLED_DATA, desk.data.path())
+        .env(KILLED_CONFIRMATION, confirmation)
+        .env(KILLED_POINT, format!("{point:?}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if existing {
+        command.env(KILLED_EXISTING, "1");
+    }
+    assert_eq!(
+        command.status().unwrap().code(),
+        Some(manyhands::repository::FAILURE_POINT_EXIT_STATUS),
+        "{point:?}: the child ended at the fault point"
+    );
+}
+
+/// A create is killed after it made its directory and before it
+/// recorded a step. The preview saw no target, and the retry sees an
+/// empty directory: the very thing the preview said it would make, under
+/// the request's own pending operation. The retry completes.
+#[test]
+fn a_create_killed_after_it_made_its_directory_is_completed_by_its_retry() {
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let create = || killed_create(site.parent.path());
+    let (confirmation, _) = desk.preview(&create());
+    killed_at(
+        &desk,
+        site.parent.path(),
+        false,
+        &confirmation,
+        FailurePoint::BeforeRepositoryInitialization,
+    );
+    // What the dead process left: its directory, empty; its record
+    // accepted; its operation pending, with no step.
+    assert_eq!(tree(site.parent.path()).len(), 1);
+    assert!(site.root.is_dir());
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    assert_eq!(desk.pending_journal_rows(), 1);
+    assert_eq!(
+        desk.count("SELECT COUNT(*) FROM operation_records WHERE completed_step IS NOT NULL"),
+        0
+    );
+
+    desk.reopen();
+    desk.clock.set(START + 3600);
+    let finished = desk.execute(REQUEST_1, &confirmation, create());
+
+    assert_enabled(&finished, &site.root);
+    assert_eq!(initializations(&site.root), 1);
+    assert_eq!(desk.pending_journal_rows(), 0);
+    assert!(desk.registered(&site.root));
+}
+
+/// That allowance is for the request's own directory and nothing else:
+/// a file in it is still a change from elsewhere.
+#[test]
+fn a_create_killed_after_it_made_its_directory_still_refuses_what_is_put_in_it() {
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let create = || killed_create(site.parent.path());
+    let (confirmation, _) = desk.preview(&create());
+    killed_at(
+        &desk,
+        site.parent.path(),
+        false,
+        &confirmation,
+        FailurePoint::BeforeRepositoryInitialization,
+    );
+    fs::write(site.root.join("notes.txt"), "mine\n").unwrap();
+
+    desk.reopen();
+    let refused = desk.execute(REQUEST_1, &confirmation, create());
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert!(git2::Repository::open(&site.root).is_err());
+}

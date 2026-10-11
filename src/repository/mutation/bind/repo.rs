@@ -55,7 +55,7 @@ use super::{
         },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
-        observe::Observation,
+        observe::{Observation, ObservationDigest},
         outcome::{self, SaveReport},
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
@@ -509,9 +509,17 @@ impl RepoBinding {
 
     /// The digest of what was observed: what a confirmation stores, and
     /// what a later observation is compared with.
-    fn digest(&self, observed: &Observed) -> String {
-        let mut observation = Observation::of(self.command().name());
-        observation = match &observed.state {
+    fn digest(&self, observed: &Observed) -> ObservationDigest {
+        ObservationDigest {
+            state: self.state_digest(&observed.state),
+            unchanging: self.identity_digest(observed.effective.as_ref()),
+        }
+    }
+
+    /// The digest of the state the command changes.
+    fn state_digest(&self, state: &State) -> String {
+        let observation = Observation::of(self.command().name());
+        let observation = match state {
             State::Create { target } => observation.text(
                 "target",
                 match target {
@@ -564,9 +572,19 @@ impl RepoBinding {
                     )
             }
         };
-        // The identity is covered only when the request supplies none:
-        // one that is supplied is in the request's own digest.
-        match (&self.identity, &observed.effective) {
+        observation.finish()
+    }
+
+    /// The digest of the identity the request will commit as, which no
+    /// call of the request changes outside the repository it is made in.
+    /// It is covered only when the request supplies none: one that is
+    /// supplied is in the request's own digest.
+    fn identity_digest(
+        &self,
+        effective: Option<&(CommitIdentity, PreviewIdentitySource)>,
+    ) -> String {
+        let observation = Observation::of(self.command().name());
+        match (&self.identity, effective) {
             (Some(_), _) => observation.absent("identity").finish(),
             (None, None) => observation.text("identity", "none").finish(),
             (None, Some((identity, source))) => observation
@@ -659,8 +677,37 @@ impl RepoBinding {
         Ok(())
     }
 
+    /// The identity Git would commit as at `root`, and where it comes
+    /// from, read as `observe` reads it and without the rest of the
+    /// observation: for a request that supplies none. For a create that
+    /// is what Git finds outside any repository, also once the
+    /// repository is there, since that is what its preview showed.
+    fn effective_identity_at(
+        &self,
+        root: &Path,
+    ) -> Result<Option<(CommitIdentity, PreviewIdentitySource)>, Answer> {
+        if self.identity.is_some() {
+            return Ok(None);
+        }
+        let config = match self.verb {
+            Verb::Create => git2::Config::open_default(),
+            Verb::Enable => Repository::open(root).and_then(|repository| repository.config()),
+        }
+        .map_err(inaccessible)?;
+        self.effective_identity(&config, root)
+    }
+
     /// The identity the domain call is given, from what was observed.
     fn acting_identity(&self, observed: &Observed) -> Option<CommitIdentity> {
+        self.acting_with(observed.effective.as_ref())
+    }
+
+    /// The identity the domain call is given, when `effective` is the
+    /// identity Git would commit as.
+    fn acting_with(
+        &self,
+        effective: Option<&(CommitIdentity, PreviewIdentitySource)>,
+    ) -> Option<CommitIdentity> {
         match (&self.identity, self.verb) {
             (Some(identity), _) => Some(identity.clone()),
             // Enablement finds the identity itself and writes nothing.
@@ -668,10 +715,7 @@ impl RepoBinding {
             // Creation reads no configuration outside the repository it
             // makes, so it is given what was found there, and writes it
             // to the new repository's own configuration.
-            (None, Verb::Create) => observed
-                .effective
-                .as_ref()
-                .map(|(identity, _)| identity.clone()),
+            (None, Verb::Create) => effective.map(|(identity, _)| identity.clone()),
         }
     }
 
@@ -687,7 +731,12 @@ impl RepoBinding {
                     configuration: _,
                 } => Some(*commit),
                 State::Enable {
-                    head: Head::Unborn { .. } | Head::Detached,
+                    head:
+                        Head::Unborn {
+                            name: _,
+                            primary_exists: _,
+                        }
+                        | Head::Detached,
                     worktree: _,
                     configuration: _,
                 }
@@ -955,7 +1004,7 @@ impl Binding for RepoBinding {
             family: Some(OperationFamily::Local),
             position: self.position(&observed),
             expected: None,
-            observation: Some(self.digest(&observed)),
+            observation: Some(self.digest(&observed).to_stored()),
         })
     }
 
@@ -968,14 +1017,21 @@ impl Binding for RepoBinding {
     /// 1. A row that has completed is answered from what its operation
     ///    recorded, with no domain call; see `ended`.
     /// 2. A row that holds a step is taken up by the domain call. The
-    ///    request's own work has changed what would be observed, so
-    ///    nothing is compared, and the confirmation is the request's
-    ///    however old it is.
+    ///    request's own work has changed the state that would be
+    ///    observed, so that is not compared, and the confirmation is the
+    ///    request's however old it is. The identity the preview showed
+    ///    is compared all the same: the request's work never changes
+    ///    where it comes from, and a request that went on with another
+    ///    would commit as, and write, an identity nobody was shown. A
+    ///    difference is `external_change`, and nothing more is written.
     /// 3. With no step recorded, nothing of the request's is known to be
     ///    there. When no row stands and the end state holds, the request
     ///    is a no-op and is finished. Otherwise what was previewed is
-    ///    observed again and compared: a difference is
-    ///    `external_change`, and a new preview is needed.
+    ///    observed again and compared, state and identity: a difference
+    ///    is `external_change`. One difference is the request's own: a
+    ///    create whose row is pending made its directory before it
+    ///    recorded anything, so a preview of an absent target accepts an
+    ///    empty directory under that row.
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
@@ -1010,20 +1066,27 @@ impl Binding for RepoBinding {
             }
         };
         let root = accepted.root();
+        // What the request's consent was to. A request whose record
+        // holds none, or one that cannot be read as a digest, has none
+        // that anything could be compared with: nothing is run on that.
+        let previewed = call
+            .confirmation
+            .and_then(|consent| consent.observation_digest.as_deref())
+            .and_then(ObservationDigest::from_stored);
+        let changed =
+            |journal: JournalRow| not_run(Answer::stopped(ResultCode::ExternalChange), journal);
+        let Some(previewed) = previewed else {
+            return Err(changed(journal));
+        };
         if stepped {
-            // The identity a create is given is read again: what it
-            // finds outside the repository is not the request's input.
-            self.acting = match (&self.identity, self.verb) {
-                (Some(identity), _) => Some(identity.clone()),
-                (None, Verb::Enable) => None,
-                (None, Verb::Create) => match git2::Config::open_default()
-                    .map_err(inaccessible)
-                    .and_then(|config| self.effective_identity(&config, &root))
-                {
-                    Ok(effective) => effective.map(|(identity, _)| identity),
-                    Err(answer) => return Err(not_run(answer, journal)),
-                },
+            let effective = match self.effective_identity_at(&root) {
+                Ok(effective) => effective,
+                Err(answer) => return Err(not_run(answer, journal)),
             };
+            if previewed.unchanging != self.identity_digest(effective.as_ref()) {
+                return Err(changed(journal));
+            }
+            self.acting = self.acting_with(effective.as_ref());
             return Ok(Entered::Unfinished);
         }
         let holds = self.end_state_holds(&root);
@@ -1038,15 +1101,26 @@ impl Binding for RepoBinding {
             Err(answer) => return Err(not_run(answer, journal)),
         };
         // A row that is pending is the domain's to end, also when the
-        // repository was enabled as requested under it.
-        let previewed = call
-            .confirmation
-            .and_then(|consent| consent.observation_digest.as_deref());
-        if !holds && previewed != Some(self.digest(&observed).as_str()) {
-            return Err(not_run(
-                Answer::stopped(ResultCode::ExternalChange),
-                journal,
-            ));
+        // repository was enabled as requested under it: nothing is
+        // written then, and nothing is compared.
+        if !holds {
+            let found = self.digest(&observed);
+            let own_directory = journal != JournalRow::Absent
+                && matches!(
+                    observed.state,
+                    State::Create {
+                        target: Target::EmptyDirectory
+                    }
+                )
+                && previewed.state
+                    == self.state_digest(&State::Create {
+                        target: Target::Absent,
+                    });
+            if previewed.unchanging != found.unchanging
+                || (previewed.state != found.state && !own_directory)
+            {
+                return Err(changed(journal));
+            }
         }
         self.acting = self.acting_identity(&observed);
         Ok(Entered::Unfinished)
@@ -1088,7 +1162,7 @@ impl Confirmed for RepoBinding {
             PreviewEffect::RepositoryRegistered,
         ]);
         Ok(Previewed {
-            observation: self.digest(&observed),
+            observation: self.digest(&observed).to_stored(),
             effects,
             details: PreviewDetailsDto::Repository(RepositoryPreviewDto {
                 root: observed.root.to_string_lossy().into_owned(),

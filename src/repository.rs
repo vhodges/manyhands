@@ -777,6 +777,10 @@ pub enum FailurePoint {
     AfterRepositoryInitialization,
     BeforeConfigurationWrite,
     BeforeInitializationCommit,
+    /// Enablement, after its initialization commit is made and before
+    /// the step that records it: the call ends there with the commit on
+    /// the branch and the row holding the step before it.
+    AfterInitializationCommit,
     BeforePublicationConfigurationCommit,
     BeforeContextBranchCreation,
     AfterContextBranchBeforeWorktreeGitFailure,
@@ -4621,6 +4625,11 @@ impl RepositoryService {
                 };
             }
         };
+        self.check_failure(
+            FailurePoint::AfterInitializationCommit,
+            RepositoryOperation::Enable,
+            &root,
+        )?;
         self.advance_lifecycle(
             &root,
             RepositoryOperation::Enable,

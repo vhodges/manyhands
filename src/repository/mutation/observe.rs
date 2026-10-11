@@ -50,11 +50,15 @@ pub(crate) fn absent_token(branch: Option<&str>, path: &str) -> String {
 /// What the observation digest is begun with.
 const OBSERVATION_DOMAIN: &[u8] = b"manyhands observation v1";
 
-/// The state a command that needs confirmation binds, reduced to one
-/// digest: `prepare` stores it in the confirmation, and `execute`
-/// observes again and compares. No item token covers this state.
+/// One part of the state a command that needs confirmation binds, as a
+/// digest. No item token covers this state.
 ///
-/// Each part is fed under its name with its length, and a part that is
+/// What a confirmation stores is two of these joined, `ObservationDigest`:
+/// one of the state the command changes, and one of what it reads and
+/// does not change. They are kept apart because they are compared at
+/// different times; see `ObservationDigest`.
+///
+/// Each value is fed under its name with its length, and one that is
 /// absent is told apart from one that is empty, so no two different
 /// observations feed the same bytes. The digest holds nothing that can be
 /// read back.
@@ -89,10 +93,59 @@ impl Observation {
         self
     }
 
-    /// The digest, as a confirmation record holds it: 64 lowercase
-    /// hexadecimal digits.
+    /// The part's digest: the first 128 bits of the hash, as 32
+    /// lowercase hexadecimal digits. Two of them are what one record
+    /// column holds.
     pub(crate) fn finish(self) -> String {
-        self.0.finalize().to_hex().to_string()
+        self.0.finalize().to_hex()[..PART_DIGITS].to_owned()
+    }
+}
+
+/// The hexadecimal digits of one part of an observation digest.
+const PART_DIGITS: usize = 32;
+
+/// What a preview observed, as a confirmation stores it: the digest of
+/// the state the command changes, followed by the digest of what the
+/// command reads and never changes, which for the bound commands is the
+/// identity it will commit as. Together they are the 64 lowercase
+/// hexadecimal digits the record's column holds.
+///
+/// A new request is accepted only when both are what a fresh observation
+/// gives. A request that is entered again compares them apart:
+///
+/// - `unchanging` is compared on every call of the request. Nothing the
+///   request does changes it, so a difference is always a change from
+///   elsewhere, however far the request has got.
+/// - `state` is compared only while the request's operation has
+///   recorded no step. From its first step on, the request's own work
+///   has changed what would be observed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObservationDigest {
+    pub(crate) state: String,
+    pub(crate) unchanging: String,
+}
+
+impl ObservationDigest {
+    /// The digest as a confirmation record holds it.
+    pub(crate) fn to_stored(&self) -> String {
+        format!("{}{}", self.state, self.unchanging)
+    }
+
+    /// The two parts of a digest a record holds. `None` for anything
+    /// that is not one: nothing is compared with it, and nothing is run
+    /// on it.
+    pub(crate) fn from_stored(stored: &str) -> Option<Self> {
+        let well_formed = stored.len() == 2 * PART_DIGITS
+            && stored
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        well_formed.then(|| {
+            let (state, unchanging) = stored.split_at(PART_DIGITS);
+            Self {
+                state: state.to_owned(),
+                unchanging: unchanging.to_owned(),
+            }
+        })
     }
 }
 

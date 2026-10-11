@@ -111,7 +111,7 @@ fn enable() -> Observation {
 fn an_observation_digest_is_stable_and_is_what_a_record_holds() {
     let digest = || enable().text("head", "main").absent("identity").finish();
     assert_eq!(digest(), digest());
-    assert_eq!(digest().len(), 64);
+    assert_eq!(digest().len(), 32);
     assert!(
         digest()
             .bytes()
@@ -140,6 +140,32 @@ fn an_observation_digest_differs_for_each_changed_part() {
         let digest = observation.finish();
         assert!(!seen.contains(&digest));
         seen.push(digest);
+    }
+}
+
+#[test]
+fn a_stored_digest_is_its_two_parts_and_is_read_back_as_them() {
+    let digest = ObservationDigest {
+        state: enable().text("head", "main").finish(),
+        unchanging: enable().text("identity", "none").finish(),
+    };
+    let stored = digest.to_stored();
+    assert_eq!(stored.len(), 64);
+    assert!(stored.starts_with(&digest.state));
+    assert!(stored.ends_with(&digest.unchanging));
+    assert_eq!(ObservationDigest::from_stored(&stored), Some(digest));
+    for malformed in [
+        "",
+        "abc",
+        &stored[1..],
+        &stored.to_uppercase(),
+        &"g".repeat(64),
+    ] {
+        assert_eq!(
+            ObservationDigest::from_stored(malformed),
+            None,
+            "{malformed:?}"
+        );
     }
 }
 
