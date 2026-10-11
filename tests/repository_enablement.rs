@@ -583,6 +583,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
     assert_eq!(
         tables,
         [
+            "comment_publication_bindings",
             "configuration_observations",
             "contexts",
             "discovered_comments",

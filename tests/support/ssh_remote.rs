@@ -123,11 +123,15 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
+    pub authentication_attempts: AtomicUsize,
+    pub rejected_authentications: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
     pub commands: Mutex<Vec<Vec<u8>>>,
     pub active_helpers: AtomicUsize,
     pub completed_helpers: AtomicUsize,
+    pub helper_audits: Mutex<(usize, usize)>,
+    pub helper_audits_changed: Condvar,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
@@ -281,11 +285,15 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
+            authentication_attempts: AtomicUsize::new(0),
+            rejected_authentications: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
             commands: Mutex::new(Vec::new()),
             active_helpers: AtomicUsize::new(0),
             completed_helpers: AtomicUsize::new(0),
+            helper_audits: Mutex::new((0, 0)),
+            helper_audits_changed: Condvar::new(),
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
@@ -390,6 +398,23 @@ impl SshRemoteFixture {
     pub fn receive_advertisements(&self) -> usize {
         self.shared.receive_advertisements.load(Ordering::SeqCst)
     }
+    /// Settle all started helper relays, including their receive audit, before
+    /// comparing counters. No new operation may start while this barrier runs.
+    pub fn wait_for_helper_audits(&self) -> Result<(), FixtureError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut audits = fixed(self.shared.helper_audits.lock())?;
+        while audits.0 != audits.1 {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(FixtureError)?;
+            (audits, _) = fixed(
+                self.shared
+                    .helper_audits_changed
+                    .wait_timeout(audits, remaining),
+            )?;
+        }
+        Ok(())
+    }
     pub fn clear_fault(&self) {
         *self.shared.fault.lock().unwrap() = None;
     }
@@ -457,6 +482,12 @@ impl SshRemoteFixture {
     }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
+    }
+    pub fn authentication_counts(&self) -> (usize, usize) {
+        (
+            self.shared.authentication_attempts.load(Ordering::SeqCst),
+            self.shared.rejected_authentications.load(Ordering::SeqCst),
+        )
     }
     /// Choose one exact virtual target; helpers always receive the owned repo path.
     pub fn expect_command_path(&self, path: &str) {

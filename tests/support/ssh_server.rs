@@ -182,6 +182,9 @@ impl Handler for Restricted {
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         boundary(&self.shared, FixtureBoundary::Authentication).await?;
+        self.shared
+            .authentication_attempts
+            .fetch_add(1, Ordering::SeqCst);
         if user == "fixture"
             && !self.shared.reject.load(Ordering::SeqCst)
             && key == &*self.shared.allowed.lock().unwrap()
@@ -189,6 +192,9 @@ impl Handler for Restricted {
             self.shared.accepted.lock().unwrap().push(key.to_bytes()?);
             Ok(Auth::Accept)
         } else {
+            self.shared
+                .rejected_authentications
+                .fetch_add(1, Ordering::SeqCst);
             Ok(Auth::reject())
         }
     }
@@ -245,6 +251,7 @@ impl Handler for Restricted {
         }
         self.shared.helpers.fetch_add(1, Ordering::SeqCst);
         self.shared.active_helpers.fetch_add(1, Ordering::SeqCst);
+        self.shared.helper_audits.lock().unwrap().0 += 1;
         let shared = self.shared.clone();
         let handle = session.handle();
         let task = tokio::spawn(async move {
@@ -445,6 +452,8 @@ async fn relay(
     let _ = handle.close(id).await;
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
+    shared.helper_audits.lock().unwrap().1 += 1;
+    shared.helper_audits_changed.notify_all();
 }
 
 // Receive-pack report-status is pkt-line framed, possibly nested in sideband 1.
