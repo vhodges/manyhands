@@ -4591,3 +4591,71 @@ fn a_remote_added_again_under_an_interrupted_removal_is_not_removed_by_the_retry
     assert_eq!(references(home.root()), before);
     assert_eq!(home.world.pending_journal_rows(), 0);
 }
+
+// ---------------------------------------------------------------------
+// `repo remove`: a root that is registered again
+// ---------------------------------------------------------------------
+
+impl Home {
+    /// Registers the root again, as another process would: through the
+    /// domain operation, which finds the repository enabled. The new
+    /// registration is made a minute after the old one, since the time
+    /// of a registration is kept in seconds.
+    fn register_again(&self) {
+        self.service()
+            .enable(manyhands::repository::EnableRepositoryRequest {
+                root: self.root().to_owned(),
+                primary_branch: "main".to_owned(),
+                identity: None,
+                operation_id: manyhands::repository::OperationId::new(),
+            })
+            .unwrap();
+        assert!(self.registered());
+        let moved = items::index(self.world.data.path())
+            .execute("UPDATE repositories SET enabled_at = enabled_at + 60", [])
+            .unwrap();
+        assert_eq!(moved, 1);
+    }
+}
+
+/// The removal happens, its result is lost, and the root is registered
+/// again before the retry. The registration the request consented to
+/// removing is gone, whoever removed it: the retry is a no-op, is not
+/// refused as `external_change`, and leaves the new registration.
+#[test]
+fn a_repo_remove_whose_result_was_lost_is_a_no_op_once_the_root_is_registered_again() {
+    let mut home = Home::new();
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    home.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    home.execute(REQUEST_1, &confirmation, home.remove_repository());
+    assert!(!home.registered());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    home.reopen();
+    home.register_again();
+    let files = tree(home.root());
+
+    let answered = home.retry(REQUEST_1, home.remove_repository());
+
+    assert_noop(&answered);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert!(home.registered());
+    assert_eq!(tree(home.root()), files);
+    assert_eq!(home.retry(REQUEST_1, home.remove_repository()), answered);
+}
+
+/// A first call is not weakened by that: a preview of a registration
+/// that has since been removed and made again is stale, and a request
+/// no record holds is refused with nothing removed.
+#[test]
+fn a_first_repo_remove_with_a_preview_of_an_earlier_registration_is_external_change() {
+    let home = Home::new();
+    let (confirmation, _) = home.preview(&home.remove_repository());
+    home.remove_registration_by_hand();
+    home.register_again();
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_repository());
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    home.assert_nothing_left(REQUEST_1);
+    assert!(home.registered());
+}

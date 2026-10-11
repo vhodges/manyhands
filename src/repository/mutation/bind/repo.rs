@@ -1441,12 +1441,16 @@ impl Binding for RepoRemoveBinding {
     ///    its own work or another's: a removal leaves no row to tell the
     ///    two apart. With no row the request is a no-op and is finished.
     ///    A row that is pending is the domain's to end, and it is called.
-    /// 2. The root is registered. `remove_registration` records no step,
-    ///    so nothing of the request's has been done: what was previewed
-    ///    is observed again and compared, and a difference is
-    ///    `external_change`. A root that was registered again since is
-    ///    another registration, and is not removed on a consent to the
-    ///    first.
+    /// 2. The root is registered, and the registration is the one that
+    ///    was previewed: nothing of the request's has been done, and the
+    ///    domain is called.
+    /// 3. The root is registered, by another registration than the one
+    ///    previewed: the root was registered again. The previewed one is
+    ///    gone, which is the request's end state; with no row the
+    ///    request is a no-op and is finished, and the new registration is
+    ///    not removed on a consent to the first. A completed removal
+    ///    whose result was lost is answered so, and never as
+    ///    `external_change`.
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
@@ -1491,13 +1495,34 @@ impl Binding for RepoRemoveBinding {
         }
         // A request whose record holds no consent that can be read has
         // none that anything could be compared with: nothing is run.
-        if call.previewed() != Some(Self::digest(&registered)) {
+        let Some(previewed) = call.previewed() else {
             return Err(not_run(
                 Answer::stopped(ResultCode::ExternalChange),
                 journal,
             ));
+        };
+        if previewed == Self::digest(&registered) {
+            return Ok(Entered::Unfinished);
         }
-        Ok(Entered::Unfinished)
+        // Another registration than the one that was previewed. The
+        // request was accepted with the previewed one in place, so that
+        // one has been removed since, by this request or by another: a
+        // removal leaves no row to say which. With no row the request's
+        // end state holds, and the registration that is there now is not
+        // the request's to remove. A row that is pending has removed
+        // nothing, and refuses everything else on the repository: what
+        // is there is not what was shown.
+        if journal == JournalRow::Absent {
+            Err(Ran {
+                answer: Answer::stopped(ResultCode::AlreadyApplied),
+                standing: Standing::Final,
+            })
+        } else {
+            Err(not_run(
+                Answer::stopped(ResultCode::ExternalChange),
+                journal,
+            ))
+        }
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
