@@ -830,3 +830,24 @@ all-feature tests and CLI smoke **PASS**, plus `git diff --check`. Output
 boundary **19**; other full counts equal the preceding final local gate, with
 one existing intentionally ignored characterization. Cargo/devenv lock inputs
 and hashes unchanged. Corrected Windows/native evidence remains pending.
+
+### Windows-only iteration passed — 2026-10-11T12:26:47Z
+
+Fixture correction committed as `4f7c263`; the subsequent clean rebase onto
+freshly fetched main was a no-op and ancestry/status checks passed. Commit
+`6f77b707ba91ff4c9a6c0491720c9b2485b9c658` temporarily reduced the workflow matrix
+to its two existing Windows jobs, preserving the complete test command and manual
+trigger. Normal fast-forward push after fetched remote-history inspection.
+
+[Windows-only run 38135479344](https://github.com/vhodges/manyhands/actions/runs/38135479344)
+checked that exact revision and **passed both Windows x86_64 and aarch64**, with
+release build, verification of both binaries, the full headless contract command
+and artifact uploads successful. Logs `tool_12aee1b71001xAamVv8zPI54F9` confirm
+publication **41** and read boundary **19** on each architecture, including both
+the original previously failing test and the actual read-only/read-mark plus
+committed-writer negative-control regression. No further Rust change was needed.
+
+Restore the workflow byte-for-byte to its pre-iteration five-target version and
+run the final matrix as requested. The validated Rust tree is unchanged from
+the complete resumed local gate. The final all-target native gate and review-ready
+handoff remain pending; ticket stays open.
