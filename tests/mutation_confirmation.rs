@@ -4905,13 +4905,140 @@ fn a_remote_whose_removal_would_take_part_of_a_sibling_remote_is_refused_at_prep
         assert_eq!(sibling_entries(&home, sibling), config, "{name}");
         assert_eq!(references(home.root()), refs, "{name}");
         assert_eq!(home.remote_url(name).as_deref(), Some(BACKUP), "{name}");
-
-        // The sibling itself takes nothing of the first, and is removed.
-        let (confirmation, _) = home.preview(&home.remove_remote(sibling));
-        assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote(sibling)));
-        assert_eq!(home.remote_url(name).as_deref(), Some(BACKUP), "{name}");
-        assert_eq!(home.remote_url(sibling), None, "{name}");
     }
+}
+
+/// `origin.bak` beside `origin` takes nothing of `origin`: neither its
+/// configuration nor a reference its refspec names. It is removed, and
+/// `origin` is whole.
+#[test]
+fn a_sibling_whose_removal_takes_nothing_of_the_other_remote_is_removed() {
+    let home = Home::new();
+    with_sibling(&home, "origin", "origin.bak");
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/origin/main", head, false, "test")
+        .unwrap();
+    let of_origin = |home: &Home| -> Vec<(String, String)> {
+        local_entries(home.root())
+            .into_iter()
+            .filter(|(key, _)| key == "remote.origin.url" || key == "remote.origin.fetch")
+            .collect()
+    };
+    let before = of_origin(&home);
+    assert_eq!(before.len(), 2);
+    let mut refs = references(home.root());
+
+    let (confirmation, _) = home.preview(&home.remove_remote("origin.bak"));
+    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("origin.bak")));
+
+    refs.remove("refs/remotes/origin.bak/main");
+    assert_eq!(references(home.root()), refs);
+    assert_eq!(of_origin(&home), before);
+    assert_eq!(home.remote_url("origin.bak"), None);
+}
+
+/// A reference that another remote's fetch refspec names as well cannot
+/// be called this remote's own. `refs/remotes/team/fork/main` is the
+/// tracking reference of `team/fork`'s branch `main` and of `team`'s
+/// branch `fork/main`: removing `team/fork` would delete it, and is
+/// refused. So is the removal of a remote whose tracking references a
+/// remote of an unrelated name also fetches into.
+#[test]
+fn a_reference_another_remote_also_fetches_into_is_not_removed_with_this_one() {
+    for (name, other, other_fetch) in [
+        ("team/fork", "team", "+refs/heads/*:refs/remotes/team/*"),
+        ("backup", "elsewhere", "+refs/heads/*:refs/remotes/backup/*"),
+    ] {
+        let home = Home::new();
+        let repository = home.git();
+        repository
+            .remote_with_fetch(other, SIBLING, other_fetch)
+            .unwrap();
+        home.add_remote(name, BACKUP);
+        let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+        repository
+            .reference(&format!("refs/remotes/{name}/main"), head, false, "test")
+            .unwrap();
+        let refs = references(home.root());
+        let entries = local_entries(home.root());
+
+        let refused = home.prepare(&home.remove_remote(name));
+
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{name}");
+        assert_eq!(home.confirmation_rows(), 0, "{name}");
+        assert_eq!(references(home.root()), refs, "{name}");
+        assert_eq!(local_entries(home.root()), entries, "{name}");
+    }
+}
+
+/// `team/fork` beside a `team` whose refspec does not reach its
+/// references, and with no `team` at all, is removed, and everything
+/// else is whole.
+#[test]
+fn a_remote_under_another_s_name_whose_references_are_its_alone_is_removed() {
+    for team in [Some("+refs/heads/main:refs/remotes/team/main"), None] {
+        let home = Home::new();
+        let repository = home.git();
+        if let Some(fetch) = team {
+            repository
+                .remote_with_fetch("team", SIBLING, fetch)
+                .unwrap();
+        }
+        home.add_remote("team/fork", BACKUP);
+        let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+        for name in ["refs/remotes/team/fork/main", "refs/remotes/team/main"] {
+            repository.reference(name, head, false, "test").unwrap();
+        }
+        let of_team = sibling_entries(&home, "team");
+        let mut refs = references(home.root());
+
+        let (confirmation, _) = home.preview(&home.remove_remote("team/fork"));
+        assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team/fork")));
+
+        refs.remove("refs/remotes/team/fork/main");
+        assert_eq!(references(home.root()), refs, "{team:?}");
+        assert_eq!(sibling_entries(&home, "team"), of_team, "{team:?}");
+    }
+}
+
+/// The refspec that makes another remote fetch into this one's
+/// references is added after the preview: the request is refused before
+/// it is accepted.
+#[test]
+fn a_refspec_added_to_another_remote_after_the_preview_is_refused_at_execute() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    home.add_remote("elsewhere", SIBLING);
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/backup/main", head, false, "test")
+        .unwrap();
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    repository
+        .remote_add_fetch("elsewhere", "+refs/heads/*:refs/remotes/backup/*")
+        .unwrap();
+    let refs = references(home.root());
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_refused(&refused, ResultCode::InvalidRemote, &[]);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(references(home.root()), refs);
+
+    // One that reaches none of its references is still not what was
+    // shown.
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    home.add_remote("elsewhere", SIBLING);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.git()
+        .remote_add_fetch("elsewhere", "+refs/tags/*:refs/remotes/elsewhere/tags/*")
+        .unwrap();
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
 }
 
 /// The sibling is added after the preview: the request is refused
@@ -5036,4 +5163,43 @@ fn a_negative_refspec_does_not_refuse_a_removal_by_itself() {
     expected.remove("refs/remotes/backup/topic");
     assert_eq!(references(home.root()), expected);
     assert_eq!(home.remote_url("backup"), None);
+}
+
+/// A setting of the remote that is in the user's global configuration
+/// and not in the repository's own. Git removes a remote's settings from
+/// the repository's configuration only, and fails on one that is not
+/// there, after it has removed the remote's references and upstream
+/// settings: a removal half done. Such a remote is refused, and nothing
+/// of it is touched.
+#[test]
+fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
+    let Some(git_home) = in_a_process_with_its_own_git_home(
+        "a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused",
+    ) else {
+        return;
+    };
+    fs::write(
+        git_home.join(".gitconfig"),
+        "[remote \"backup\"]\n\tprune = true\n",
+    )
+    .unwrap();
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/backup/main", head, false, "test")
+        .unwrap();
+    let refs = references(home.root());
+    let entries = local_entries(home.root());
+    let global = fs::read(git_home.join(".gitconfig")).unwrap();
+
+    let refused = home.prepare(&home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::InvalidRemote);
+    assert_eq!(refused.data, None);
+    assert_eq!(home.confirmation_rows(), 0);
+    assert_eq!(references(home.root()), refs);
+    assert_eq!(local_entries(home.root()), entries);
+    assert_eq!(fs::read(git_home.join(".gitconfig")).unwrap(), global);
 }

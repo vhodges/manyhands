@@ -674,14 +674,22 @@ struct Removal {
     /// matches the destination of one of its refspecs.
     tracking_refs: bool,
     /// Whether any of those is outside `refs/remotes/<name>/`, or is
-    /// under it and is the tracking reference of another remote, one
-    /// named `<name>/...`: a reference that is not the remote's own.
+    /// under it and is another remote's as well: under the prefix of a
+    /// remote named `<name>/...`, or matched by the destination of a
+    /// fetch refspec of any other remote. Such a reference is not this
+    /// remote's own.
     foreign_refs: bool,
     /// The other remotes whose names begin with this one's and a `.` or
     /// a `/`, in name order: the ones Git could take a part of.
     siblings: Vec<String>,
+    /// The fetch refspecs of every other remote of the repository, each
+    /// with its remote's name, in name order: what says whether a
+    /// reference is another remote's as well.
+    other_refspecs: Vec<String>,
     /// Whether Git would remove with the remote's section a
-    /// configuration entry that is not the remote's own.
+    /// configuration entry that is not the remote's own, or could not
+    /// remove one that is: an entry of the remote that is not in the
+    /// repository's own configuration file.
     foreign_config: bool,
     /// Whether any local branch has the remote as its upstream's.
     upstreams: bool,
@@ -770,6 +778,38 @@ impl RemoteRemoveBinding {
             .filter(|other| other[self.name.len()..].starts_with('/'))
             .map(|other| format!("refs/remotes/{other}/"))
             .collect();
+        // Every other remote, to ask of each whether it fetches into a
+        // reference this remote's removal would delete.
+        let mut names: Vec<String> = repository
+            .remotes()
+            .map_err(unreadable)?
+            .iter()
+            .flatten()
+            .filter(|other| *other != self.name)
+            .map(str::to_owned)
+            .collect();
+        names.sort_unstable();
+        let mut others = Vec::new();
+        let mut other_refspecs = Vec::new();
+        for other in &names {
+            let remote = repository.find_remote(other).map_err(unreadable)?;
+            for refspec in remote.refspecs() {
+                if refspec.direction() == git2::Direction::Fetch {
+                    other_refspecs.push(format!(
+                        "{other} {}",
+                        String::from_utf8_lossy(refspec.bytes())
+                    ));
+                }
+            }
+            others.push(remote);
+        }
+        let also_another_s = |name: &str| {
+            others.iter().any(|other| {
+                other.refspecs().any(|refspec| {
+                    refspec.direction() == git2::Direction::Fetch && refspec.dst_matches(name)
+                })
+            })
+        };
         let mut refspecs = Vec::new();
         let (mut tracking_refs, mut foreign_refs) = (false, false);
         let remote = match repository.find_remote(&self.name) {
@@ -804,6 +844,7 @@ impl RemoteRemoveBinding {
                         let own = name.is_some_and(|name| {
                             name.starts_with(&own)
                                 && !of_a_sibling.iter().any(|other| name.starts_with(other))
+                                && !also_another_s(name)
                         });
                         if !own {
                             foreign_refs = true;
@@ -862,7 +903,11 @@ impl RemoteRemoveBinding {
                 let own = key
                     .strip_prefix(&section)
                     .is_some_and(|rest| !rest.is_empty() && !rest.contains('.'));
-                if matched && !own {
+                // Git deletes what it matches from the repository's own
+                // configuration file, and fails on an entry that is not
+                // there, with the remote's references already removed.
+                let removable = own && entry.level() == git2::ConfigLevel::Local;
+                if matched && !removable {
                     foreign_config = true;
                 }
             }
@@ -888,6 +933,7 @@ impl RemoteRemoveBinding {
             tracking_refs,
             foreign_refs,
             siblings,
+            other_refspecs,
             foreign_config,
             upstreams,
             polling,
@@ -906,6 +952,7 @@ impl RemoteRemoveBinding {
             tracking_refs,
             foreign_refs,
             siblings,
+            other_refspecs,
             foreign_config,
             upstreams,
             polling,
@@ -942,6 +989,10 @@ impl RemoteRemoveBinding {
         let mut observation = observation.text("siblings", &siblings.len().to_string());
         for sibling in siblings {
             observation = observation.text("sibling", sibling);
+        }
+        let mut observation = observation.text("other_refspecs", &other_refspecs.len().to_string());
+        for refspec in other_refspecs {
+            observation = observation.text("other_refspec", refspec);
         }
         let observation = flag(observation, "foreign_config", *foreign_config);
         let observation = flag(observation, "upstreams", *upstreams);
@@ -981,8 +1032,10 @@ impl RemoteRemoveBinding {
 
     /// Refuses a remote whose removal would take with it something that
     /// is not its own: a reference that is not its tracking reference (a
-    /// branch, a tag, another remote's), or a configuration entry of
-    /// another remote. No preview is given of it and it is not removed;
+    /// branch, a tag, another remote's, or one another remote fetches
+    /// into as well), or a configuration entry of another remote. And
+    /// one whose removal Git would leave half done: a remote with a
+    /// setting outside the repository's own configuration file. No preview is given of it and it is not removed;
     /// it is not a remote this command can remove.
     fn removable(&self, removal: &Removal) -> Result<(), Answer> {
         if removal.foreign_refs || removal.foreign_config {
