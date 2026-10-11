@@ -6,29 +6,34 @@
 //! The records are not a journal: they hold no step, no lease and no
 //! authority over Git. Losing them loses the ability to answer a retry
 //! from memory, never the ability to work.
+//!
+//! This file is the boundary's public surface: the types a front end
+//! calls it with, the reads of a request and of a journal row, and what
+//! tests inject. The work of a call is in the modules below it:
+//!
+//! - `execute` looks a request up, decides what the call is, and accepts
+//!   and runs a new one;
+//! - `replay` answers from a record without running anything;
+//! - `reenter` takes up an accepted record again;
+//! - `settle` finishes, deletes or leaves the record afterwards;
+//! - `reply` identifies the request and builds its envelopes;
+//! - `bind` holds what connects each command to all of that.
 
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]
 
-use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use time::OffsetDateTime;
 
-use crate::results::{
-    Effects, Envelope, ResultCode, Scope, absolute_path_string, timestamp_string,
-};
+use crate::results::{Envelope, ResultCode, Scope, timestamp_string};
 
 use super::{
-    FailurePoint, OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService,
-    keys,
-    keys::{SessionCredentialProvider, SessionCredentials},
-    recovery::{self, FinalKind, JournalRow},
+    OperationFamily, OperationId, ReadError, RepositoryOperation, RepositoryService, keys,
+    recovery::{self, JournalRow},
     remote,
 };
 
@@ -37,25 +42,27 @@ mod command;
 mod context;
 mod dto;
 mod evidence;
+mod execute;
 mod identity;
 mod observe;
 mod outcome;
 mod records;
+mod reenter;
+mod replay;
+mod reply;
+mod settle;
 
 pub use bind::ticket::{TicketCreateInput, TicketSaveInput};
-use bind::{
-    Accepted, Answer, Binding, EndedWithoutCheckpoint, Ran, Standing, ticket::TicketBinding,
-};
+use bind::{Binding, ticket::TicketBinding};
 use command::Command;
 pub use dto::{
     MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
     TicketMutationDto,
 };
-use evidence::Position;
+use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
-use identity::{DigestSalt, IntentDigest, ScopeKey};
+use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
-use records::{InsertRequestOutcome, NewRequest, RequestOperation, RequestRecord, RequestResult};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -267,637 +274,6 @@ pub struct NoProgress;
 
 impl ProgressSink for NoProgress {}
 
-/// A request as `execute` identifies it: what a record of it must hold to
-/// be the same request.
-struct RequestIdentity {
-    request_id: RequestId,
-    /// `None` when the root cannot be resolved to a canonical path: no
-    /// record can be of this request then.
-    scope: Option<ScopeKey>,
-    digest: Option<IntentDigest>,
-}
-
-impl RequestIdentity {
-    fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
-        let scope = ScopeKey::for_repository(binding.root());
-        let digest = scope.as_ref().map(|scope| {
-            binding
-                .fields(IntentDigest::builder(
-                    DigestSalt::Request(request_id),
-                    binding.command().name(),
-                    scope,
-                    &binding.target(),
-                ))
-                .finish()
-        });
-        Self {
-            request_id,
-            scope,
-            digest,
-        }
-    }
-
-    /// The repository, as a result's scope names it.
-    fn repository(&self, binding: &dyn Binding) -> Option<String> {
-        match &self.scope {
-            Some(scope) => scope.repository().map(str::to_owned),
-            None => absolute_path_string(binding.root()),
-        }
-    }
-
-    fn matches(&self, binding: &dyn Binding, record: &RequestRecord) -> bool {
-        self.scope.as_ref() == Some(&record.scope)
-            && record.command == binding.command().name()
-            && record.target == binding.target()
-            && self.digest == Some(record.intent_digest)
-    }
-}
-
-/// What the envelope of one call is built with.
-struct Reply<'a> {
-    binding: &'a dyn Binding,
-    identity: &'a RequestIdentity,
-}
-
-impl Reply<'_> {
-    fn scope(&self, position: Option<&Position>) -> Scope {
-        self.binding
-            .scope(self.identity.repository(self.binding), position)
-    }
-
-    /// The envelope of an answer. The outcome is derived from the code and
-    /// the effects; `retry` says the record was left accepted, so the same
-    /// request finishes the work.
-    fn envelope(
-        &self,
-        answer: Answer,
-        accepted: Option<&Accepted>,
-        retry: bool,
-    ) -> Envelope<MutationDataDto> {
-        let Answer {
-            code,
-            effects,
-            data,
-            recovery,
-        } = answer;
-        let scope = self.scope(accepted.map(|accepted| &accepted.position));
-        let recovery = if recovery.is_empty() {
-            outcome::recovery(
-                code,
-                scope.repository.as_deref(),
-                self.identity.request_id,
-                accepted.map(|accepted| accepted.operation_id),
-                retry,
-            )
-        } else {
-            recovery
-        };
-        let mut envelope = Envelope::classified_mutation(
-            self.binding.command().name(),
-            scope,
-            code == ResultCode::Cancelled,
-            code,
-            effects,
-            false,
-        )
-        .with_request_id(self.identity.request_id.to_string())
-        .with_recovery(recovery);
-        if let Some(accepted) = accepted {
-            envelope = envelope.with_operation_id(accepted.operation_id.to_string());
-        }
-        match data {
-            Some(data) => envelope.with_data(data),
-            None => envelope,
-        }
-    }
-
-    /// A request that stopped before it was accepted, having done nothing.
-    fn stopped(&self, code: ResultCode) -> Envelope<MutationDataDto> {
-        self.envelope(Answer::stopped(code), None, false)
-    }
-
-    fn read_failure(&self, error: &ReadError) -> Envelope<MutationDataDto> {
-        self.envelope(Answer::of_read(error), None, false)
-    }
-}
-
-impl RepositoryService {
-    /// Runs one mutation under the caller's request ID and returns its
-    /// result. Every handled outcome, success or not, is an envelope.
-    ///
-    /// The request ID decides what the call is. A request seen for the
-    /// first time is validated, checked, accepted and run once. One whose
-    /// record is finished gets the stored result again, whatever has
-    /// happened to its target since, and nothing is written. The same ID
-    /// with another command, target or input is `request_mismatch`, and
-    /// nothing runs.
-    ///
-    /// The call is synchronous and runs on the caller's thread. It takes
-    /// no lease and holds no lock between its steps: every Git or
-    /// canonical effect is made by the domain operation the binding calls,
-    /// under that operation's own lease and journal row.
-    pub fn execute<P: SessionCredentialProvider>(
-        &self,
-        call: MutationCall,
-        // No bound command needs a credential, reports a stage or can be
-        // stopped once it is accepted; the commands that do use these.
-        _credentials: &mut SessionCredentials<P>,
-        _progress: &mut dyn ProgressSink,
-        cancel: &CancellationToken,
-    ) -> Envelope<MutationDataDto> {
-        let MutationCall {
-            request_id,
-            confirmation,
-            mutation,
-        } = call;
-        let mut binding = mutation.into_binding();
-        let identity = RequestIdentity::of(request_id, binding.as_ref());
-        // Two processes that submit the same new request ID race on the
-        // record's key. The one that loses finds a record on its second
-        // look and is answered from it. A record released on re-entry, of
-        // a request that ended before its checkpoint, takes one more look:
-        // the request is then new.
-        for _ in 0..3 {
-            let record = match self.request_record(request_id) {
-                Ok(record) => record,
-                Err(error) => {
-                    return Reply {
-                        binding: binding.as_ref(),
-                        identity: &identity,
-                    }
-                    .read_failure(&error);
-                }
-            };
-            match record {
-                Some(record) => {
-                    let reply = Reply {
-                        binding: binding.as_ref(),
-                        identity: &identity,
-                    };
-                    if !identity.matches(binding.as_ref(), &record) {
-                        return self.mismatched(&reply, &record);
-                    }
-                    match record.state {
-                        RequestState::Finished => return self.replay(&reply, record),
-                        RequestState::Accepted => {
-                            // `None` when another call settled the record
-                            // meanwhile: the next look answers from what
-                            // it left.
-                            if let Some(envelope) =
-                                self.reenter(binding.as_mut(), &identity, &record)
-                            {
-                                return envelope;
-                            }
-                        }
-                    }
-                }
-                None => {
-                    if let Some(envelope) =
-                        self.first_call(binding.as_mut(), &identity, confirmation, cancel)
-                    {
-                        return envelope;
-                    }
-                }
-            }
-        }
-        Reply {
-            binding: binding.as_ref(),
-            identity: &identity,
-        }
-        .stopped(ResultCode::Busy)
-    }
-
-    /// A request no record holds: validate, check, accept, run, settle.
-    /// `None` when another call accepted the same request ID meanwhile.
-    fn first_call(
-        &self,
-        binding: &mut dyn Binding,
-        identity: &RequestIdentity,
-        confirmation: Option<ConfirmationId>,
-        cancel: &CancellationToken,
-    ) -> Option<Envelope<MutationDataDto>> {
-        // Neither bound command takes a confirmation.
-        if confirmation.is_some() {
-            return Some(Reply { binding, identity }.stopped(ResultCode::NotConfirmable));
-        }
-        let prepared = match binding.prepare(self) {
-            Ok(prepared) => prepared,
-            Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
-        };
-        let reply = Reply { binding, identity };
-        // `prepare` resolved the repository, so the root has a scope key.
-        let (Some(scope), Some(digest)) = (identity.scope.clone(), identity.digest) else {
-            return Some(reply.stopped(ResultCode::InternalError));
-        };
-        if cancel.is_cancelled() {
-            return Some(reply.stopped(ResultCode::Cancelled));
-        }
-        let accepted = Accepted {
-            request_id: identity.request_id,
-            attempt: 1,
-            scope: scope.clone(),
-            family: prepared.family,
-            // A new acceptance gets a new operation ID, so the journal's
-            // own mismatch check never reaches a caller.
-            operation_id: OperationId::new(),
-            position: prepared.position,
-            expected: prepared.expected,
-        };
-        let inserted = self.insert_request(&NewRequest {
-            request_id: accepted.request_id,
-            scope,
-            command: binding.command().name().to_owned(),
-            target: binding.target(),
-            intent_digest: digest,
-            confirmation: None,
-            base_ref: accepted.position.base_ref.clone(),
-            base_oid: accepted.position.base_oid,
-            expected_digest: accepted.expected.clone(),
-            operations: vec![RequestOperation {
-                family: accepted.family,
-                operation_id: accepted.operation_id,
-            }],
-        });
-        match inserted {
-            Ok(InsertRequestOutcome::Inserted) => {}
-            Ok(InsertRequestOutcome::RequestExists) => return None,
-            // No confirmation was presented.
-            Ok(InsertRequestOutcome::ConfirmationUnavailable) => {
-                return Some(reply.stopped(ResultCode::InternalError));
-            }
-            Err(error) => return Some(reply.read_failure(&error)),
-        }
-        Some(self.run_accepted(&reply, &accepted))
-    }
-
-    /// Makes the binding's domain call for an accepted request and settles
-    /// its record from what the call left.
-    fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
-        self.called(reply, accepted, || reply.binding.run(self, accepted))
-    }
-
-    /// Makes a domain call, `call`, for an accepted request and settles its
-    /// record from what the call left.
-    ///
-    /// The two fault points stand in for a process that died: at either,
-    /// the call ends with its record exactly as it was, and what it
-    /// returns is not a result of the request.
-    fn called(
-        &self,
-        reply: &Reply<'_>,
-        accepted: &Accepted,
-        call: impl FnOnce() -> Ran,
-    ) -> Envelope<MutationDataDto> {
-        let died = |point| {
-            self.dies_at(point, accepted)
-                .then(|| reply.envelope(Answer::stopped(ResultCode::InternalError), None, false))
-        };
-        if let Some(envelope) = died(FailurePoint::BeforeRequestDomainCall) {
-            return envelope;
-        }
-        // The cache guard is not held here: the record functions release
-        // it before they return, and the domain call takes it itself.
-        self.run_request_hook();
-        let ran = call();
-        if let Some(envelope) = died(FailurePoint::BeforeRequestSettlement) {
-            return envelope;
-        }
-        self.settled(reply, accepted, ran)
-    }
-
-    /// Whether a test has this call end at `point`.
-    fn dies_at(&self, point: FailurePoint, accepted: &Accepted) -> bool {
-        self.should_inject(
-            point,
-            RepositoryOperation::Read,
-            Path::new(accepted.scope.as_str()),
-        )
-        .unwrap_or(false)
-    }
-
-    /// The envelope of what a call found or did, with its record settled
-    /// from it.
-    fn settled(
-        &self,
-        reply: &Reply<'_>,
-        accepted: &Accepted,
-        ran: Ran,
-    ) -> Envelope<MutationDataDto> {
-        let Ran { answer, standing } = ran;
-        let settlement = Settlement::of(&standing);
-        let envelope = reply.envelope(answer, Some(accepted), settlement == Settlement::Leave);
-        self.settle(accepted, settlement, &envelope);
-        envelope
-    }
-
-    /// Changes the record as `settlement` says. Every change is
-    /// conditional on the record still being accepted with this call's
-    /// attempt, so a call never settles a record another call has since
-    /// entered. A change that fails leaves the record as it is: the next
-    /// call of the request re-enters it.
-    fn settle(
-        &self,
-        accepted: &Accepted,
-        settlement: Settlement,
-        envelope: &Envelope<MutationDataDto>,
-    ) {
-        match settlement {
-            Settlement::Finish => {
-                let data = match &envelope.data {
-                    Some(data) => match serde_json::to_value(data) {
-                        Ok(data) => Some(data),
-                        // The record stays accepted and the request is
-                        // answered again by re-entering it.
-                        Err(_) => return,
-                    },
-                    None => None,
-                };
-                let _ = self.finish_request(
-                    accepted.request_id,
-                    accepted.attempt,
-                    &RequestResult {
-                        outcome: envelope.outcome,
-                        code: envelope.code,
-                        effects: envelope.effects.clone(),
-                        data,
-                    },
-                );
-            }
-            // "Nothing in flight" is read from the journal row, and a call
-            // of the request that was accepted and has not yet begun its
-            // row shows none. A second call that enters in that window and
-            // stops with no row deletes the record under the first, which
-            // then does its work and finds no record to settle. That is a
-            // known limit and it is safe: the first call's caller has its
-            // result, no effect is repeated, and the next call of the
-            // request has no record, so it is treated as new and answered
-            // by the already-applied rule, which writes nothing and claims
-            // no commit.
-            Settlement::Delete => {
-                let _ = self.delete_request(accepted.request_id, accepted.attempt);
-            }
-            Settlement::Leave => {}
-        }
-    }
-
-    /// A finished record of this request: its stored result, unchanged.
-    /// No domain call is made and nothing is written.
-    ///
-    /// The envelope is rebuilt from the record: the outcome, code, effects,
-    /// commit and data it stored and the operation it names. The record
-    /// matches this call's command, repository and target, and its
-    /// recorded position gives the scope its branch. It stores no recovery
-    /// action, and a finished ticket create or save has none.
-    fn replay(&self, reply: &Reply<'_>, record: RequestRecord) -> Envelope<MutationDataDto> {
-        let (Some(accepted), Some(result)) =
-            (Accepted::of_record(&record, record.attempt), record.result)
-        else {
-            return reply.stopped(ResultCode::InternalError);
-        };
-        // A result that names a commit is given again only while that
-        // commit can be reached from the branch the request committed to,
-        // or from primary once that branch is gone.
-        if let Some(commit) = result.effects.commit_oid.as_deref() {
-            let reachable = git2::Oid::from_str(commit).is_ok_and(|commit| {
-                record.scope.repository().is_some_and(|root| {
-                    evidence::still_reachable(
-                        Path::new(root),
-                        accepted.position.base_ref.as_deref(),
-                        commit,
-                    )
-                })
-            });
-            if !reachable {
-                return reply.stopped(ResultCode::RecoveryRequired);
-            }
-        }
-        let data = match result.data.as_ref() {
-            // Stored data of a command this build does not bind cannot be
-            // given its shape.
-            Some(stored) => {
-                match Command::parse(&record.command)
-                    .and_then(|command| MutationDataDto::from_stored(command, stored))
-                {
-                    Some(data) => Some(data),
-                    None => return reply.stopped(ResultCode::InternalError),
-                }
-            }
-            None => None,
-        };
-        // The one place an outcome is not derived: it is the stored one.
-        let envelope = Envelope::mutation(
-            record.command,
-            reply.scope(Some(&accepted.position)),
-            result.outcome,
-            result.code,
-        )
-        .with_effects(result.effects)
-        .with_request_id(record.request_id.to_string())
-        .with_operation_id(accepted.operation_id.to_string());
-        match data {
-            Some(data) => envelope.with_data(data),
-            None => envelope,
-        }
-    }
-
-    /// A record exists and is not of this request: the same request ID
-    /// with another repository, command, target or input. Nothing runs and
-    /// the record is not changed.
-    ///
-    /// When the recorded request is unfinished and an attempt of it ran,
-    /// the result reports what the repository shows of it, a commit to its
-    /// path among it, and the outcome is `partial` when that is a durable
-    /// effect. Otherwise it is an input error: a finished request's
-    /// effects are its own result's, which `request show` gives, and are
-    /// not reported as this call's.
-    fn mismatched(&self, reply: &Reply<'_>, record: &RequestRecord) -> Envelope<MutationDataDto> {
-        let effects = match record.state {
-            RequestState::Accepted => bind::recorded_effects(self, record),
-            RequestState::Finished => Effects::not_requested(),
-        };
-        reply.envelope(
-            Answer {
-                effects,
-                ..Answer::stopped(ResultCode::RequestMismatch)
-            },
-            None,
-            false,
-        )
-    }
-
-    /// An accepted record matches this call: an earlier call of the
-    /// request started and its end was not recorded. `None` when the
-    /// record was settled between the look that found it and this.
-    ///
-    /// The call raises the record's attempt, so that it is the one call
-    /// that may settle it: a call that entered before it and is still
-    /// running reports what it did and changes nothing. The caller's
-    /// token is not checked again. Then, in order:
-    ///
-    /// 1. The binding reads the operation's journal row and what Git shows
-    ///    of the request's path since the recorded position. A row or a
-    ///    repository that cannot be read answers the call and leaves the
-    ///    record as it is.
-    /// 2. When the operation has completed and the request's own commit
-    ///    is in range, the request is finished with that commit and no
-    ///    domain call is made: nothing remains to continue.
-    /// 3. Otherwise, when someone else has committed other content to the
-    ///    path since, the request is not run again: it is
-    ///    `external_change`.
-    /// 4. Otherwise the domain operation is called under the recorded
-    ///    operation ID and expectation. This is the only way the work is
-    ///    continued: only the domain completes its row and its hand-off.
-    /// 5. The commit reported comes from the evidence read before and
-    ///    after that call, and the record is settled as a first call's is.
-    fn reenter(
-        &self,
-        binding: &mut dyn Binding,
-        identity: &RequestIdentity,
-        record: &RequestRecord,
-    ) -> Option<Envelope<MutationDataDto>> {
-        let attempt = match self.enter_request(record.request_id) {
-            Ok(Some(attempt)) => attempt,
-            Ok(None) => return None,
-            Err(error) => return Some(Reply { binding, identity }.read_failure(&error)),
-        };
-        let Some(accepted) = Accepted::of_record(record, attempt) else {
-            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
-        };
-        // The row as it is before this call: its state afterwards proves
-        // nothing about an earlier attempt.
-        let journal =
-            match self.journal_row(accepted.family, &accepted.scope, accepted.operation_id) {
-                Ok(journal) => journal,
-                Err(error) => {
-                    let ran = Ran {
-                        answer: Answer::of_read(&error),
-                        standing: Standing::Stopped { journal: None },
-                    };
-                    return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
-                }
-            };
-        match Reentry::of(&journal, binding.ended_without_checkpoint()) {
-            // The operation ended before its checkpoint: it stopped or was
-            // refused with nothing in flight. Had that answer not been
-            // lost, settling would have deleted the record. It is deleted
-            // now, with this call's attempt, and the request is taken as
-            // new on the next look: a new operation ID, the token check
-            // and the already-applied rule. The old row is final and is
-            // left alone; calling the domain on it again would record a
-            // checkpoint on a row that never had one, and a later retry
-            // could then take another request's commit for this one's.
-            Reentry::AsNew => {
-                return match self.delete_request(accepted.request_id, accepted.attempt) {
-                    Ok(_) => None,
-                    Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
-                };
-            }
-            Reentry::AsRecorded => {}
-        }
-        let before = binding.reenter(self, &accepted, journal);
-        let reply = Reply { binding, identity };
-        Some(match before {
-            Ok(before) => self.called(&reply, &accepted, || {
-                binding.rerun(self, &accepted, &before)
-            }),
-            Err(ran) => self.settled(&reply, &accepted, ran),
-        })
-    }
-}
-
-/// How a call that re-enters an accepted record takes it, decided from the
-/// operation's journal row as it was before the call and from what the
-/// binding says of a row that ended without a checkpoint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reentry {
-    /// The record is released and the call is run as a new request.
-    AsNew,
-    /// The record is kept: the binding reads its evidence, and the request
-    /// is continued or answered from what its operation did.
-    AsRecorded,
-}
-
-impl Reentry {
-    fn of(journal: &JournalRow, rule: EndedWithoutCheckpoint) -> Self {
-        match journal {
-            JournalRow::Final {
-                kind: FinalKind::Completed,
-                owes_work: false,
-                checkpointed: false,
-            } => match rule {
-                EndedWithoutCheckpoint::DidNothing => Self::AsNew,
-                // The row is taken as one that has its checkpoint step is.
-                EndedWithoutCheckpoint::SaysNothing => Self::AsRecorded,
-            },
-            JournalRow::Absent
-            | JournalRow::Pending(_)
-            | JournalRow::Final {
-                kind: _,
-                owes_work: _,
-                checkpointed: _,
-            } => Self::AsRecorded,
-        }
-    }
-}
-
-/// What a call does to its record once its domain call has returned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Settlement {
-    /// The result is stored and the record is finished.
-    Finish,
-    /// The record is deleted and the confirmation it accepted released:
-    /// the request ID is free again.
-    Delete,
-    /// The record stays accepted: a retry continues the request.
-    Leave,
-}
-
-impl Settlement {
-    /// Settling is decided from what the binding's call left and from the
-    /// operation's journal row, never from the kind of error the domain
-    /// returned.
-    ///
-    /// For a request that stopped, a result the domain has made final for
-    /// the operation is asked for before whether anything is in flight: a
-    /// cancelled synchronization that still owes its index hand-off is in
-    /// flight and is final all the same, and asking in the other order
-    /// would leave its record accepted for good. A row that could not be
-    /// read leaves the record as it is.
-    fn of(standing: &Standing) -> Self {
-        match standing {
-            Standing::Final => Self::Finish,
-            Standing::Owed | Standing::Unconfirmed => Self::Leave,
-            Standing::Stopped { journal: None } => Self::Leave,
-            Standing::NotRun { journal } => match journal {
-                JournalRow::Absent => Self::Delete,
-                JournalRow::Pending(_) | JournalRow::Final { .. } => Self::Leave,
-            },
-            Standing::Stopped {
-                journal: Some(journal),
-            } => match journal {
-                JournalRow::Final {
-                    kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
-                    owes_work: _,
-                    checkpointed: _,
-                } => Self::Finish,
-                JournalRow::Final {
-                    kind: FinalKind::Completed,
-                    owes_work: _,
-                    checkpointed: _,
-                }
-                | JournalRow::Absent
-                | JournalRow::Pending(_) => {
-                    if journal.in_flight() {
-                        Self::Leave
-                    } else {
-                        Self::Delete
-                    }
-                }
-            },
-        }
-    }
-}
-
 /// What the boundary is built from: the intent digest, the request records
 /// and the journal lookup. A front end uses the boundary itself; this is
 /// public so that the integration tests can reach it.
@@ -913,11 +289,3 @@ pub mod request_store {
         recovery::{FinalKind, JournalRow, PendingOperation},
     };
 }
-
-#[cfg(test)]
-#[path = "settle_tests.rs"]
-mod settle_tests;
-
-#[cfg(test)]
-#[path = "reentry_tests.rs"]
-mod reentry_tests;

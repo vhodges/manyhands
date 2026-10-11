@@ -1,9 +1,16 @@
 use std::path::{Path, PathBuf};
 
-use super::*;
-use crate::repository::recovery::PendingOperation;
-use bind::{Before, Prepared};
-use identity::IntentDigestBuilder;
+use super::{
+    super::{
+        Mutation, TicketCreateInput, TicketSaveInput,
+        bind::{Before, Prepared},
+        command::Command,
+        evidence::Position,
+        identity::IntentDigestBuilder,
+    },
+    *,
+};
+use crate::{repository::recovery::PendingOperation, results::Scope};
 
 /// A binding of a command whose completed journal row never records a
 /// checkpoint step, whatever the command did: an index refresh, say, or a
