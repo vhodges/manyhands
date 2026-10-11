@@ -1801,31 +1801,7 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
             let context = named_context(connection, repo, &worktree)?;
-            // What the index holds for this file in this context.
-            let here: Vec<ProblemCode> = stored_problems(connection, repo)?
-                .into_iter()
-                .filter(|problem| problem.context.worktree == worktree && problem.path == path)
-                .map(|problem| problem.code)
-                .collect();
-            // A path that is not an item's is read only when a list shows
-            // it: the same rule that makes the entry.
-            let kind = canonical_item_kind(path)
-                .or_else(|| {
-                    ItemDtoKind::ALL
-                        .into_iter()
-                        .find(|kind| path.starts_with(kind.path_prefix()))
-                        .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
-                })
-                .ok_or_else(|| {
-                    // An index that is behind may not yet hold the problem
-                    // that would make this path one a list shows.
-                    let error = ReadError::invalid_path();
-                    if index.state == IndexState::Current {
-                        error
-                    } else {
-                        error.with_recovery(vec![refresh_action(repo)])
-                    }
-                })?;
+            let (kind, here) = readable_path(connection, repo, &index, &worktree, path)?;
             let file = match read_item_file(repo, &context.worktree, path)? {
                 ItemFileRead::Found(file) => file,
                 ItemFileRead::Missing => return Err(ReadError::new(ResultCode::PathNotFound)),
@@ -1905,11 +1881,12 @@ impl RepositoryService {
     /// Anything else at the path, a directory or a symbolic link among
     /// them, is `invalid_path`.
     ///
-    /// `path` and `context` are written as `show_path` takes them, and
-    /// are `invalid_path` where they are there. Unlike that read, the
-    /// path need not be one an item can be at: only a digest of what is
-    /// there is returned, never its content. Nothing is parsed, and the
-    /// index is asked only for the context.
+    /// `path` and `context` are written as `show_path` takes them and
+    /// are refused where that read refuses them: the path must be one an
+    /// item can be at, or a nonconforming entry the lists show. No other
+    /// file is opened, so no token says anything of what a file that is
+    /// not Manyhands content holds. A move's destination is an item path.
+    /// Nothing is parsed.
     pub fn observe_path(
         &self,
         repo: &ResolvedRepository,
@@ -1923,8 +1900,10 @@ impl RepositoryService {
                 .ok_or_else(ReadError::invalid_path)?;
             let worktree = named_worktree(repo, context)?;
             let context = self.read_session(RepositoryOperation::Read, |connection| {
-                stored_index_state(connection, repo)?;
-                named_context(connection, repo, &worktree)
+                let (index, _) = stored_index_state(connection, repo)?;
+                let context = named_context(connection, repo, &worktree)?;
+                readable_path(connection, repo, &index, &worktree, path)?;
+                Ok(context)
             })?;
             let observed =
                 observe_in_context(repo, context.branch.as_deref(), &context.worktree, path)?;
@@ -2094,6 +2073,47 @@ fn named_context(
         }),
         None => Err(ReadError::invalid_path()),
     }
+}
+
+/// The path rule of the reads by path. `path` is read in the context
+/// whose worktree is `worktree` only when it is a canonical item path,
+/// `docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`, or the path of
+/// a nonconforming entry a list shows for that context: the same rule
+/// that makes the entry. Anything else is `invalid_path`.
+///
+/// Returns the kind of item the path is a place of, and the problems the
+/// index holds for the file there.
+fn readable_path(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    index: &IndexStateDto,
+    worktree: &str,
+    path: &str,
+) -> Result<(ItemDtoKind, Vec<ProblemCode>), ReadError> {
+    // What the index holds for this file in this context.
+    let here: Vec<ProblemCode> = stored_problems(connection, repo)?
+        .into_iter()
+        .filter(|problem| problem.context.worktree == worktree && problem.path == path)
+        .map(|problem| problem.code)
+        .collect();
+    let kind = canonical_item_kind(path)
+        .or_else(|| {
+            ItemDtoKind::ALL
+                .into_iter()
+                .find(|kind| path.starts_with(kind.path_prefix()))
+                .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
+        })
+        .ok_or_else(|| {
+            // An index that is behind may not yet hold the problem that
+            // would make this path one a list shows.
+            let error = ReadError::invalid_path();
+            if index.state == IndexState::Current {
+                error
+            } else {
+                error.with_recovery(vec![refresh_action(repo)])
+            }
+        })?;
+    Ok((kind, here))
 }
 
 /// What is at a path in a context, as a write's precondition states it.

@@ -2900,9 +2900,10 @@ fn path_observe_matches_its_schema_and_goldens() {
         );
     }
 
+    std::fs::create_dir(fixture.root.join("docs/folder.md")).unwrap();
     let error = enabled
         .service
-        .observe_path(&repo, None, Path::new("docs"))
+        .observe_path(&repo, None, Path::new("docs/folder.md"))
         .unwrap_err();
     assert_eq!(error.code(), ResultCode::InvalidPath);
     assert_failure_contract(

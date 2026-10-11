@@ -726,7 +726,7 @@ fn every_item_read(
                 .observe_path(repo, Some(&worktree), path("docs/moved/b.md"))
                 .map(|observed| assert!(!observed.exists)),
         ),
-        // A directory.
+        // A directory, which is no item path either.
         outcome(service.observe_path(repo, None, path("docs")).map(drop)),
         outcome(
             service
@@ -839,9 +839,9 @@ fn observe_path_gives_a_file_its_token_and_an_absent_path_one_of_its_branch_and_
     assert!(!elsewhere.exists);
     assert_ne!(absent.context.branch, elsewhere.context.branch);
     assert_ne!(absent.observation, elsewhere.observation, "by branch");
-    // Below a directory that does not exist, and at a path no item can be.
+    // Below a directory that does not exist, and where a ticket would be.
     assert!(!observe(None, "docs/none/absent.md").exists);
-    assert!(!observe(None, "notes/absent.txt").exists);
+    assert!(!observe(None, &items::ticket_path("01ARZ3NDEKTSV4RRFFQ69G5FZZ")).exists);
     // Not the token of a file there, empty or not.
     fs::write(fixture.root.join("docs/absent.md"), "").unwrap();
     let empty = observe(None, "docs/absent.md");
@@ -856,8 +856,33 @@ fn observe_path_gives_a_file_its_token_and_an_absent_path_one_of_its_branch_and_
             .unwrap_err()
             .code()
     };
+    fs::create_dir(fixture.root.join("docs/folder.md")).unwrap();
+    assert_eq!(code(None, "docs/folder.md"), ResultCode::InvalidPath);
     assert_eq!(code(None, "docs"), ResultCode::InvalidPath);
     assert_eq!(code(None, ".manyhands/tickets"), ResultCode::InvalidPath);
+    // A path no item can be at is not observed, whether or not a file is
+    // there: the read `show_path` refuses is refused here, and nothing
+    // of such a file is digested.
+    fs::write(fixture.root.join("notes.txt"), "not an item\n").unwrap();
+    for path in [
+        ".git/config",
+        ".git/HEAD",
+        "fixture.txt",
+        "notes.txt",
+        "notes/absent.txt",
+        ".manyhands/config.toml",
+        "docs/absent.txt",
+    ] {
+        assert_eq!(code(None, path), ResultCode::InvalidPath, "{path}");
+        assert_eq!(
+            code(None, path),
+            service
+                .show_path(&repo, None, std::path::Path::new(path))
+                .unwrap_err()
+                .code(),
+            "{path}"
+        );
+    }
     assert_eq!(code(None, "../outside.md"), ResultCode::InvalidPath);
     assert_eq!(code(None, "/docs/a.md"), ResultCode::InvalidPath);
     assert_eq!(code(None, "docs//a.md"), ResultCode::InvalidPath);
