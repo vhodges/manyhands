@@ -19,7 +19,7 @@
         "host.approve",
         "host.replace"
       ],
-      "description": "What to do next. An action carries exactly the arguments it registers, or none when the result names no repository. index.rebuild, index.refresh, repo.inspect, operation.abandon and repo.identity_set take root, the repository's root. host.approve and host.replace take root and authority. request.retry takes request_id. operation.resume and request.prepare take none. operation.resume and operation.abandon set operation_id."
+      "description": "What to do next. An action carries exactly the arguments it registers, or, when one of them is root and the result names no repository, none. index.rebuild, index.refresh, repo.inspect, operation.abandon and repo.identity_set take root, the repository's root. host.approve and host.replace take root and authority. request.retry takes request_id. operation.resume and request.prepare take none. operation.resume and operation.abandon set operation_id."
     },
     "operation_id": {
       "type": ["string", "null"]

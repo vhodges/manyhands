@@ -18,7 +18,7 @@ use manyhands::{
 };
 
 use crate::support::{
-    FailOnce,
+    FailOnce, golden,
     items::{self, TICKET_A},
     mutation::{
         self, KeyWorld, PUBLIC_KEY_FINGERPRINT, REQUEST_1, REQUEST_2, REQUEST_3, World,
@@ -608,4 +608,91 @@ fn an_import_whose_result_was_lost_names_its_key_on_its_retry() {
         key_data(&replayed),
         &imported(&id.to_string(), "Work laptop")
     );
+}
+
+/// Makes the request under a service that dies before it settles the
+/// record, and leaves the world as a new process would find it.
+fn lose_the_result(world: &mut KeyWorld, request_id: &str, request: Mutation) {
+    world.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let lost = world.execute(request_id, request);
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(
+        world.record(request_id).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    world.reopen();
+}
+
+/// A limit, pinned. A registry change has no operation and leaves no
+/// mark of its own: a call that enters its request again knows only what
+/// the registry holds now. When someone else has changed the registry
+/// since the request's own change, the retry cannot tell that its work
+/// was done and undone, and makes the change a second time, over theirs.
+#[test]
+fn a_registry_change_retried_after_someone_else_s_change_is_made_again() {
+    // A selection: the key someone else selected since is deselected.
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
+    lose_the_result(&mut world, REQUEST_1, select(work));
+    assert_eq!(world.selected(), Some(work));
+    world.service.select_shared_key(other).unwrap();
+    let retry = world.execute(REQUEST_1, select(work));
+    assert_success(&retry);
+    assert_eq!(world.selected(), Some(work));
+
+    // A clearing: the key someone else selected since is cleared.
+    lose_the_result(&mut world, REQUEST_2, clear());
+    assert_eq!(world.selected(), None);
+    world.service.select_shared_key(other).unwrap();
+    let retry = world.execute(REQUEST_2, clear());
+    assert_success(&retry);
+    assert_eq!(world.selected(), None);
+
+    // An import: the key someone else removed since is registered again,
+    // under a new ID.
+    let (private, public) = world.key_files("imported");
+    lose_the_result(
+        &mut world,
+        REQUEST_3,
+        import("Imported", &private, Some(&public)),
+    );
+    let first = world.keys()[2].0;
+    world.service.unregister_shared_key(first).unwrap();
+    let retry = world.execute(REQUEST_3, import("Imported", &private, Some(&public)));
+    assert_success(&retry);
+    let second = world.keys()[2].0;
+    assert_ne!(second, first);
+    assert_eq!(key_data(&retry).id, Some(second.to_string()));
+
+    // A removal is never made twice: an ID is not registered again.
+    lose_the_result(&mut world, "01ARZ3NDEKTSV4RRFFQ69G5FX4", remove(other));
+    assert_noop(&world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX4", remove(other)));
+}
+
+/// What `request show` gives for a request that has no operation: an
+/// empty list, which its schema allows.
+#[test]
+fn a_registry_change_is_shown_with_no_operations() {
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    assert_success(&world.execute(REQUEST_1, select(work)));
+    lose_the_result(&mut world, REQUEST_2, clear());
+
+    for (request, state) in [(REQUEST_1, "finished"), (REQUEST_2, "accepted")] {
+        let shown = world
+            .service
+            .show_request(manyhands::repository::RequestId::parse(request).unwrap());
+        let value = serde_json::to_value(&shown).unwrap();
+        crate::support::schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
+        crate::support::schema::check_published("request.schema.json", &value["data"]).unwrap();
+        assert_eq!(value["code"], "ok", "{request}");
+        assert_eq!(value["data"]["state"], state, "{request}");
+        assert_eq!(
+            value["data"]["operations"],
+            serde_json::json!([]),
+            "{request}"
+        );
+        assert_eq!(value["scope"]["repository"], serde_json::Value::Null);
+    }
 }

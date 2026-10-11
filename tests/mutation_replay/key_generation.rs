@@ -765,3 +765,83 @@ fn a_call_that_fails_beside_a_generation_that_has_not_begun_does_not_release_its
     assert_eq!(world.key_operations(), 1);
     assert_eq!(state(&world, REQUEST_1), Some(RequestState::Finished));
 }
+
+/// The key store is locked by another holder while a generation whose
+/// pair is written is retried. The call stops as busy with the pair
+/// still written and its row pending, so the record stays accepted, and
+/// the retry after the lock is released registers the one key.
+#[test]
+fn a_retry_that_finds_the_key_store_busy_keeps_its_record_and_is_finished_later() {
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::GenerationAfterPublicWrite).open_service(data)
+    });
+    let stopped = world.execute(REQUEST_1, world.generate(LABEL, None));
+    let reserved = assert_interrupted(&stopped, KeyGenerationState::PairWritten);
+    world.reopen();
+
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(world.store_directory().join(".lock"))
+        .unwrap();
+    assert!(fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap());
+    let busy = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(
+        (busy.outcome, busy.code),
+        (Outcome::Partial, ResultCode::Busy)
+    );
+    assert_of_the_application(&busy);
+    assert_eq!(busy.operation_id, stopped.operation_id);
+    assert_eq!(key_data(&busy).id, None);
+    assert_eq!(recovery_actions(&busy), ["request.retry"]);
+    assert_eq!(
+        journal_row(&world, &busy),
+        JournalRow::Pending(PendingOperation::KeyMaterial {
+            phase: KeyMaterialPhase::PairWritten
+        })
+    );
+    assert_eq!(state(&world, REQUEST_1), Some(RequestState::Accepted));
+    assert!(world.keys().is_empty());
+    fs4::fs_std::FileExt::unlock(&lock).unwrap();
+    drop(lock);
+
+    let retry = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(assert_generated(&world, &retry).to_string(), reserved);
+    assert_eq!(world.private_key_files(), [reserved]);
+    assert_eq!(world.key_operations(), 1);
+    assert_eq!(state(&world, REQUEST_1), Some(RequestState::Finished));
+}
+
+/// The key store is no part of a request's identity: the digest holds the
+/// label and the protection. A retry that names another store is the same
+/// request, and the domain refuses to take the operation up there. A
+/// limit, pinned: the answer is `internal_error`, nothing is created in
+/// either store, and the record is kept for the retry that names the
+/// store the generation began in.
+#[test]
+fn a_retry_with_another_key_store_is_refused_and_creates_nothing() {
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::GenerationAfterPublicWrite).open_service(data)
+    });
+    let stopped = world.execute(REQUEST_1, world.generate(LABEL, None));
+    let reserved = assert_interrupted(&stopped, KeyGenerationState::PairWritten);
+    world.reopen();
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let refused = world.execute(REQUEST_1, generate_in(elsewhere.path(), LABEL, None));
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Partial, ResultCode::InternalError)
+    );
+    assert_of_the_application(&refused);
+    assert_eq!(refused.operation_id, stopped.operation_id);
+    assert!(!elsewhere.path().join(".ssh").exists());
+    assert_eq!(world.private_key_files(), std::slice::from_ref(&reserved));
+    assert!(world.keys().is_empty());
+    assert_eq!(world.key_operations(), 1);
+    assert_eq!(state(&world, REQUEST_1), Some(RequestState::Accepted));
+
+    let retry = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(assert_generated(&world, &retry).to_string(), reserved);
+    assert_eq!(world.key_operations(), 1);
+}

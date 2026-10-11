@@ -237,21 +237,27 @@ impl KeyRegistryBinding {
                                 answer(code, registered(&registration))
                             }
                             // The key that holds the source, with its
-                            // own label and not the request's. Were it
-                            // removed meanwhile, its ID is still what
-                            // the registry answered with.
+                            // own label and not the request's. A read
+                            // of it that fails is the request's answer,
+                            // naming the key: nothing was registered,
+                            // and a no-op is not stored for a key the
+                            // registry could not show.
                             RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing } => {
-                                answer(
-                                    code,
-                                    match service.show_key(existing) {
-                                        Ok(key) => key_data(
+                                match service.show_key(existing) {
+                                    Ok(key) => answer(
+                                        code,
+                                        key_data(
                                             Some(existing),
                                             Some(&key.label),
                                             key.fingerprint.as_deref(),
                                         ),
-                                        Err(_) => key_data(Some(existing), None, None),
-                                    },
-                                )
+                                    ),
+                                    Err(error) => Answer::of_read(&error).with_data(key_data(
+                                        Some(existing),
+                                        None,
+                                        None,
+                                    )),
+                                }
                             }
                         }
                     }
