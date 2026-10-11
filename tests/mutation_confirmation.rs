@@ -2710,3 +2710,84 @@ fn a_preview_on_the_primary_branch_moves_no_head() {
     assert!(!effects(&preview).contains(&PreviewEffect::HeadMoved));
     assert!(effects(&preview).contains(&PreviewEffect::WorktreeExclusionWritten));
 }
+
+/// The secrets are put where these commands read: in the configuration
+/// file, which each parses, and in the location of the remote the
+/// configuration names for publication, which enablement looks up. Each
+/// command is then made to fail on what it read, in `prepare` and under
+/// the lease in `execute`, and nothing it returns or records holds any
+/// of it. No passphrase is planted: neither command is given one or
+/// reads a key.
+#[test]
+fn no_failure_of_these_commands_carries_what_they_read() {
+    let sentinels = [URL_SENTINEL, BODY_SENTINEL];
+    // A configuration that does not parse, and one that names a remote
+    // whose location holds a password.
+    let unreadable = format!("primary_branch = \"{BODY_SENTINEL}\"\nnot = [toml {BODY_SENTINEL}");
+    let naming_a_remote =
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
+    let plant = |root: &Path, configuration: &str| {
+        let repository = git2::Repository::open(root).unwrap();
+        if repository.find_remote("origin").is_err() {
+            repository
+                .remote(
+                    "origin",
+                    &format!("https://deploy:{URL_SENTINEL}@example.invalid/repository.git"),
+                )
+                .unwrap();
+        }
+        fs::create_dir_all(root.join(".manyhands")).unwrap();
+        fs::write(root.join(canonical::CONFIG_PATH), configuration).unwrap();
+        // Out of the way of the clean-worktree check, so that the
+        // configuration itself is what is read.
+        fs::write(root.join(".git/info/exclude"), ".manyhands/\n").unwrap();
+    };
+    let scan = |desk: &Desk, what: &str, value: serde_json::Value| {
+        assert_eq!(golden::find_sentinel(&value, &sentinels), None, "{what}");
+        mutation::assert_request_stores_exclude(desk.data.path(), &sentinels);
+    };
+
+    // `prepare`, on a configuration it cannot read.
+    let desk = Desk::new();
+    let plain = Plain::new();
+    plant(&plain.root, &unreadable);
+    let refused = desk.prepare(&plain.enable());
+    assert_eq!(refused.code, ResultCode::InvalidConfiguration);
+    scan(&desk, "prepare", serde_json::to_value(&refused).unwrap());
+
+    // `execute`: the same file, and then the remote, appear after the
+    // request is accepted, and the domain operation reads them.
+    for (what, configuration, code) in [
+        (
+            "an unreadable configuration",
+            unreadable.as_str(),
+            ResultCode::InvalidConfiguration,
+        ),
+        (
+            "a publication remote that cannot be used",
+            naming_a_remote,
+            ResultCode::InvalidRemote,
+        ),
+    ] {
+        let desk = Desk::new();
+        let plain = Plain::new();
+        let (confirmation, _) = desk.preview(&plain.enable());
+        let (root, planted) = (plain.root.clone(), configuration.to_owned());
+        desk.service
+            .set_request_hook_for_testing(move || plant(&root, &planted));
+
+        let failed = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+        assert_eq!(failed.code, code, "{what}: {}", failed.message);
+        scan(&desk, what, serde_json::to_value(&failed).unwrap());
+        // The scan read the rows the request left: its confirmation,
+        // and the row of the operation that was refused.
+        assert_eq!(desk.confirmation_rows(), 1, "{what}");
+        assert_eq!(
+            desk.count("SELECT COUNT(*) FROM operation_records"),
+            1,
+            "{what}"
+        );
+        desk.assert_nothing_left(REQUEST_1);
+    }
+}
