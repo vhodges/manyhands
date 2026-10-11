@@ -45,8 +45,9 @@ the behaviour was checked against the vendored libgit2 source
 - **A half-done removal.** When one of the remote's own entries is set in the
   global configuration (for example `remote.origin.prune`), libgit2 removes
   the references and upstream settings and then fails on that entry
-  (`ENOTFOUND`), leaving the removal partly done. Read from the source;
-  being reproduced in F2 Task 12's third fix round.
+  (`ENOTFOUND`), leaving the removal partly done. Reproduced with
+  `remote.backup.prune` set globally: the removal failed with
+  `refs/remotes/backup/main` already gone.
 
 Both sibling names pass `is_remote_name`, so Manyhands itself can create them.
 
