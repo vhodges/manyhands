@@ -34,7 +34,7 @@ use super::{
         outcome,
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, resolve_root, save,
+    Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, resolve_root, save,
 };
 
 /// Where documents are, below a context's root.
@@ -914,11 +914,14 @@ impl Binding for DocumentBinding {
         service: &RepositoryService,
         accepted: &Accepted,
         journal: JournalRow,
-    ) -> Result<Before, Ran> {
-        save::reenter(self, service, accepted, journal)
+    ) -> Result<Entered, Ran> {
+        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
-        save::rerun(self, service, accepted, before)
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+        match entered.authoring() {
+            Ok(before) => save::rerun(self, service, accepted, before),
+            Err(ran) => ran,
+        }
     }
 }

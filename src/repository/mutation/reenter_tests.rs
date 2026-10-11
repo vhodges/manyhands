@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::{
     super::{
         Mutation, TicketCreateInput, TicketSaveInput,
-        bind::{Before, Prepared},
+        bind::{Entered, Prepared},
         command::Command,
         evidence::Position,
         identity::IntentDigestBuilder,
@@ -62,11 +62,11 @@ impl Binding for NeverCheckpoints {
         _service: &RepositoryService,
         _accepted: &Accepted,
         _journal: JournalRow,
-    ) -> Result<Before, Ran> {
+    ) -> Result<Entered, Ran> {
         unreachable!("the decision is made before the evidence is read")
     }
 
-    fn rerun(&self, _service: &RepositoryService, _accepted: &Accepted, _before: &Before) -> Ran {
+    fn rerun(&self, _service: &RepositoryService, _accepted: &Accepted, _entered: &Entered) -> Ran {
         unreachable!("the decision is made before any domain call")
     }
 }

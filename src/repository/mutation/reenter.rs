@@ -127,11 +127,11 @@ impl RepositoryService {
             }
             Reentry::AsRecorded => {}
         }
-        let before = binding.reenter(self, &accepted, journal);
+        let entered = binding.reenter(self, &accepted, journal);
         let reply = Reply { binding, identity };
-        Some(match before {
-            Ok(before) => self.called(&reply, &accepted, || {
-                binding.rerun(self, &accepted, &before)
+        Some(match entered {
+            Ok(entered) => self.called(&reply, &accepted, || {
+                binding.rerun(self, &accepted, &entered)
             }),
             Err(ran) => self.settled(&reply, &accepted, ran),
         })

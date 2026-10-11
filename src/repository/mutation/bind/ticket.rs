@@ -32,7 +32,7 @@ use super::{
         observe::{self, ObservedFile},
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, resolve_root, save,
+    Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, resolve_root, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -855,12 +855,15 @@ impl Binding for TicketBinding {
         service: &RepositoryService,
         accepted: &Accepted,
         journal: JournalRow,
-    ) -> Result<Before, Ran> {
-        save::reenter(self, service, accepted, journal)
+    ) -> Result<Entered, Ran> {
+        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
-        save::rerun(self, service, accepted, before)
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+        match entered.authoring() {
+            Ok(before) => save::rerun(self, service, accepted, before),
+            Err(ran) => ran,
+        }
     }
 }
 
@@ -1218,11 +1221,14 @@ impl Binding for SlugAssignBinding {
         service: &RepositoryService,
         accepted: &Accepted,
         journal: JournalRow,
-    ) -> Result<Before, Ran> {
-        save::reenter(self, service, accepted, journal)
+    ) -> Result<Entered, Ran> {
+        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
-        save::rerun(self, service, accepted, before)
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+        match entered.authoring() {
+            Ok(before) => save::rerun(self, service, accepted, before),
+            Err(ran) => ran,
+        }
     }
 }

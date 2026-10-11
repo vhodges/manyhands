@@ -228,6 +228,37 @@ pub(crate) struct Before {
     pub(crate) evidence: PathEvidence,
 }
 
+/// What a binding read on re-entry and found no answer in: it is handed
+/// back for the domain call, whose result is judged by it. The boundary
+/// reads none of it.
+pub(crate) enum Entered {
+    /// An authoring write: the operation's row, and what Git showed of the
+    /// request's path. A row without a checkpoint step is read the
+    /// authoring way; see `Before::committing`.
+    Authoring(Before),
+    /// A command whose completed row has no checkpoint step whatever it
+    /// did, and whose work its binding found not to be done: the
+    /// operation's row, as it was before the call.
+    #[expect(dead_code)]
+    Unfinished(JournalRow),
+}
+
+impl Entered {
+    /// What an authoring write read. A binding of one is never handed
+    /// anything else: it is given back what its own `reenter` returned.
+    /// Were it, nothing would be known of what the request committed, and
+    /// nothing is run, finished or deleted on that.
+    pub(crate) fn authoring(&self) -> Result<&Before, Ran> {
+        match self {
+            Self::Authoring(before) => Ok(before),
+            Self::Unfinished(_) => Err(Ran {
+                answer: Answer::stopped(ResultCode::InternalError),
+                standing: Standing::Unconfirmed,
+            }),
+        }
+    }
+}
+
 /// What re-entry does about what it read before the domain call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Found {
@@ -435,13 +466,14 @@ pub(crate) trait Binding {
         service: &RepositoryService,
         accepted: &Accepted,
         journal: JournalRow,
-    ) -> Result<Before, Ran>;
+    ) -> Result<Entered, Ran>;
 
     /// Re-entry, the domain call: made with the recorded operation ID and
     /// the recorded expectation, which is the only way the work is
-    /// continued. The commit is taken from the evidence read before and
-    /// after the call, never from what the domain names.
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran;
+    /// continued. `entered` is what this binding's `reenter` returned.
+    /// For an authoring write the commit is taken from the evidence read
+    /// before and after the call, never from what the domain names.
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran;
 }
 
 /// The effects the repository shows of the unfinished request `record`
