@@ -756,3 +756,77 @@ Next authorization request: publish this rebased ticket branch using
 five-target workflow. Fetch/compare remote ticket history before any authorized
 push; a moved ref is a stop, not permission to overwrite it. PR, closure, merge
 and cleanup remain separate stages.
+
+## Authorized Publication, First Native Run and Windows Correction — 2026-10-11T11:23:16Z
+
+The owner approved the pinned-lease push and five-target dispatch. Fresh fetch
+found the original remote ticket HEAD unchanged at
+`59f27a94b1358bdc7172d10610ae08969b09ff90`; range-diff proved its four planning
+commits identical to their rebased counterparts. The authorized pinned
+`--force-with-lease` published `bac4903fa6d6e7b283422fa524c4f7c4e149bef0`.
+Manual [Build run 38085850884](https://github.com/vhodges/manyhands/actions/runs/38085850884)
+checked that exact revision:
+
+| Native target | Build and binary verification | Headless contracts / artifacts |
+| --- | --- | --- |
+| Linux x86_64 | PASS | PASS / uploaded |
+| Linux aarch64 | PASS | PASS / uploaded |
+| macOS aarch64 | PASS | PASS / uploaded |
+| Windows aarch64 | PASS | PASS / uploaded |
+| Windows x86_64 | PASS | FAIL at existing read-boundary snapshot; later targets not executed, artifacts not uploaded |
+
+All **41 comment-publication SSH cases passed on all five targets**, including
+the owned resolution, original-comment, selected-key and path-dependent cases.
+Windows x86_64 also passed library 468 and local authoring 107 before failing
+`item_reads_change_nothing_in_the_repository_or_its_worktrees`:
+`tests/support/credentials.rs` asserted that `manyhands.sqlite3-shm` was byte
+identical. Full native logs: `tool_127eaa24a001CfXpMEbXQqrvt0`; failed job
+[114312065894](https://github.com/vhodges/manyhands/actions/runs/38085850884/job/114312065894).
+The overall run failed; do not infer a complete native gate from publication-only
+success. The ARM job completed in 1h24m; a watcher budget expired earlier without
+cancelling the run. An attempted job rerun while the original run was active
+was refused; no new run resulted.
+
+### Deterministic fixture diagnosis and review
+
+Reproduced the exact SHM assertion locally using a real WAL writer and a
+`SQLITE_OPEN_READ_ONLY` connection that only executes SELECT and reports itself
+read-only. Its shared-memory differences are nonempty and exclusively in the
+five transient WAL-index read marks, offsets **100..120**. The original
+preservation helper failed this case before the correction. SQLite documents
+that layout for both Unix and Windows in
+[WAL-index header details](https://www.sqlite.org/walformat.html#the_wal_index_header).
+
+The helper now permits only those five marks in an existing equal-length SHM
+image. Main DB, WAL, other files and every other SHM byte remain exact, with the
+existing removal/appearance checks intact. A real subsequent committed writer
+is a negative control and must still fail the preservation oracle. No production
+behavior, privacy scan, dependency or scoped-authoring guard changed.
+
+Independent read-only review approved the two-file fixture correction with no
+P1/P2 findings. Focused read-boundary 19, credential reads 25, item reads 67,
+status reads 23 and contract reads 64 pass. The owner paused execution during a
+subsequent full run; that interrupted attempt (`tool_127edb0be001lm8LjUYDfEcfli`)
+is not full verification evidence.
+
+### Resume and current local evidence
+
+The owner directed Windows-only workflow iteration on this branch until Windows
+works, followed by restoration of all five targets and a final native run, then
+requested a pause. "I am ready to continue" resumes that authorized sequence,
+including its correction/workflow commits, normal pushes and manual runs. It
+does not authorize PR, closure, merge or cleanup.
+
+At resume HEAD and fetched remote ticket agree at `bac4903`; freshly fetched main
+is still `f87ce81001f75ff6fc21192b71019b0bcaef6ea6`, already an ancestor. The only
+working changes are the reviewed controller-owned fixture files. Preserve them
+in this checkpoint before the clean no-op rebase and new workflow edit; no stash
+or unrelated worktree mutation.
+
+Completed all required Devenv gates on this fixture-corrected Rust tree: locked
+all-feature check, fmt, all-target/all-feature clippy with warnings denied, full
+all-feature tests and CLI smoke **PASS**, plus `git diff --check`. Output
+`tool_12a8b46590016KiUrVOXk0RBZn`: library **504**, publication SSH **41**, read
+boundary **19**; other full counts equal the preceding final local gate, with
+one existing intentionally ignored characterization. Cargo/devenv lock inputs
+and hashes unchanged. Corrected Windows/native evidence remains pending.
