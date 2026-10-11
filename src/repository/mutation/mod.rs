@@ -806,13 +806,16 @@ enum Reentry {
 
 impl Reentry {
     fn of(journal: &JournalRow, rule: EndedWithoutCheckpoint) -> Self {
-        let _ = rule;
         match journal {
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,
                 checkpointed: false,
-            } => Self::AsNew,
+            } => match rule {
+                EndedWithoutCheckpoint::DidNothing => Self::AsNew,
+                // The row is taken as one that has its checkpoint step is.
+                EndedWithoutCheckpoint::SaysNothing => Self::AsRecorded,
+            },
             JournalRow::Absent
             | JournalRow::Pending(_)
             | JournalRow::Final {
