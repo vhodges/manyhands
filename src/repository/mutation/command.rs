@@ -49,6 +49,7 @@ commands! {
     RepoEnable => "repo enable",
     RemoteRemove => "remote remove",
     RepoRemove => "repo remove",
+    KeyDelete => "key delete",
 }
 
 impl Command {
@@ -79,7 +80,8 @@ impl Command {
             | Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
-            | Self::RepoRemove => true,
+            | Self::RepoRemove
+            | Self::KeyDelete => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
         }
     }
@@ -108,7 +110,8 @@ impl Command {
             | Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
-            | Self::RepoRemove => false,
+            | Self::RepoRemove
+            | Self::KeyDelete => false,
         }
     }
 
@@ -135,7 +138,8 @@ impl Command {
             | Self::KeyRemove
             | Self::RepoEnable
             | Self::RemoteRemove
-            | Self::RepoRemove => false,
+            | Self::RepoRemove
+            | Self::KeyDelete => false,
         }
     }
 
@@ -146,7 +150,11 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
-            Self::RepoCreate | Self::RepoEnable | Self::RemoteRemove | Self::RepoRemove => true,
+            Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -194,6 +202,7 @@ mod tests {
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
+        assert_eq!(Command::KeyDelete.name(), "key delete");
     }
 
     #[test]
@@ -207,6 +216,7 @@ mod tests {
                         | Command::RepoEnable
                         | Command::RemoteRemove
                         | Command::RepoRemove
+                        | Command::KeyDelete
                 ),
                 "{command:?}"
             );

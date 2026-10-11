@@ -56,6 +56,7 @@ fn assert_generated(world: &KeyWorld, envelope: &Envelope<MutationDataDto>) -> S
             label: Some(LABEL.to_owned()),
             fingerprint: key.public_key_fingerprint.clone(),
             generation: None,
+            deletion: None,
         }
     );
     assert!(key.public_key_fingerprint.is_some());
@@ -629,6 +630,7 @@ fn a_completed_generation_s_lost_result_is_given_from_its_row_whatever_became_of
                 label: Some(LABEL.to_owned()),
                 fingerprint: fingerprint.clone(),
                 generation: None,
+                deletion: None,
             },
             "{since:?}"
         );

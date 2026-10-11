@@ -1259,6 +1259,40 @@ fn recovery_required_with_no_repository_offers_the_request_or_nothing() {
     );
 }
 
+/// An external change under a confirmed request whose record stays
+/// accepted is looked at in the repository. A request of the
+/// application has none: nothing is offered.
+#[test]
+fn an_external_change_under_an_accepted_key_deletion_offers_nothing() {
+    let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
+    let offered = |command, root, retry| {
+        recovery(
+            ResultCode::ExternalChange,
+            command,
+            root,
+            Some(request_id),
+            None,
+            retry,
+        )
+        .into_iter()
+        .map(|action| action.action.as_str())
+        .collect::<Vec<_>>()
+    };
+    assert!(offered(Command::KeyDelete, None, true).is_empty());
+    assert_eq!(
+        offered(Command::KeyDelete, None, false),
+        ["request.prepare"]
+    );
+    assert_eq!(
+        offered(Command::RemoteRemove, Some("/repository"), true),
+        ["repo.inspect"]
+    );
+    assert_eq!(
+        offered(Command::RemoteRemove, Some("/repository"), false),
+        ["request.prepare"]
+    );
+}
+
 #[test]
 fn a_pending_registration_is_finished_by_the_same_request() {
     assert_eq!(

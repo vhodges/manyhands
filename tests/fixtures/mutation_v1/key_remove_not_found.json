@@ -2,6 +2,7 @@
   "code": "key_not_found",
   "command": "key remove",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": null,
     "id": "<unknown>",

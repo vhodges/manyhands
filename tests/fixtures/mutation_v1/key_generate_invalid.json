@@ -2,6 +2,7 @@
   "code": "invalid_input",
   "command": "key generate",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": null,
     "id": null,

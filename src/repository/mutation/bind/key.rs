@@ -24,6 +24,10 @@
 //! that key from the row; and a row whose files were retained for
 //! inspection is final, and nothing continues it.
 //!
+//! `key delete` deletes the two files of a key Manyhands generated and
+//! removes its registration, as one operation in the same journal. It is
+//! the one key command that needs confirmation; see `KeyDeleteBinding`.
+//!
 //! The passphrase of a new key is given to the one domain call and to
 //! nothing else. It is no field of the digest, and no record, journal
 //! row, result or error holds it or anything made from it.
@@ -38,22 +42,28 @@ use crate::results::{ResultCode, Scope};
 use super::{
     super::{
         super::{
-            OperationFamily, ReadError, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
+            GeneratedKeyDeletionPreflight, OperationFamily, PrivateKeySourceState,
+            PublicKeyMetadataState, ReadError, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
             RepositoryService, SharedKeyId, SharedKeyOwnership, SharedKeySelectionOutcome,
             keys::{
-                GenerateSharedKeyOutcome, GenerateSharedKeyRequest, KeyMaterialPhase,
+                DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, GenerateSharedKeyRequest,
+                GeneratedKeyDeletionReview, KeyMaterialErrorKind, KeyMaterialPhase,
                 KeyMaterialRecovery, KeyProtection, KeyStore,
             },
             recovery::{FinalKind, PendingOperation},
         },
         command::Command,
-        dto::{KeyGenerationState, KeyMutationDto, MutationDataDto},
+        dto::{
+            KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
+            MutationDataDto, PreviewDetailsDto, PreviewEffect,
+        },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
+        observe::{Observation, ObservationDigest},
         outcome,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Previewed, Ran, Standing, refused,
 };
 use crate::repository::{SharedKeyRegistration, recovery::JournalRow};
 
@@ -103,6 +113,7 @@ fn key_data(
         label: label.map(str::to_owned),
         fingerprint: fingerprint.map(str::to_owned),
         generation: None,
+        deletion: None,
     })
 }
 
@@ -547,6 +558,7 @@ impl KeyGenerateBinding {
             label: Some(self.label.clone()),
             fingerprint: fingerprint.map(str::to_owned),
             generation,
+            deletion: None,
         })
     }
 
@@ -835,5 +847,577 @@ impl Binding for KeyGenerateBinding {
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
         self.call(call.service, accepted)
+    }
+}
+
+/// The input of `key delete`: a key Manyhands generated, and the key
+/// store that holds its files. The key's two files are deleted and its
+/// registration removed.
+#[derive(Clone)]
+pub struct KeyDeleteInput {
+    pub store: KeyStore,
+    pub id: SharedKeyId,
+}
+
+/// Whether the row of a deletion says that a key file was removed and
+/// the deletion has not ended: a change that no effect shows, with work
+/// remaining.
+pub(crate) fn removed_and_unfinished(journal: Option<&JournalRow>) -> bool {
+    match journal {
+        Some(JournalRow::Pending(PendingOperation::KeyMaterial { phase })) => match phase {
+            KeyMaterialPhase::PrivateRemoved | KeyMaterialPhase::FilesRemoved => true,
+            // No removal is recorded, or the row is a generation's.
+            KeyMaterialPhase::Prepared
+            | KeyMaterialPhase::Reserved
+            | KeyMaterialPhase::PrivateWritten
+            | KeyMaterialPhase::PairWritten
+            | KeyMaterialPhase::Completed
+            | KeyMaterialPhase::RetainedForInspection => false,
+        },
+        Some(
+            JournalRow::Absent
+            | JournalRow::Pending(
+                PendingOperation::Local { state: _, step: _ }
+                | PendingOperation::Remote { phase: _ },
+            )
+            | JournalRow::Final {
+                kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                owes_work: _,
+                checkpointed: _,
+            },
+        )
+        | None => false,
+    }
+}
+
+/// Where a deletion stands, as a result names it. `None` for a phase
+/// only a generation passes through, and for one that has ended.
+fn deletion_state(phase: KeyMaterialPhase) -> Option<KeyDeletionState> {
+    match phase {
+        KeyMaterialPhase::Prepared => Some(KeyDeletionState::Prepared),
+        KeyMaterialPhase::PrivateRemoved => Some(KeyDeletionState::PrivateRemoved),
+        KeyMaterialPhase::FilesRemoved => Some(KeyDeletionState::FilesRemoved),
+        KeyMaterialPhase::Reserved
+        | KeyMaterialPhase::PrivateWritten
+        | KeyMaterialPhase::PairWritten
+        | KeyMaterialPhase::Completed
+        | KeyMaterialPhase::RetainedForInspection => None,
+    }
+}
+
+/// The digest of a key's registration as the preflight of a deletion
+/// reports it: what a confirmation of `key delete` stores, and what a
+/// later observation is compared with. The command reads no identity.
+///
+/// A key that cannot be deleted is observed as what stands in the way,
+/// so that it never equals the observation of one that can.
+fn registration_digest(preflight: &GeneratedKeyDeletionPreflight) -> ObservationDigest {
+    let command = Command::KeyDelete.name();
+    let observation = Observation::of(command);
+    let observation = match preflight {
+        GeneratedKeyDeletionPreflight::ConfirmationRequired(registration) => {
+            let SharedKeyRegistration {
+                id,
+                label,
+                ownership,
+                private_key_path,
+                public_key_path,
+                public_key_fingerprint,
+                private_source_state,
+                public_metadata_state,
+                selected,
+            } = registration;
+            let optional = |observation: Observation, name: &str, value: Option<&str>| match value {
+                Some(value) => observation.text(name, value),
+                None => observation.absent(name),
+            };
+            let observation = observation
+                .text("key", "deletable")
+                .text("id", &id.to_string())
+                .text("label", label)
+                .text(
+                    "ownership",
+                    match ownership {
+                        SharedKeyOwnership::Imported => "imported",
+                        SharedKeyOwnership::Generated => "generated",
+                    },
+                )
+                .text("private_key_path", &private_key_path.to_string_lossy());
+            let observation = optional(
+                observation,
+                "public_key_path",
+                public_key_path
+                    .as_deref()
+                    .map(Path::to_string_lossy)
+                    .as_deref(),
+            );
+            optional(
+                observation,
+                "fingerprint",
+                public_key_fingerprint.as_deref(),
+            )
+            .text(
+                "private_source_state",
+                match private_source_state {
+                    PrivateKeySourceState::Available => "available",
+                    PrivateKeySourceState::Missing => "missing",
+                    PrivateKeySourceState::Unavailable => "unavailable",
+                },
+            )
+            .text(
+                "public_metadata_state",
+                match public_metadata_state {
+                    PublicKeyMetadataState::NotProvided => "not_provided",
+                    PublicKeyMetadataState::FingerprintAvailable => "available",
+                    PublicKeyMetadataState::Unavailable => "unavailable",
+                },
+            )
+            .text("selected", if *selected { "yes" } else { "no" })
+        }
+        GeneratedKeyDeletionPreflight::NotRegistered => observation.text("key", "not_registered"),
+        GeneratedKeyDeletionPreflight::ImportedKey => observation.text("key", "imported"),
+        GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => {
+            observation.text("key", "selected")
+        }
+    };
+    ObservationDigest::of_state(command, observation.finish())
+}
+
+/// `key delete`: the two files of a key Manyhands generated are deleted
+/// from the user's key store, and the key is taken out of the key list.
+/// It needs confirmation, and belongs to the application as every key
+/// command does. Its operation is in the key journal.
+///
+/// **What its preview covers.** The key's registration, as the preflight
+/// of a deletion reports it. The key's files are not read for a preview:
+/// the domain's own review reads them when the request runs, and a file
+/// that is not the one Manyhands wrote is its `external_change`.
+///
+/// **The review.** The domain deletes only against a review of the key
+/// it made itself, which cannot be stored and is used once. The binding
+/// obtains one before each domain call that needs one: in `prepare`, and
+/// on a retry in `reenter`. What the request's consent was to is
+/// compared with the registration that review holds.
+pub(crate) struct KeyDeleteBinding {
+    store: KeyStore,
+    id: SharedKeyId,
+    /// The key's registration, once the request has read it: what its
+    /// results name the key by, and where its files are.
+    registration: Option<SharedKeyRegistration>,
+    /// The review the next domain call is given. It is taken by that
+    /// call: a review is used once.
+    review: Cell<Option<GeneratedKeyDeletionReview>>,
+}
+
+impl From<KeyDeleteInput> for KeyDeleteBinding {
+    fn from(input: KeyDeleteInput) -> Self {
+        // Every field is named: one added to the input does not compile
+        // until it is taken into the binding or left out here.
+        let KeyDeleteInput { store, id } = input;
+        Self {
+            store,
+            id,
+            registration: None,
+            review: Cell::new(None),
+        }
+    }
+}
+
+impl KeyDeleteBinding {
+    /// What the request reports of its key: the key it names, with the
+    /// label and the fingerprint of its registration when the request
+    /// read it, and where its deletion stands when it has not ended.
+    fn data(&self, deletion: Option<KeyDeletionState>) -> MutationDataDto {
+        let registration = self.registration.as_ref();
+        MutationDataDto::Key(KeyMutationDto {
+            id: Some(self.id.to_string()),
+            label: registration.map(|registration| registration.label.clone()),
+            fingerprint: registration
+                .and_then(|registration| registration.public_key_fingerprint.clone()),
+            generation: None,
+            deletion,
+        })
+    }
+
+    fn answer(&self, code: ResultCode) -> Answer {
+        Answer::stopped(code).with_data(self.data(None))
+    }
+
+    /// The code of a failure of the review or of the deletion. A
+    /// deletion that says it lacks its review was called without one by
+    /// the binding, which is the binding's fault and no state a caller
+    /// can act on.
+    fn failure_code(kind: KeyMaterialErrorKind) -> ResultCode {
+        match kind {
+            KeyMaterialErrorKind::ConfirmationRequired => ResultCode::InternalError,
+            KeyMaterialErrorKind::InvalidLabel
+            | KeyMaterialErrorKind::InvalidPassphrase
+            | KeyMaterialErrorKind::RegistryUnavailable
+            | KeyMaterialErrorKind::Busy
+            | KeyMaterialErrorKind::NotRegistered
+            | KeyMaterialErrorKind::SelectedKeyMustBeCleared
+            | KeyMaterialErrorKind::ImportedKey
+            | KeyMaterialErrorKind::OwnershipUnverified
+            | KeyMaterialErrorKind::SourceMissing
+            | KeyMaterialErrorKind::SourceUnreadable
+            | KeyMaterialErrorKind::NotRegularFile
+            | KeyMaterialErrorKind::UnsafePath
+            | KeyMaterialErrorKind::InvalidGeneratedKey
+            | KeyMaterialErrorKind::UnlockFailed
+            | KeyMaterialErrorKind::SourceChanged
+            | KeyMaterialErrorKind::SelectionChanged
+            | KeyMaterialErrorKind::OperationMismatch
+            | KeyMaterialErrorKind::HomeUnavailable
+            | KeyMaterialErrorKind::ProtectionUnavailable
+            | KeyMaterialErrorKind::RandomnessUnavailable
+            | KeyMaterialErrorKind::GenerationFailed
+            | KeyMaterialErrorKind::StorageUnavailable => outcome::key_material_error_code(kind),
+        }
+    }
+
+    /// The preflight of the deletion: the key's registration, or what
+    /// stands in the way of deleting it. It reads the key registry and
+    /// nothing else. A key it finds deletable is remembered.
+    fn preflight(
+        &mut self,
+        service: &RepositoryService,
+    ) -> Result<GeneratedKeyDeletionPreflight, Answer> {
+        let preflight = service
+            .preflight_generated_key_deletion(self.id)
+            .map_err(|error| refused(error).with_data(self.data(None)))?;
+        match &preflight {
+            GeneratedKeyDeletionPreflight::ConfirmationRequired(registration) => {
+                self.registration = Some(registration.clone());
+            }
+            GeneratedKeyDeletionPreflight::NotRegistered
+            | GeneratedKeyDeletionPreflight::ImportedKey
+            | GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => {}
+        }
+        Ok(preflight)
+    }
+
+    /// A review of the key from the domain, kept for the next domain
+    /// call, and the digest of the registration it holds. An `Err` is the
+    /// domain's refusal to review the key: for a key file that is no
+    /// longer the one Manyhands wrote, `external_change`.
+    fn review(&mut self, service: &RepositoryService) -> Result<ObservationDigest, Answer> {
+        match service.review_generated_key_deletion(&self.store, self.id) {
+            Ok(review) => {
+                let registration = review.registration().clone();
+                self.review.set(Some(review));
+                self.registration = Some(registration.clone());
+                Ok(registration_digest(
+                    &GeneratedKeyDeletionPreflight::ConfirmationRequired(registration),
+                ))
+            }
+            // Only the kind is read.
+            Err(error) => Err(self.answer(Self::failure_code(error.kind))),
+        }
+    }
+
+    /// What the request observes before a domain call that deletes: the
+    /// digest of the key's registration, from the domain's review when
+    /// the key can be deleted, which is then kept for the call, and from
+    /// the preflight when it cannot.
+    fn observe(&mut self, service: &RepositoryService) -> Result<ObservationDigest, Answer> {
+        match self.preflight(service)? {
+            GeneratedKeyDeletionPreflight::ConfirmationRequired(_) => self.review(service),
+            preflight @ (GeneratedKeyDeletionPreflight::NotRegistered
+            | GeneratedKeyDeletionPreflight::ImportedKey
+            | GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared) => {
+                Ok(registration_digest(&preflight))
+            }
+        }
+    }
+
+    /// Whether a file the key's registration names is not there. Under a
+    /// deletion that has begun and not ended, that is a file it removed,
+    /// also when the phase that says so was never recorded.
+    fn a_file_is_gone(&self) -> bool {
+        let gone = |path: &Path| {
+            matches!(
+                std::fs::symlink_metadata(path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+        };
+        self.registration.as_ref().is_some_and(|registration| {
+            gone(&registration.private_key_path)
+                || registration.public_key_path.as_deref().is_some_and(gone)
+        })
+    }
+
+    /// Whether the request's deletion removed a file and has not ended:
+    /// its row is pending, and holds a phase that says so or a file of
+    /// the key is gone.
+    fn removed(&self, journal: Option<&JournalRow>) -> bool {
+        removed_and_unfinished(journal)
+            || (matches!(
+                journal,
+                Some(JournalRow::Pending(PendingOperation::KeyMaterial {
+                    phase: _
+                }))
+            ) && self.a_file_is_gone())
+    }
+
+    /// The one domain call, under the recorded operation ID, with the
+    /// review that was obtained for it, if one was, and what it came to.
+    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        let result = service.delete_generated_key(
+            &self.store,
+            accepted.operation_id,
+            self.review.take(),
+            // The request's confirmation was accepted with its record.
+            true,
+        );
+        match result {
+            Ok(DeleteGeneratedKeyOutcome::RecoveryRequired(recovery)) => {
+                let KeyMaterialRecovery {
+                    operation_id: _,
+                    key_id: _,
+                    action: _,
+                    phase,
+                    // Read through `operation show`, with the
+                    // operation's state.
+                    failure_code: _,
+                    recovery_action: _,
+                } = recovery;
+                // The deletion began and did not end: the same request
+                // completes it, under the same operation, and the record
+                // stays accepted for that.
+                let removed = match phase {
+                    KeyMaterialPhase::PrivateRemoved | KeyMaterialPhase::FilesRemoved => true,
+                    KeyMaterialPhase::Prepared
+                    | KeyMaterialPhase::Reserved
+                    | KeyMaterialPhase::PrivateWritten
+                    | KeyMaterialPhase::PairWritten
+                    | KeyMaterialPhase::Completed
+                    | KeyMaterialPhase::RetainedForInspection => self.a_file_is_gone(),
+                };
+                Ran {
+                    answer: Answer {
+                        local_change: removed,
+                        ..Answer::stopped(ResultCode::RecoveryRequired)
+                            .with_data(self.data(deletion_state(phase)))
+                    },
+                    standing: Standing::Owed,
+                }
+            }
+            Ok(
+                outcome @ (DeleteGeneratedKeyOutcome::Deleted
+                | DeleteGeneratedKeyOutcome::AlreadyDeleted),
+            ) => Ran {
+                answer: self.answer(outcome::delete_key_outcome_code(&outcome)),
+                standing: Standing::Final,
+            },
+            // Not what a confirmed deletion returns. Nothing is settled
+            // on it but by what the journal says.
+            Ok(DeleteGeneratedKeyOutcome::Cancelled) => Ran {
+                answer: self.answer(ResultCode::InternalError),
+                standing: Standing::Stopped {
+                    journal: accepted.journal_row(service),
+                },
+            },
+            Err(error) => {
+                // Only the kind is read.
+                let code = Self::failure_code(error.kind);
+                let journal = accepted.journal_row(service);
+                let answer = Answer {
+                    local_change: self.removed(journal.as_ref()),
+                    ..self.answer(code)
+                };
+                let standing = match journal {
+                    // The deletion never began, or has not ended: the
+                    // row says whether anything is in flight.
+                    Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
+                        Standing::Stopped { journal }
+                    }
+                    // The deletion has ended, and this call failed all
+                    // the same. The error is no result of the deletion:
+                    // nothing is stored and nothing is deleted, and the
+                    // same request is answered from the row.
+                    Some(JournalRow::Final {
+                        kind: _,
+                        owes_work: _,
+                        checkpointed: _,
+                    }) => Standing::Unconfirmed,
+                };
+                Ran { answer, standing }
+            }
+        }
+    }
+}
+
+impl Binding for KeyDeleteBinding {
+    fn command(&self) -> Command {
+        Command::KeyDelete
+    }
+
+    /// The key journal records phases and no checkpoint step.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::SaysNothing
+    }
+
+    fn place(&self) -> Place<'_> {
+        Place::Application
+    }
+
+    fn target(&self) -> String {
+        self.id.to_string()
+    }
+
+    fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
+        let Self {
+            // Where the key's files are. The domain refuses an operation
+            // ID that is taken up again with another store.
+            store: _,
+            // The target, which the digest is begun with.
+            id: _,
+            // Read by the request, and no part of it.
+            registration: _,
+            review: _,
+        } = self;
+        builder
+    }
+
+    /// A key command names no repository, item, branch or worktree.
+    fn scope(&self, _repository: Option<String>, _position: Option<&Position>) -> Scope {
+        Scope::default()
+    }
+
+    /// Observes: the registration is read, and for a key that can be
+    /// deleted the domain's review is obtained for the call. No check is
+    /// made of what the preview covers: the boundary compares the digest
+    /// with the confirmation's, and refuses a request whose preview is
+    /// stale as `external_change`. A key that was selected, removed or
+    /// replaced since the preview is such a change. A key file that has
+    /// changed is refused here by the domain's review, as
+    /// `external_change` too.
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let observed = self.observe(call.service)?;
+        Ok(Prepared {
+            family: Some(OperationFamily::KeyMaterial),
+            position: no_position(),
+            expected: None,
+            observation: Some(observed.to_stored()),
+        })
+    }
+
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        self.call(call.service, accepted)
+    }
+
+    /// In order:
+    ///
+    /// 1. A row that has completed is a key that was deleted: the domain
+    ///    completes a deletion's row in the transaction that removes the
+    ///    key's registration and in no other. The deletion is called
+    ///    with no review, which the domain answers with "already
+    ///    deleted" and without opening the key store: the request is a
+    ///    no-op, and is finished.
+    /// 2. A row that is pending is a deletion that began. Its own work
+    ///    may have removed a file, so what was previewed is not compared,
+    ///    and the confirmation is the request's however old it is. A
+    ///    fresh review is obtained, and the deletion completes under the
+    ///    same operation. A review the domain refuses answers the call
+    ///    and leaves the record as it is.
+    /// 3. With no row nothing of the request's has been done: the key is
+    ///    observed again and compared with what was previewed, and a
+    ///    difference is `external_change`.
+    fn reenter(
+        &mut self,
+        call: &CallContext<'_>,
+        _accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Entered, Ran> {
+        let not_run = |answer: Answer, journal: JournalRow| Ran {
+            answer,
+            standing: Standing::NotRun { journal },
+        };
+        match &journal {
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: _,
+                checkpointed: _,
+            } => {
+                self.review.set(None);
+                Ok(Entered::Unfinished)
+            }
+            JournalRow::Pending(PendingOperation::KeyMaterial { phase: _ }) => {
+                match self.review(call.service) {
+                    Ok(_) => Ok(Entered::Unfinished),
+                    Err(answer) => Err(not_run(
+                        Answer {
+                            local_change: self.removed(Some(&journal)),
+                            ..answer
+                        },
+                        journal,
+                    )),
+                }
+            }
+            JournalRow::Absent => {
+                let observed = match self.observe(call.service) {
+                    Ok(observed) => observed,
+                    Err(answer) => return Err(not_run(answer, journal)),
+                };
+                // A request whose record holds no consent that can be
+                // read has none that anything could be compared with:
+                // nothing is run.
+                if call.previewed() != Some(observed) {
+                    self.review.set(None);
+                    return Err(not_run(self.answer(ResultCode::ExternalChange), journal));
+                }
+                Ok(Entered::Unfinished)
+            }
+            // No row of a deletion reads so. Nothing is run or settled
+            // on one that does.
+            JournalRow::Pending(
+                PendingOperation::Local { state: _, step: _ }
+                | PendingOperation::Remote { phase: _ },
+            )
+            | JournalRow::Final {
+                kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                owes_work: _,
+                checkpointed: _,
+            } => Err(not_run(Answer::stopped(ResultCode::InternalError), journal)),
+        }
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for KeyDeleteBinding {
+    /// The preview is of the registration alone, read by the preflight:
+    /// the key store is not opened for it, and no file is read.
+    fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
+        let preflight = self.preflight(call.service)?;
+        let registration = match &preflight {
+            GeneratedKeyDeletionPreflight::ConfirmationRequired(registration) => registration,
+            GeneratedKeyDeletionPreflight::NotRegistered
+            | GeneratedKeyDeletionPreflight::ImportedKey
+            | GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => {
+                return Err(self.answer(outcome::key_deletion_preflight_code(&preflight)));
+            }
+        };
+        let mut effects = vec![PreviewEffect::PrivateKeyFileDeleted];
+        if registration.public_key_path.is_some() {
+            effects.push(PreviewEffect::PublicKeyFileDeleted);
+        }
+        effects.push(PreviewEffect::KeyUnregistered);
+        Ok(Previewed {
+            observation: registration_digest(&preflight).to_stored(),
+            effects,
+            details: PreviewDetailsDto::KeyDeletion(KeyDeletionPreviewDto {
+                id: registration.id.to_string(),
+                label: registration.label.clone(),
+                fingerprint: registration.public_key_fingerprint.clone(),
+                private_key_path: registration.private_key_path.to_string_lossy().into_owned(),
+                public_key_path: registration
+                    .public_key_path
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            }),
+        })
     }
 }

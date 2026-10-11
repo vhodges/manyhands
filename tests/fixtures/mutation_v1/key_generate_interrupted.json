@@ -2,6 +2,7 @@
   "code": "recovery_required",
   "command": "key generate",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": "pair_written",
     "id": "<key>",

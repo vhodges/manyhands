@@ -553,7 +553,7 @@ fn the_table_covers_every_command_the_boundary_binds() {
 /// four sequences instead. The table's columns are an item's: its
 /// editing branch, the commits on it, its context's files and its token.
 /// None of these commands has an item.
-const ELSEWHERE: [(&str, &str); 13] = [
+const ELSEWHERE: [(&str, &str); 14] = [
     (
         "remote add",
         "commits nothing and writes no canonical file: `remotes`",
@@ -596,6 +596,12 @@ const ELSEWHERE: [(&str, &str); 13] = [
     (
         "key remove",
         "a change to the key registry, in no repository and with no operation: `keys`",
+    ),
+    (
+        "key delete",
+        "needs a confirmation, and deletes a key's files from the user's key store, in no \
+         repository; its operation is in the key journal: the test target \
+         `mutation_confirmation`",
     ),
     (
         "repo create",

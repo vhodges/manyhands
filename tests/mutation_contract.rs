@@ -5,10 +5,10 @@
 use manyhands::{
     repository::{
         CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
-        KeyClearInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
-        RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
-        RepoEnableInput, RepoRemoveInput, SharedKeyId, TicketCreateInput, TicketSaveInput,
-        TicketSlugAssignInput,
+        KeyClearInput, KeyDeleteInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
+        MutationDataDto, RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepoRemoveInput, SharedKeyId, TicketCreateInput,
+        TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -1026,5 +1026,94 @@ fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
         REPOSITORY_REMOVAL_SCHEMA,
         &[],
         &noop,
+    );
+}
+
+const KEY_DELETION_SCHEMA: &str = "key_deletion_preview.schema.json";
+
+#[test]
+fn a_key_delete_and_its_preview_match_their_schemas_and_goldens() {
+    let open = |data: &std::path::Path, point: Option<FailurePoint>| {
+        match point {
+            Some(point) => FailOnce::at(point).open_service(data),
+            None => manyhands::repository::RepositoryService::open_at(data).unwrap(),
+        }
+        .with_clock_for_testing(mutation::TestClock::at(support::operations::STORED_AT))
+    };
+    let mut world = KeyWorld::with_service(|data| open(data, None));
+    let generated = world.execute(
+        REQUEST_2,
+        world.generate("Work laptop", Some(mutation::PASSPHRASE)),
+    );
+    let data = mutation::key_data(&generated);
+    let key = data.id.clone().unwrap();
+    let fingerprint = data.fingerprint.clone().unwrap();
+    let id = SharedKeyId::parse(&key).unwrap();
+    let delete = |world: &KeyWorld| {
+        Mutation::KeyDelete(KeyDeleteInput {
+            store: world.store(),
+            id,
+        })
+    };
+    // What differs from run to run: the key, its fingerprint, its two
+    // files, and the operation and confirmation IDs.
+    let check = |name: &str, data_schema: &str, value: serde_json::Value| {
+        let text = |pointer: &str| value.pointer(pointer).and_then(|found| found.as_str());
+        let mut placeholders = vec![
+            (key.as_str(), "<key>"),
+            (fingerprint.as_str(), "<fingerprint>"),
+        ];
+        for (pointer, placeholder) in [
+            ("/operation_id", "<operation>"),
+            ("/data/confirmation_id", "<confirmation>"),
+            ("/data/details/private_key_path", "<private-key-file>"),
+            ("/data/details/public_key_path", "<public-key-file>"),
+        ] {
+            if let Some(found) = text(pointer) {
+                placeholders.push((found, placeholder));
+            }
+        }
+        mutation::assert_contract(
+            &ContractCase {
+                name,
+                data_schema: Some(data_schema),
+                placeholders: &placeholders,
+                sentinels: &[mutation::PASSPHRASE_SENTINEL],
+            },
+            &value,
+        );
+    };
+
+    let preview = world.service.prepare(&delete(&world));
+    assert_eq!(preview.outcome, Outcome::Success);
+    check(
+        "key_delete_preview",
+        KEY_DELETION_SCHEMA,
+        serde_json::to_value(&preview).unwrap(),
+    );
+    let confirmation = preview.data.unwrap().confirmation_id;
+
+    // Interrupted with its private key file removed: the same request
+    // completes the deletion.
+    world.service = open(
+        world.data.path(),
+        Some(FailurePoint::DeletionAfterPrivatePhase),
+    );
+    let interrupted =
+        mutation::execute_confirmed(&world.service, REQUEST_1, &confirmation, delete(&world));
+    assert_eq!(interrupted.outcome, Outcome::Partial);
+    check(
+        "key_delete_interrupted",
+        KEY_SCHEMA,
+        serde_json::to_value(&interrupted).unwrap(),
+    );
+
+    world.service = open(world.data.path(), None);
+    let deleted = mutation::execute_with(&world.service, REQUEST_1, delete(&world));
+    assert_eq!(deleted.outcome, Outcome::Success);
+    check(
+        "key_delete",
+        KEY_SCHEMA,
+        serde_json::to_value(&deleted).unwrap(),
     );
 }

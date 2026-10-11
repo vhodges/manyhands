@@ -2,6 +2,7 @@
   "code": "invalid_input",
   "command": "key import",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": null,
     "id": null,

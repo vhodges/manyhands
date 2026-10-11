@@ -284,6 +284,30 @@ pub(crate) fn remove_registration_outcome_code(outcome: &RemoveRegistrationOutco
     }
 }
 
+/// The code of what `delete_generated_key` returns. `key delete` never
+/// asks for a deletion it has no consent for, so it is never answered
+/// `Cancelled`, and reports that as its own fault.
+pub(crate) fn delete_key_outcome_code(outcome: &DeleteGeneratedKeyOutcome) -> ResultCode {
+    match outcome {
+        DeleteGeneratedKeyOutcome::Deleted => ResultCode::Ok,
+        DeleteGeneratedKeyOutcome::AlreadyDeleted => ResultCode::AlreadyApplied,
+        DeleteGeneratedKeyOutcome::Cancelled => ResultCode::Cancelled,
+        DeleteGeneratedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
+    }
+}
+
+/// What the preflight of a key deletion found, as a code: a key that
+/// can be deleted needs the confirmation. `prepare` gives that key its
+/// preview instead, and answers with the code for every other.
+pub(crate) fn key_deletion_preflight_code(preflight: &GeneratedKeyDeletionPreflight) -> ResultCode {
+    match preflight {
+        GeneratedKeyDeletionPreflight::ConfirmationRequired(_) => ResultCode::ConfirmationRequired,
+        GeneratedKeyDeletionPreflight::NotRegistered => ResultCode::KeyNotFound,
+        GeneratedKeyDeletionPreflight::ImportedKey => ResultCode::KeyNotDeletable,
+        GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
+    }
+}
+
 /// The codes of the outcomes of the commands that are not bound yet. Each
 /// is a `match` with no wildcard arm, as every mapping here is.
 #[cfg_attr(not(test), expect(dead_code))]
@@ -320,30 +344,6 @@ pub(crate) mod unbound {
                 local_oid: _,
                 reason: PublishPendingReason::NoPublicationRemote,
             } => ResultCode::PublicationRemoteRequired,
-        }
-    }
-
-    pub(crate) fn delete_key_outcome_code(outcome: &DeleteGeneratedKeyOutcome) -> ResultCode {
-        match outcome {
-            DeleteGeneratedKeyOutcome::Deleted => ResultCode::Ok,
-            DeleteGeneratedKeyOutcome::AlreadyDeleted => ResultCode::AlreadyApplied,
-            DeleteGeneratedKeyOutcome::Cancelled => ResultCode::Cancelled,
-            DeleteGeneratedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
-        }
-    }
-
-    /// What the review of a key deletion found, as the code of its
-    /// preview: a key that can be deleted needs the confirmation.
-    pub(crate) fn key_deletion_preflight_code(
-        preflight: &GeneratedKeyDeletionPreflight,
-    ) -> ResultCode {
-        match preflight {
-            GeneratedKeyDeletionPreflight::ConfirmationRequired(_) => {
-                ResultCode::ConfirmationRequired
-            }
-            GeneratedKeyDeletionPreflight::NotRegistered => ResultCode::KeyNotFound,
-            GeneratedKeyDeletionPreflight::ImportedKey => ResultCode::KeyNotDeletable,
-            GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
         }
     }
 }
@@ -615,10 +615,16 @@ pub(crate) fn recovery(
         // what was previewed put back, the same request goes on. For an
         // item write the caller reads the item again and submits a new
         // request, and no action is offered.
-        ResultCode::ExternalChange => match (command.needs_confirmation(), retry) {
-            (true, false) => prepare_again(),
-            (true, true) => vec![at_root(RecoveryActionKind::RepoInspect)],
-            (false, _) => Vec::new(),
+        //
+        // A result that names no repository has none to look at: it is
+        // of a key deletion that was interrupted, whose key or files
+        // are no longer what its own operation left. That operation
+        // refuses any other deletion of the key, and with what it left
+        // put back the same request goes on; nothing is offered.
+        ResultCode::ExternalChange => match (command.needs_confirmation(), retry, root) {
+            (true, false, _) => prepare_again(),
+            (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
+            (true, true, None) | (false, _, _) => Vec::new(),
         },
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send.
@@ -630,8 +636,8 @@ pub(crate) fn recovery(
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
         // refreshed or rebuilt, a key generated, imported, selected,
-        // cleared or removed, a repository created, enabled or removed
-        // from the list, a remote removed. The same
+        // cleared, removed or deleted, a repository created, enabled or
+        // removed from the list, a remote removed. The same
         // request is offered when its record was left accepted, and
         // nothing otherwise.
         ResultCode::Ok
@@ -657,11 +663,13 @@ pub(crate) fn recovery(
         | ResultCode::WorktreeConflicted
         | ResultCode::RemoteNameConflict
         | ResultCode::InvalidRemote
-        // A key that is not registered, a key that is selected, and a
-        // key store that cannot be used: the code says what is missing,
-        // and the command that resolves it is the caller's to choose.
+        // A key that is not registered, a key that is selected, a key
+        // Manyhands did not make and so does not delete, and a key store
+        // that cannot be used: the code says what is missing, and the
+        // command that resolves it is the caller's to choose.
         | ResultCode::KeyNotFound
         | ResultCode::SelectedKeyInUse
+        | ResultCode::KeyNotDeletable
         | ResultCode::KeyUnavailable
         // A caller error, which no action corrects: a confirmation that
         // is of another command, repository or input, or that another
@@ -683,7 +691,6 @@ pub(crate) fn recovery(
         | ResultCode::OperationNotFound
         | ResultCode::RequestNotFound
         | ResultCode::NotRepairable
-        | ResultCode::KeyNotDeletable
         | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
         | ResultCode::PublicationRemoteRequired

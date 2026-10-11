@@ -10,12 +10,12 @@ use manyhands::{
         Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
-        KeyGenerationState, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState,
-        OperationAction, OperationFamily, OperationNextAction, OperationOwner, PollingInterval,
-        PollingOutcome, PreviewEffect, PreviewIdentitySource, ProblemDto, ProposedRelationships,
-        ReadinessFilter, ReadinessReasonCode, ReadinessState, RelationshipRejectionDto,
-        RepositoryService, RequestState, ResolvedRepository, SharedKeyId, TicketFilter,
-        UnplannableReasonCode, transport::SshAuthority,
+        KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
+        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
+        OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
+        ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode, ReadinessState,
+        RelationshipRejectionDto, RepositoryService, RequestState, ResolvedRepository, SharedKeyId,
+        TicketFilter, UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -930,6 +930,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             KeyGenerationState::ALL
                 .map(KeyGenerationState::as_str)
                 .to_vec(),
+        ),
+        (
+            "key_mutation.schema.json",
+            "deletion",
+            KeyDeletionState::ALL.map(KeyDeletionState::as_str).to_vec(),
         ),
         (
             "preview_effect.schema.json",

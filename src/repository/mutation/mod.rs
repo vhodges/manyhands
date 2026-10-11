@@ -60,7 +60,7 @@ use bind::{
     Binding, Confirmed,
     document::DocumentBinding,
     index::IndexBinding,
-    key::{KeyGenerateBinding, KeyRegistryBinding},
+    key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repo::{RepoBinding, RepoRemoveBinding},
     ticket::{SlugAssignBinding, TicketBinding},
@@ -68,7 +68,10 @@ use bind::{
 pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
-    key::{KeyClearInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput},
+    key::{
+        KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
+        KeySelectInput,
+    },
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repo::{RepoCreateInput, RepoEnableInput, RepoRemoveInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
@@ -76,10 +79,11 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
-    RequestDto, RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
+    DocumentMutationDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    KeyMutationDto, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
+    PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
+    RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -340,6 +344,7 @@ pub enum Mutation {
     RepoEnable(RepoEnableInput),
     RemoteRemove(RemoteRemoveInput),
     RepoRemove(RepoRemoveInput),
+    KeyDelete(KeyDeleteInput),
 }
 
 impl Mutation {
@@ -369,6 +374,7 @@ impl Mutation {
             Self::RepoEnable(_) => Command::RepoEnable,
             Self::RemoteRemove(_) => Command::RemoteRemove,
             Self::RepoRemove(_) => Command::RepoRemove,
+            Self::KeyDelete(_) => Command::KeyDelete,
         }
     }
 
@@ -381,6 +387,7 @@ impl Mutation {
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
             Self::RepoRemove(input) => Some(Box::new(RepoRemoveBinding::from(input.clone()))),
+            Self::KeyDelete(input) => Some(Box::new(KeyDeleteBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -420,6 +427,7 @@ impl Mutation {
             Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
             Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
             Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
+            Self::KeyDelete(input) => Box::new(KeyDeleteBinding::from(input)),
         }
     }
 }

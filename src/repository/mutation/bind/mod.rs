@@ -737,6 +737,13 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             effects: Effects::not_requested(),
             local_change: key::written_and_unfinished(journal.as_ref()),
         },
+        // A key file that was deleted is shown by no effect. The
+        // deletion's row says whether one was, with the deletion not yet
+        // ended.
+        Some(Command::KeyDelete) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: key::removed_and_unfinished(journal.as_ref()),
+        },
         Some(Command::RepoCreate | Command::RepoEnable) => {
             repo::recorded_effects(service, &accepted, journal.as_ref())
         }

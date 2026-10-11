@@ -14,12 +14,13 @@ use std::{
 use manyhands::{
     canonical,
     repository::{
-        CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput, LeaseKind,
-        Mutation, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
-        PreviewIdentitySource, RemoteRemovalPreviewDto, RemoteRemoveInput, RemoteSelectInput,
-        RemoveRegistrationRequest, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
-        RepositoryPreviewDto, RepositoryRemovalPreviewDto, RepositoryService, RequestId,
-        RequestState, TicketCreateInput, request_store::RequestRecord,
+        CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput,
+        KeyDeleteInput, KeyDeletionPreviewDto, KeyDeletionState, LeaseKind, Mutation,
+        MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewIdentitySource,
+        RemoteRemovalPreviewDto, RemoteRemoveInput, RemoteSelectInput, RemoveRegistrationRequest,
+        RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepositoryPreviewDto,
+        RepositoryRemovalPreviewDto, RepositoryService, RequestId, RequestState, SharedKeyId,
+        TicketCreateInput, request_store::RequestRecord,
     },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, Outcome, ResultCode, WriteEffect,
@@ -32,8 +33,8 @@ use support::{
     TestRepository, born_repository, golden,
     items::{self, TICKET_A},
     mutation::{
-        self, REQUEST_1, REQUEST_2, REQUEST_3, TestClock, World, execute_confirmed, execute_with,
-        recovery_actions,
+        self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, REQUEST_1, REQUEST_2, REQUEST_3,
+        TestClock, World, execute_confirmed, execute_with, key_data, recovery_actions,
     },
     schema,
 };
@@ -41,12 +42,14 @@ use support::{
 const PREVIEW_SCHEMA: &str = "preview.schema.json";
 const REMOTE_REMOVAL_SCHEMA: &str = "remote_removal_preview.schema.json";
 const REPOSITORY_REMOVAL_SCHEMA: &str = "repository_removal_preview.schema.json";
+const KEY_DELETION_SCHEMA: &str = "key_deletion_preview.schema.json";
 
 /// The published schema of the preview `command` gives.
 fn preview_schema(command: &str) -> &'static str {
     match command {
         "remote remove" => REMOTE_REMOVAL_SCHEMA,
         "repo remove" => REPOSITORY_REMOVAL_SCHEMA,
+        "key delete" => KEY_DELETION_SCHEMA,
         _ => PREVIEW_SCHEMA,
     }
 }
@@ -3782,4 +3785,510 @@ fn repo_remove_without_a_confirmation_is_confirmation_required_and_does_nothing(
     );
     assert!(home.registered());
     home.assert_nothing_left(REQUEST_1);
+}
+
+// ---------------------------------------------------------------------
+// `key delete`
+// ---------------------------------------------------------------------
+
+/// A service with no repository, timed by a clock the test sets, and a
+/// home whose key store holds one key Manyhands generated, protected by
+/// a passphrase that nothing may keep.
+struct Keyring {
+    world: KeyWorld,
+    clock: Arc<TestClock>,
+    /// The generated key.
+    id: SharedKeyId,
+}
+
+impl Keyring {
+    fn new() -> Self {
+        let clock = TestClock::at(START);
+        let world = KeyWorld::with_service(|data| mutation::service_with_clock(data, &clock));
+        let generated = world.execute(REQUEST_3, world.generate("Work key", Some(PASSPHRASE)));
+        assert_eq!(generated.code, ResultCode::Ok, "{}", generated.message);
+        let id = SharedKeyId::parse(key_data(&generated).id.as_deref().unwrap()).unwrap();
+        Self { world, clock, id }
+    }
+
+    /// Another service over the same data, as a new process would open.
+    fn reopen(&mut self) {
+        self.world.service = mutation::service_with_clock(self.world.data.path(), &self.clock);
+    }
+
+    /// Another service over the same data that fails once at `point`.
+    fn fail_once_at(&mut self, point: FailurePoint) {
+        self.world.service = RepositoryService::open_at_with_failure_point_for_testing(
+            self.world.data.path(),
+            point,
+        )
+        .unwrap()
+        .with_clock_for_testing(self.clock.clone());
+    }
+
+    fn service(&self) -> &RepositoryService {
+        &self.world.service
+    }
+
+    fn delete(&self, id: SharedKeyId) -> Mutation {
+        Mutation::KeyDelete(KeyDeleteInput {
+            store: self.world.store(),
+            id,
+        })
+    }
+
+    fn delete_key(&self) -> Mutation {
+        self.delete(self.id)
+    }
+
+    /// `prepare`, with its envelope scanned for the passphrase.
+    fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+        let envelope = prepare_with(self.service(), mutation);
+        assert_eq!(
+            golden::find_sentinel(
+                &serde_json::to_value(&envelope).unwrap(),
+                &[PASSPHRASE_SENTINEL]
+            ),
+            None
+        );
+        envelope
+    }
+
+    fn preview(&self) -> (String, PreviewDto) {
+        let envelope = self.prepare(&self.delete_key());
+        assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+        assert_eq!(envelope.outcome, Outcome::Success);
+        let preview = envelope.data.expect("a preview");
+        (preview.confirmation_id.clone(), preview)
+    }
+
+    fn scanned(&self, envelope: Envelope<MutationDataDto>) -> Envelope<MutationDataDto> {
+        assert_eq!(
+            golden::find_sentinel(
+                &serde_json::to_value(&envelope).unwrap(),
+                &[PASSPHRASE_SENTINEL]
+            ),
+            None
+        );
+        // A key command names no repository, item, branch or worktree.
+        assert_eq!(envelope.scope, manyhands::results::Scope::default());
+        envelope
+    }
+
+    fn execute(
+        &self,
+        request_id: &str,
+        confirmation: &str,
+        mutation: Mutation,
+    ) -> Envelope<MutationDataDto> {
+        self.scanned(execute_confirmed(
+            self.service(),
+            request_id,
+            confirmation,
+            mutation,
+        ))
+    }
+
+    /// The same request again, presenting nothing: its record holds its
+    /// consent.
+    fn retry(&self, request_id: &str, mutation: Mutation) -> Envelope<MutationDataDto> {
+        self.scanned(execute_with(self.service(), request_id, mutation))
+    }
+
+    fn state(&self, request_id: &str) -> Option<RequestState> {
+        self.world.record(request_id).map(|record| record.state)
+    }
+
+    fn count(&self, query: &str) -> i64 {
+        items::index(self.world.data.path())
+            .query_row(query, [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// The key's two files, as its registration names them.
+    fn files(&self) -> (PathBuf, PathBuf) {
+        let directory = self.world.store_directory();
+        (
+            directory.join(self.id.to_string()),
+            directory.join(format!("{}.pub", self.id)),
+        )
+    }
+
+    fn registered(&self) -> bool {
+        self.world.keys().iter().any(|(id, _)| *id == self.id)
+    }
+
+    /// Nothing is left of a request that was rejected: no record, no
+    /// confirmation held, and no deletion begun.
+    fn assert_nothing_left(&self, request_id: &str) {
+        assert_eq!(self.world.record(request_id), None, "a request record");
+        assert_eq!(
+            self.count(
+                "SELECT COUNT(*) FROM confirmation_records WHERE accepted_by_request IS NOT NULL"
+            ),
+            0,
+            "a confirmation held"
+        );
+        assert_eq!(
+            self.count("SELECT COUNT(*) FROM key_material_operations WHERE action = 'delete'"),
+            0,
+            "a deletion begun"
+        );
+    }
+}
+
+fn key_deletion(preview: &PreviewDto) -> &KeyDeletionPreviewDto {
+    match &preview.details {
+        PreviewDetailsDto::KeyDeletion(details) => details,
+        other => panic!("not a preview of a key's deletion: {other:?}"),
+    }
+}
+
+#[test]
+fn a_preview_of_key_delete_names_the_key_and_its_files_and_changes_nothing() {
+    let keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let store = tree(&keyring.world.store_directory());
+    let listed = keyring.service().show_key(keyring.id).unwrap();
+
+    let (_, preview) = keyring.preview();
+
+    assert_eq!(tree(&keyring.world.store_directory()), store);
+    assert_eq!(keyring.service().show_key(keyring.id).unwrap(), listed);
+    assert_eq!(
+        keyring.count("SELECT COUNT(*) FROM confirmation_records"),
+        1
+    );
+    // The generation's record and row, and nothing of a deletion.
+    assert_eq!(keyring.world.request_rows(), 1);
+    assert_eq!(keyring.world.key_operations(), 1);
+    assert_eq!(preview.command, "key delete");
+    assert_eq!(preview.scope, manyhands::results::Scope::default());
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::PrivateKeyFileDeleted,
+            PreviewEffect::PublicKeyFileDeleted,
+            PreviewEffect::KeyUnregistered,
+        ]
+    );
+    let details = key_deletion(&preview);
+    assert_eq!(details.id, keyring.id.to_string());
+    assert_eq!(details.label, "Work key");
+    // No more than the key list gives of the same key.
+    assert_eq!(details.fingerprint, listed.fingerprint);
+    assert!(details.fingerprint.is_some());
+    assert_eq!(details.private_key_path, listed.private_key_path);
+    assert_eq!(details.public_key_path, listed.public_key_path);
+    assert_eq!(Path::new(&details.private_key_path), private);
+    assert_eq!(
+        details.public_key_path.as_deref().map(Path::new),
+        Some(public.as_path())
+    );
+    assert!(private.exists() && public.exists());
+}
+
+#[test]
+fn prepare_refuses_a_key_that_is_imported_selected_or_not_registered() {
+    let keyring = Keyring::new();
+    let imported = keyring.world.register("id_imported", "Imported");
+
+    let refused = keyring.prepare(&keyring.delete(imported));
+    assert_eq!(refused.code, ResultCode::KeyNotDeletable);
+    assert_eq!(refused.outcome, Outcome::Error);
+    assert_eq!(refused.data, None);
+    assert!(refused.recovery.is_empty());
+
+    keyring.service().select_shared_key(keyring.id).unwrap();
+    let selected = keyring.prepare(&keyring.delete_key());
+    assert_eq!(selected.code, ResultCode::SelectedKeyInUse);
+    assert_eq!(selected.outcome, Outcome::Blocked);
+    assert_eq!(selected.data, None);
+
+    let unknown = keyring.prepare(&keyring.delete(SharedKeyId::new()));
+    assert_eq!(unknown.code, ResultCode::KeyNotFound);
+    assert_eq!(unknown.data, None);
+
+    assert_eq!(
+        keyring.count("SELECT COUNT(*) FROM confirmation_records"),
+        0
+    );
+    let (private, public) = keyring.files();
+    assert!(private.exists() && public.exists());
+}
+
+#[test]
+fn a_confirmed_key_delete_removes_the_files_and_the_key_and_is_replayed() {
+    let keyring = Keyring::new();
+    let imported = keyring.world.register("id_imported", "Imported");
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    let fingerprint = keyring.service().show_key(keyring.id).unwrap().fingerprint;
+
+    let required = keyring.retry(REQUEST_1, keyring.delete_key());
+    assert_refused(
+        &required,
+        ResultCode::ConfirmationRequired,
+        &["request.prepare"],
+    );
+    let other = keyring.execute(REQUEST_1, &confirmation, keyring.delete(imported));
+    assert_refused(&other, ResultCode::ConfirmationMismatch, &[]);
+    assert!(private.exists() && public.exists());
+
+    let deleted = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+
+    assert_done(&deleted);
+    let data = key_data(&deleted);
+    assert_eq!(data.id, Some(keyring.id.to_string()));
+    assert_eq!(data.label.as_deref(), Some("Work key"));
+    assert_eq!(data.fingerprint, fingerprint);
+    assert_eq!(data.generation, None);
+    assert_eq!(data.deletion, None);
+    assert!(deleted.operation_id.is_some());
+    assert!(!private.exists() && !public.exists());
+    assert!(!keyring.registered());
+    // The other key and its file are as they were.
+    assert!(keyring.world.keys().iter().any(|(id, _)| *id == imported));
+    assert_eq!(keyring.state(REQUEST_1), Some(RequestState::Finished));
+
+    // At any later time, whatever the retry presents: the stored result.
+    keyring.clock.set(START + 86_400);
+    assert_eq!(
+        keyring.execute(REQUEST_1, &confirmation, keyring.delete_key()),
+        deleted
+    );
+    assert_eq!(keyring.retry(REQUEST_1, keyring.delete_key()), deleted);
+
+    // The same request ID for another key is another request.
+    let changed = keyring.retry(REQUEST_1, keyring.delete(imported));
+    assert_eq!(changed.code, ResultCode::RequestMismatch);
+    assert_eq!(changed.effects, Effects::not_requested());
+    // And the confirmation is used.
+    let reused = keyring.execute(REQUEST_2, &confirmation, keyring.delete_key());
+    assert_refused(&reused, ResultCode::ConfirmationUsed, &[]);
+}
+
+/// The key is selected after the preview: its registration is no longer
+/// the one that was shown.
+#[test]
+fn a_registration_changed_between_preview_and_confirmation_is_external_change() {
+    let keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    keyring.service().select_shared_key(keyring.id).unwrap();
+
+    let refused = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    keyring.assert_nothing_left(REQUEST_1);
+    assert!(private.exists() && public.exists());
+    assert!(keyring.registered());
+    // A new preview says what is in the way.
+    assert_eq!(
+        keyring.prepare(&keyring.delete_key()).code,
+        ResultCode::SelectedKeyInUse
+    );
+}
+
+/// A key file is replaced after the preview. The registration is what
+/// it was, so the preview's observation holds: it is the domain's own
+/// review of the files that refuses, and nothing is deleted.
+#[test]
+fn a_key_file_changed_after_the_preview_is_external_change_from_the_domain_s_review() {
+    let keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    // Written in place: the file is the store's own still, with its
+    // owner and its mode, and holds something else.
+    fs::write(&private, "another file\n").unwrap();
+
+    let refused = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    keyring.assert_nothing_left(REQUEST_1);
+    assert_eq!(fs::read_to_string(&private).unwrap(), "another file\n");
+    assert!(public.exists());
+    assert!(keyring.registered());
+}
+
+/// The deletion is interrupted once its private key file is removed:
+/// before that removal is recorded, and after. An hour later, with the
+/// confirmation's own record of what was previewed overwritten, the same
+/// request completes under the same operation: a fresh review is
+/// obtained, and nothing is compared with the preview.
+#[test]
+fn a_deletion_interrupted_after_the_private_file_is_removed_is_partial_and_its_retry_completes() {
+    for (point, state) in [
+        (
+            FailurePoint::DeletionAfterPrivateUnlink,
+            KeyDeletionState::Prepared,
+        ),
+        (
+            FailurePoint::DeletionAfterPrivatePhase,
+            KeyDeletionState::PrivateRemoved,
+        ),
+        (
+            FailurePoint::DeletionAfterPublicUnlink,
+            KeyDeletionState::PrivateRemoved,
+        ),
+    ] {
+        let mut keyring = Keyring::new();
+        let (private, public) = keyring.files();
+        let (confirmation, _) = keyring.preview();
+        keyring.fail_once_at(point);
+
+        let partial = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+
+        assert_eq!(partial.code, ResultCode::RecoveryRequired, "{point:?}");
+        assert_eq!(partial.outcome, Outcome::Partial, "{point:?}");
+        assert_eq!(partial.effects, Effects::not_requested(), "{point:?}");
+        assert_eq!(recovery_actions(&partial), ["request.retry"], "{point:?}");
+        assert_eq!(key_data(&partial).deletion, Some(state), "{point:?}");
+        assert_eq!(
+            key_data(&partial).id,
+            Some(keyring.id.to_string()),
+            "{point:?}"
+        );
+        assert!(!private.exists(), "{point:?}");
+        assert_eq!(
+            public.exists(),
+            point != FailurePoint::DeletionAfterPublicUnlink,
+            "{point:?}"
+        );
+        assert!(keyring.registered(), "{point:?}");
+        assert_eq!(
+            keyring.state(REQUEST_1),
+            Some(RequestState::Accepted),
+            "{point:?}"
+        );
+
+        keyring.reopen();
+        keyring.clock.set(START + 3600);
+        let overwritten = items::index(keyring.world.data.path())
+            .execute(
+                "UPDATE confirmation_records SET observation_digest = ?1",
+                ["0".repeat(64)],
+            )
+            .unwrap();
+        assert_eq!(overwritten, 1, "{point:?}");
+        let finished = keyring.retry(REQUEST_1, keyring.delete_key());
+
+        assert_done(&finished);
+        assert_eq!(partial.operation_id, finished.operation_id, "{point:?}");
+        assert_eq!(key_data(&finished).deletion, None, "{point:?}");
+        assert!(!private.exists() && !public.exists(), "{point:?}");
+        assert!(!keyring.registered(), "{point:?}");
+        assert_eq!(
+            keyring.state(REQUEST_1),
+            Some(RequestState::Finished),
+            "{point:?}"
+        );
+        assert_eq!(
+            keyring.count("SELECT COUNT(*) FROM key_material_operations WHERE action = 'delete'"),
+            1,
+            "{point:?}"
+        );
+        assert_eq!(
+            keyring.execute(REQUEST_1, &confirmation, keyring.delete_key()),
+            finished,
+            "{point:?}"
+        );
+    }
+}
+
+/// A deletion that fails before it removed anything has begun all the
+/// same: its record stays accepted, nothing is reported as changed, and
+/// the same request completes it.
+#[test]
+fn a_deletion_that_fails_before_it_removed_a_file_is_not_partial_and_its_retry_completes() {
+    let mut keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    keyring.fail_once_at(FailurePoint::DeletionAfterIntent);
+
+    let stopped = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.outcome, Outcome::Blocked);
+    assert_eq!(recovery_actions(&stopped), ["request.retry"]);
+    assert_eq!(
+        key_data(&stopped).deletion,
+        Some(KeyDeletionState::Prepared)
+    );
+    assert!(private.exists() && public.exists());
+    assert_eq!(keyring.state(REQUEST_1), Some(RequestState::Accepted));
+
+    keyring.reopen();
+    assert_done(&keyring.retry(REQUEST_1, keyring.delete_key()));
+    assert!(!private.exists() && !public.exists());
+}
+
+/// The deletion completes and its result is lost. The key is no longer
+/// registered, so no review of it can be had: the retry is answered by
+/// the deletion called with none, as a no-op, and is not refused.
+#[test]
+fn a_key_delete_whose_result_was_lost_is_a_no_op_and_not_external_change() {
+    let mut keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    keyring.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let lost = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert!(!private.exists() && !public.exists());
+    assert!(!keyring.registered());
+    assert_eq!(keyring.state(REQUEST_1), Some(RequestState::Accepted));
+
+    keyring.reopen();
+    keyring.clock.set(START + 3600);
+    // A file at the key's path now is not the key's, and is not touched.
+    fs::write(&private, "another file\n").unwrap();
+    let answered = keyring.retry(REQUEST_1, keyring.delete_key());
+
+    assert_noop(&answered);
+    assert_eq!(key_data(&answered).id, Some(keyring.id.to_string()));
+    assert_eq!(keyring.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(fs::read_to_string(&private).unwrap(), "another file\n");
+    assert_eq!(keyring.retry(REQUEST_1, keyring.delete_key()), answered);
+}
+
+/// A request is accepted and stops before its first effect, and the key
+/// is selected. The retry observes again and is refused: the consent was
+/// to what was shown.
+#[test]
+fn a_retry_of_a_key_delete_before_any_effect_observes_again() {
+    let mut keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    keyring.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    let died = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert_eq!(died.code, ResultCode::InternalError);
+    assert_eq!(keyring.state(REQUEST_1), Some(RequestState::Accepted));
+    keyring.service().select_shared_key(keyring.id).unwrap();
+
+    let refused = keyring.retry(REQUEST_1, keyring.delete_key());
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(recovery_actions(&refused), ["request.prepare"]);
+    keyring.assert_nothing_left(REQUEST_1);
+    assert!(private.exists() && public.exists());
+    assert!(keyring.registered());
+}
+
+/// The same interruption with nothing changed: the retry is honored,
+/// also after the ten minutes.
+#[test]
+fn a_retry_of_a_key_delete_before_any_effect_runs_when_nothing_has_changed() {
+    let mut keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let (confirmation, _) = keyring.preview();
+    keyring.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    keyring.clock.set(START + 3600);
+
+    let finished = keyring.retry(REQUEST_1, keyring.delete_key());
+
+    assert_done(&finished);
+    assert!(!private.exists() && !public.exists());
 }

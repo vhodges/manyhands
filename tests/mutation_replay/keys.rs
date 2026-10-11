@@ -73,6 +73,7 @@ fn read(id: SharedKeyId, label: &str) -> KeyMutationDto {
         // The fixture registers a key with no public key file.
         fingerprint: None,
         generation: None,
+        deletion: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn named(id: Option<SharedKeyId>) -> KeyMutationDto {
         label: None,
         fingerprint: None,
         generation: None,
+        deletion: None,
     }
 }
 
@@ -476,6 +478,7 @@ fn imported(id: &str, label: &str) -> KeyMutationDto {
         label: Some(label.to_owned()),
         fingerprint: Some(PUBLIC_KEY_FINGERPRINT.to_owned()),
         generation: None,
+        deletion: None,
     }
 }
 

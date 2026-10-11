@@ -2,6 +2,7 @@
   "code": "ok",
   "command": "key clear",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": null,
     "id": null,

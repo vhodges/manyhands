@@ -82,6 +82,12 @@ contract_enum!(
     /// its polling policy, what polling observed of its remote and the
     /// records of its synchronizations. None of the four touches a file
     /// under the repository's root or anything Git holds.
+    ///
+    /// `private_key_file_deleted` and `public_key_file_deleted` are the
+    /// two files of a key Manyhands generated, deleted from the user's
+    /// key store, each named in the preview's details.
+    /// `key_unregistered` is the key taken out of the key list, with the
+    /// record that Manyhands made its files.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -98,6 +104,9 @@ contract_enum!(
         IndexDropped => "index_dropped",
         OperationRecordsDropped => "operation_records_dropped",
         RemoteStateDropped => "remote_state_dropped",
+        PrivateKeyFileDeleted => "private_key_file_deleted",
+        PublicKeyFileDeleted => "public_key_file_deleted",
+        KeyUnregistered => "key_unregistered",
     }
 );
 
@@ -152,6 +161,22 @@ pub enum PreviewDetailsDto {
     Repository(RepositoryPreviewDto),
     RemoteRemoval(RemoteRemovalPreviewDto),
     RepositoryRemoval(RepositoryRemovalPreviewDto),
+    KeyDeletion(KeyDeletionPreviewDto),
+}
+
+/// What a preview of `key delete` shows: the key, and the files that
+/// will be deleted. It holds what the key list gives of the key, and no
+/// key material.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeyDeletionPreviewDto {
+    pub id: String,
+    pub label: String,
+    /// The fingerprint the key's registration stores.
+    pub fingerprint: Option<String>,
+    /// The private key file that will be deleted.
+    pub private_key_path: String,
+    /// The public key file that will be deleted.
+    pub public_key_path: Option<String>,
 }
 
 /// What a preview of `repo remove` shows: the registration that will be
@@ -221,6 +246,19 @@ pub enum MutationDataDto {
 }
 
 contract_enum!(
+    /// Where a key deletion that has not ended stands, as
+    /// `operation show` names the state of its operation: `prepared`
+    /// before the private key file is recorded as removed,
+    /// `private_removed` once it is, and `files_removed` once the public
+    /// key file is too and the key is still registered.
+    KeyDeletionState {
+        Prepared => "prepared",
+        PrivateRemoved => "private_removed",
+        FilesRemoved => "files_removed",
+    }
+);
+
+contract_enum!(
     /// Where a key generation that has not registered its key stands, as
     /// `operation show` names the state of its operation.
     KeyGenerationState {
@@ -238,7 +276,7 @@ contract_enum!(
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct KeyMutationDto {
     /// The key the request is about: the one it generated, registered,
-    /// selected or removed, or was refused for, and for a `key import` of
+    /// selected, removed or deleted, or was refused for, and for a `key import` of
     /// a source that is already registered, the key that holds it. A
     /// `key generate` names its key from the moment it reserves the
     /// key's ID, which is before the key is registered. Null for
@@ -255,6 +293,9 @@ pub struct KeyMutationDto {
     /// Set only by a `key generate` that has not registered its key:
     /// where its generation stands.
     pub generation: Option<KeyGenerationState>,
+    /// Set only by a `key delete` that began and has not ended: where
+    /// its deletion stands. The same request completes it.
+    pub deletion: Option<KeyDeletionState>,
 }
 
 impl KeyMutationDto {
@@ -277,6 +318,15 @@ impl KeyMutationDto {
                         .find(|known| known.as_str() == state)?,
                 ),
                 None => None,
+            },
+            // A record stored before a deletion had a state holds none.
+            deletion: match stored.get("deletion") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(state) => Some(
+                    KeyDeletionState::ALL
+                        .into_iter()
+                        .find(|known| Some(known.as_str()) == state.as_str())?,
+                ),
             },
         })
     }
@@ -400,7 +450,8 @@ impl MutationDataDto {
             | Command::KeyImport
             | Command::KeySelect
             | Command::KeyClear
-            | Command::KeyRemove => KeyMutationDto::from_stored(stored).map(Self::Key),
+            | Command::KeyRemove
+            | Command::KeyDelete => KeyMutationDto::from_stored(stored).map(Self::Key),
             // These report no data, so a record of one stores none.
             Command::IndexRefresh
             | Command::IndexRebuild

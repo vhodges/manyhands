@@ -2,6 +2,7 @@
   "code": "selected_key_in_use",
   "command": "key remove",
   "data": {
+    "deletion": null,
     "fingerprint": null,
     "generation": null,
     "id": "<key>",
