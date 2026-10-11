@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 remote mutation data",
-  "description": "The data of a remote add or remote select envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the remote. A remote that is added is shown by no effect, so this and the outcome say what the request did.",
+  "description": "The data of a remote add, remote select or remote remove envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the remote. A remote that is added or removed is shown by no effect, so this and the outcome say what the request did.",
   "type": "object",
   "additionalProperties": false,
   "required": ["name", "location"],
@@ -11,7 +11,7 @@
       "type": ["string", "null"]
     },
     "location": {
-      "description": "The location a remote add gave the remote, redacted. It is not a location to connect to. Null for remote select, which names a remote and gives no location.",
+      "description": "The location a remote add gave the remote, redacted. It is not a location to connect to. Null for remote select and remote remove, which name a remote and give no location.",
       "type": ["string", "null"]
     }
   }

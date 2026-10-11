@@ -61,7 +61,7 @@ use bind::{
     document::DocumentBinding,
     index::IndexBinding,
     key::{KeyGenerateBinding, KeyRegistryBinding},
-    remote::{RemoteAddBinding, RemoteSelectBinding},
+    remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repo::RepoBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
@@ -69,7 +69,7 @@ pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{KeyClearInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput},
-    remote::{RemoteAddInput, RemoteSelectInput},
+    remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repo::{RepoCreateInput, RepoEnableInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
@@ -78,8 +78,8 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, PreviewDetailsDto,
     PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RepositoryPreviewDto, RequestDto, RequestOperationDto, RequestResultDto,
-    RequestState, TicketMutationDto,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -206,6 +206,24 @@ impl RepositoryService {
 }
 
 impl RepositoryService {
+    /// What the registration at `root` holds of polling; see
+    /// `remote::state::select_polling_policy`. `None` for a root that is
+    /// not registered.
+    pub(crate) fn polling_policy(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<Option<remote::state::PollingPolicy>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            // A root that is not UTF-8 cannot have been stored.
+            let Some(root) = root.to_str() else {
+                return Ok(None);
+            };
+            Ok(remote::state::select_polling_policy(connection, root)?)
+        })
+    }
+}
+
+impl RepositoryService {
     /// The key a generation that has completed registered, and the
     /// fingerprint its row recorded; see `keys::completed_generation`.
     pub(crate) fn completed_generation(
@@ -320,6 +338,7 @@ pub enum Mutation {
     KeyRemove(KeyRemoveInput),
     RepoCreate(RepoCreateInput),
     RepoEnable(RepoEnableInput),
+    RemoteRemove(RemoteRemoveInput),
 }
 
 impl Mutation {
@@ -347,6 +366,7 @@ impl Mutation {
             Self::KeyRemove(_) => Command::KeyRemove,
             Self::RepoCreate(_) => Command::RepoCreate,
             Self::RepoEnable(_) => Command::RepoEnable,
+            Self::RemoteRemove(_) => Command::RemoteRemove,
         }
     }
 
@@ -357,6 +377,7 @@ impl Mutation {
         match self {
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
+            Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -394,6 +415,7 @@ impl Mutation {
             Self::KeyRemove(input) => Box::new(KeyRegistryBinding::from(input)),
             Self::RepoCreate(input) => Box::new(RepoBinding::from(input)),
             Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
+            Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
         }
     }
 }

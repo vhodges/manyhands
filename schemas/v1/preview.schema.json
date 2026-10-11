@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 preview",
-  "description": "The data of a prepare envelope that gives a preview: what a command that needs confirmation will do, and the confirmation an execute of the same command, repository, target and input presents to do it. A prepare that gives no preview carries no data: a rejection, and a no-op for a command whose end state already holds.",
+  "description": "The data of a prepare envelope that gives a preview of repo create or repo enable: what the command will do, and the confirmation an execute of the same command, repository, target and input presents to do it. A prepare that gives no preview carries no data: a rejection, and a no-op for a command whose end state already holds.",
   "type": "object",
   "additionalProperties": false,
   "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],

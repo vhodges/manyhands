@@ -630,7 +630,8 @@ pub(crate) fn recovery(
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
         // refreshed or rebuilt, a key generated, imported, selected,
-        // cleared or removed, a repository created or enabled. The same
+        // cleared or removed, a repository created or enabled, a remote
+        // removed. The same
         // request is offered when its record was left accepted, and
         // nothing otherwise.
         ResultCode::Ok
@@ -667,6 +668,9 @@ pub(crate) fn recovery(
         // request has used. The caller uses a new preview.
         | ResultCode::ConfirmationMismatch
         | ResultCode::ConfirmationUsed
+        // The publication remote is not removed while it is selected:
+        // the selection is cleared first, which is the caller's to do.
+        | ResultCode::PublicationRemoteInUse
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -683,7 +687,6 @@ pub(crate) fn recovery(
         | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
         | ResultCode::PublicationRemoteRequired
-        | ResultCode::PublicationRemoteInUse
         | ResultCode::MergeRequired
         | ResultCode::RemoteBranchDeleted
         | ResultCode::PushRejected

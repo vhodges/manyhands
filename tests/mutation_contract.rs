@@ -6,8 +6,8 @@ use manyhands::{
     repository::{
         CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
         KeyClearInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto,
-        RelationshipWrite, RemoteAddInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
-        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
+        RepoEnableInput, SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -786,6 +786,18 @@ fn assert_repository_contract<T: serde::Serialize>(
     root: &std::path::Path,
     envelope: &Envelope<T>,
 ) {
+    assert_confirmed_contract(name, root, PREVIEW_SCHEMA, &[], envelope);
+}
+
+/// The same for any command that needs confirmation: `data_schema` is
+/// the schema of the data the envelope carries, when it carries any.
+fn assert_confirmed_contract<T: serde::Serialize>(
+    name: &str,
+    root: &std::path::Path,
+    data_schema: &str,
+    sentinels: &[&str],
+    envelope: &Envelope<T>,
+) {
     let value = serde_json::to_value(envelope).unwrap();
     let text = |pointer: &str| value.pointer(pointer).and_then(|found| found.as_str());
     let mut placeholders = vec![(root.to_str().unwrap(), "<root>")];
@@ -801,9 +813,9 @@ fn assert_repository_contract<T: serde::Serialize>(
     mutation::assert_contract(
         &ContractCase {
             name,
-            data_schema: (!value["data"].is_null()).then_some(PREVIEW_SCHEMA),
+            data_schema: (!value["data"].is_null()).then_some(data_schema),
             placeholders: &placeholders,
-            sentinels: &[],
+            sentinels,
         },
         envelope,
     );
@@ -890,4 +902,64 @@ fn a_repo_create_and_its_preview_match_their_schemas_and_goldens() {
     let created = mutation::execute_confirmed(&service, REQUEST_1, &confirmation, create());
     assert_eq!(created.outcome, Outcome::Success);
     assert_repository_contract("repo_create", &root, &created);
+}
+
+/// An enabled, registered repository under a clock that stands still,
+/// so that a preview's expiry is fixed.
+fn world_with_a_still_clock() -> World {
+    World::with_service(|data| {
+        manyhands::repository::RepositoryService::open_at(data)
+            .unwrap()
+            .with_clock_for_testing(mutation::TestClock::at(support::operations::STORED_AT))
+    })
+}
+
+const REMOTE_REMOVAL_SCHEMA: &str = "remote_removal_preview.schema.json";
+
+#[test]
+fn a_remote_remove_and_its_preview_match_their_schemas_and_goldens() {
+    let world = world_with_a_still_clock();
+    world
+        .fixture
+        .repository
+        .remote("origin", &remote_location())
+        .unwrap();
+    let remove = || {
+        Mutation::RemoteRemove(RemoteRemoveInput {
+            root: world.root.clone(),
+            name: "origin".to_owned(),
+        })
+    };
+    let secret = [REMOTE_SECRET];
+
+    let preview = world.service.prepare(&remove());
+    assert_eq!(preview.outcome, Outcome::Success);
+    assert_confirmed_contract(
+        "remote_remove_preview",
+        &world.root,
+        REMOTE_REMOVAL_SCHEMA,
+        &secret,
+        &preview,
+    );
+    let confirmation = preview.data.unwrap().confirmation_id;
+
+    let removed = mutation::execute_confirmed(&world.service, REQUEST_1, &confirmation, remove());
+    assert_eq!(removed.outcome, Outcome::Success);
+    assert_confirmed_contract(
+        "remote_remove",
+        &world.root,
+        REMOTE_SCHEMA,
+        &secret,
+        &removed,
+    );
+
+    let noop = world.service.prepare(&remove());
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_confirmed_contract(
+        "remote_remove_preview_noop",
+        &world.root,
+        REMOTE_REMOVAL_SCHEMA,
+        &secret,
+        &noop,
+    );
 }

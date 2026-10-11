@@ -134,6 +134,16 @@ pub(crate) struct ObservationDigest {
 }
 
 impl ObservationDigest {
+    /// What a preview of `command` observed, for a command that reads
+    /// no identity: `state` is the digest of the state it changes, and
+    /// the other half is the constant `Observation::no_identity`.
+    pub(crate) fn of_state(command: &str, state: String) -> Self {
+        Self {
+            state,
+            unchanging: Observation::no_identity(command),
+        }
+    }
+
     /// The digest as a confirmation record holds it.
     pub(crate) fn to_stored(&self) -> String {
         format!("{}{}", self.state, self.unchanging)

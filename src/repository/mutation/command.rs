@@ -47,6 +47,7 @@ commands! {
     KeyRemove => "key remove",
     RepoCreate => "repo create",
     RepoEnable => "repo enable",
+    RemoteRemove => "remote remove",
 }
 
 impl Command {
@@ -75,7 +76,8 @@ impl Command {
             | Self::IndexRebuild
             | Self::KeyGenerate
             | Self::RepoCreate
-            | Self::RepoEnable => true,
+            | Self::RepoEnable
+            | Self::RemoteRemove => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
         }
     }
@@ -102,7 +104,8 @@ impl Command {
             | Self::KeyClear
             | Self::KeyRemove
             | Self::RepoCreate
-            | Self::RepoEnable => false,
+            | Self::RepoEnable
+            | Self::RemoteRemove => false,
         }
     }
 
@@ -127,7 +130,8 @@ impl Command {
             | Self::KeySelect
             | Self::KeyClear
             | Self::KeyRemove
-            | Self::RepoEnable => false,
+            | Self::RepoEnable
+            | Self::RemoteRemove => false,
         }
     }
 
@@ -138,7 +142,7 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
-            Self::RepoCreate | Self::RepoEnable => true,
+            Self::RepoCreate | Self::RepoEnable | Self::RemoteRemove => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -184,14 +188,18 @@ mod tests {
         assert_eq!(Command::KeyRemove.name(), "key remove");
         assert_eq!(Command::RepoCreate.name(), "repo create");
         assert_eq!(Command::RepoEnable.name(), "repo enable");
+        assert_eq!(Command::RemoteRemove.name(), "remote remove");
     }
 
     #[test]
-    fn only_creating_and_enabling_a_repository_need_confirmation() {
+    fn the_commands_whose_caller_must_first_be_shown_need_confirmation() {
         for command in Command::ALL {
             assert_eq!(
                 command.needs_confirmation(),
-                matches!(command, Command::RepoCreate | Command::RepoEnable),
+                matches!(
+                    command,
+                    Command::RepoCreate | Command::RepoEnable | Command::RemoteRemove
+                ),
                 "{command:?}"
             );
         }

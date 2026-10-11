@@ -1,4 +1,4 @@
-//! `remote add` and `remote select`.
+//! `remote add`, `remote select` and `remote remove`.
 //!
 //! `remote add` changes the repository's own Git configuration. A remote
 //! is no canonical content and no commit, so no effect shows it: every
@@ -22,20 +22,26 @@ use crate::{
 use super::{
     super::{
         super::{
-            AddRemoteRequest, ExpectedPathObservation, OperationFamily, RemoteChange,
-            RemoteOutcome, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, SetPublicationRemoteRequest, owned_file_bytes,
+            AddRemoteRequest, ConfigurationInspection, ExpectedPathObservation, OperationFamily,
+            RemoteChange, RemoteOutcome, RemoveRemoteRequest, RepositoryError, RepositoryErrorKind,
+            RepositoryOperation, RepositoryService, SetPublicationRemoteRequest, owned_file_bytes,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow, PendingOperation},
+            remote::state::PollingPolicy,
         },
         command::Command,
-        dto::{MutationDataDto, RemoteMutationDto},
+        dto::{
+            MutationDataDto, PreviewDetailsDto, PreviewEffect, RemoteMutationDto,
+            RemoteRemovalPreviewDto,
+        },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
+        observe::{Observation, ObservationDigest},
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing, resolve_root, save,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Previewed, Ran, Standing, lost_refusal, refused, resolve_root, save,
 };
 
 /// The input of `remote add`: the remote's name and its location, which
@@ -587,5 +593,554 @@ impl Binding for RemoteSelectBinding {
             Ok(before) => save::rerun(self, call.service, accepted, before),
             Err(ran) => ran,
         }
+    }
+}
+
+/// The input of `remote remove`: the remote to take out of the
+/// repository's own Git configuration.
+#[derive(Clone)]
+pub struct RemoteRemoveInput {
+    pub root: PathBuf,
+    pub name: String,
+}
+
+/// `remote remove`. It needs confirmation.
+///
+/// **What its preview covers.** Whether the repository has the remote,
+/// and where it fetches from and pushes to; whether it is the publication
+/// remote; whether the repository holds tracking references of it and
+/// branches that follow it, which Git removes with it; and the
+/// repository's polling policy, with the remote polling observes. The
+/// command reads no identity.
+///
+/// **A row that ended without a checkpoint step** says nothing here, as
+/// for `remote add`: `remove_remote` records `remote_changed` when it
+/// removed the remote, and completes a row with no step both when it
+/// found no such remote and when it refused to remove the publication
+/// remote.
+pub(crate) struct RemoteRemoveBinding {
+    root: PathBuf,
+    name: String,
+}
+
+impl From<RemoteRemoveInput> for RemoteRemoveBinding {
+    fn from(input: RemoteRemoveInput) -> Self {
+        // Every field is named: one added to the input does not compile
+        // until it is taken into the binding or left out here.
+        let RemoteRemoveInput { root, name } = input;
+        Self { root, name }
+    }
+}
+
+/// A remote as the repository's configuration has it.
+struct Configured {
+    /// The locations as Git holds them, credentials and all. They are fed
+    /// to the observation's digest and go nowhere else.
+    fetch: Option<String>,
+    push: Option<String>,
+    /// The locations as the remote list gives them: redacted. `None` for
+    /// a remote that list leaves out.
+    listed: Option<(String, String)>,
+}
+
+/// What a preview of `remote remove` covers, at `root`.
+struct Removal {
+    root: PathBuf,
+    /// `None` when the repository has no remote of the name.
+    remote: Option<Configured>,
+    /// Whether the remote is the publication remote.
+    selected: bool,
+    /// Whether any reference is under `refs/remotes/<name>/`.
+    tracking_refs: bool,
+    /// Whether any local branch has the remote as its upstream's.
+    upstreams: bool,
+    polling: Option<PollingPolicy>,
+}
+
+impl Removal {
+    /// Whether polling observes the remote.
+    fn polling_affected(&self, name: &str) -> bool {
+        self.polling
+            .as_ref()
+            .is_some_and(|polling| polling.remote_name.as_deref() == Some(name))
+    }
+}
+
+/// A Git error met while observing. It is dropped: its text can hold a
+/// location.
+fn unreadable(_: git2::Error) -> Answer {
+    Answer::stopped(ResultCode::RepositoryInaccessible)
+}
+
+impl RemoteRemoveBinding {
+    /// What the command reports of its remote: its name. A removal gives
+    /// no location.
+    fn data(&self) -> MutationDataDto {
+        MutationDataDto::Remote(RemoteMutationDto {
+            name: Some(self.name.clone()),
+            location: None,
+        })
+    }
+
+    fn answer(&self, code: ResultCode, local_change: bool) -> Answer {
+        Answer {
+            local_change,
+            ..Answer::stopped(code).with_data(self.data())
+        }
+    }
+
+    /// A name that cannot be a remote's is refused before anything is
+    /// read: the domain operation would report it as a Git failure.
+    fn validate(&self) -> Result<(), Answer> {
+        let Self { root: _, name } = self;
+        if is_remote_name(name) {
+            Ok(())
+        } else {
+            Err(self.answer(ResultCode::InvalidRemote, false))
+        }
+    }
+
+    /// Whether the repository at `root` has a remote of the name. `Err`
+    /// when Git could not be read.
+    fn in_place(&self, root: &Path) -> Result<bool, ()> {
+        let repository = git2::Repository::open(root).map_err(|_| ())?;
+        match repository.find_remote(&self.name) {
+            Ok(_) => Ok(true),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Reads what a preview covers. Nothing is written and no lease is
+    /// taken. An `Err` is a root the command cannot work at, or a read
+    /// that failed.
+    fn observe(&self, service: &RepositoryService) -> Result<Removal, Answer> {
+        let resolved = resolve_root(service, &self.root)?;
+        let root = resolved.root().to_owned();
+        let repository = git2::Repository::open(&root).map_err(unreadable)?;
+        let remote = match repository.find_remote(&self.name) {
+            Ok(remote) => {
+                let listed = service
+                    .list_remotes_redacted(&resolved)
+                    .map_err(|error| Answer::of_read(&error))?
+                    .items
+                    .into_iter()
+                    .find(|listed| listed.name == self.name)
+                    .map(|listed| (listed.fetch_location, listed.push_location));
+                Some(Configured {
+                    fetch: remote.url().map(str::to_owned),
+                    push: remote.pushurl().or(remote.url()).map(str::to_owned),
+                    listed,
+                })
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(unreadable(error)),
+        };
+        // As the domain operation reads it: the configuration file in
+        // the repository's own worktree.
+        let selected = match read_configuration_for(&root, RepositoryOperation::RemoveRemote)
+            .map_err(refused)?
+        {
+            ConfigurationInspection::Valid(configuration) => {
+                configuration.publication_remote.as_deref() == Some(self.name.as_str())
+            }
+            ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => false,
+        };
+        let tracking_refs = repository
+            .references_glob(&format!("refs/remotes/{}/*", self.name))
+            .map_err(unreadable)?
+            .next()
+            .is_some();
+        let config = repository
+            .config()
+            .and_then(|mut config| config.snapshot())
+            .map_err(unreadable)?;
+        let mut upstreams = false;
+        let mut entries = config
+            .entries(Some("^branch\\..*\\.remote$"))
+            .map_err(unreadable)?;
+        while let Some(entry) = entries.next() {
+            if entry.map_err(unreadable)?.value() == Some(self.name.as_str()) {
+                upstreams = true;
+            }
+        }
+        let polling = service
+            .polling_policy(&root)
+            .map_err(|error| Answer::of_read(&error))?;
+        Ok(Removal {
+            root,
+            remote,
+            selected,
+            tracking_refs,
+            upstreams,
+            polling,
+        })
+    }
+
+    /// The digest of what was observed: what a confirmation stores, and
+    /// what a later observation is compared with.
+    fn digest(&self, removal: &Removal) -> ObservationDigest {
+        let Removal {
+            // The request's scope.
+            root: _,
+            remote,
+            selected,
+            tracking_refs,
+            upstreams,
+            polling,
+        } = removal;
+        let optional = |observation: Observation, name: &str, value: Option<&str>| match value {
+            Some(value) => observation.text(name, value),
+            None => observation.absent(name),
+        };
+        let flag = |observation: Observation, name: &str, value: bool| {
+            observation.text(name, if value { "yes" } else { "no" })
+        };
+        let command = Command::RemoteRemove.name();
+        let observation = Observation::of(command);
+        let observation = match remote {
+            Some(Configured {
+                fetch,
+                push,
+                // The redacted form of the same two.
+                listed: _,
+            }) => {
+                let observation = observation.text("remote", "configured");
+                let observation = optional(observation, "fetch", fetch.as_deref());
+                optional(observation, "push", push.as_deref())
+            }
+            None => observation.absent("remote").absent("fetch").absent("push"),
+        };
+        let observation = flag(observation, "selected", *selected);
+        let observation = flag(observation, "tracking_refs", *tracking_refs);
+        let observation = flag(observation, "upstreams", *upstreams);
+        let observation = match polling {
+            Some(PollingPolicy {
+                enabled,
+                paused,
+                interval_seconds,
+                remote_name,
+            }) => {
+                let observation = flag(observation, "polling_enabled", *enabled);
+                let observation = flag(observation, "polling_paused", *paused)
+                    .text("polling_interval", &interval_seconds.to_string());
+                optional(observation, "polling_remote", remote_name.as_deref())
+            }
+            None => observation
+                .absent("polling_enabled")
+                .absent("polling_paused")
+                .absent("polling_interval")
+                .absent("polling_remote"),
+        };
+        ObservationDigest::of_state(command, observation.finish())
+    }
+
+    /// The checks the domain operation would end the request for, in the
+    /// order it makes them, on what was observed. An `Err` is a
+    /// rejection, or a no-op when the repository has no such remote.
+    fn check(&self, removal: &Removal) -> Result<(), Answer> {
+        if removal.selected {
+            return Err(self.answer(ResultCode::PublicationRemoteInUse, false));
+        }
+        if removal.remote.is_none() {
+            return Err(self.answer(ResultCode::AlreadyApplied, false));
+        }
+        Ok(())
+    }
+
+    /// Whether the request's operation removed the remote and has not
+    /// ended: its row is pending, and holds the step that says so or the
+    /// remote is gone. A call that removed the remote and could not
+    /// record the step leaves the second.
+    fn removed_and_unfinished(&self, root: &Path, journal: Option<&JournalRow>) -> bool {
+        changed_and_unfinished(journal)
+            || (matches!(
+                journal,
+                Some(JournalRow::Pending(PendingOperation::Local {
+                    state: _,
+                    step: None
+                }))
+            ) && self.in_place(root) == Ok(false))
+    }
+
+    /// The one domain call, under the recorded operation ID, and what it
+    /// came to.
+    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        let root = accepted.root();
+        let result = service.remove_remote(RemoveRemoteRequest {
+            root: root.clone(),
+            name: self.name.clone(),
+            operation_id: accepted.operation_id,
+        });
+        match result {
+            Ok(outcome) => {
+                let code = outcome::remote_outcome_code(&outcome);
+                let (removed, standing) = match outcome {
+                    RemoteOutcome::Changed => (true, Standing::Final),
+                    RemoteOutcome::NoChange => (false, Standing::Final),
+                    RemoteOutcome::IndexPending { authoritative } => (
+                        match authoritative {
+                            RemoteChange::Changed => true,
+                            RemoteChange::NoChange => false,
+                        },
+                        Standing::Owed,
+                    ),
+                };
+                Ran {
+                    answer: self.answer(code, removed),
+                    standing,
+                }
+            }
+            Err(error) => {
+                // Only the kind is read: the error's text can hold a
+                // location.
+                let code = outcome::repository_error_code(error.kind);
+                let journal = accepted.journal_row(service);
+                Ran {
+                    answer: self.answer(code, self.removed_and_unfinished(&root, journal.as_ref())),
+                    standing: Standing::Stopped { journal },
+                }
+            }
+        }
+    }
+
+    /// A row that has completed: what the request is answered with, and
+    /// what becomes of its record. No domain call is made.
+    ///
+    /// That the row has completed does not show the remote to be gone:
+    /// `remove_remote` also completes its row when it refuses to remove
+    /// the publication remote.
+    ///
+    /// - The row recorded `remote_changed`: this operation removed the
+    ///   remote. The request is finished with `ok`, whatever has been
+    ///   done since, a remote of the same name added again among it.
+    /// - Otherwise Git is asked. No such remote is there: the request's
+    ///   end state holds and the change was not its own, a no-op. One is
+    ///   there: the operation ended having done nothing, and that answer
+    ///   was lost; see `lost_refusal`.
+    fn ended(&self, call: &CallContext<'_>, accepted: &Accepted, journal: JournalRow) -> Ran {
+        // What cannot be read answers the call and leaves the record as
+        // it is.
+        let unread = |answer: Answer, journal| Ran {
+            answer: answer.with_data(self.data()),
+            standing: Standing::NotRun { journal },
+        };
+        let step = match call
+            .service
+            .completed_local_step(&accepted.scope, accepted.operation_id)
+        {
+            Ok(step) => step,
+            Err(error) => return unread(Answer::of_read(&error), journal),
+        };
+        if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+            return Ran {
+                answer: self.answer(ResultCode::Ok, true),
+                standing: Standing::Final,
+            };
+        }
+        match self.in_place(&accepted.root()) {
+            Ok(false) => Ran {
+                answer: self.answer(ResultCode::AlreadyApplied, false),
+                standing: Standing::Final,
+            },
+            Ok(true) => Ran {
+                answer: lost_refusal(
+                    self.observe(call.service).and_then(|removal| {
+                        self.check(&removal)?;
+                        Ok(self.digest(&removal))
+                    }),
+                    call.previewed().as_ref(),
+                )
+                .with_data(self.data()),
+                standing: Standing::Stopped {
+                    journal: Some(journal),
+                },
+            },
+            Err(()) => unread(Answer::stopped(ResultCode::RepositoryInaccessible), journal),
+        }
+    }
+}
+
+impl Binding for RemoteRemoveBinding {
+    fn command(&self) -> Command {
+        Command::RemoteRemove
+    }
+
+    /// `remove_remote` records no checkpoint step, and completes a row
+    /// with no step of its work both for a remote it did not find and for
+    /// one it refused to remove. The record is kept, and `reenter`
+    /// answers from the step the row holds and from what Git has.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::SaysNothing
+    }
+
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
+    }
+
+    fn target(&self) -> String {
+        self.name.clone()
+    }
+
+    fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
+        let Self {
+            // What the digest is begun with: the repository and the
+            // target. The request holds nothing else.
+            root: _,
+            name: _,
+        } = self;
+        builder
+    }
+
+    fn scope(&self, repository: Option<String>, _position: Option<&Position>) -> Scope {
+        Scope {
+            repository,
+            remote: Some(self.name.clone()),
+            ..Scope::default()
+        }
+    }
+
+    /// Validates the input and observes. No check is made of what the
+    /// preview covers: the boundary compares the digest with the
+    /// confirmation's, and refuses a request whose preview is stale as
+    /// `external_change`, whatever it is that has changed. A remote that
+    /// was selected for publication since the preview is one such change.
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        self.validate()?;
+        let removal = self
+            .observe(call.service)
+            .map_err(|answer| answer.with_data(self.data()))?;
+        Ok(Prepared {
+            family: Some(OperationFamily::Local),
+            // Nothing is committed, so there is no branch to bound.
+            position: Position {
+                base_ref: None,
+                base_oid: None,
+            },
+            expected: None,
+            observation: Some(self.digest(&removal).to_stored()),
+        })
+    }
+
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        self.call(call.service, accepted)
+    }
+
+    /// In order:
+    ///
+    /// 1. A row that has completed is answered from the step it holds
+    ///    and from what Git has, with no domain call; see `ended`.
+    /// 2. A row that holds a step removed the remote. The request's own
+    ///    work has changed what would be observed, so nothing is
+    ///    compared, and the confirmation is the request's however old it
+    ///    is: the domain call completes the row and its hand-off.
+    /// 3. With no step recorded, nothing of the request's is known to be
+    ///    done. When the repository has no such remote, the request's
+    ///    end state holds: with no row it is a no-op and is finished,
+    ///    and a row that is pending is the domain's to end. Otherwise
+    ///    what was previewed is observed again and compared: a
+    ///    difference is `external_change`, and nothing is removed.
+    fn reenter(
+        &mut self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Entered, Ran> {
+        let not_run = |answer: Answer, journal: JournalRow| Ran {
+            answer: answer.with_data(self.data()),
+            standing: Standing::NotRun { journal },
+        };
+        let step = match &journal {
+            JournalRow::Absent => None,
+            JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.clone(),
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: false,
+                checkpointed: _,
+            } => return Err(self.ended(call, accepted, journal)),
+            // No local operation is in another journal, ends in another
+            // way or owes work once it has completed. Nothing is run or
+            // settled on a row that says so.
+            JournalRow::Pending(
+                PendingOperation::Remote { phase: _ } | PendingOperation::KeyMaterial { phase: _ },
+            )
+            | JournalRow::Final {
+                kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                owes_work: _,
+                checkpointed: _,
+            } => {
+                return Err(not_run(Answer::stopped(ResultCode::InternalError), journal));
+            }
+        };
+        if step.is_some() {
+            return Ok(Entered::Unfinished);
+        }
+        match self.in_place(&accepted.root()) {
+            Ok(true) => {}
+            Ok(false) if journal == JournalRow::Absent => {
+                return Err(Ran {
+                    answer: self.answer(ResultCode::AlreadyApplied, false),
+                    standing: Standing::Final,
+                });
+            }
+            Ok(false) => return Ok(Entered::Unfinished),
+            Err(()) => {
+                return Err(not_run(
+                    Answer::stopped(ResultCode::RepositoryInaccessible),
+                    journal,
+                ));
+            }
+        }
+        let removal = match self.observe(call.service) {
+            Ok(removal) => removal,
+            Err(answer) => return Err(not_run(answer, journal)),
+        };
+        // A request whose record holds no consent that can be read has
+        // none that anything could be compared with: nothing is run.
+        if call.previewed() != Some(self.digest(&removal)) {
+            return Err(not_run(
+                Answer::stopped(ResultCode::ExternalChange),
+                journal,
+            ));
+        }
+        Ok(Entered::Unfinished)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for RemoteRemoveBinding {
+    fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
+        self.validate()?;
+        let removal = self
+            .observe(call.service)
+            .map_err(|answer| answer.with_data(self.data()))?;
+        self.check(&removal)?;
+        let mut effects = vec![PreviewEffect::RemoteRemoved];
+        if removal.tracking_refs {
+            effects.push(PreviewEffect::RemoteTrackingRefsRemoved);
+        }
+        if removal.upstreams {
+            effects.push(PreviewEffect::BranchUpstreamsRemoved);
+        }
+        let listed = removal
+            .remote
+            .as_ref()
+            .and_then(|remote| remote.listed.clone());
+        Ok(Previewed {
+            observation: self.digest(&removal).to_stored(),
+            effects,
+            details: PreviewDetailsDto::RemoteRemoval(RemoteRemovalPreviewDto {
+                root: removal.root.to_string_lossy().into_owned(),
+                name: self.name.clone(),
+                fetch_location: listed.as_ref().map(|(fetch, _)| fetch.clone()),
+                push_location: listed.map(|(_, push)| push),
+                // `check` refused a remote that is selected.
+                publication_affected: removal.selected,
+                polling_affected: removal.polling_affected(&self.name),
+            }),
+        })
     }
 }

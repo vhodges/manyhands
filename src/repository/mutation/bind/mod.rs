@@ -718,8 +718,8 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             Recorded::of(ticket::recorded_effects(record, &accepted))
         }
         // A remote is shown by no effect. Its row says whether it was
-        // added with work remaining.
-        Some(Command::RemoteAdd) => Recorded {
+        // added or removed with work remaining.
+        Some(Command::RemoteAdd | Command::RemoteRemove) => Recorded {
             effects: Effects::not_requested(),
             local_change: remote::changed_and_unfinished(journal.as_ref()),
         },

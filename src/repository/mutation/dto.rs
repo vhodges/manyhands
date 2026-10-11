@@ -67,6 +67,12 @@ contract_enum!(
     /// `worktree_exclusion_written` is the repository's own exclude file,
     /// `.git/info/exclude`, made to ignore the directory Manyhands keeps
     /// its worktrees in.
+    ///
+    /// `remote_removed` is the remote taken out of the repository's own
+    /// Git configuration. With it Git removes the remote's tracking
+    /// references, `remote_tracking_refs_removed`, and the upstream of
+    /// every local branch that follows it, `branch_upstreams_removed`:
+    /// each is listed when the repository has any.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -76,6 +82,9 @@ contract_enum!(
         ConfigurationWritten => "configuration_written",
         InitializationCommitted => "initialization_committed",
         RepositoryRegistered => "repository_registered",
+        RemoteRemoved => "remote_removed",
+        RemoteTrackingRefsRemoved => "remote_tracking_refs_removed",
+        BranchUpstreamsRemoved => "branch_upstreams_removed",
     }
 );
 
@@ -128,6 +137,28 @@ pub struct RepositoryPreviewDto {
 #[serde(untagged)]
 pub enum PreviewDetailsDto {
     Repository(RepositoryPreviewDto),
+    RemoteRemoval(RemoteRemovalPreviewDto),
+}
+
+/// What a preview of `remote remove` shows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteRemovalPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// The remote that will be removed.
+    pub name: String,
+    /// Where the remote fetches from and pushes to, redacted as the
+    /// remote list redacts them: neither is a location to connect to.
+    /// Null for a remote whose location that list does not give.
+    pub fetch_location: Option<String>,
+    pub push_location: Option<String>,
+    /// Whether the remote is the one the repository publishes to. A
+    /// preview is given only of a remote that is not, so this is false:
+    /// the publication remote is cleared before it can be removed.
+    pub publication_affected: bool,
+    /// Whether polling observes this remote: the repository's polling
+    /// state names it, and has nothing to observe once it is removed.
+    pub polling_affected: bool,
 }
 
 /// What `prepare` returns for a command that needs confirmation: what
@@ -218,17 +249,18 @@ impl KeyMutationDto {
     }
 }
 
-/// What `remote add` and `remote select` report about the remote. The
-/// effects of a `remote add` are all `not_requested`: this, with the
-/// outcome, is what says what it did.
+/// What `remote add`, `remote select` and `remote remove` report about
+/// the remote. The effects of a `remote add` and of a `remote remove`
+/// are all `not_requested`: this, with the outcome, is what says what
+/// it did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RemoteMutationDto {
     /// The remote the request names. Null for a `remote select` that
     /// clears the selection.
     pub name: Option<String>,
     /// The location a `remote add` gave the remote, redacted: it is not
-    /// a location to connect to. Null for `remote select`, which names a
-    /// remote and gives no location.
+    /// a location to connect to. Null for `remote select` and
+    /// `remote remove`, which name a remote and give no location.
     pub location: Option<String>,
 }
 
@@ -328,7 +360,7 @@ impl MutationDataDto {
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
-            Command::RemoteAdd | Command::RemoteSelect => {
+            Command::RemoteAdd | Command::RemoteSelect | Command::RemoteRemove => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
             }
             Command::KeyGenerate

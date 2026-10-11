@@ -4801,3 +4801,42 @@ impl RemoteObservationOutcome {
         &self.snapshot
     }
 }
+
+/// What a registration holds of polling, as the preview of a remote's
+/// removal reads it: the policy, and the remote polling observes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PollingPolicy {
+    pub(crate) enabled: bool,
+    pub(crate) paused: bool,
+    pub(crate) interval_seconds: i64,
+    /// The remote the polling state names, which is the publication
+    /// remote as the index last saw the configuration. `None` when it
+    /// names none.
+    pub(crate) remote_name: Option<String>,
+}
+
+/// The polling policy of the registration whose root is `root_path`.
+/// `None` when no registration has that root, or it has no polling row.
+/// Only these four values are read.
+pub(in super::super) fn select_polling_policy(
+    connection: &Connection,
+    root_path: &str,
+) -> rusqlite::Result<Option<PollingPolicy>> {
+    connection
+        .query_row(
+            "SELECT polling.enabled,polling.paused,polling.interval_seconds,polling.remote_name
+               FROM remote_polling_state AS polling
+               JOIN repositories ON repositories.id=polling.repository_id
+              WHERE repositories.root_path=?1",
+            [root_path],
+            |row| {
+                Ok(PollingPolicy {
+                    enabled: row.get(0)?,
+                    paused: row.get(1)?,
+                    interval_seconds: row.get(2)?,
+                    remote_name: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+}

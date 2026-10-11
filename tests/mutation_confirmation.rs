@@ -1,6 +1,8 @@
 //! Two-phase confirmation: `prepare` gives a preview and a confirmation,
 //! and `execute` runs a command that needs one only for a request that
-//! presents it. Driven through `repo create` and `repo enable`.
+//! presents it. Driven through `repo create` and `repo enable`, and
+//! then through the three confirmed commands of administration:
+//! `remote remove`, `repo remove` and `key delete`.
 
 use std::{
     collections::BTreeMap,
@@ -14,11 +16,13 @@ use manyhands::{
     repository::{
         CONFIRMATION_LIFETIME_SECONDS, CommitIdentity, FailurePoint, IndexRefreshInput, LeaseKind,
         Mutation, MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
-        PreviewIdentitySource, RepoCreateInput, RepoEnableInput, RepositoryPreviewDto,
-        RepositoryService, RequestId, RequestState, TicketCreateInput,
-        request_store::RequestRecord,
+        PreviewIdentitySource, RemoteRemovalPreviewDto, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepositoryPreviewDto, RepositoryService, RequestId,
+        RequestState, TicketCreateInput, request_store::RequestRecord,
     },
-    results::{CheckpointEffect, DiscoveryEffect, Envelope, Outcome, ResultCode, WriteEffect},
+    results::{
+        CheckpointEffect, DiscoveryEffect, Effects, Envelope, Outcome, ResultCode, WriteEffect,
+    },
 };
 
 mod support;
@@ -34,6 +38,31 @@ use support::{
 };
 
 const PREVIEW_SCHEMA: &str = "preview.schema.json";
+const REMOTE_REMOVAL_SCHEMA: &str = "remote_removal_preview.schema.json";
+
+/// The published schema of the preview `command` gives.
+fn preview_schema(command: &str) -> &'static str {
+    match command {
+        "remote remove" => REMOTE_REMOVAL_SCHEMA,
+        _ => PREVIEW_SCHEMA,
+    }
+}
+
+/// `prepare`, with its envelope checked against the published contract.
+fn prepare_with(service: &RepositoryService, mutation: &Mutation) -> Envelope<PreviewDto> {
+    let envelope = service.prepare(mutation);
+    let value = serde_json::to_value(&envelope).unwrap();
+    schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
+    golden::assert_registered_recovery("prepare", &value);
+    assert_eq!(envelope.command, mutation.command());
+    // A preview is of no request.
+    assert_eq!(envelope.request_id, None);
+    assert_eq!(envelope.operation_id, None);
+    if !value["data"].is_null() {
+        schema::check_published(preview_schema(mutation.command()), &value["data"]).unwrap();
+    }
+    envelope
+}
 
 /// When the scenarios begin.
 const START: i64 = 1_700_000_000;
@@ -126,18 +155,7 @@ impl Desk {
     /// `prepare`, with its envelope checked against the published
     /// contract.
     fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
-        let envelope = self.service.prepare(mutation);
-        let value = serde_json::to_value(&envelope).unwrap();
-        schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
-        golden::assert_registered_recovery("prepare", &value);
-        assert_eq!(envelope.command, mutation.command());
-        // A preview is of no request.
-        assert_eq!(envelope.request_id, None);
-        assert_eq!(envelope.operation_id, None);
-        if !value["data"].is_null() {
-            schema::check_published(PREVIEW_SCHEMA, &value["data"]).unwrap();
-        }
-        envelope
+        prepare_with(&self.service, mutation)
     }
 
     /// A preview that is given, and the confirmation it gives.
@@ -315,8 +333,10 @@ fn initializations(root: &Path) -> usize {
 }
 
 fn repository_preview(preview: &PreviewDto) -> &RepositoryPreviewDto {
-    let PreviewDetailsDto::Repository(details) = &preview.details;
-    details
+    match &preview.details {
+        PreviewDetailsDto::Repository(details) => details,
+        other => panic!("not a preview of a repository's creation: {other:?}"),
+    }
 }
 
 fn effects(preview: &PreviewDto) -> Vec<PreviewEffect> {
@@ -2852,4 +2872,621 @@ fn no_failure_of_these_commands_carries_what_they_read() {
         );
         desk.assert_nothing_left(REQUEST_1);
     }
+}
+
+// ---------------------------------------------------------------------
+// The confirmed commands of administration
+// ---------------------------------------------------------------------
+
+/// An enabled, registered repository with committed, indexed items, and
+/// a service over it that is timed by a clock the test sets.
+struct Home {
+    world: World,
+    clock: Arc<TestClock>,
+}
+
+impl Home {
+    fn new() -> Self {
+        let clock = TestClock::at(START);
+        let world = World::with_service(|data| mutation::service_with_clock(data, &clock));
+        Self { world, clock }
+    }
+
+    /// Another service over the same data, as a new process would open.
+    fn reopen(&mut self) {
+        self.world.service = mutation::service_with_clock(self.world.data.path(), &self.clock);
+    }
+
+    /// Another service over the same data that fails once at `point`.
+    fn fail_once_at(&mut self, point: FailurePoint) {
+        self.world.service = RepositoryService::open_at_with_failure_point_for_testing(
+            self.world.data.path(),
+            point,
+        )
+        .unwrap()
+        .with_clock_for_testing(self.clock.clone());
+    }
+
+    fn service(&self) -> &RepositoryService {
+        &self.world.service
+    }
+
+    fn root(&self) -> &Path {
+        &self.world.root
+    }
+
+    fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+        prepare_with(self.service(), mutation)
+    }
+
+    /// A preview that is given, and the confirmation it gives.
+    fn preview(&self, mutation: &Mutation) -> (String, PreviewDto) {
+        let envelope = self.prepare(mutation);
+        assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+        assert_eq!(envelope.outcome, Outcome::Success);
+        let preview = envelope.data.expect("a preview");
+        (preview.confirmation_id.clone(), preview)
+    }
+
+    fn execute(
+        &self,
+        request_id: &str,
+        confirmation: &str,
+        mutation: Mutation,
+    ) -> Envelope<MutationDataDto> {
+        execute_confirmed(self.service(), request_id, confirmation, mutation)
+    }
+
+    /// The same request again, presenting nothing: its record holds its
+    /// consent.
+    fn retry(&self, request_id: &str, mutation: Mutation) -> Envelope<MutationDataDto> {
+        execute_with(self.service(), request_id, mutation)
+    }
+
+    fn state(&self, request_id: &str) -> Option<RequestState> {
+        self.world.record(request_id).map(|record| record.state)
+    }
+
+    fn count(&self, query: &str) -> i64 {
+        items::index(self.world.data.path())
+            .query_row(query, [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn confirmation_rows(&self) -> i64 {
+        self.count("SELECT COUNT(*) FROM confirmation_records")
+    }
+
+    /// Nothing is left of a request that was rejected: no record, no
+    /// confirmation held, and no operation in flight.
+    fn assert_nothing_left(&self, request_id: &str) {
+        assert_eq!(self.world.record(request_id), None, "a request record");
+        assert_eq!(
+            self.count(
+                "SELECT COUNT(*) FROM confirmation_records WHERE accepted_by_request IS NOT NULL"
+            ),
+            0,
+            "a confirmation held"
+        );
+        assert_eq!(
+            self.world.pending_journal_rows(),
+            0,
+            "an operation in flight"
+        );
+    }
+
+    fn git(&self) -> git2::Repository {
+        git2::Repository::open(self.root()).unwrap()
+    }
+
+    /// Adds a remote by hand, as `git remote add` would.
+    fn add_remote(&self, name: &str, url: &str) {
+        self.git().remote(name, url).unwrap();
+    }
+
+    fn remote_url(&self, name: &str) -> Option<String> {
+        self.git()
+            .find_remote(name)
+            .ok()
+            .and_then(|remote| remote.url().map(str::to_owned))
+    }
+
+    fn remove_remote(&self, name: &str) -> Mutation {
+        Mutation::RemoteRemove(RemoteRemoveInput {
+            root: self.root().to_owned(),
+            name: name.to_owned(),
+        })
+    }
+
+    /// Selects the publication remote, or clears the selection, as a
+    /// request of its own would.
+    fn select(&self, request_id: &str, name: Option<&str>) {
+        select_through(self.service(), request_id, self.root(), name);
+    }
+}
+
+fn select_through(service: &RepositoryService, request_id: &str, root: &Path, name: Option<&str>) {
+    let selected = execute_with(
+        service,
+        request_id,
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: root.to_owned(),
+            name: name.map(str::to_owned),
+        }),
+    );
+    assert_eq!(selected.outcome, Outcome::Success, "{}", selected.message);
+}
+
+/// A location for a remote that can be published to.
+const BACKUP: &str = "git@example.invalid:team/backup.git";
+
+fn remote_removal(preview: &PreviewDto) -> &RemoteRemovalPreviewDto {
+    match &preview.details {
+        PreviewDetailsDto::RemoteRemoval(details) => details,
+        other => panic!("not a preview of a remote's removal: {other:?}"),
+    }
+}
+
+/// A request of administration that did what it was asked: a success
+/// that no effect shows.
+fn assert_done(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+    assert_eq!(envelope.outcome, Outcome::Success);
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert!(envelope.recovery.is_empty());
+}
+
+/// The same for a request whose end state held already.
+fn assert_noop(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        envelope.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        envelope.message
+    );
+    assert_eq!(envelope.outcome, Outcome::Noop);
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert!(envelope.recovery.is_empty());
+}
+
+// ---------------------------------------------------------------------
+// `remote remove`
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_preview_of_remote_remove_names_the_remote_and_says_whether_polling_is_affected() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let before = tree(home.root());
+
+    let (_, preview) = home.preview(&home.remove_remote("backup"));
+
+    assert_eq!(tree(home.root()), before);
+    assert_eq!(home.confirmation_rows(), 1);
+    assert_eq!(home.world.request_rows(), 0);
+    assert_eq!(preview.command, "remote remove");
+    assert_eq!(preview.scope.remote.as_deref(), Some("backup"));
+    assert_eq!(
+        preview.scope.repository.as_deref(),
+        Some(home.root().to_str().unwrap())
+    );
+    assert_eq!(effects(&preview), [PreviewEffect::RemoteRemoved]);
+    let details = remote_removal(&preview);
+    assert_eq!(details.root, home.root().to_str().unwrap());
+    assert_eq!(details.name, "backup");
+    assert_eq!(details.fetch_location.as_deref(), Some(BACKUP));
+    assert_eq!(details.push_location.as_deref(), Some(BACKUP));
+    assert!(!details.publication_affected);
+    assert!(!details.polling_affected);
+
+    // The repository's polling state still names the remote: the index
+    // has not caught up with a selection that was cleared.
+    let named = items::index(home.world.data.path())
+        .execute(
+            "UPDATE remote_polling_state SET remote_name='backup', primary_branch='main'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(named, 1, "the registration has a polling row");
+    let (_, preview) = home.preview(&home.remove_remote("backup"));
+    assert!(remote_removal(&preview).polling_affected);
+    assert!(!remote_removal(&preview).publication_affected);
+}
+
+/// Git removes a remote's tracking references and the upstream of every
+/// branch that follows it. The preview says so when there are any, and
+/// they are what the removal removes.
+#[test]
+fn a_preview_of_remote_remove_lists_what_git_removes_with_the_remote() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/backup/main", head, false, "test")
+        .unwrap();
+    let mut config = repository.config().unwrap();
+    config.set_str("branch.main.remote", "backup").unwrap();
+    config
+        .set_str("branch.main.merge", "refs/heads/main")
+        .unwrap();
+    let files = tree(home.root())
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with(".git"))
+        .collect::<Vec<_>>();
+
+    let (confirmation, preview) = home.preview(&home.remove_remote("backup"));
+
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::RemoteRemoved,
+            PreviewEffect::RemoteTrackingRefsRemoved,
+            PreviewEffect::BranchUpstreamsRemoved,
+        ]
+    );
+
+    let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_done(&removed);
+    let repository = home.git();
+    assert!(repository.find_remote("backup").is_err());
+    assert!(
+        repository
+            .find_reference("refs/remotes/backup/main")
+            .is_err()
+    );
+    assert!(
+        repository
+            .config()
+            .unwrap()
+            .get_string("branch.main.remote")
+            .is_err()
+    );
+    // Nothing else: the branch, its commit and every file are as they
+    // were.
+    assert_eq!(
+        repository.head().unwrap().peel_to_commit().unwrap().id(),
+        head
+    );
+    assert_eq!(
+        tree(home.root())
+            .into_iter()
+            .filter(|(path, _)| !path.starts_with(".git"))
+            .collect::<Vec<_>>(),
+        files
+    );
+}
+
+/// A tracking reference that appears after the preview is something the
+/// removal would remove and the preview did not name.
+#[test]
+fn what_git_would_remove_and_the_preview_did_not_name_is_external_change() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, preview) = home.preview(&home.remove_remote("backup"));
+    assert_eq!(effects(&preview), [PreviewEffect::RemoteRemoved]);
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+    repository
+        .reference("refs/remotes/backup/main", head, false, "test")
+        .unwrap();
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    home.assert_nothing_left(REQUEST_1);
+    assert!(
+        repository
+            .find_reference("refs/remotes/backup/main")
+            .is_ok()
+    );
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+}
+
+#[test]
+fn prepare_for_the_publication_remote_is_publication_remote_in_use_with_no_confirmation() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    home.select(REQUEST_3, Some("backup"));
+
+    let refused = home.prepare(&home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::PublicationRemoteInUse);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(refused.data, None);
+    assert!(refused.recovery.is_empty());
+    assert_eq!(home.confirmation_rows(), 0);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+}
+
+#[test]
+fn prepare_for_a_remote_the_repository_does_not_have_is_a_no_op_with_no_confirmation() {
+    let home = Home::new();
+
+    let noop = home.prepare(&home.remove_remote("backup"));
+    assert_eq!(noop.code, ResultCode::AlreadyApplied);
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_eq!(noop.data, None);
+
+    let invalid = home.prepare(&home.remove_remote("not a name"));
+    assert_eq!(invalid.code, ResultCode::InvalidRemote);
+    assert_eq!(invalid.data, None);
+    assert_eq!(home.confirmation_rows(), 0);
+}
+
+#[test]
+fn selecting_the_remote_between_preview_and_confirmation_is_external_change() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.select(REQUEST_3, Some("backup"));
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+    // The new preview says what is in the way.
+    let prepared = home.prepare(&home.remove_remote("backup"));
+    assert_eq!(prepared.code, ResultCode::PublicationRemoteInUse);
+}
+
+#[test]
+fn a_confirmed_remote_removal_shows_no_effect_and_is_replayed_and_not_reused() {
+    let home = Home::new();
+    home.add_remote("backup", BACKUP);
+    home.add_remote("other", "git@example.invalid:team/other.git");
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+
+    let required = home.retry(REQUEST_1, home.remove_remote("backup"));
+    assert_refused(
+        &required,
+        ResultCode::ConfirmationRequired,
+        &["request.prepare"],
+    );
+    let other = home.execute(REQUEST_1, &confirmation, home.remove_remote("other"));
+    assert_refused(&other, ResultCode::ConfirmationMismatch, &[]);
+
+    let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_done(&removed);
+    let data = mutation::remote_data(&removed);
+    assert_eq!(data.name.as_deref(), Some("backup"));
+    assert_eq!(data.location, None);
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.world.pending_journal_rows(), 0);
+
+    // At any later time, whatever the retry presents and whatever has
+    // been done since: the same result, and nothing runs.
+    home.clock.set(START + 86_400);
+    home.add_remote("backup", BACKUP);
+    assert_eq!(
+        home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")),
+        removed
+    );
+    assert_eq!(home.retry(REQUEST_1, home.remove_remote("backup")), removed);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+
+    // The same request ID with another remote is another request.
+    let changed = home.retry(REQUEST_1, home.remove_remote("other"));
+    assert_eq!(changed.code, ResultCode::RequestMismatch);
+    assert_eq!(changed.effects, Effects::not_requested());
+    assert!(home.remote_url("other").is_some());
+    // And the confirmation is used.
+    let reused = home.execute(REQUEST_2, &confirmation, home.remove_remote("backup"));
+    assert_refused(&reused, ResultCode::ConfirmationUsed, &[]);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+}
+
+/// The remote is deleted and its step recorded, and the call fails
+/// before its operation ends. An hour later, with the state the preview
+/// covered changed by more than the request's own work, the same request
+/// completes: nothing is observed again.
+#[test]
+fn a_removal_interrupted_after_the_remote_is_deleted_is_partial_and_its_retry_completes() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::AfterRemoteMutation);
+
+    let partial = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_eq!(partial.code, ResultCode::InternalError);
+    assert_eq!(partial.outcome, Outcome::Partial);
+    assert_eq!(partial.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&partial), ["request.retry"]);
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    assert_eq!(home.world.pending_journal_rows(), 1);
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    items::index(home.world.data.path())
+        .execute("UPDATE remote_polling_state SET interval_seconds=900", [])
+        .unwrap();
+    let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_done(&finished);
+    assert_eq!(partial.operation_id, finished.operation_id);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.world.pending_journal_rows(), 0);
+    assert_eq!(
+        home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")),
+        finished
+    );
+}
+
+/// The removal completes and its result is lost. Whatever has been done
+/// since, a remote of the same name added among it, the retry is given
+/// the request's result and is not refused.
+#[test]
+fn a_remote_removal_whose_result_was_lost_is_answered_with_its_result() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let lost = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    assert_eq!(home.world.pending_journal_rows(), 0);
+
+    home.reopen();
+    home.clock.set(START + 3600);
+    home.add_remote("backup", "git@example.invalid:team/another.git");
+    let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_done(&answered);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    // Nothing ran: the remote added since is there.
+    assert!(home.remote_url("backup").is_some());
+}
+
+/// A request is accepted and stops before its first effect. The remote
+/// is selected for publication. The retry observes again and is refused:
+/// the consent was to what was shown.
+#[test]
+fn a_retry_of_a_remote_removal_before_any_effect_observes_again() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    let died = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(died.code, ResultCode::InternalError);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    home.select(REQUEST_3, Some("backup"));
+
+    let refused = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(recovery_actions(&refused), ["request.prepare"]);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+    home.assert_nothing_left(REQUEST_1);
+}
+
+/// The same interruption with nothing changed: the retry is honored,
+/// also after the ten minutes.
+#[test]
+fn a_retry_of_a_remote_removal_before_any_effect_runs_when_nothing_has_changed() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    home.clock.set(START + 3600);
+
+    let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_done(&finished);
+    assert_eq!(home.remote_url("backup"), None);
+}
+
+/// The remote is selected for publication after the request is accepted,
+/// so the domain refuses the removal, and that answer is lost. The
+/// domain closed the row it began, so the retry finds no operation of
+/// its own: it observes again, and is told that what was previewed is
+/// not what is there. Nothing is left of the request, and a new preview
+/// says what stands in the way. With the selection cleared again nothing
+/// has changed, and the same request and confirmation remove the remote.
+#[test]
+fn a_lost_refusal_of_a_remote_removal_is_answered_with_what_is_true() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let (data, clock, root) = (
+        home.world.data.path().to_owned(),
+        home.clock.clone(),
+        home.root().to_owned(),
+    );
+    home.service().set_request_hook_for_testing(move || {
+        let other = mutation::service_with_clock(&data, &clock);
+        select_through(&other, REQUEST_3, &root, Some("backup"));
+    });
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+
+    home.reopen();
+    let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_eq!(answered.code, ResultCode::ExternalChange);
+    assert_eq!(answered.outcome, Outcome::Blocked);
+    assert_eq!(recovery_actions(&answered), ["request.prepare"]);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+    assert_eq!(
+        home.prepare(&home.remove_remote("backup")).code,
+        ResultCode::PublicationRemoteInUse
+    );
+
+    home.select(REQUEST_2, None);
+    let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_done(&removed);
+    assert_eq!(home.remote_url("backup"), None);
+}
+
+/// A remote whose location holds a password: it is in no preview, no
+/// confirmation, request or journal row and no envelope, on the path
+/// that fails as on the one that completes.
+#[test]
+fn nothing_of_a_remote_removal_holds_the_remote_s_password() {
+    let mut home = Home::new();
+    home.add_remote(
+        "backup",
+        &format!("ssh://git:{URL_SENTINEL}@example.invalid/repository.git"),
+    );
+    let sentinels = [URL_SENTINEL];
+    let scan = |home: &Home, what: &str, value: serde_json::Value| {
+        assert_eq!(golden::find_sentinel(&value, &sentinels), None, "{what}");
+        mutation::assert_request_stores_exclude(home.world.data.path(), &sentinels);
+    };
+
+    let prepared = home.prepare(&home.remove_remote("backup"));
+    scan(&home, "prepare", serde_json::to_value(&prepared).unwrap());
+    let preview = prepared.data.unwrap();
+    assert_eq!(
+        remote_removal(&preview).fetch_location.as_deref(),
+        Some("ssh://git@example.invalid/repository.git")
+    );
+    let confirmation = preview.confirmation_id;
+
+    home.fail_once_at(FailurePoint::AfterRemoteMutation);
+    let partial = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(partial.outcome, Outcome::Partial);
+    scan(&home, "a failure", serde_json::to_value(&partial).unwrap());
+    // The scan read the rows the request left: its confirmation, its
+    // record and its operation's row.
+    assert_eq!(home.confirmation_rows(), 1);
+    assert_eq!(home.world.request_rows(), 1);
+    assert_eq!(home.world.pending_journal_rows(), 1);
+    assert!(mutation::find_stored_sentinel(home.world.data.path(), &[&confirmation]).is_some());
+
+    home.reopen();
+    let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
+    assert_done(&finished);
+    scan(&home, "the retry", serde_json::to_value(&finished).unwrap());
+}
+
+/// A request is accepted and stops before its first effect, and someone
+/// else removes the remote. The request's end state holds: the retry is
+/// a no-op, and is not refused for what has changed.
+#[test]
+fn a_retry_of_a_remote_removal_another_has_done_is_a_no_op() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    home.git().remote_delete("backup").unwrap();
+
+    let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_noop(&answered);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(home.world.pending_journal_rows(), 0);
 }
