@@ -883,10 +883,11 @@ pub(crate) struct SlugAssignBinding {
     id: ItemId,
     observation: String,
     initials: Option<String>,
-    /// What `prepare` and `resume` work out for the domain call: the
-    /// ticket's fields as the request found them, which the save writes
-    /// back unchanged, and the short code to write where the file has none.
-    draft: Option<TicketDraft>,
+    /// What `prepare` and `resume` work out: the ticket as the request
+    /// found it, whose fields the save writes back unchanged and which the
+    /// request intends its file to be but for a short code, and the short
+    /// code to write where the file has none.
+    found: Option<canonical::Ticket>,
     slug: Option<String>,
 }
 
@@ -904,7 +905,7 @@ impl From<TicketSlugAssignInput> for SlugAssignBinding {
             id,
             observation,
             initials,
-            draft: None,
+            found: None,
             slug: None,
         }
     }
@@ -989,11 +990,24 @@ impl save::Save for SlugAssignBinding {
         context_file(root, &self.id_text())
     }
 
-    /// The request intends the ticket to hold a short code. Which one is
-    /// not asked: it is written once, and the initials or the prefix it
-    /// was composed from may have changed since.
+    /// The request intends the ticket as it found it, with a short code:
+    /// every field of the file is the one the request was accepted
+    /// against, and a short code is there. Which code is not asked: it is
+    /// written once, and the initials or the prefix it was composed from
+    /// may have changed since.
     fn holds_bytes(&self, bytes: &[u8]) -> bool {
-        parse_ticket(&ticket_path(&self.id_text()), bytes).is_some_and(|ticket| has_slug(&ticket))
+        let (Some(mut file), Some(mut found)) = (
+            parse_ticket(&ticket_path(&self.id_text()), bytes),
+            self.found.clone(),
+        ) else {
+            return false;
+        };
+        if !has_slug(&file) {
+            return false;
+        }
+        file.unknown.shift_remove("slug");
+        found.unknown.shift_remove("slug");
+        file == found
     }
 
     fn call_domain(
@@ -1001,7 +1015,8 @@ impl save::Save for SlugAssignBinding {
         service: &RepositoryService,
         accepted: &Accepted,
     ) -> Result<SaveOutcome, RepositoryError> {
-        let (Some(draft), Some(slug)) = (self.draft.clone(), self.slug.clone()) else {
+        let (Some(draft), Some(slug)) = (self.found.as_ref().map(draft_of), self.slug.clone())
+        else {
             // Neither `prepare` nor `resume` lets a call come here
             // without them.
             return Err(RepositoryError::new(
@@ -1061,7 +1076,7 @@ impl save::Save for SlugAssignBinding {
             .and_then(|bytes| parse_ticket(&path, bytes))
             // The file is gone or is no ticket any more.
             .ok_or_else(|| Answer::stopped(ResultCode::ExternalChange))?;
-        self.draft = Some(draft_of(&found));
+        self.found = Some(found);
         let written = context_file(repository.root(), &id)
             .as_deref()
             .and_then(|bytes| parse_ticket(&path, bytes))
@@ -1102,7 +1117,7 @@ impl Binding for SlugAssignBinding {
             initials,
             // Worked out from the repository: no part of what the caller
             // asked for.
-            draft: _,
+            found: _,
             slug: _,
         } = self;
         builder
@@ -1173,7 +1188,7 @@ impl Binding for SlugAssignBinding {
             &item.path,
             &observed.bytes,
         )?;
-        self.draft = Some(draft_of(&current));
+        self.found = Some(current);
         self.slug = Some(slug);
         prepared(repository.root(), &id, expected)
     }

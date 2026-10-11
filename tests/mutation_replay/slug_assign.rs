@@ -314,25 +314,57 @@ fn an_edit_made_under_an_interrupted_assignment_is_not_committed_as_its_own() {
         let retry = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
         assert_eq!(retry.code, ResultCode::ExternalChange, "{what}");
         assert_eq!(retry.effects.commit_oid, None, "{what}");
-        // What is reported of the first attempt's write follows the
-        // operation's journal row. The first save of a ticket leaves its
-        // row pending, having recorded the steps that made its context:
-        // the write is reported and the refusal is partial. For a ticket
-        // that had a context the interrupted write recorded no step, and
-        // the domain closes such a row as rejected when it refuses the
-        // repeat: nothing is in flight, so no effect is reported and the
-        // request's record is released.
-        let (outcome, checkpoint, record) = if has_context {
-            (Outcome::Blocked, CheckpointEffect::NotRequested, false)
-        } else {
-            (Outcome::Partial, CheckpointEffect::Pending, true)
-        };
-        assert_eq!(retry.outcome, outcome, "{what}");
-        assert_eq!(retry.effects.checkpoint, checkpoint, "{what}");
-        assert_eq!(world.record(REQUEST_1).is_some(), record, "{what}");
+        // The file is no longer what the request intends, a short code
+        // on the ticket as it found it, so no write is reported as the
+        // request's: the refusal is blocked, with no effect.
+        assert_eq!(retry.outcome, Outcome::Blocked, "{what}");
+        assert_eq!(retry.effects, Effects::not_requested(), "{what}");
+        // What becomes of the record follows the operation's journal
+        // row. The first save of a ticket leaves its row pending, having
+        // recorded the steps that made its context, and the record stays.
+        // For a ticket that had a context the interrupted write recorded
+        // no step, and the domain closes such a row as rejected when it
+        // refuses the repeat: the record is released.
+        assert_eq!(world.record(REQUEST_1).is_some(), !has_context, "{what}");
         // Either way the same request is not offered again.
         assert!(recovery_actions(&retry).is_empty(), "{what}");
         assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
         assert_eq!(world.worktree_source(TICKET_A), edited, "{what}");
     }
+}
+
+#[test]
+fn a_foreign_commit_that_carries_a_short_code_is_not_the_assignment_s_own() {
+    // The request is accepted and interrupted before it writes: its
+    // operation's row is pending.
+    let mut world =
+        World::with_service(|data| FailOnce::at(FailurePoint::BeforeItemWrite).open_service(data));
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(world.slug(TICKET_A), None);
+
+    // Someone commits the ticket with another title, and a short code.
+    let foreign_source =
+        crate::support::items::ticket_source(TICKET_A, "Someone else's title", "slug: zz-00000\n");
+    let foreign = world.commit_in_context(
+        TICKET_A,
+        &crate::support::items::ticket_path(TICKET_A),
+        &foreign_source,
+    );
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
+    // Other content from elsewhere: nothing of it is the request's.
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Blocked, ResultCode::ExternalChange)
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert!(recovery_actions(&retry).is_empty());
+    assert_eq!(world.branch_tip(TICKET_A), Some(foreign));
+    assert_eq!(world.worktree_source(TICKET_A), foreign_source);
 }
