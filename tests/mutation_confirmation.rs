@@ -50,7 +50,9 @@ fn preview_schema(command: &str) -> &'static str {
         "remote remove" => REMOTE_REMOVAL_SCHEMA,
         "repo remove" => REPOSITORY_REMOVAL_SCHEMA,
         "key delete" => KEY_DELETION_SCHEMA,
-        _ => PREVIEW_SCHEMA,
+        "repo create" | "repo enable" => PREVIEW_SCHEMA,
+        // `prepare` gives no preview of any other command.
+        other => panic!("{other}: no preview schema"),
     }
 }
 
@@ -4658,4 +4660,129 @@ fn a_first_repo_remove_with_a_preview_of_an_earlier_registration_is_external_cha
     assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
     home.assert_nothing_left(REQUEST_1);
     assert!(home.registered());
+}
+
+// ---------------------------------------------------------------------
+// `key delete`: what a retry may delete
+// ---------------------------------------------------------------------
+
+/// The retry of an interrupted deletion compares nothing with the
+/// preview, so this is what bounds it: it deletes the key's own files
+/// and no other. A new file at the private key's path, and a public key
+/// file rewritten in place, are each refused by the fresh review, with
+/// every file left byte for byte as it is, the key registered and the
+/// record accepted. Put back as the deletion left it, the same request
+/// completes.
+#[test]
+fn a_retry_of_an_interrupted_deletion_deletes_nothing_that_is_not_the_key_s_own_file() {
+    for what in ["a new private file", "a public file rewritten in place"] {
+        let mut keyring = Keyring::new();
+        let (private, public) = keyring.files();
+        let (confirmation, _) = keyring.preview();
+        keyring.fail_once_at(FailurePoint::DeletionAfterPrivateUnlink);
+        let partial = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+        assert_eq!(partial.outcome, Outcome::Partial, "{what}");
+        assert!(!private.exists() && public.exists(), "{what}");
+        if what == "a new private file" {
+            fs::write(&private, "someone else's file\n").unwrap();
+        } else {
+            fs::write(&public, "someone else's text\n").unwrap();
+        }
+        let store = tree(&keyring.world.store_directory());
+
+        keyring.reopen();
+        keyring.clock.set(START + 3600);
+        let refused = keyring.retry(REQUEST_1, keyring.delete_key());
+
+        assert!(refused.code.failure_class().is_some(), "{what}");
+        assert_ne!(refused.outcome, Outcome::Success, "{what}");
+        assert_eq!(tree(&keyring.world.store_directory()), store, "{what}");
+        assert!(keyring.registered(), "{what}");
+        assert_eq!(
+            keyring.state(REQUEST_1),
+            Some(RequestState::Accepted),
+            "{what}"
+        );
+        // A second retry is refused the same way and deletes nothing.
+        keyring.retry(REQUEST_1, keyring.delete_key());
+        assert_eq!(tree(&keyring.world.store_directory()), store, "{what}");
+
+        // With the new file taken away again the request completes. A
+        // public key file that was rewritten is not the key's own again
+        // for being given its old bytes: that deletion stays refused.
+        if what == "a new private file" {
+            fs::remove_file(&private).unwrap();
+            assert_done(&keyring.retry(REQUEST_1, keyring.delete_key()));
+            assert!(!private.exists() && !public.exists(), "{what}");
+            assert!(!keyring.registered(), "{what}");
+        }
+    }
+}
+
+/// A key whose private key file is not there: the preview does not say
+/// that file will be deleted, and the deletion removes the rest. A file
+/// that is at the path by the time the request runs is not what was
+/// shown: the request is refused, by the domain's review of a file that
+/// is not the key's own before the observation is compared, and the
+/// file is left.
+#[test]
+fn a_preview_of_key_delete_lists_only_the_files_that_are_there() {
+    let keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let kept = fs::read(&private).unwrap();
+    fs::remove_file(&private).unwrap();
+
+    let (confirmation, preview) = keyring.preview();
+
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::PublicKeyFileDeleted,
+            PreviewEffect::KeyUnregistered,
+        ]
+    );
+
+    fs::write(&private, &kept).unwrap();
+    let refused = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert!(refused.code.failure_class().is_some(), "{:?}", refused.code);
+    assert_ne!(refused.outcome, Outcome::Partial);
+    keyring.assert_nothing_left(REQUEST_1);
+    assert_eq!(fs::read(&private).unwrap(), kept);
+    assert!(public.exists());
+
+    fs::remove_file(&private).unwrap();
+    let deleted = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert_done(&deleted);
+    assert!(!public.exists());
+    assert!(!keyring.registered());
+}
+
+/// A record of a key command that was stored before a deletion had a
+/// state holds no `deletion`. It is replayed, with none.
+#[test]
+fn a_stored_key_result_without_a_deletion_state_is_replayed() {
+    let keyring = Keyring::new();
+    let (confirmation, _) = keyring.preview();
+    let deleted = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert_done(&deleted);
+    let index = items::index(keyring.world.data.path());
+    let stripped = index
+        .execute(
+            "UPDATE request_records SET result_data = json_remove(result_data, '$.deletion')
+              WHERE command = 'key delete'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(stripped, 1);
+    let stored: String = index
+        .query_row(
+            "SELECT result_data FROM request_records WHERE command = 'key delete'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!stored.contains("deletion"), "{stored}");
+    drop(index);
+
+    assert_eq!(keyring.retry(REQUEST_1, keyring.delete_key()), deleted);
 }

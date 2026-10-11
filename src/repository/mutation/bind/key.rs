@@ -905,9 +905,24 @@ fn deletion_state(phase: KeyMaterialPhase) -> Option<KeyDeletionState> {
     }
 }
 
+/// Whether anything is at `path`: a file, a link or a directory. Only
+/// "nothing is there" reads as absent; what cannot be read is taken to
+/// be there, so that it is named and never deleted unnamed.
+fn is_there(path: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// The digest of a key's registration as the preflight of a deletion
 /// reports it: what a confirmation of `key delete` stores, and what a
 /// later observation is compared with. The command reads no identity.
+///
+/// With the registration goes whether each file it names is there:
+/// that is read from the file system without opening the key store or
+/// any file, and it is what the preview's list of deletions is made
+/// from.
 ///
 /// A key that cannot be deleted is observed as what stands in the way,
 /// so that it never equals the observation of one that can.
@@ -973,6 +988,22 @@ fn registration_digest(preflight: &GeneratedKeyDeletionPreflight) -> Observation
                 },
             )
             .text("selected", if *selected { "yes" } else { "no" })
+            .text(
+                "private_key_file",
+                if is_there(private_key_path) {
+                    "present"
+                } else {
+                    "absent"
+                },
+            )
+            .text(
+                "public_key_file",
+                if public_key_path.as_deref().is_some_and(is_there) {
+                    "present"
+                } else {
+                    "absent"
+                },
+            )
         }
         GeneratedKeyDeletionPreflight::NotRegistered => observation.text("key", "not_registered"),
         GeneratedKeyDeletionPreflight::ImportedKey => observation.text("key", "imported"),
@@ -989,7 +1020,8 @@ fn registration_digest(preflight: &GeneratedKeyDeletionPreflight) -> Observation
 /// command does. Its operation is in the key journal.
 ///
 /// **What its preview covers.** The key's registration, as the preflight
-/// of a deletion reports it. The key's files are not read for a preview:
+/// of a deletion reports it, and whether each of its two files is there.
+/// The key's files are not opened or read for a preview:
 /// the domain's own review reads them when the request runs, and a file
 /// that is not the one Manyhands wrote is its `external_change`.
 ///
@@ -1134,15 +1166,12 @@ impl KeyDeleteBinding {
     /// deletion that has begun and not ended, that is a file it removed,
     /// also when the phase that says so was never recorded.
     fn a_file_is_gone(&self) -> bool {
-        let gone = |path: &Path| {
-            matches!(
-                std::fs::symlink_metadata(path),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound
-            )
-        };
         self.registration.as_ref().is_some_and(|registration| {
-            gone(&registration.private_key_path)
-                || registration.public_key_path.as_deref().is_some_and(gone)
+            !is_there(&registration.private_key_path)
+                || registration
+                    .public_key_path
+                    .as_deref()
+                    .is_some_and(|path| !is_there(path))
         })
     }
 
@@ -1400,8 +1429,18 @@ impl Confirmed for KeyDeleteBinding {
                 return Err(self.answer(outcome::key_deletion_preflight_code(&preflight)));
             }
         };
-        let mut effects = vec![PreviewEffect::PrivateKeyFileDeleted];
-        if registration.public_key_path.is_some() {
+        // A file that is not there is not deleted, and is not listed.
+        // One that appears before the request runs is a change to what
+        // was observed.
+        let mut effects = Vec::new();
+        if is_there(&registration.private_key_path) {
+            effects.push(PreviewEffect::PrivateKeyFileDeleted);
+        }
+        if registration
+            .public_key_path
+            .as_deref()
+            .is_some_and(is_there)
+        {
             effects.push(PreviewEffect::PublicKeyFileDeleted);
         }
         effects.push(PreviewEffect::KeyUnregistered);
