@@ -10,16 +10,24 @@ use crate::results::{
 };
 
 use super::{
-    super::{LocalCheckpoint, OperationId, RepositoryErrorKind, SaveOutcome},
+    super::{
+        EnableRepositoryOutcome, GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationId,
+        PublicationRemoteOutcome, PublishPendingReason, RefreshOutcome, RegisterSharedKeyOutcome,
+        RemoteOutcome, RemoveRegistrationOutcome, RepositoryErrorKind, SaveOutcome,
+        SharedKeySelectionOutcome, SynchronizationError, SynchronizationOutcome,
+        SynchronizationResult, UnregisterSharedKeyOutcome,
+        keys::{DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, KeyMaterialErrorKind},
+        transport::SshTransportErrorKind,
+    },
     identity::RequestId,
 };
 
 /// The code a mutation reports for a domain error of `kind`.
 ///
-/// The kinds a ticket create or save can return have their codes. The
-/// kinds only another command returns are `internal_error` here, each in
-/// its own group, until the task that binds that command gives them
-/// theirs.
+/// Some commands report another code for a kind, from what the binding
+/// knows: `remote select` reports `identity_required` for
+/// `InvalidIdentity`, since the identity it lacks is the repository's
+/// and not part of its input.
 pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
     match kind {
         RepositoryErrorKind::InvalidPath => ResultCode::InvalidPath,
@@ -53,20 +61,296 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         | RepositoryErrorKind::Sqlite
         | RepositoryErrorKind::Git
         | RepositoryErrorKind::InjectedFailure => ResultCode::InternalError,
-        // Shared keys: no ticket command returns these. The task that
-        // binds the key commands gives them their codes.
         RepositoryErrorKind::InvalidSharedKeyMetadata
-        | RepositoryErrorKind::InvalidSharedKeySourcePath
-        | RepositoryErrorKind::SharedKeyRegistryUnavailable
-        | RepositoryErrorKind::SharedKeyMaterialPending => ResultCode::InternalError,
-        // Remotes: likewise, for the task that binds the remote commands.
+        | RepositoryErrorKind::InvalidSharedKeySourcePath => ResultCode::InvalidInput,
+        RepositoryErrorKind::SharedKeyRegistryUnavailable => ResultCode::IndexUnavailable,
+        RepositoryErrorKind::SharedKeyMaterialPending => ResultCode::RecoveryRequired,
         RepositoryErrorKind::InvalidPublicationRemote
-        | RepositoryErrorKind::UnavailablePublicationRemote
-        | RepositoryErrorKind::SelectedRemoteRemoval
-        | RepositoryErrorKind::RemoteNameConflict => ResultCode::InternalError,
-        // Enablement: likewise, for the task that binds `repo create` and
-        // `repo enable`.
-        RepositoryErrorKind::RegistryRefreshPending => ResultCode::InternalError,
+        | RepositoryErrorKind::UnavailablePublicationRemote => ResultCode::InvalidRemote,
+        RepositoryErrorKind::SelectedRemoteRemoval => ResultCode::PublicationRemoteInUse,
+        RepositoryErrorKind::RemoteNameConflict => ResultCode::RemoteNameConflict,
+        // The initialization or publication commit exists and the registry
+        // write failed.
+        RepositoryErrorKind::RegistryRefreshPending => ResultCode::RegistrationPending,
+    }
+}
+
+/// The code a mutation reports for a failure of the SSH transport.
+///
+/// `host_mismatch` is not here: it is what the binding of a host approval
+/// reports when the host presents another key than the one approved.
+// Used by the synchronization and host bindings, which are not bound yet.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCode {
+    match kind {
+        // The remote's location is not one the transport can use.
+        SshTransportErrorKind::ConfigurationInvalid | SshTransportErrorKind::UsernameRequired => {
+            ResultCode::InvalidRemote
+        }
+        SshTransportErrorKind::PublicationRemoteMissing => ResultCode::PublicationRemoteRequired,
+        SshTransportErrorKind::NoSelectedKey => ResultCode::NoSelectedKey,
+        SshTransportErrorKind::KeyMissing
+        | SshTransportErrorKind::KeyUnreadable
+        | SshTransportErrorKind::KeyInvalidOrUnsupported => ResultCode::KeyUnavailable,
+        // What the operation was begun against changed under it.
+        SshTransportErrorKind::KeySourceChanged
+        | SshTransportErrorKind::SelectionChanged
+        | SshTransportErrorKind::EndpointChanged
+        | SshTransportErrorKind::HostTrustChanged => ResultCode::ExternalChange,
+        SshTransportErrorKind::KeyRejected => ResultCode::KeyRejected,
+        // A prompt that was dismissed, or that nothing could show: the
+        // action did not happen and needs an unlock.
+        SshTransportErrorKind::UnlockCancelled | SshTransportErrorKind::ProviderUnavailable => {
+            ResultCode::UnlockRequired
+        }
+        SshTransportErrorKind::UnlockFailed => ResultCode::UnlockFailed,
+        SshTransportErrorKind::HostApprovalRequired { presented: _ } => {
+            ResultCode::HostApprovalRequired
+        }
+        SshTransportErrorKind::HostReplacementRequired {
+            expected: _,
+            presented: _,
+        } => ResultCode::HostReplacementRequired,
+        SshTransportErrorKind::RegistryUnavailable => ResultCode::IndexUnavailable,
+        SshTransportErrorKind::TransportUnavailable
+        | SshTransportErrorKind::HostVerificationUnavailable => ResultCode::TransportUnavailable,
+        SshTransportErrorKind::RemoteUnavailable => ResultCode::RemoteUnavailable,
+        SshTransportErrorKind::PushRejected => ResultCode::PushRejected,
+        // The library's own fault, or the server's, with nothing a caller
+        // can act on.
+        SshTransportErrorKind::RuntimeUninitialized | SshTransportErrorKind::ProtocolFailure => {
+            ResultCode::InternalError
+        }
+    }
+}
+
+/// The code a mutation reports for a failure of a key-material operation.
+// Used by the key bindings, which are not bound yet.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn key_material_error_code(kind: KeyMaterialErrorKind) -> ResultCode {
+    match kind {
+        KeyMaterialErrorKind::InvalidLabel | KeyMaterialErrorKind::InvalidPassphrase => {
+            ResultCode::InvalidInput
+        }
+        KeyMaterialErrorKind::RegistryUnavailable => ResultCode::IndexUnavailable,
+        KeyMaterialErrorKind::Busy => ResultCode::Busy,
+        KeyMaterialErrorKind::NotRegistered => ResultCode::KeyNotFound,
+        KeyMaterialErrorKind::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
+        // Manyhands deletes only the key files it can show to be its own.
+        KeyMaterialErrorKind::ImportedKey | KeyMaterialErrorKind::OwnershipUnverified => {
+            ResultCode::KeyNotDeletable
+        }
+        KeyMaterialErrorKind::SourceMissing
+        | KeyMaterialErrorKind::SourceUnreadable
+        | KeyMaterialErrorKind::NotRegularFile
+        | KeyMaterialErrorKind::UnsafePath
+        | KeyMaterialErrorKind::InvalidGeneratedKey => ResultCode::KeyUnavailable,
+        KeyMaterialErrorKind::UnlockFailed => ResultCode::UnlockFailed,
+        KeyMaterialErrorKind::SourceChanged | KeyMaterialErrorKind::SelectionChanged => {
+            ResultCode::ExternalChange
+        }
+        KeyMaterialErrorKind::ConfirmationRequired => ResultCode::ConfirmationRequired,
+        // The boundary allocates operation IDs, so a mismatch is its own
+        // fault.
+        KeyMaterialErrorKind::OperationMismatch => ResultCode::InternalError,
+        // The system the library runs on. Nothing in a request changes it.
+        KeyMaterialErrorKind::HomeUnavailable
+        | KeyMaterialErrorKind::ProtectionUnavailable
+        | KeyMaterialErrorKind::RandomnessUnavailable
+        | KeyMaterialErrorKind::GenerationFailed
+        | KeyMaterialErrorKind::StorageUnavailable => ResultCode::InternalError,
+    }
+}
+
+/// The code a mutation reports for a synchronization that stopped.
+///
+/// `Interrupted` is `recovery_required` here; the binding reports
+/// `cancelled` when the operation's row says it was cancelled.
+// Used by the synchronization bindings, which are not bound yet.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> ResultCode {
+    match error {
+        SynchronizationError::Repository(error) => repository_error_code(error.kind),
+        SynchronizationError::Transport(error) => ssh_transport_error_code(&error.kind),
+        SynchronizationError::Busy => ResultCode::Busy,
+        SynchronizationError::PollYielding => ResultCode::PollYielding,
+        SynchronizationError::TargetNotMaterialized => ResultCode::ItemNotFound,
+        SynchronizationError::WorktreeNotClean { target: _ } => ResultCode::WorktreeNotClean,
+        SynchronizationError::WorktreeConflicted { target: _ } => ResultCode::WorktreeConflicted,
+        SynchronizationError::PrimaryMissing => ResultCode::InvalidConfiguration,
+        SynchronizationError::RemoteContextDeleted => ResultCode::RemoteBranchDeleted,
+        SynchronizationError::IdentityRequired {
+            target: _,
+            expected_configuration: _,
+        } => ResultCode::IdentityRequired,
+        SynchronizationError::MergeRequired { target: _ } => ResultCode::MergeRequired,
+        SynchronizationError::PushRejected => ResultCode::PushRejected,
+        SynchronizationError::ExternalChange => ResultCode::ExternalChange,
+        // The bindings refuse divergence, so no request of theirs leaves a
+        // merge to resolve; one made some other way is not theirs to
+        // continue.
+        SynchronizationError::ConflictPending {
+            target: _,
+            operation_id: _,
+            stage: _,
+        }
+        | SynchronizationError::ExternalResolutionRequired {
+            target: _,
+            operation_id: _,
+        }
+        | SynchronizationError::Interrupted
+        | SynchronizationError::HistoryUnknown
+        | SynchronizationError::RecoveryRequired => ResultCode::RecoveryRequired,
+    }
+}
+
+/// The code of what `add_remote` and `remove_remote` return.
+// Used by the remote bindings.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn remote_outcome_code(outcome: &RemoteOutcome) -> ResultCode {
+    match outcome {
+        RemoteOutcome::Changed => ResultCode::Ok,
+        RemoteOutcome::NoChange => ResultCode::AlreadyApplied,
+        RemoteOutcome::IndexPending { authoritative: _ } => ResultCode::DiscoveryPending,
+    }
+}
+
+/// The code of what `refresh_repository` returns. A refresh that another
+/// owner holds, or that found the repository changing while it observed
+/// it, has stored nothing: the same request is sent again.
+// Used by the index bindings.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
+    match outcome {
+        RefreshOutcome::Refreshed { snapshot: _ } => ResultCode::Ok,
+        RefreshOutcome::IndexPending { root: _ }
+        | RefreshOutcome::RetryRequired {
+            root: _,
+            context: _,
+        } => ResultCode::Busy,
+    }
+}
+
+/// The code of what `set_publication_remote` returns, before the evidence
+/// check: `Changed` is `ok` only if the check finds the request's commit,
+/// and `already_applied` otherwise.
+// Its binding reads the outcome as a save's; this states the codes.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) fn publication_remote_outcome_code(outcome: &PublicationRemoteOutcome) -> ResultCode {
+    match outcome {
+        PublicationRemoteOutcome::Changed { commit_oid: _ } => ResultCode::Ok,
+        PublicationRemoteOutcome::NoChange => ResultCode::AlreadyApplied,
+        PublicationRemoteOutcome::RegistrationPending { commit_oid: _ } => {
+            ResultCode::RegistrationPending
+        }
+        PublicationRemoteOutcome::IndexPending { commit_oid: _ } => ResultCode::DiscoveryPending,
+    }
+}
+
+/// The codes of the outcomes of the commands that are not bound yet. Each
+/// is a `match` with no wildcard arm, as every mapping here is.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) mod unbound {
+    use super::*;
+
+    pub(crate) fn enable_outcome_code(outcome: &EnableRepositoryOutcome) -> ResultCode {
+        match outcome {
+            EnableRepositoryOutcome::Enabled { commit_oid: _ } => ResultCode::Ok,
+            EnableRepositoryOutcome::AlreadyEnabled => ResultCode::AlreadyApplied,
+            EnableRepositoryOutcome::IdentityRequired => ResultCode::IdentityRequired,
+            EnableRepositoryOutcome::IndexPending(_) => ResultCode::DiscoveryPending,
+            EnableRepositoryOutcome::RegistrationPending { commit_oid: _ } => {
+                ResultCode::RegistrationPending
+            }
+        }
+    }
+
+    pub(crate) fn remove_registration_outcome_code(
+        outcome: &RemoveRegistrationOutcome,
+    ) -> ResultCode {
+        match outcome {
+            RemoveRegistrationOutcome::Removed => ResultCode::Ok,
+            RemoveRegistrationOutcome::NotRegistered => ResultCode::AlreadyApplied,
+        }
+    }
+
+    pub(crate) fn synchronization_result_code(result: &SynchronizationResult) -> ResultCode {
+        match result {
+            SynchronizationResult::Complete(outcome) => synchronization_outcome_code(outcome),
+            SynchronizationResult::IndexPending(_) => ResultCode::DiscoveryPending,
+        }
+    }
+
+    pub(crate) fn synchronization_outcome_code(outcome: &SynchronizationOutcome) -> ResultCode {
+        match outcome {
+            SynchronizationOutcome::Published { target: _, oid: _ } => ResultCode::Ok,
+            SynchronizationOutcome::AlreadyCurrent { target: _, oid: _ } => {
+                ResultCode::AlreadyApplied
+            }
+            SynchronizationOutcome::PublishPending {
+                target: _,
+                local_oid: _,
+                reason: PublishPendingReason::NoPublicationRemote,
+            } => ResultCode::PublicationRemoteRequired,
+        }
+    }
+
+    pub(crate) fn register_key_outcome_code(outcome: &RegisterSharedKeyOutcome) -> ResultCode {
+        match outcome {
+            RegisterSharedKeyOutcome::Registered(_) => ResultCode::Ok,
+            RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing: _ } => {
+                ResultCode::AlreadyApplied
+            }
+        }
+    }
+
+    pub(crate) fn key_selection_outcome_code(outcome: &SharedKeySelectionOutcome) -> ResultCode {
+        match outcome {
+            SharedKeySelectionOutcome::Selected(_) | SharedKeySelectionOutcome::Cleared => {
+                ResultCode::Ok
+            }
+            SharedKeySelectionOutcome::AlreadyCleared => ResultCode::AlreadyApplied,
+        }
+    }
+
+    pub(crate) fn unregister_key_outcome_code(outcome: UnregisterSharedKeyOutcome) -> ResultCode {
+        match outcome {
+            UnregisterSharedKeyOutcome::Unregistered => ResultCode::Ok,
+            UnregisterSharedKeyOutcome::NotRegistered => ResultCode::AlreadyApplied,
+            UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
+        }
+    }
+
+    pub(crate) fn generate_key_outcome_code(outcome: &GenerateSharedKeyOutcome) -> ResultCode {
+        match outcome {
+            GenerateSharedKeyOutcome::Created(_) => ResultCode::Ok,
+            GenerateSharedKeyOutcome::AlreadyCreated(_) => ResultCode::AlreadyApplied,
+            GenerateSharedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
+        }
+    }
+
+    pub(crate) fn delete_key_outcome_code(outcome: &DeleteGeneratedKeyOutcome) -> ResultCode {
+        match outcome {
+            DeleteGeneratedKeyOutcome::Deleted => ResultCode::Ok,
+            DeleteGeneratedKeyOutcome::AlreadyDeleted => ResultCode::AlreadyApplied,
+            DeleteGeneratedKeyOutcome::Cancelled => ResultCode::Cancelled,
+            DeleteGeneratedKeyOutcome::RecoveryRequired(_) => ResultCode::RecoveryRequired,
+        }
+    }
+
+    /// What the review of a key deletion found, as the code of its
+    /// preview: a key that can be deleted needs the confirmation.
+    pub(crate) fn key_deletion_preflight_code(
+        preflight: &GeneratedKeyDeletionPreflight,
+    ) -> ResultCode {
+        match preflight {
+            GeneratedKeyDeletionPreflight::ConfirmationRequired(_) => {
+                ResultCode::ConfirmationRequired
+            }
+            GeneratedKeyDeletionPreflight::NotRegistered => ResultCode::KeyNotFound,
+            GeneratedKeyDeletionPreflight::ImportedKey => ResultCode::KeyNotDeletable,
+            GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
+        }
     }
 }
 
@@ -237,11 +521,14 @@ pub(crate) fn recovery(
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send.
         ResultCode::Busy => vec![retry_request()],
+        // The commit exists and the registry write failed: the same
+        // request completes the registration.
+        ResultCode::RegistrationPending => vec![retry_request()],
         // Decided: these have no action of their own. They are the codes
-        // a ticket create, save or short code assignment, or the boundary
-        // itself, ends with. The
-        // same request is offered when its record was left accepted, and
-        // nothing otherwise.
+        // a bound command, or the boundary itself, ends with: a write of
+        // a ticket or a document, a remote added or selected, an index
+        // refreshed or rebuilt. The same request is offered when its
+        // record was left accepted, and nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
         | ResultCode::Cancelled
@@ -263,6 +550,8 @@ pub(crate) fn recovery(
         | ResultCode::WrongBranch
         | ResultCode::WorktreeNotClean
         | ResultCode::WorktreeConflicted
+        | ResultCode::RemoteNameConflict
+        | ResultCode::InvalidRemote
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -277,8 +566,6 @@ pub(crate) fn recovery(
         | ResultCode::RequestNotFound
         | ResultCode::ConfirmationMismatch
         | ResultCode::NotRepairable
-        | ResultCode::RemoteNameConflict
-        | ResultCode::InvalidRemote
         | ResultCode::KeyNotDeletable
         | ResultCode::ConfirmationRequired
         | ResultCode::ConfirmationExpired
@@ -300,7 +587,6 @@ pub(crate) fn recovery(
         | ResultCode::HostApprovalRequired
         | ResultCode::HostReplacementRequired
         | ResultCode::HostMismatch
-        | ResultCode::RegistrationPending
         | ResultCode::PollYielding
         | ResultCode::RemoteUnavailable
         | ResultCode::TransportUnavailable => {
