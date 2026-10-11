@@ -265,7 +265,8 @@ impl PathEvidence {
     /// holds. When the request's own commit is in range and the tip is
     /// back at what the request expected, someone undid that commit, and
     /// that is a change from elsewhere.
-    pub(crate) fn superseded(&self) -> bool {
+    pub(crate) fn superseded(&self, committing: bool) -> bool {
+        let _ = committing;
         let newest_is_foreign = self.changes.first().is_some_and(|change| !change.intended);
         newest_is_foreign && !(self.tip_as_expected && self.own().is_none())
     }

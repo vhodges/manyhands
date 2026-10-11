@@ -350,7 +350,7 @@ fn the_request_s_commit_is_the_oldest_in_range_that_left_the_path_as_intended() 
     let position = fixture.position();
     let nothing = fixture.evidence(&position).unwrap();
     assert_eq!(nothing.own(), None);
-    assert!(!nothing.superseded());
+    assert!(!nothing.superseded(STARTED));
 
     let made = commit(
         &fixture.repository,
@@ -362,7 +362,7 @@ fn the_request_s_commit_is_the_oldest_in_range_that_left_the_path_as_intended() 
     let unrelated = commit(&fixture.repository, BRANCH, Some(made), "other.md", "x\n");
     let one = fixture.evidence(&position).unwrap();
     assert_eq!(one.own(), Some(made));
-    assert!(!one.superseded());
+    assert!(!one.superseded(STARTED));
 
     // A later save of something else is on top: the commit is still the
     // request's, and the path is no longer what it intended.
@@ -375,13 +375,13 @@ fn the_request_s_commit_is_the_oldest_in_range_that_left_the_path_as_intended() 
     );
     let two = fixture.evidence(&position).unwrap();
     assert_eq!(two.own(), Some(made));
-    assert!(two.superseded());
+    assert!(two.superseded(STARTED));
 
     // The same content saved again by someone else is not the request's.
     commit(&fixture.repository, BRANCH, Some(later), PATH, "intended\n");
     let three = fixture.evidence(&position).unwrap();
     assert_eq!(three.own(), Some(made));
-    assert!(!three.superseded());
+    assert!(!three.superseded(STARTED));
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn a_range_widened_to_the_whole_branch_shows_no_commit_of_the_request_s() {
     };
     let bounded = evidence_against(&fixture, &recorded, &expected);
     assert_eq!(bounded.own(), None);
-    assert!(!bounded.superseded());
+    assert!(!bounded.superseded(STARTED));
 
     // The tip is amended: the recorded commit is no longer an ancestor,
     // and the range is all of the branch.
@@ -539,7 +539,7 @@ fn a_range_widened_to_the_whole_branch_shows_no_commit_of_the_request_s() {
     // The newest change in all of history is not what the request
     // intends, and the tip still holds what it expected: nothing foreign
     // stands at the path.
-    assert!(!widened.superseded());
+    assert!(!widened.superseded(STARTED));
 
     // The request then commits: that commit was not there before.
     let made = commit(
@@ -555,7 +555,7 @@ fn a_range_widened_to_the_whole_branch_shows_no_commit_of_the_request_s() {
 
     // A foreign change at the tip is still a foreign change.
     commit(&fixture.repository, BRANCH, Some(made), PATH, "foreign\n");
-    assert!(evidence_against(&fixture, &recorded, &expected).superseded());
+    assert!(evidence_against(&fixture, &recorded, &expected).superseded(STARTED));
 }
 
 #[test]
@@ -581,7 +581,7 @@ fn a_request_with_nothing_to_commit_at_acceptance_has_no_commit_of_its_own() {
     let found = evidence(&committed);
     assert_eq!(found.own(), None);
     assert_eq!(found.reported(STARTED, &found), None);
-    assert!(!found.superseded());
+    assert!(!found.superseded(STARTED));
 
     // A request whose file was edited by hand to the intended content and
     // not committed had something to commit: the rule does not apply.
@@ -605,5 +605,43 @@ fn a_revert_of_the_request_s_commit_is_a_change_from_elsewhere() {
     // own commit is beneath it: someone undid it.
     let reverted = fixture.evidence(&position).unwrap();
     assert_eq!(reverted.own(), Some(made));
-    assert!(reverted.superseded());
+    assert!(reverted.superseded(STARTED));
+}
+
+#[test]
+fn an_undone_look_alike_is_no_change_from_elsewhere_for_a_request_that_cannot_have_committed() {
+    let fixture = fixture();
+    let position = fixture.position();
+    // Someone else commits exactly what the request intends, from exactly
+    // the state it was accepted against, and then undoes it.
+    let look_alike = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "intended\n",
+    );
+    let undone = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(look_alike),
+        PATH,
+        "before\n",
+    );
+    let evidence = fixture.evidence(&position).unwrap();
+    // By what Git shows alone the commit could be the request's.
+    assert_eq!(evidence.own(), Some(look_alike));
+    // For a request that may have committed it is, and it was undone.
+    assert!(evidence.superseded(STARTED));
+    // A request whose journal shows it cannot have committed has no
+    // commit in range, and the tip holds what it expected: nothing
+    // foreign stands at the path.
+    assert!(!evidence.superseded(NOT_STARTED));
+    assert_eq!(evidence.reported(NOT_STARTED, &evidence), None);
+
+    // Other content at the tip is a change from elsewhere for both.
+    commit(&fixture.repository, BRANCH, Some(undone), PATH, "foreign\n");
+    let foreign = fixture.evidence(&position).unwrap();
+    assert!(foreign.superseded(STARTED));
+    assert!(foreign.superseded(NOT_STARTED));
 }

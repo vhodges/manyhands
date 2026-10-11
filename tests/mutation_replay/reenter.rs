@@ -2213,3 +2213,51 @@ fn a_foreign_revert_of_the_commit_of_a_request_in_flight_is_not_undone() {
         Some(RequestState::Accepted)
     );
 }
+
+#[test]
+fn identical_content_committed_and_undone_by_someone_else_does_not_stop_a_request_that_never_ran() {
+    // The request was accepted against a committed file and its process
+    // died before the domain call: no journal row exists.
+    let mut world = World::new();
+    let earlier = world.execute(REQUEST_2, earlier_save(&world, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let accepted_against = world.worktree_source(TICKET_A);
+    let died = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation_id = record.operations[0].operation_id.to_string();
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+
+    // Another request saves the same content, from the same state: a
+    // commit that looks exactly like one this request would have made.
+    world.reopen();
+    let other = world.execute(REQUEST_3, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(
+        (other.outcome, other.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let look_alike = other.effects.commit_oid.clone().expect("a commit");
+    // And someone undoes it: the branch's tip holds the file exactly as
+    // this request expected it again.
+    let undone = world.commit_in_context(
+        TICKET_A,
+        &crate::support::items::ticket_path(TICKET_A),
+        &accepted_against,
+    );
+    assert_eq!(world.branch_commits(TICKET_A), 3);
+    assert_eq!(world.worktree_source(TICKET_A), accepted_against);
+
+    // The request cannot have committed, so the look-alike is not its
+    // own and nobody undid anything of its: nothing foreign stands at the
+    // path. It runs, commits once, and reports that commit.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 4, "the retry");
+    assert_ne!(retry.effects.commit_oid, Some(look_alike));
+    assert_ne!(retry.effects.commit_oid, Some(undone.to_string()));
+    assert_eq!(retry.operation_id, Some(operation_id));
+}

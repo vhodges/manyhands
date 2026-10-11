@@ -255,7 +255,7 @@ impl Before {
                 },
                 own,
             ) => {
-                if self.evidence.superseded() {
+                if self.evidence.superseded(self.committing()) {
                     Found::Foreign { own }
                 } else {
                     Found::Continue
