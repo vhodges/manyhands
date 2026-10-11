@@ -23,7 +23,7 @@ use crate::support::{
     items::{self, TICKET_A, TICKET_ABSENT},
     mutation::{
         BODY, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_CLOSED, TICKET_NEW, TITLE, World,
-        execute_cancellable, recovery_actions, ticket_data,
+        execute_cancellable, execute_confirmed, recovery_actions, ticket_data,
     },
 };
 
@@ -1091,6 +1091,11 @@ fn a_save_with_no_identity_is_blocked_and_its_request_id_is_free() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        // A filter that matches no test succeeds too.
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the child ran no test"
+        );
         return;
     };
     for level in [
@@ -1146,4 +1151,106 @@ fn a_save_with_no_identity_is_blocked_and_its_request_id_is_free() {
         (again.outcome, again.code),
         (Outcome::Success, ResultCode::Ok)
     );
+}
+
+/// A confirmation ID no confirmation was prepared with.
+const CONFIRMATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FN1";
+
+#[test]
+fn a_confirmation_presented_to_a_command_that_takes_none_is_not_confirmable() {
+    // Nothing prepares a confirmation yet. A call can present one all the
+    // same, and neither bound command takes one: the request is refused
+    // before any check, whatever else is true of it.
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    for (what, id, mutation) in [
+        ("a save", TICKET_A, world.save(TICKET_A, &token)),
+        ("a create", TICKET_NEW, world.create(TICKET_NEW)),
+        // Also when the request would be refused for another reason.
+        (
+            "a save of a closed ticket",
+            TICKET_CLOSED,
+            world.save(TICKET_CLOSED, &world.token(TICKET_CLOSED)),
+        ),
+    ] {
+        let envelope = execute_confirmed(&world.service, REQUEST_1, CONFIRMATION, mutation);
+        assert_stopped(
+            &envelope,
+            Outcome::Error,
+            ResultCode::NotConfirmable,
+            FailureClass::Input,
+        );
+        assert_eq!(envelope.request_id.as_deref(), Some(REQUEST_1), "{what}");
+        assert_eq!(envelope.operation_id, None, "{what}");
+        assert!(recovery_actions(&envelope).is_empty(), "{what}");
+        world.assert_nothing_exists(REQUEST_1, id);
+        assert_eq!(world.request_rows(), 0, "{what}");
+    }
+
+    // The request ID is free: the same request without the confirmation
+    // runs.
+    let envelope = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}
+
+#[test]
+fn a_mutation_addressed_below_or_beside_the_repository_root_is_not_repository_root() {
+    let world = World::new();
+    // The ticket gets an editing context: a linked worktree of the
+    // repository, which a read resolves to the repository it belongs to.
+    let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(earlier.outcome, Outcome::Success);
+    let commits = world.branch_commits(TICKET_A);
+    let rows = world.request_rows();
+    let token = world.token(TICKET_A);
+
+    let subdirectory = world.root.join(".manyhands/tickets");
+    let linked_worktree = world.worktree(TICKET_A);
+    assert!(subdirectory.is_dir() && linked_worktree.is_dir());
+    for (what, root) in [
+        ("a subdirectory", subdirectory),
+        ("a linked worktree", linked_worktree),
+    ] {
+        for (kind, mutation) in [
+            (
+                "save",
+                Mutation::TicketSave(TicketSaveInput {
+                    root: root.clone(),
+                    draft: World::draft("Another title", "Another body.\n"),
+                    ..world.save_input(TICKET_A, &token)
+                }),
+            ),
+            (
+                "create",
+                Mutation::TicketCreate(TicketCreateInput {
+                    root: root.clone(),
+                    ..create_input(&world, TICKET_NEW)
+                }),
+            ),
+        ] {
+            let what = format!("a {kind} at {what}");
+            let envelope = world.execute(REQUEST_1, mutation);
+            assert_eq!(
+                (envelope.outcome, envelope.code, envelope.failure_class()),
+                (
+                    Outcome::Error,
+                    ResultCode::NotRepositoryRoot,
+                    Some(FailureClass::Input)
+                ),
+                "{what}"
+            );
+            assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
+            assert_eq!(envelope.operation_id, None, "{what}");
+            // Nothing was accepted and nothing was done.
+            assert!(world.record(REQUEST_1).is_none(), "{what}");
+            assert_eq!(world.request_rows(), rows, "{what}");
+            assert_eq!(world.pending_journal_rows(), 0, "{what}");
+            assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
+            assert!(world.branch_tip(TICKET_NEW).is_none(), "{what}");
+            assert!(!world.worktree(TICKET_NEW).exists(), "{what}");
+        }
+    }
 }

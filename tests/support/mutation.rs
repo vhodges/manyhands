@@ -13,9 +13,9 @@ use std::{
 
 use manyhands::{
     repository::{
-        CancellationToken, Mutation, MutationCall, MutationDataDto, NoProgress, OperationFamily,
-        OperationId, RelationshipWrite, RepositoryService, RequestId, ResolvedRepository,
-        TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput,
+        CancellationToken, ConfirmationId, Mutation, MutationCall, MutationDataDto, NoProgress,
+        OperationFamily, OperationId, RelationshipWrite, RepositoryService, RequestId,
+        ResolvedRepository, TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         request_store::{Clock, JournalRow, RequestRecord, ScopeKey},
     },
@@ -499,10 +499,36 @@ pub fn execute_cancellable(
     mutation: Mutation,
     cancel: &CancellationToken,
 ) -> Envelope<MutationDataDto> {
+    execute_call(service, request_id, None, mutation, cancel)
+}
+
+/// Runs one request that presents the confirmation `confirmation`.
+pub fn execute_confirmed(
+    service: &RepositoryService,
+    request_id: &str,
+    confirmation: &str,
+    mutation: Mutation,
+) -> Envelope<MutationDataDto> {
+    execute_call(
+        service,
+        request_id,
+        Some(ConfirmationId::parse(confirmation).unwrap()),
+        mutation,
+        &CancellationToken::new(),
+    )
+}
+
+fn execute_call(
+    service: &RepositoryService,
+    request_id: &str,
+    confirmation: Option<ConfirmationId>,
+    mutation: Mutation,
+    cancel: &CancellationToken,
+) -> Envelope<MutationDataDto> {
     let envelope = service.execute(
         MutationCall {
             request_id: RequestId::parse(request_id).unwrap(),
-            confirmation: None,
+            confirmation,
             mutation,
         },
         &mut SessionCredentials::new(NoPassphrase),

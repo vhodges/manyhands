@@ -1606,9 +1606,9 @@ fn a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_on
 }
 
 #[test]
-fn a_request_that_stopped_for_an_identity_takes_no_commit_after_a_second_lost_retry() {
+fn a_request_that_stopped_for_an_identity_takes_no_commit_however_often_it_is_retried() {
     if !in_a_process_without_an_identity(
-        "a_request_that_stopped_for_an_identity_takes_no_commit_after_a_second_lost_retry",
+        "a_request_that_stopped_for_an_identity_takes_no_commit_however_often_it_is_retried",
     ) {
         return;
     }
@@ -1621,15 +1621,16 @@ fn a_request_that_stopped_for_an_identity_takes_no_commit_after_a_second_lost_re
     assert_eq!(second.outcome, Outcome::Success);
     let tip = world.branch_tip(TICKET_A);
 
-    // The first request is retried by a process that would lose the
-    // result of a domain call, were one made. Calling the save on the
-    // stopped operation's row would find nothing to change, record a
+    // The first request is retried. Its record is released and it is
+    // answered as a new request, before it is accepted: no domain call is
+    // made and no record is left. Calling the save on the stopped
+    // operation's row instead would find nothing to change, record a
     // checkpoint on that row and complete it: the row would then say the
-    // request may have committed.
-    world.service =
-        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    // request may have committed, and the next retry could take the
+    // other request's commit.
     let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
     assert_no_op_without_a_commit(&retry, "the retry");
+    assert_eq!(retry.operation_id, None, "no operation ran");
     assert!(world.record(REQUEST_1).is_none());
 
     // A third call is answered the same way, and never with the other
