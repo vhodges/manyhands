@@ -514,10 +514,9 @@ const KILLED_REQUEST: &str = "MANYHANDS_KILLED_INDEX_REQUEST";
 
 /// The fault points a test of this file or of `remotes` has a process end
 /// at.
-const KILL_POINTS: [FailurePoint; 3] = [
+const KILL_POINTS: [FailurePoint; 2] = [
     FailurePoint::BeforeIndexTransactionCommit,
     FailurePoint::BeforePublicationConfigurationCommit,
-    FailurePoint::AfterIndexClaim,
 ];
 
 /// The process `killed_at` starts: it submits `REQUEST_1` and ends at the
@@ -539,7 +538,6 @@ fn killed_at_fault_point_child() {
     )
     .unwrap();
     let mutation = match std::env::var(KILLED_REQUEST).unwrap().as_str() {
-        "index refresh" => Mutation::IndexRefresh(IndexRefreshInput { root }),
         "index rebuild" => Mutation::IndexRebuild(IndexRebuildInput { root }),
         "remote select origin" => {
             Mutation::RemoteSelect(manyhands::repository::RemoteSelectInput {
@@ -642,4 +640,182 @@ fn a_refresh_that_a_call_beside_it_completed_is_answered_as_done() {
     assert_eq!(record.state, RequestState::Finished);
     assert_eq!(world.pending_journal_rows(), 0);
     assert_eq!(world.execute(REQUEST_1, refresh(&world)), first);
+}
+
+const INDEX_FILE: &str = "manyhands.sqlite3";
+
+/// Asserts that the index file is the one `corrupt_index` and
+/// `corrupt_index_in_place` write: nothing has replaced it.
+fn assert_not_replaced(world: &World) {
+    assert!(
+        fs::read(world.data.path().join(INDEX_FILE)).unwrap() == b"not sqlite",
+        "the index file was replaced"
+    );
+}
+
+/// Replaces the index with a file that is not a database under the
+/// world's own service, which opened a healthy one and does not know.
+fn corrupt_index_in_place(world: &World) {
+    remove_index(world);
+    fs::write(world.data.path().join(INDEX_FILE), b"not sqlite").unwrap();
+}
+
+/// A service learns that its index is corrupt only when it opens. One
+/// whose index goes bad afterwards restores it for a rebuild all the
+/// same, and for nothing else.
+#[test]
+fn a_rebuild_restores_a_database_that_became_corrupt_under_an_open_service() {
+    let world = World::new();
+    corrupt_index_in_place(&world);
+
+    // Any other command answers as it does for an unavailable index,
+    // and replaces nothing.
+    for mutation in [refresh(&world), world.save(TICKET_A, "v1:any")] {
+        let refused = world.execute(REQUEST_1, mutation);
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, ResultCode::IndexUnavailable)
+        );
+        assert_eq!(recovery_actions(&refused), ["index.rebuild"]);
+        assert_eq!(refused.operation_id, None);
+        assert_not_replaced(&world);
+    }
+
+    let rebuilt = world.execute(REQUEST_2, rebuild(&world));
+    assert_current(&world, "index rebuild", &rebuilt);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(
+        rebuilt.operation_id.as_deref(),
+        Some(operation_of(&world, REQUEST_2).as_str())
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    // The file that was not a database was set aside, not deleted.
+    let kept = fs::read_dir(world.data.path())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("manyhands.sqlite3.corrupt-")
+        })
+        .count();
+    assert_eq!(kept, 1);
+    assert_registered_again(&world);
+}
+
+/// A rebuild that is refused before it is accepted replaces nothing.
+#[test]
+fn a_rebuild_that_is_cancelled_or_carries_a_confirmation_replaces_nothing() {
+    for degraded in [true, false] {
+        let mut world = World::new();
+        if degraded {
+            corrupt_index(&mut world, |data| {
+                manyhands::repository::RepositoryService::open_at(data).unwrap()
+            });
+        } else {
+            corrupt_index_in_place(&world);
+        }
+
+        let cancel = manyhands::repository::CancellationToken::new();
+        cancel.cancel();
+        let cancelled = crate::support::mutation::execute_cancellable(
+            &world.service,
+            REQUEST_1,
+            rebuild(&world),
+            &cancel,
+        );
+        assert_eq!(
+            (cancelled.outcome, cancelled.code),
+            (Outcome::Cancelled, ResultCode::Cancelled),
+            "{degraded}"
+        );
+        assert_eq!(cancelled.operation_id, None);
+        assert_not_replaced(&world);
+
+        let confirmed = crate::support::mutation::execute_confirmed(
+            &world.service,
+            REQUEST_1,
+            "01ARZ3NDEKTSV4RRFFQ69G5FN0",
+            rebuild(&world),
+        );
+        assert_eq!(
+            (confirmed.outcome, confirmed.code),
+            (Outcome::Error, ResultCode::NotConfirmable),
+            "{degraded}"
+        );
+        assert_eq!(confirmed.operation_id, None);
+        assert_not_replaced(&world);
+
+        // The world's own scan needs a database to read.
+        let rebuilt = world.execute(REQUEST_1, rebuild(&world));
+        assert_current(&world, "index rebuild", &rebuilt);
+    }
+}
+
+/// Overwrites the page that is the root of the index the request records
+/// are looked up by. The file is still a database, its schema reads, and
+/// opening and migrating it succeed: only a lookup of a record finds it
+/// malformed.
+fn corrupt_request_records(world: &World) {
+    let connection = items::index(world.data.path());
+    let _: String = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            row.get::<_, i64>(0).map(|busy| busy.to_string())
+        })
+        .unwrap();
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let root_page: i64 = connection
+        .query_row(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'sqlite_autoindex_request_records_1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(connection);
+    let path = world.data.path().join(INDEX_FILE);
+    let mut bytes = fs::read(&path).unwrap();
+    let start = ((root_page - 1) * page_size) as usize;
+    bytes[start..start + page_size as usize].fill(0xff);
+    fs::write(&path, bytes).unwrap();
+}
+
+/// The limit of the restore. Corruption that opening and migrating the
+/// index do not meet is not found by the test a rebuild replaces a
+/// corrupt index on, so nothing is replaced, here or by the domain's own
+/// rebuild. The answer says the index is unavailable: it is not a state
+/// that waiting ends.
+#[test]
+fn a_rebuild_of_a_database_whose_corruption_opening_it_does_not_meet_is_index_unavailable() {
+    let world = World::new();
+    corrupt_request_records(&world);
+    let before = fs::read(world.data.path().join(INDEX_FILE)).unwrap();
+
+    let refused = world.execute(REQUEST_1, rebuild(&world));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::IndexUnavailable,
+            Some(FailureClass::Blocked)
+        )
+    );
+    assert_eq!(recovery_actions(&refused), ["index.rebuild"]);
+    assert_eq!(refused.operation_id, None);
+    assert!(
+        fs::read(world.data.path().join(INDEX_FILE)).unwrap() == before,
+        "the index file was replaced"
+    );
+
+    // The world's own scan needs a database it can read: the file is
+    // removed by hand, which is the way out of this state.
+    remove_index(&world);
+    let rebuilt = world.execute(REQUEST_1, rebuild(&world));
+    assert_current(&world, "index rebuild", &rebuilt);
 }

@@ -1328,6 +1328,15 @@ impl RepositoryService {
     /// it, and one whose file is gone is created empty. Nothing is done
     /// for a root that a rebuild would refuse.
     ///
+    /// A service learns that its index is corrupt when it opens. One
+    /// whose index went bad afterwards does not know, so the index is
+    /// tested here whatever the service holds it to be: the replacement
+    /// opens and migrates it under the exclusive index lock and replaces
+    /// it only if that finds it structurally corrupt. An index that
+    /// opens and migrates is left as it is, also when it cannot be read
+    /// for another reason: corruption that opening does not meet, or a
+    /// file this process may not open.
+    ///
     /// A rebuild does this itself. The mutation boundary does it first
     /// because it records a request before the request's operation
     /// begins, and has nowhere to record one until the index is back.
@@ -1337,12 +1346,10 @@ impl RepositoryService {
         if self.requires_corrupt_cache_replacement()? {
             return self.replace_corrupt_cache(operation, &root);
         }
-        // The index is not known to be corrupt and cannot be read: its
-        // file is gone. Opening it for writing creates it.
-        let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|error| error.for_operation(operation, &root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, &root))
+        // Not known to be corrupt, and unreadable all the same. Opening
+        // the index for writing creates a file that is gone; a file that
+        // is there and is not a database is replaced.
+        self.reconcile_corrupt_cache_replacement(operation, &root)
     }
 
     pub fn repository_snapshot(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {

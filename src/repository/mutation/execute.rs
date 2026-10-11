@@ -60,6 +60,7 @@ impl RepositoryService {
         // look and is answered from it. A record released on re-entry, of
         // a request that ended before its checkpoint, takes one more look:
         // the request is then new.
+        let mut restored = false;
         for _ in 0..3 {
             let record = match self.request_record(request_id) {
                 Ok(record) => record,
@@ -71,10 +72,28 @@ impl RepositoryService {
                 // So the index is brought back first, as the rebuild
                 // itself would bring it back, and the request looked up
                 // again.
+                //
+                // A request that would be refused before it is accepted
+                // is refused before anything is replaced for it.
                 Err(error)
                     if error.code() == ResultCode::IndexUnavailable
                         && binding.command().restores_index() =>
                 {
+                    let refused = if confirmation.is_some() {
+                        Some(ResultCode::NotConfirmable)
+                    } else if cancel.is_cancelled() {
+                        Some(ResultCode::Cancelled)
+                    } else {
+                        None
+                    };
+                    if let Some(code) = refused {
+                        return Reply {
+                            binding: binding.as_ref(),
+                            identity: &identity,
+                        }
+                        .stopped(code);
+                    }
+                    restored = true;
                     match self.restore_index_for_rebuild(binding.root()) {
                         Ok(()) => continue,
                         // Only the kind is read.
@@ -131,7 +150,13 @@ impl RepositoryService {
             binding: binding.as_ref(),
             identity: &identity,
         }
-        .stopped(ResultCode::Busy)
+        // The index was restored and its records still cannot be read:
+        // that is not a state the same request sent again finds changed.
+        .stopped(if restored {
+            ResultCode::IndexUnavailable
+        } else {
+            ResultCode::Busy
+        })
     }
 
     /// A request no record holds: validate, check, accept, run, settle.
