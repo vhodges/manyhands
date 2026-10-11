@@ -382,3 +382,33 @@ commit identifier in its own contents.
 ticket and all four canonical comments successfully. `git diff --check` passed;
 status, full diff and `git log --oneline -10` were inspected before staging
 only these three evidence files for the local checkpoint.
+
+## Task 0 Independent Reviews And Owner Pause — 2026-10-11T20:01:51Z
+
+The owner reported both independent reviews passed and instructed:
+**"Pause after task 0 and before task 1"**. This checkpoint records review
+bookkeeping only; Task 1 has not started and execution is paused until owner
+direction to resume.
+
+Both reviews inspected the full Task 0 range:
+
+- Base: `094e5734d1d4480ee29e6f675aaba4a8883b9060`.
+- Head: `11f7dbd6b99ee7f0a838c0faa972cb0c794c763f`.
+
+| Review | Session ID | Scope and result reported by owner |
+| --- | --- | --- |
+| Independent spec | `ses_ed4470e17ffeiE6Bsc6av876RR` | Full range plus current source/ref/schema inspection; spec compliant, no blockers or findings requiring action |
+| Independent quality | `ses_ed443ab4effebJy3h12aBe4kYO` | Full range plus relevant source and locked backend; hashes, counts and schema checked; **APPROVED**, zero Critical, Important or Minor issues |
+
+Neither reviewer replayed the removed throwaway assertions or reproduced the
+historical baseline. Both explicitly accepted the recorded evidence limitations.
+The characterizations and baseline remain the implementer's historical Linux
+evidence; review approval is not a new test run or native matrix proof. Native
+evidence remains pending separate authorization.
+
+Both Task 0 review checkboxes are ticked on the open ticket, which now states
+Task 0 is completed, independently reviewed and paused before Task 1. Canonical
+comment `01M4P8XCDN3ZBFEXBJ3W865M7N` records the review results and pause.
+The bookkeeping base is `11f7dbd6b99ee7f0a838c0faa972cb0c794c763f`; only the
+ticket, this ledger and that comment are included in the local checkpoint.
+No Rust tree change or broad baseline repeat is needed for this bookkeeping.
