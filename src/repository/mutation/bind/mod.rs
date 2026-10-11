@@ -322,9 +322,12 @@ pub(crate) trait Binding {
     /// caller's token described the file before the first attempt, whose own
     /// write is allowed to have changed it. Then reads the evidence the
     /// rules need. `journal` is the operation's row as the boundary read
-    /// it before this call.
+    /// it before this call. It is never a row the boundary released the
+    /// record for: see `ended_without_checkpoint`.
     ///
-    /// An `Err` answers the request without a domain call.
+    /// An `Err` answers the request without a domain call, and its
+    /// standing says what becomes of the record: the request can be
+    /// finished here, when the evidence shows its work is done.
     fn reenter(
         &mut self,
         service: &RepositoryService,

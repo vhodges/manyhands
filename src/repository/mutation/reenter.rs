@@ -35,7 +35,7 @@ impl Reentry {
                 checkpointed: false,
             } => match rule {
                 EndedWithoutCheckpoint::DidNothing => Self::AsNew,
-                // The row is taken as one that has its checkpoint step is.
+                // The row is taken as a row that has its checkpoint step is.
                 EndedWithoutCheckpoint::SaysNothing => Self::AsRecorded,
             },
             JournalRow::Absent
@@ -59,21 +59,28 @@ impl RepositoryService {
     /// running reports what it did and changes nothing. The caller's
     /// token is not checked again. Then, in order:
     ///
-    /// 1. The binding reads the operation's journal row and what Git shows
-    ///    of the request's path since the recorded position. A row or a
-    ///    repository that cannot be read answers the call and leaves the
+    /// 1. The operation's journal row is read here, as it is before this
+    ///    call. A row that cannot be read answers the call and leaves the
     ///    record as it is.
-    /// 2. When the operation has completed and the request's own commit
-    ///    is in range, the request is finished with that commit and no
-    ///    domain call is made: nothing remains to continue.
-    /// 3. Otherwise, when someone else has committed other content to the
-    ///    path since, the request is not run again: it is
-    ///    `external_change`.
+    /// 2. When the row is final, completed, owes no work and never
+    ///    reached a checkpoint, and the binding says such a row did
+    ///    nothing, the record is released and `None` is returned: the
+    ///    next look finds no record and runs the call as a new request.
+    ///    A binding that says the row tells it nothing goes on as for any
+    ///    other final row.
+    /// 3. The binding sets up its domain call and reads what the
+    ///    repository shows of the request since the recorded position.
+    ///    What cannot be read answers the call and leaves the record as
+    ///    it is. The binding may answer here with no domain call: the
+    ///    ticket binding finishes a request whose operation has completed
+    ///    and whose own commit is in range, and answers
+    ///    `external_change` when someone else has committed other
+    ///    content to the path since.
     /// 4. Otherwise the domain operation is called under the recorded
     ///    operation ID and expectation. This is the only way the work is
     ///    continued: only the domain completes its row and its hand-off.
-    /// 5. The commit reported comes from the evidence read before and
-    ///    after that call, and the record is settled as a first call's is.
+    /// 5. What is reported comes from the evidence read before and after
+    ///    that call, and the record is settled as a first call's is.
     pub(super) fn reenter(
         &self,
         binding: &mut dyn Binding,

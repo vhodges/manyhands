@@ -563,6 +563,12 @@ impl JournalRow {
     /// still owes work; false for an absent row and for a final row that
     /// owes none. A failed request's record is deleted only when this is
     /// false.
+    ///
+    /// Settling asks which way a final row ended, its `kind`, before it
+    /// asks this. A row the domain has made final as `Cancelled` or
+    /// `RetainedForInspection` gives the request its result even while
+    /// it owes work; asked in the other order, such a row would read as
+    /// in flight and its record would stay accepted for good.
     pub const fn in_flight(&self) -> bool {
         match self {
             Self::Absent => false,
