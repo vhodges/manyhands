@@ -3404,8 +3404,21 @@ impl RepositoryService {
         &self,
         request: EnableRepositoryRequest,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
+        self.enable_with_slug_prefix(request, None)
+    }
+
+    /// `enable`, writing `slug_prefix` to the configuration it commits as
+    /// the repository's short code prefix. With none the configuration is
+    /// the one `enable` writes. On a repository that is enabled already
+    /// nothing writes it, so a prefix that is not the stored one is
+    /// refused.
+    pub(crate) fn enable_with_slug_prefix(
+        &self,
+        request: EnableRepositoryRequest,
+        slug_prefix: Option<&str>,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
-        self.enable_with_identity_provider(request, &mut RepositoryIdentityConfig)
+        self.enable_with_identity_provider(request, slug_prefix, &mut RepositoryIdentityConfig)
     }
 
     pub fn list_remotes(&self, root: &Path) -> Result<Vec<RemoteInfo>, RepositoryError> {
@@ -3940,9 +3953,21 @@ impl RepositoryService {
         &self,
         request: CreateRepositoryRequest,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
+        self.create_and_enable_with_slug_prefix(request, None)
+    }
+
+    /// `create_and_enable`, with the short code prefix the new
+    /// repository's configuration is to hold; see
+    /// `enable_with_slug_prefix`.
+    pub(crate) fn create_and_enable_with_slug_prefix(
+        &self,
+        request: CreateRepositoryRequest,
+        slug_prefix: Option<&str>,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::CreateAndEnable, Some(&request.root))?;
         canonical_configuration(
             &request.primary_branch,
+            slug_prefix,
             &request.root,
             RepositoryOperation::CreateAndEnable,
         )?;
@@ -4025,6 +4050,7 @@ impl RepositoryService {
                 operation_id: request.operation_id,
             },
             identity,
+            slug_prefix,
             root.clone(),
             &mut bootstrap,
             resumes_create,
@@ -4039,10 +4065,12 @@ impl RepositoryService {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_and_enable_recorded(
         &self,
         request: CreateRepositoryRequest,
         identity: CommitIdentity,
+        slug_prefix: Option<&str>,
         root: PathBuf,
         bootstrap: &mut Option<BootstrapLease>,
         resumes_create: bool,
@@ -4066,12 +4094,15 @@ impl RepositoryService {
             drop(bootstrap.take());
             drop(lease);
             return self
-                .enable(EnableRepositoryRequest {
-                    root,
-                    primary_branch: request.primary_branch,
-                    identity: Some(identity),
-                    operation_id: request.operation_id,
-                })
+                .enable_with_slug_prefix(
+                    EnableRepositoryRequest {
+                        root,
+                        primary_branch: request.primary_branch,
+                        identity: Some(identity),
+                        operation_id: request.operation_id,
+                    },
+                    slug_prefix,
+                )
                 .map_err(|error| {
                     error.for_operation(RepositoryOperation::CreateAndEnable, &request.root)
                 });
@@ -4197,12 +4228,15 @@ impl RepositoryService {
             )?;
             drop(bootstrap.take());
             drop(lease);
-            self.enable(EnableRepositoryRequest {
-                root: root.clone(),
-                primary_branch: request.primary_branch,
-                identity: Some(identity),
-                operation_id: request.operation_id,
-            })
+            self.enable_with_slug_prefix(
+                EnableRepositoryRequest {
+                    root: root.clone(),
+                    primary_branch: request.primary_branch,
+                    identity: Some(identity),
+                    operation_id: request.operation_id,
+                },
+                slug_prefix,
+            )
             .map_err(|error| error.for_operation(RepositoryOperation::CreateAndEnable, &root))
         })();
         if let Err(original) = result {
@@ -4224,6 +4258,7 @@ impl RepositoryService {
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.enable_with_identity_provider(
             request,
+            None,
             &mut SuppliedIdentityConfig { effective_config },
         )
     }
@@ -4231,6 +4266,7 @@ impl RepositoryService {
     fn enable_with_identity_provider(
         &self,
         request: EnableRepositoryRequest,
+        slug_prefix: Option<&str>,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
@@ -4248,6 +4284,7 @@ impl RepositoryService {
         let effects = CallEffects::default();
         let result = self.enable_recorded(
             request,
+            slug_prefix,
             identity_config,
             repository,
             root.clone(),
@@ -4262,6 +4299,7 @@ impl RepositoryService {
     fn enable_recorded(
         &self,
         request: EnableRepositoryRequest,
+        slug_prefix: Option<&str>,
         identity_config: &mut impl IdentityConfigProvider,
         repository: Repository,
         root: PathBuf,
@@ -4269,8 +4307,12 @@ impl RepositoryService {
         record: RecoveryRecord,
         effects: &CallEffects,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
-        let requested_config =
-            canonical_configuration(&request.primary_branch, &root, RepositoryOperation::Enable)?;
+        let requested_config = canonical_configuration(
+            &request.primary_branch,
+            slug_prefix,
+            &root,
+            RepositoryOperation::Enable,
+        )?;
         let unborn = match repository.head() {
             Ok(_) => false,
             Err(error) if error.code() == git2::ErrorCode::UnbornBranch => true,
@@ -4351,6 +4393,22 @@ impl RepositoryService {
                         Some(root),
                         RepositoryErrorKind::InvalidConfiguration,
                         "the configured primary branch differs from the requested branch",
+                    ));
+                }
+                // Nothing here writes the configuration, so a prefix that
+                // is asked for and is not the one it holds would be lost.
+                if let Some(requested) = slug_prefix
+                    && canonical::slug_settings(&config)
+                        .ok()
+                        .and_then(|(stored, _)| stored)
+                        .as_deref()
+                        != Some(requested)
+                {
+                    return Err(RepositoryError::new(
+                        RepositoryOperation::Enable,
+                        Some(root),
+                        RepositoryErrorKind::InvalidConfiguration,
+                        "the configured short code prefix differs from the requested prefix",
                     ));
                 }
                 if let Some(remote) = config.publication_remote
@@ -9038,17 +9096,38 @@ fn guarded_configuration_file(root: &Path) -> std::io::Result<Option<GuardedFile
     }))
 }
 
+/// The configuration enablement writes: the primary branch and, when one
+/// is asked for, the short code prefix. Without a prefix it holds no key
+/// for one. A prefix that is not one to eight lowercase letters or digits
+/// is refused: the configuration would parse and no short code could be
+/// composed from it.
 fn canonical_configuration(
     primary_branch: &str,
+    slug_prefix: Option<&str>,
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<String, RepositoryError> {
-    canonical::serialize_repository_config(&canonical::RepositoryConfig {
+    let mut unknown = toml::Table::new();
+    if let Some(prefix) = slug_prefix {
+        unknown.insert(
+            canonical::SLUG_PREFIX_KEY.to_owned(),
+            toml::Value::String(prefix.to_owned()),
+        );
+    }
+    let config = canonical::RepositoryConfig {
         primary_branch: primary_branch.to_owned(),
         publication_remote: None,
-        unknown: toml::Table::new(),
-    })
-    .map_err(|problem| {
+        unknown,
+    };
+    if canonical::slug_settings(&config).is_err() {
+        return Err(RepositoryError::new(
+            operation,
+            Some(root.to_owned()),
+            RepositoryErrorKind::InvalidConfiguration,
+            "the short code prefix must be one to eight lowercase letters or digits",
+        ));
+    }
+    canonical::serialize_repository_config(&config).map_err(|problem| {
         RepositoryError::new(
             operation,
             Some(root.to_owned()),
@@ -10014,6 +10093,36 @@ fn committed_configuration_blob_oid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enablement_s_configuration_holds_a_prefix_only_when_one_is_asked_for() {
+        let root = Path::new("/repository");
+        let write =
+            |prefix| canonical_configuration("main", prefix, root, RepositoryOperation::Enable);
+        // Without one the file is the one enablement has always written.
+        let plain = write(None).unwrap();
+        assert_eq!(plain, "format_version = 1\nprimary_branch = \"main\"\n");
+        let prefixed = write(Some("mh")).unwrap();
+        assert_eq!(
+            prefixed,
+            "format_version = 1\nprimary_branch = \"main\"\nticket_slug_prefix = \"mh\"\n"
+        );
+        let parsed = match canonical::parse_repository_config(&prefixed) {
+            Ok(config) => config,
+            Err(_) => panic!("the configuration does not parse"),
+        };
+        assert_eq!(
+            canonical::slug_settings(&parsed).unwrap().0.as_deref(),
+            Some("mh")
+        );
+        for invalid in ["", "MH", "too-long-", "abcdefghi", "a b"] {
+            assert_eq!(
+                write(Some(invalid)).unwrap_err().kind,
+                RepositoryErrorKind::InvalidConfiguration,
+                "{invalid:?}"
+            );
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
