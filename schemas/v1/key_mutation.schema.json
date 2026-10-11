@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 key mutation data",
+  "description": "The data of a key select, key clear or key remove envelope. It may accompany any outcome: a success, a no-op, and a rejection that is about the key. A key command changes no canonical content and makes no commit, so every effect of its envelope is not_requested, and this and the outcome say what the request did. It holds no path, no key material and no passphrase.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "label", "fingerprint", "generation"],
+  "properties": {
+    "id": {
+      "description": "The key the request is about: the one it selected or removed, or was refused for. Null for key clear, which names none.",
+      "type": ["string", "null"]
+    },
+    "label": {
+      "description": "The key's label, when the request read the key's registration. Null otherwise.",
+      "type": ["string", "null"]
+    },
+    "fingerprint": {
+      "description": "The fingerprint the key's registration stores, when the request read the registration and it stores one. Null otherwise.",
+      "type": ["string", "null"]
+    },
+    "generation": {
+      "description": "Always null for key select, key clear and key remove.",
+      "type": ["string", "null"],
+      "enum": [
+        "reserved",
+        "private_written",
+        "pair_written",
+        "completed",
+        "retained_for_inspection",
+        null
+      ]
+    }
+  }
+}

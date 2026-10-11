@@ -26,6 +26,7 @@ use super::{
 
 pub(crate) mod document;
 pub(crate) mod index;
+pub(crate) mod key;
 pub(crate) mod remote;
 pub(crate) mod save;
 pub(crate) mod ticket;
@@ -106,8 +107,6 @@ pub(crate) enum Place<'a> {
     /// The application: a command that belongs to no repository, as the
     /// key commands do. Its record's scope is the literal `application`,
     /// and its results name no repository, item, branch or worktree.
-    // No bound command is of the application until the key commands are.
-    #[expect(dead_code)]
     Application,
 }
 
@@ -597,6 +596,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RemoteSelect) => Recorded::of(remote::recorded_effects(record, &accepted)),
         // A refresh or a rebuild in flight has made no durable effect.
         Some(Command::IndexRefresh | Command::IndexRebuild) => Recorded::nothing(),
+        // A change to the key registry has no operation, so none is ever
+        // found to have run: this is not reached, and nothing is claimed.
+        Some(Command::KeySelect | Command::KeyClear | Command::KeyRemove) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

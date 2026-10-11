@@ -227,6 +227,30 @@ pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
     }
 }
 
+/// The code of what `select_shared_key` and `clear_shared_key_selection`
+/// return. A selection reads as `ok` whether or not the key was selected
+/// before: `key select` reports a key that already was as a no-op from
+/// what it read of the registry.
+pub(crate) fn key_selection_outcome_code(outcome: &SharedKeySelectionOutcome) -> ResultCode {
+    match outcome {
+        SharedKeySelectionOutcome::Selected(_) | SharedKeySelectionOutcome::Cleared => {
+            ResultCode::Ok
+        }
+        SharedKeySelectionOutcome::AlreadyCleared => ResultCode::AlreadyApplied,
+    }
+}
+
+/// The code of what `unregister_shared_key` returns. A key that is not
+/// registered is the request's end state: `key remove` refuses a key
+/// that was never registered before it is accepted, as `key_not_found`.
+pub(crate) fn unregister_key_outcome_code(outcome: UnregisterSharedKeyOutcome) -> ResultCode {
+    match outcome {
+        UnregisterSharedKeyOutcome::Unregistered => ResultCode::Ok,
+        UnregisterSharedKeyOutcome::NotRegistered => ResultCode::AlreadyApplied,
+        UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
+    }
+}
+
 /// The codes of the outcomes of the commands that are not bound yet. Each
 /// is a `match` with no wildcard arm, as every mapping here is.
 #[cfg_attr(not(test), expect(dead_code))]
@@ -281,23 +305,6 @@ pub(crate) mod unbound {
             RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing: _ } => {
                 ResultCode::AlreadyApplied
             }
-        }
-    }
-
-    pub(crate) fn key_selection_outcome_code(outcome: &SharedKeySelectionOutcome) -> ResultCode {
-        match outcome {
-            SharedKeySelectionOutcome::Selected(_) | SharedKeySelectionOutcome::Cleared => {
-                ResultCode::Ok
-            }
-            SharedKeySelectionOutcome::AlreadyCleared => ResultCode::AlreadyApplied,
-        }
-    }
-
-    pub(crate) fn unregister_key_outcome_code(outcome: UnregisterSharedKeyOutcome) -> ResultCode {
-        match outcome {
-            UnregisterSharedKeyOutcome::Unregistered => ResultCode::Ok,
-            UnregisterSharedKeyOutcome::NotRegistered => ResultCode::AlreadyApplied,
-            UnregisterSharedKeyOutcome::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
         }
     }
 
@@ -562,8 +569,9 @@ pub(crate) fn recovery(
         // Decided: these have no action of their own. They are the codes
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
-        // refreshed or rebuilt. The same request is offered when its
-        // record was left accepted, and nothing otherwise.
+        // refreshed or rebuilt, a key selected, cleared or removed. The
+        // same request is offered when its record was left accepted, and
+        // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
         | ResultCode::Cancelled
@@ -587,6 +595,11 @@ pub(crate) fn recovery(
         | ResultCode::WorktreeConflicted
         | ResultCode::RemoteNameConflict
         | ResultCode::InvalidRemote
+        // A key that is not registered, and a key that is selected: the
+        // code says what is missing, and the command that resolves it is
+        // the caller's to choose.
+        | ResultCode::KeyNotFound
+        | ResultCode::SelectedKeyInUse
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -594,7 +607,6 @@ pub(crate) fn recovery(
         // moves its codes to an arm of their own.
         | ResultCode::InvalidId
         | ResultCode::PathNotFound
-        | ResultCode::KeyNotFound
         | ResultCode::PublicKeyUnavailable
         | ResultCode::AuthorityNotFound
         | ResultCode::OperationNotFound
@@ -616,7 +628,6 @@ pub(crate) fn recovery(
         | ResultCode::NoSelectedKey
         | ResultCode::KeyUnavailable
         | ResultCode::KeyRejected
-        | ResultCode::SelectedKeyInUse
         | ResultCode::UnlockRequired
         | ResultCode::UnlockFailed
         | ResultCode::HostApprovalRequired

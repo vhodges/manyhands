@@ -4,9 +4,10 @@
 
 use manyhands::{
     repository::{
-        DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, Mutation,
-        MutationDataDto, RelationshipWrite, RemoteAddInput, RemoteSelectInput, TicketCreateInput,
-        TicketSaveInput, TicketSlugAssignInput,
+        DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, KeyClearInput,
+        KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, RelationshipWrite,
+        RemoteAddInput, RemoteSelectInput, SharedKeyId, TicketCreateInput, TicketSaveInput,
+        TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -19,7 +20,7 @@ use support::{
     items::TICKET_A,
     mutation::{
         self, BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
-        REQUEST_1, REQUEST_2, SENTINELS, TICKET_NEW, TITLE, World,
+        KeyWorld, REQUEST_1, REQUEST_2, SENTINELS, TICKET_NEW, TITLE, World,
     },
 };
 
@@ -529,4 +530,85 @@ fn a_remote_select_whose_discovery_is_pending_matches_its_schema_and_golden() {
     let pending = world.execute(REQUEST_1, remote_select(&world, Some("origin")));
     assert_eq!(pending.outcome, Outcome::Partial);
     assert_remote_contract("remote_select_discovery_pending", &world, &pending);
+}
+
+const KEY_SCHEMA: &str = "key_mutation.schema.json";
+
+/// Checks a key command's envelope against its fixture, with the IDs of
+/// the keys the fixture registered replaced: they differ from run to run.
+/// A key command names no repository, so there is no root to replace.
+fn assert_key_contract(
+    name: &str,
+    envelope: &Envelope<MutationDataDto>,
+    keys: &[(&SharedKeyId, &str)],
+) {
+    let keys: Vec<(String, &str)> = keys
+        .iter()
+        .map(|(id, placeholder)| (id.to_string(), *placeholder))
+        .collect();
+    let operation = envelope.operation_id.clone();
+    let mut placeholders: Vec<(&str, &str)> = keys
+        .iter()
+        .map(|(id, placeholder)| (id.as_str(), *placeholder))
+        .collect();
+    if let Some(operation) = operation.as_deref() {
+        placeholders.push((operation, "<operation>"));
+    }
+    mutation::assert_contract(
+        &ContractCase {
+            name,
+            data_schema: Some(KEY_SCHEMA),
+            placeholders: &placeholders,
+            sentinels: &SENTINELS,
+        },
+        envelope,
+    );
+}
+
+#[test]
+fn a_key_select_and_clear_match_their_schema_and_goldens() {
+    let world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let keys = [(&work, "<key>")];
+    let select = || Mutation::KeySelect(KeySelectInput { id: work });
+    let clear = || Mutation::KeyClear(KeyClearInput {});
+
+    let selected = world.execute(REQUEST_1, select());
+    assert_eq!(selected.outcome, Outcome::Success);
+    assert_key_contract("key_select", &selected, &keys);
+
+    let again = world.execute(REQUEST_2, select());
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert_key_contract("key_select_noop", &again, &keys);
+
+    let cleared = world.execute(support::mutation::REQUEST_3, clear());
+    assert_eq!(cleared.outcome, Outcome::Success);
+    assert_key_contract("key_clear", &cleared, &keys);
+
+    let again = world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX4", clear());
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert_key_contract("key_clear_noop", &again, &keys);
+}
+
+#[test]
+fn a_key_remove_matches_its_schema_and_goldens() {
+    let world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let unknown = SharedKeyId::new();
+    let keys = [(&work, "<key>"), (&unknown, "<unknown>")];
+    let remove = |id| Mutation::KeyRemove(KeyRemoveInput { id });
+
+    world.service.select_shared_key(work).unwrap();
+    let selected = world.execute(REQUEST_1, remove(work));
+    assert_eq!(selected.code, ResultCode::SelectedKeyInUse);
+    assert_key_contract("key_remove_selected", &selected, &keys);
+
+    let not_found = world.execute(REQUEST_1, remove(unknown));
+    assert_eq!(not_found.code, ResultCode::KeyNotFound);
+    assert_key_contract("key_remove_not_found", &not_found, &keys);
+
+    world.service.clear_shared_key_selection().unwrap();
+    let removed = world.execute(REQUEST_1, remove(work));
+    assert_eq!(removed.outcome, Outcome::Success);
+    assert_key_contract("key_remove", &removed, &keys);
 }

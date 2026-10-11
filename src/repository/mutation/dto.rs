@@ -67,6 +67,62 @@ pub enum MutationDataDto {
     Document(DocumentMutationDto),
     Ticket(TicketMutationDto),
     Remote(RemoteMutationDto),
+    Key(KeyMutationDto),
+}
+
+contract_enum!(
+    /// Where a key generation that has not registered its key stands, as
+    /// `operation show` names the state of its operation.
+    KeyGenerationState {
+        Reserved => "reserved",
+        PrivateWritten => "private_written",
+        PairWritten => "pair_written",
+        Completed => "completed",
+        RetainedForInspection => "retained_for_inspection",
+    }
+);
+
+/// What a key command reports about its key. Every effect of a key
+/// command is `not_requested`: this, with the outcome, is what says what
+/// it did. It holds no path, no key material and no passphrase.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeyMutationDto {
+    /// The key the request is about: the one it selected or removed, or
+    /// was refused for. Null for `key clear`, which names none.
+    pub id: Option<String>,
+    /// The key's label, when the request read the key's registration.
+    pub label: Option<String>,
+    /// The fingerprint the key's registration stores, when the request
+    /// read the registration and it stores one.
+    pub fingerprint: Option<String>,
+    /// Set only by a `key generate` that has not registered its key:
+    /// where its generation stands.
+    pub generation: Option<KeyGenerationState>,
+}
+
+impl KeyMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        Some(Self {
+            id: text("id")?,
+            label: text("label")?,
+            fingerprint: text("fingerprint")?,
+            generation: match text("generation")? {
+                Some(state) => Some(
+                    KeyGenerationState::ALL
+                        .into_iter()
+                        .find(|known| known.as_str() == state)?,
+                ),
+                None => None,
+            },
+        })
+    }
 }
 
 /// What `remote add` and `remote select` report about the remote. The
@@ -181,6 +237,9 @@ impl MutationDataDto {
             }
             Command::RemoteAdd | Command::RemoteSelect => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
+            }
+            Command::KeySelect | Command::KeyClear | Command::KeyRemove => {
+                KeyMutationDto::from_stored(stored).map(Self::Key)
             }
             // These report no data, so a record of one stores none.
             Command::IndexRefresh | Command::IndexRebuild => None,

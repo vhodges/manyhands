@@ -40,6 +40,9 @@ commands! {
     RemoteSelect => "remote select",
     IndexRefresh => "index refresh",
     IndexRebuild => "index rebuild",
+    KeySelect => "key select",
+    KeyClear => "key clear",
+    KeyRemove => "key remove",
 }
 
 impl Command {
@@ -64,7 +67,10 @@ impl Command {
             | Self::TicketSlugAssign
             | Self::RemoteAdd
             | Self::RemoteSelect
-            | Self::IndexRefresh => false,
+            | Self::IndexRefresh
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove => false,
         }
     }
 }
@@ -88,6 +94,9 @@ mod tests {
         assert_eq!(Command::RemoteSelect.name(), "remote select");
         assert_eq!(Command::IndexRefresh.name(), "index refresh");
         assert_eq!(Command::IndexRebuild.name(), "index rebuild");
+        assert_eq!(Command::KeySelect.name(), "key select");
+        assert_eq!(Command::KeyClear.name(), "key clear");
+        assert_eq!(Command::KeyRemove.name(), "key remove");
     }
 
     #[test]

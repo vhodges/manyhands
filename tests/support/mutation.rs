@@ -14,10 +14,11 @@ use std::{
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
-        DocumentMutationDto, DocumentSaveInput, Mutation, MutationCall, MutationDataDto,
-        NoProgress, OperationFamily, OperationId, RelationshipWrite, RemoteMutationDto,
-        RepositoryService, RequestId, ResolvedRepository, TicketCreateInput, TicketDraft,
-        TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
+        DocumentMutationDto, DocumentSaveInput, KeyMutationDto, Mutation, MutationCall,
+        MutationDataDto, NoProgress, OperationFamily, OperationId, RegisterSharedKeyOutcome,
+        RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto, RepositoryService,
+        RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership, TicketCreateInput,
+        TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         request_store::{Clock, JournalRow, RequestRecord, ScopeKey},
     },
@@ -164,6 +165,13 @@ pub const CASES: &[&str] = &[
     "index_refresh",
     "index_refresh_failed",
     "index_refresh_mismatch",
+    "key_clear",
+    "key_clear_noop",
+    "key_remove",
+    "key_remove_not_found",
+    "key_remove_selected",
+    "key_select",
+    "key_select_noop",
     "remote_add",
     "remote_add_conflict",
     "remote_add_discovery_pending",
@@ -661,6 +669,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Ticket(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Key(_) => panic!("a key's data"),
     }
 }
 
@@ -670,6 +679,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Document(data) => data,
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Key(_) => panic!("a key's data"),
     }
 }
 
@@ -783,6 +793,119 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Remote(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+        MutationDataDto::Key(_) => panic!("a key's data"),
+    }
+}
+
+/// What a key request reported about its key.
+pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
+    match envelope.data.as_ref().expect("key data") {
+        MutationDataDto::Key(data) => data,
+        MutationDataDto::Document(_) => panic!("a document's data"),
+        MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+        MutationDataDto::Remote(_) => panic!("a remote's data"),
+    }
+}
+
+/// A service with no repository, and a home for key files: the key
+/// commands belong to the application.
+///
+/// As for `World`, every envelope `execute` returns is scanned for the
+/// sentinels, and the request stores are scanned when the world is
+/// dropped.
+pub struct KeyWorld {
+    pub service: RepositoryService,
+    pub data: tempfile::TempDir,
+    pub home: tempfile::TempDir,
+}
+
+impl KeyWorld {
+    pub fn new() -> Self {
+        Self::with_service(|data| RepositoryService::open_at(data).unwrap())
+    }
+
+    /// The same world, with the service `open` gives for its data
+    /// directory: one with a failure point, say.
+    pub fn with_service(open: impl FnOnce(&Path) -> RepositoryService) -> Self {
+        let data = tempfile::tempdir().unwrap();
+        let service = open(data.path());
+        Self {
+            service,
+            data,
+            home: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    /// Another service over the same data, as a new process would open.
+    pub fn reopen(&mut self) {
+        self.service = RepositoryService::open_at(self.data.path()).unwrap();
+    }
+
+    /// The same data under a service that fails once at `point`.
+    pub fn fail_once_at(&mut self, point: manyhands::repository::FailurePoint) {
+        self.service = super::FailOnce::at(point).open_service(self.data.path());
+    }
+
+    pub fn execute(&self, request_id: &str, mutation: Mutation) -> Envelope<MutationDataDto> {
+        execute_with(&self.service, request_id, mutation)
+    }
+
+    pub fn record(&self, request_id: &str) -> Option<RequestRecord> {
+        self.service
+            .request_record(RequestId::parse(request_id).unwrap())
+            .unwrap()
+    }
+
+    pub fn request_rows(&self) -> i64 {
+        items::index(self.data.path())
+            .query_row("SELECT COUNT(*) FROM request_records", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// Writes a file named `name` in the home and registers it as an
+    /// imported key labelled `label`, as the domain registers one.
+    pub fn register(&self, name: &str, label: &str) -> SharedKeyId {
+        let path = self.home.path().canonicalize().unwrap().join(name);
+        fs::write(&path, "not a key\n").unwrap();
+        let registered = self
+            .service
+            .register_shared_key(RegisterSharedKeyRequest {
+                label: label.to_owned(),
+                ownership: SharedKeyOwnership::Imported,
+                private_key_path: path,
+                public_key_path: None,
+            })
+            .unwrap();
+        match registered {
+            RegisterSharedKeyOutcome::Registered(registration) => registration.id,
+            RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing } => existing,
+        }
+    }
+
+    /// The registered keys, each with whether it is selected.
+    pub fn keys(&self) -> Vec<(SharedKeyId, bool)> {
+        self.service
+            .list_shared_keys()
+            .unwrap()
+            .into_iter()
+            .map(|registration| (registration.id, registration.selected))
+            .collect()
+    }
+
+    /// The selected key, if one is.
+    pub fn selected(&self) -> Option<SharedKeyId> {
+        self.keys()
+            .into_iter()
+            .find_map(|(id, selected)| selected.then_some(id))
+    }
+}
+
+impl Drop for KeyWorld {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            assert_request_stores_exclude(self.data.path(), &SENTINELS);
+            super::assert_operation_records_hold_no_content(self.data.path());
+        }
     }
 }
 

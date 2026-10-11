@@ -2199,6 +2199,9 @@ mod index;
 #[path = "mutation_replay/remotes.rs"]
 mod remotes;
 
+#[path = "mutation_replay/keys.rs"]
+mod keys;
+
 /// The process `support::hold_lease_in_child` starts: it holds the lease
 /// it is told to until it is released.
 #[test]

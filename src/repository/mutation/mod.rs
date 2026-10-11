@@ -56,19 +56,21 @@ use bind::{
     Binding,
     document::DocumentBinding,
     index::IndexBinding,
+    key::KeyRegistryBinding,
     remote::{RemoteAddBinding, RemoteSelectBinding},
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     index::{IndexRebuildInput, IndexRefreshInput},
+    key::{KeyClearInput, KeyRemoveInput, KeySelectInput},
     remote::{RemoteAddInput, RemoteSelectInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
 pub use dto::{
-    DocumentMutationDto, MutationDataDto, RemoteMutationDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, TicketMutationDto,
+    DocumentMutationDto, KeyGenerationState, KeyMutationDto, MutationDataDto, RemoteMutationDto,
+    RequestDto, RequestOperationDto, RequestResultDto, RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -257,6 +259,9 @@ pub enum Mutation {
     RemoteSelect(RemoteSelectInput),
     IndexRefresh(IndexRefreshInput),
     IndexRebuild(IndexRebuildInput),
+    KeySelect(KeySelectInput),
+    KeyClear(KeyClearInput),
+    KeyRemove(KeyRemoveInput),
 }
 
 impl Mutation {
@@ -277,6 +282,9 @@ impl Mutation {
             Self::RemoteSelect(_) => Command::RemoteSelect,
             Self::IndexRefresh(_) => Command::IndexRefresh,
             Self::IndexRebuild(_) => Command::IndexRebuild,
+            Self::KeySelect(_) => Command::KeySelect,
+            Self::KeyClear(_) => Command::KeyClear,
+            Self::KeyRemove(_) => Command::KeyRemove,
         }
     }
 
@@ -292,6 +300,9 @@ impl Mutation {
             Self::RemoteSelect(input) => Box::new(RemoteSelectBinding::from(input)),
             Self::IndexRefresh(input) => Box::new(IndexBinding::from(input)),
             Self::IndexRebuild(input) => Box::new(IndexBinding::from(input)),
+            Self::KeySelect(input) => Box::new(KeyRegistryBinding::from(input)),
+            Self::KeyClear(input) => Box::new(KeyRegistryBinding::from(input)),
+            Self::KeyRemove(input) => Box::new(KeyRegistryBinding::from(input)),
         }
     }
 }

@@ -10,11 +10,12 @@ use manyhands::{
         Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
-        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
-        OperationFamily, OperationNextAction, OperationOwner, PollingInterval, PollingOutcome,
-        ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode, ReadinessState,
-        RelationshipRejectionDto, RepositoryService, RequestState, ResolvedRepository, SharedKeyId,
-        TicketFilter, UnplannableReasonCode, transport::SshAuthority,
+        KeyGenerationState, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState,
+        OperationAction, OperationFamily, OperationNextAction, OperationOwner, PollingInterval,
+        PollingOutcome, ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
+        ReadinessState, RelationshipRejectionDto, RepositoryService, RequestState,
+        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
+        transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -922,6 +923,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "request_operation.schema.json",
             "family",
             OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "key_mutation.schema.json",
+            "generation",
+            KeyGenerationState::ALL
+                .map(KeyGenerationState::as_str)
+                .to_vec(),
         ),
     ]
 }
