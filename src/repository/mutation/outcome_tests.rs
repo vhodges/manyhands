@@ -774,20 +774,42 @@ fn every_domain_outcome_has_its_code() {
         Code::Busy
     );
 
+    // A selection is read as a save of the configuration file: its code
+    // is the save's, given the commit the evidence check found.
     let commit_oid = oid(1);
-    for (outcome, code) in [
-        (PublicationRemoteOutcome::Changed { commit_oid }, Code::Ok),
-        (PublicationRemoteOutcome::NoChange, Code::AlreadyApplied),
+    for (outcome, with_commit, without) in [
+        (
+            PublicationRemoteOutcome::Changed { commit_oid },
+            Code::Ok,
+            // The head it names is not this request's commit.
+            Code::AlreadyApplied,
+        ),
+        (
+            PublicationRemoteOutcome::NoChange,
+            Code::Ok,
+            Code::AlreadyApplied,
+        ),
         (
             PublicationRemoteOutcome::RegistrationPending { commit_oid },
             Code::RegistrationPending,
+            Code::RegistrationPending,
+        ),
+        (
+            PublicationRemoteOutcome::IndexPending {
+                commit_oid: Some(commit_oid),
+            },
+            Code::DiscoveryPending,
+            Code::DiscoveryPending,
         ),
         (
             PublicationRemoteOutcome::IndexPending { commit_oid: None },
             Code::DiscoveryPending,
+            Code::DiscoveryPending,
         ),
     ] {
-        assert_eq!(publication_remote_outcome_code(&outcome), code);
+        let report = SaveReport::of_publication_remote(outcome);
+        assert_eq!(report.result(Some(commit_oid)).0, with_commit);
+        assert_eq!(report.result(None).0, without);
     }
 
     for (outcome, code) in [
@@ -948,4 +970,19 @@ fn a_pending_registration_is_finished_by_the_same_request() {
         actions(ResultCode::RegistrationPending, false),
         ["request.retry"]
     );
+}
+
+#[test]
+fn a_selection_whose_registration_is_pending_reports_its_commit_and_is_owed() {
+    let report = SaveReport::of_publication_remote(PublicationRemoteOutcome::RegistrationPending {
+        commit_oid: oid(4),
+    });
+    assert_eq!(report.claimed(), Some(oid(4)));
+    let (code, effects) = report.result(Some(oid(4)));
+    assert_eq!(code, ResultCode::RegistrationPending);
+    assert_eq!(effects.write, WriteEffect::Written);
+    assert_eq!(effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(effects.discovery, DiscoveryEffect::Pending);
+    assert_eq!(effects.commit_oid, Some(oid(4).to_string()));
+    assert!(effects.is_durable());
 }

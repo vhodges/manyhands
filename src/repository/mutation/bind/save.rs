@@ -383,7 +383,10 @@ pub(crate) fn rerun<S: Save + ?Sized>(
                     journal: accepted.journal_row(service),
                 },
             ),
-            (report @ SaveReport::Saved { .. }, Ok(after)) => {
+            (
+                report @ (SaveReport::Saved { .. } | SaveReport::RegistrationPending { .. }),
+                Ok(after),
+            ) => {
                 let (code, effects) = report.result(before.reported(&after));
                 // The journal is not read here: `standing` asks for
                 // it only for a save that needs an identity, which is
@@ -394,7 +397,10 @@ pub(crate) fn rerun<S: Save + ?Sized>(
             // The save returned and Git cannot be read to say whether
             // the request committed. A no-op stored now would be
             // replayed for good.
-            (SaveReport::Saved { .. }, Err(Unreadable)) => (
+            (
+                SaveReport::Saved { .. } | SaveReport::RegistrationPending { .. },
+                Err(Unreadable),
+            ) => (
                 ResultCode::InternalError,
                 Effects::not_requested(),
                 Standing::Unconfirmed,
@@ -508,7 +514,8 @@ pub(crate) fn standing(
         } => Standing::Final,
         SaveReport::Saved {
             discovered: false, ..
-        } => Standing::Owed,
+        }
+        | SaveReport::RegistrationPending { .. } => Standing::Owed,
     }
 }
 

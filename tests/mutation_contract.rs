@@ -5,8 +5,8 @@
 use manyhands::{
     repository::{
         DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, Mutation,
-        MutationDataDto, RelationshipWrite, RemoteAddInput, TicketCreateInput, TicketSaveInput,
-        TicketSlugAssignInput,
+        MutationDataDto, RelationshipWrite, RemoteAddInput, RemoteSelectInput, TicketCreateInput,
+        TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -479,4 +479,54 @@ fn a_remote_add_whose_discovery_is_pending_matches_its_schema_and_golden() {
     let pending = world.execute(REQUEST_1, remote_add(&world, "origin", &remote_location()));
     assert_eq!(pending.outcome, Outcome::Partial);
     assert_remote_contract("remote_add_discovery_pending", &world, &pending);
+}
+
+fn remote_select(world: &World, name: Option<&str>) -> Mutation {
+    Mutation::RemoteSelect(RemoteSelectInput {
+        root: world.root.clone(),
+        name: name.map(str::to_owned),
+    })
+}
+
+/// Adds a remote that can be published to, as `git remote add` would.
+fn add_origin(world: &World) {
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .remote("origin", "git@example.invalid:team/project.git")
+        .unwrap();
+}
+
+#[test]
+fn a_remote_select_matches_its_schema_and_goldens() {
+    let world = World::new();
+    add_origin(&world);
+    let selected = world.execute(REQUEST_1, remote_select(&world, Some("origin")));
+    assert_eq!(selected.outcome, Outcome::Success);
+    assert_remote_contract("remote_select", &world, &selected);
+
+    let again = world.execute(REQUEST_2, remote_select(&world, Some("origin")));
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert_remote_contract("remote_select_noop", &world, &again);
+
+    let invalid = world.execute(
+        support::mutation::REQUEST_3,
+        remote_select(&world, Some("absent")),
+    );
+    assert_eq!(invalid.code, ResultCode::InvalidRemote);
+    assert_remote_contract("remote_select_invalid", &world, &invalid);
+
+    let cleared = world.execute(support::mutation::REQUEST_3, remote_select(&world, None));
+    assert_eq!(cleared.outcome, Outcome::Success);
+    assert_remote_contract("remote_select_cleared", &world, &cleared);
+}
+
+#[test]
+fn a_remote_select_whose_discovery_is_pending_matches_its_schema_and_golden() {
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    add_origin(&world);
+    let pending = world.execute(REQUEST_1, remote_select(&world, Some("origin")));
+    assert_eq!(pending.outcome, Outcome::Partial);
+    assert_remote_contract("remote_select_discovery_pending", &world, &pending);
 }

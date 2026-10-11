@@ -539,6 +539,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             effects: Effects::not_requested(),
             local_change: remote::added_and_unfinished(journal.as_ref()),
         },
+        Some(Command::RemoteSelect) => Recorded::of(remote::recorded_effects(record, &accepted)),
         // A refresh or a rebuild in flight has made no durable effect.
         Some(Command::IndexRefresh | Command::IndexRebuild) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.

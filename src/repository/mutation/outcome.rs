@@ -227,22 +227,6 @@ pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
     }
 }
 
-/// The code of what `set_publication_remote` returns, before the evidence
-/// check: `Changed` is `ok` only if the check finds the request's commit,
-/// and `already_applied` otherwise.
-// Its binding reads the outcome as a save's; this states the codes.
-#[cfg_attr(not(test), expect(dead_code))]
-pub(crate) fn publication_remote_outcome_code(outcome: &PublicationRemoteOutcome) -> ResultCode {
-    match outcome {
-        PublicationRemoteOutcome::Changed { commit_oid: _ } => ResultCode::Ok,
-        PublicationRemoteOutcome::NoChange => ResultCode::AlreadyApplied,
-        PublicationRemoteOutcome::RegistrationPending { commit_oid: _ } => {
-            ResultCode::RegistrationPending
-        }
-        PublicationRemoteOutcome::IndexPending { commit_oid: _ } => ResultCode::DiscoveryPending,
-    }
-}
-
 /// The codes of the outcomes of the commands that are not bound yet. Each
 /// is a `match` with no wildcard arm, as every mapping here is.
 #[cfg_attr(not(test), expect(dead_code))]
@@ -363,6 +347,9 @@ pub(crate) enum SaveReport {
         /// Whether the index hand-off completed.
         discovered: bool,
     },
+    /// The commit was made and the repository's registration could not
+    /// be brought up to it. The same request completes it.
+    RegistrationPending { claimed: Option<git2::Oid> },
 }
 
 impl SaveReport {
@@ -377,6 +364,34 @@ impl SaveReport {
                 context: _,
                 checkpoint,
             } => Self::of_checkpoint(checkpoint, false),
+        }
+    }
+
+    /// What `set_publication_remote` returned, read as a save of the
+    /// configuration file: it writes that file and commits it.
+    ///
+    /// `Changed` names the head it found whenever the configuration
+    /// equals the request, whoever committed it. As for any save, the
+    /// commit is the request's only if the evidence check says so.
+    pub(crate) fn of_publication_remote(outcome: PublicationRemoteOutcome) -> Self {
+        match outcome {
+            PublicationRemoteOutcome::Changed { commit_oid } => Self::Saved {
+                claimed: Some(commit_oid),
+                discovered: true,
+            },
+            PublicationRemoteOutcome::NoChange => Self::Saved {
+                claimed: None,
+                discovered: true,
+            },
+            PublicationRemoteOutcome::IndexPending { commit_oid } => Self::Saved {
+                claimed: commit_oid,
+                discovered: false,
+            },
+            PublicationRemoteOutcome::RegistrationPending { commit_oid } => {
+                Self::RegistrationPending {
+                    claimed: Some(commit_oid),
+                }
+            }
         }
     }
 
@@ -396,18 +411,25 @@ impl SaveReport {
     pub(crate) fn claimed(self) -> Option<git2::Oid> {
         match self {
             Self::IdentityRequired => None,
-            Self::Saved { claimed, .. } => claimed,
+            Self::Saved { claimed, .. } | Self::RegistrationPending { claimed } => claimed,
         }
     }
 
     /// The code and effects of the save, given the commit the evidence
     /// check found to be this request's.
     pub(crate) fn result(self, commit: Option<git2::Oid>) -> (ResultCode, Effects) {
-        let discovered = match self {
+        // What the operation still owes, as the code that says so.
+        let owed = match self {
             Self::IdentityRequired => {
                 return (ResultCode::IdentityRequired, Effects::not_requested());
             }
-            Self::Saved { discovered, .. } => discovered,
+            Self::Saved {
+                discovered: true, ..
+            } => None,
+            Self::Saved {
+                discovered: false, ..
+            } => Some(ResultCode::DiscoveryPending),
+            Self::RegistrationPending { .. } => Some(ResultCode::RegistrationPending),
         };
         let effects = Effects {
             write: match commit {
@@ -418,18 +440,18 @@ impl SaveReport {
                 Some(_) => CheckpointEffect::Committed,
                 None => CheckpointEffect::Unchanged,
             },
-            discovery: match (discovered, commit) {
-                (false, _) => DiscoveryEffect::Pending,
-                (true, Some(_)) => DiscoveryEffect::Current,
-                (true, None) => DiscoveryEffect::NotRequested,
+            discovery: match (owed, commit) {
+                (Some(_), _) => DiscoveryEffect::Pending,
+                (None, Some(_)) => DiscoveryEffect::Current,
+                (None, None) => DiscoveryEffect::NotRequested,
             },
             commit_oid: commit.map(|commit| commit.to_string()),
             ..Effects::not_requested()
         };
-        let code = match (discovered, commit) {
-            (false, _) => ResultCode::DiscoveryPending,
-            (true, Some(_)) => ResultCode::Ok,
-            (true, None) => ResultCode::AlreadyApplied,
+        let code = match (owed, commit) {
+            (Some(owed), _) => owed,
+            (None, Some(_)) => ResultCode::Ok,
+            (None, None) => ResultCode::AlreadyApplied,
         };
         (code, effects)
     }

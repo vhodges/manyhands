@@ -69,15 +69,17 @@ pub enum MutationDataDto {
     Remote(RemoteMutationDto),
 }
 
-/// What `remote add` reports about the remote. The effects of such a
-/// request are all `not_requested`: this, with the outcome, is what says
-/// what it did.
+/// What `remote add` and `remote select` report about the remote. The
+/// effects of a `remote add` are all `not_requested`: this, with the
+/// outcome, is what says what it did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RemoteMutationDto {
-    /// The remote the request names.
+    /// The remote the request names. Null for a `remote select` that
+    /// clears the selection.
     pub name: Option<String>,
-    /// The location the request gave the remote, redacted: it is not a
-    /// location to connect to.
+    /// The location a `remote add` gave the remote, redacted: it is not
+    /// a location to connect to. Null for `remote select`, which names a
+    /// remote and gives no location.
     pub location: Option<String>,
 }
 
@@ -177,7 +179,9 @@ impl MutationDataDto {
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
-            Command::RemoteAdd => RemoteMutationDto::from_stored(stored).map(Self::Remote),
+            Command::RemoteAdd | Command::RemoteSelect => {
+                RemoteMutationDto::from_stored(stored).map(Self::Remote)
+            }
             // These report no data, so a record of one stores none.
             Command::IndexRefresh | Command::IndexRebuild => None,
         }

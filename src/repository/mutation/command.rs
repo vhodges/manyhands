@@ -37,6 +37,7 @@ commands! {
     TicketSave => "ticket save",
     TicketSlugAssign => "ticket slug-assign",
     RemoteAdd => "remote add",
+    RemoteSelect => "remote select",
     IndexRefresh => "index refresh",
     IndexRebuild => "index rebuild",
 }
@@ -61,6 +62,7 @@ impl Command {
             | Self::TicketSave
             | Self::TicketSlugAssign
             | Self::RemoteAdd
+            | Self::RemoteSelect
             | Self::IndexRefresh => false,
         }
     }
@@ -82,6 +84,7 @@ mod tests {
         assert_eq!(Command::TicketCreate.name(), "ticket create");
         assert_eq!(Command::TicketSave.name(), "ticket save");
         assert_eq!(Command::RemoteAdd.name(), "remote add");
+        assert_eq!(Command::RemoteSelect.name(), "remote select");
         assert_eq!(Command::IndexRefresh.name(), "index refresh");
         assert_eq!(Command::IndexRebuild.name(), "index rebuild");
     }

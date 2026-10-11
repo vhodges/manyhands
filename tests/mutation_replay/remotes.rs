@@ -1,13 +1,20 @@
 //! `remote add`: a change that no effect shows. Every effect is
 //! `not_requested`, `data` names the remote with its location redacted,
 //! and the location itself reaches no record and no result.
+//!
+//! `remote select`: a commit of the configuration file on primary. Its
+//! commit is read from Git, never taken from what the domain names.
 
 use manyhands::{
     repository::{
-        FailurePoint, Mutation, MutationDataDto, RemoteAddInput, RemoteMutationDto, RequestState,
+        FailurePoint, Mutation, MutationDataDto, RemoteAddInput, RemoteMutationDto,
+        RemoteSelectInput, RepositoryService, RequestState,
         request_store::{FinalKind, JournalRow},
     },
-    results::{Effects, Envelope, FailureClass, Outcome, ResultCode},
+    results::{
+        CheckpointEffect, DiscoveryEffect, Effects, Envelope, FailureClass, Outcome, ResultCode,
+        WriteEffect,
+    },
 };
 
 use crate::support::{
@@ -359,4 +366,468 @@ fn an_add_to_a_repository_that_is_not_registered_is_refused() {
     assert_eq!(recovery_actions(&refused), ["index.rebuild"]);
     assert_eq!(remote_url(&world, "origin"), None);
     assert_eq!(world.request_rows(), 0);
+}
+
+fn select(world: &World, name: Option<&str>) -> Mutation {
+    Mutation::RemoteSelect(RemoteSelectInput {
+        root: world.root.clone(),
+        name: name.map(str::to_owned),
+    })
+}
+
+/// Adds a remote by hand, as `git remote add` would.
+fn git_remote(world: &World, name: &str, url: &str) {
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .remote(name, url)
+        .unwrap();
+}
+
+/// A world whose repository has a remote that can be published to.
+fn world_with_origin(open: impl FnOnce(&std::path::Path) -> RepositoryService) -> World {
+    let world = World::with_service(open);
+    git_remote(&world, "origin", "git@example.invalid:team/project.git");
+    world
+}
+
+fn plain(data: &std::path::Path) -> RepositoryService {
+    RepositoryService::open_at(data).unwrap()
+}
+
+/// The publication remote the committed configuration names at `commit`.
+fn selected_at(world: &World, commit: git2::Oid) -> Option<String> {
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let tree = repository.find_commit(commit).unwrap().tree().unwrap();
+    let entry = tree
+        .get_path(std::path::Path::new(".manyhands/config.toml"))
+        .unwrap();
+    let blob = repository.find_blob(entry.id()).unwrap();
+    manyhands::canonical::parse_repository_config(std::str::from_utf8(blob.content()).unwrap())
+        .unwrap()
+        .publication_remote
+}
+
+fn parent_of(world: &World, commit: git2::Oid) -> git2::Oid {
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .find_commit(commit)
+        .unwrap()
+        .parent_id(0)
+        .unwrap()
+}
+
+/// Asserts that the configuration file in the primary worktree is the
+/// one its head commits. The file's status is not asked: the domain
+/// commits the configuration without bringing Git's index up to it.
+fn assert_configuration_clean(world: &World) {
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    let entry = head
+        .tree()
+        .unwrap()
+        .get_path(std::path::Path::new(".manyhands/config.toml"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(world.root.join(".manyhands/config.toml")).unwrap(),
+        repository.find_blob(entry.id()).unwrap().content()
+    );
+}
+
+fn committed(commit: git2::Oid) -> Effects {
+    Effects {
+        write: WriteEffect::Written,
+        checkpoint: CheckpointEffect::Committed,
+        discovery: DiscoveryEffect::Current,
+        commit_oid: Some(commit.to_string()),
+        ..Effects::not_requested()
+    }
+}
+
+fn unchanged() -> Effects {
+    Effects {
+        write: WriteEffect::Unchanged,
+        checkpoint: CheckpointEffect::Unchanged,
+        ..Effects::not_requested()
+    }
+}
+
+fn assert_selected(
+    world: &World,
+    envelope: &Envelope<MutationDataDto>,
+    name: Option<&str>,
+    commit: git2::Oid,
+) {
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    assert_eq!(envelope.effects, committed(commit));
+    assert_eq!(
+        remote_data(envelope),
+        &RemoteMutationDto {
+            name: name.map(str::to_owned),
+            location: None,
+        }
+    );
+    assert_eq!(envelope.scope.remote.as_deref(), name);
+    assert_eq!(envelope.scope.branch.as_deref(), Some("main"));
+    assert_eq!(
+        (&envelope.scope.item_id, &envelope.scope.worktree),
+        (&None, &None)
+    );
+    assert!(envelope.recovery.is_empty());
+    assert_eq!(selected_at(world, commit).as_deref(), name);
+    assert_configuration_clean(world);
+}
+
+fn assert_selection_unchanged(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (Outcome::Noop, ResultCode::AlreadyApplied, None)
+    );
+    assert_eq!(envelope.effects, unchanged());
+    assert!(envelope.recovery.is_empty());
+}
+
+#[test]
+fn a_remote_is_selected_with_its_commit_and_selecting_it_again_is_a_no_op() {
+    let world = world_with_origin(plain);
+    let before = world.primary_head();
+
+    let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
+    let commit = world.primary_head();
+    assert_ne!(commit, before);
+    assert_eq!(parent_of(&world, commit), before);
+    assert_selected(&world, &selected, Some("origin"), commit);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // Replay, and changed input under the same request ID.
+    assert_eq!(
+        world.execute(REQUEST_1, select(&world, Some("origin"))),
+        selected
+    );
+    let changed = world.execute(REQUEST_1, select(&world, None));
+    assert_eq!(
+        (changed.outcome, changed.code),
+        (Outcome::Error, ResultCode::RequestMismatch)
+    );
+    assert_eq!(changed.effects, Effects::not_requested());
+    assert_eq!(world.primary_head(), commit);
+
+    // Selecting the selected remote, as a new request: the domain names
+    // the head it found as its commit, and the head is not this
+    // request's.
+    let again = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_selection_unchanged(&again);
+    assert_eq!(remote_data(&again).name.as_deref(), Some("origin"));
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+
+    // Clearing the selection commits, and clearing it again does not.
+    let cleared = world.execute(REQUEST_3, select(&world, None));
+    let clearing = world.primary_head();
+    assert_eq!(parent_of(&world, clearing), commit);
+    assert_selected(&world, &cleared, None, clearing);
+    let cleared_again = world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX4", select(&world, None));
+    assert_selection_unchanged(&cleared_again);
+    assert_eq!(remote_data(&cleared_again).name, None);
+    assert_eq!(world.primary_head(), clearing);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// Row 9 of the design's table, for a selection: a request that changes
+/// nothing, whose result is lost, is a no-op on its retry too, though an
+/// earlier commit holds exactly what it asked for.
+#[test]
+fn selecting_the_selected_remote_is_a_no_op_on_a_retry_after_a_lost_result() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+    });
+    // Another process selects the remote first.
+    let first = mutation::execute_with(
+        &plain(world.data.path()),
+        REQUEST_1,
+        select(&world, Some("origin")),
+    );
+    assert_eq!(first.outcome, Outcome::Success);
+    let commit = world.primary_head();
+
+    let lost = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_2).expect("a record");
+    assert_eq!(record.state, RequestState::Accepted);
+    // Its operation completed without the step that marks a commit.
+    assert_eq!(
+        world.journal_row(&record.operations[0].operation_id.to_string()),
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: false,
+            checkpointed: false,
+        }
+    );
+
+    let retry = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_selection_unchanged(&retry);
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_completed_selection_whose_result_was_lost_reports_its_commit_and_commits_nothing_more() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+    });
+    let before = world.primary_head();
+    let lost = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    let commit = world.primary_head();
+    assert_eq!(parent_of(&world, commit), before);
+    let operation = world.record(REQUEST_1).unwrap().operations[0]
+        .operation_id
+        .to_string();
+    let rows = operation_rows(&world);
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &retry, Some("origin"), commit);
+    assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(operation_rows(&world), rows);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+}
+
+#[test]
+fn a_failure_after_the_selection_s_commit_is_partial_and_its_retry_reports_that_commit() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let before = world.primary_head();
+    let partial = world.execute(REQUEST_1, select(&world, Some("origin")));
+    let commit = world.primary_head();
+    assert_eq!(parent_of(&world, commit), before);
+    assert_eq!(
+        (partial.outcome, partial.code, partial.failure_class()),
+        (
+            Outcome::Partial,
+            ResultCode::DiscoveryPending,
+            Some(FailureClass::Incomplete)
+        )
+    );
+    assert_eq!(
+        partial.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..committed(commit)
+        }
+    );
+    assert_eq!(recovery_actions(&partial), ["operation.resume"]);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // The request ID with another input, after that commit.
+    let changed = world.execute(REQUEST_1, select(&world, None));
+    assert_eq!(
+        (changed.outcome, changed.code),
+        (Outcome::Partial, ResultCode::RequestMismatch)
+    );
+    assert_eq!(changed.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(changed.operation_id, None);
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &retry, Some("origin"), commit);
+    assert_eq!(retry.operation_id, partial.operation_id);
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_selection_whose_registration_failed_is_partial_and_finished_by_its_retry() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRegistryWrite).open_service(data)
+    });
+    let pending = world.execute(REQUEST_1, select(&world, Some("origin")));
+    let commit = world.primary_head();
+    assert_eq!(
+        (pending.outcome, pending.code, pending.failure_class()),
+        (
+            Outcome::Partial,
+            ResultCode::RegistrationPending,
+            Some(FailureClass::Incomplete)
+        )
+    );
+    assert_eq!(
+        pending.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..committed(commit)
+        }
+    );
+    assert_eq!(recovery_actions(&pending), ["request.retry"]);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &retry, Some("origin"), commit);
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn a_selection_that_failed_before_its_commit_leaves_nothing_and_can_be_made_again() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforePublicationConfigurationCommit).open_service(data)
+    });
+    let before = world.primary_head();
+    let failed = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(
+        (failed.outcome, failed.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(failed.effects, Effects::not_requested());
+    assert!(failed.recovery.is_empty());
+    // The configuration file was put back.
+    assert_configuration_clean(&world);
+    assert_eq!(world.primary_head(), before);
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &selected, Some("origin"), world.primary_head());
+}
+
+#[test]
+fn a_selection_that_is_refused_leaves_nothing() {
+    let world = world_with_origin(plain);
+    git_remote(&world, "web", "https://example.invalid/team/project.git");
+    let before = world.primary_head();
+    let token = world.token(TICKET_A);
+
+    for (name, code) in [
+        // No such remote, a remote that is not SSH, and a name Git does
+        // not take.
+        ("absent", ResultCode::InvalidRemote),
+        ("web", ResultCode::InvalidRemote),
+        ("not a name", ResultCode::InvalidRemote),
+    ] {
+        let refused = world.execute(REQUEST_1, select(&world, Some(name)));
+        assert_eq!(
+            (refused.outcome, refused.code, refused.failure_class()),
+            (Outcome::Error, code, Some(FailureClass::Input)),
+            "{name}"
+        );
+        assert_eq!(refused.effects, Effects::not_requested(), "{name}");
+        assert!(world.record(REQUEST_1).is_none(), "{name}");
+        assert_eq!(world.pending_journal_rows(), 0, "{name}");
+        assert_eq!(world.primary_head(), before, "{name}");
+        assert_configuration_clean(&world);
+    }
+
+    // A different request runs at once, and the request ID is free.
+    let saved = world.execute(REQUEST_2, world.save(TICKET_A, &token));
+    assert_eq!(saved.outcome, Outcome::Success);
+    let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &selected, Some("origin"), world.primary_head());
+}
+
+const UNIDENTIFIED_HOME: &str = "MANYHANDS_UNIDENTIFIED_HOME";
+
+/// Runs the calling test, `name`, in a process of its own in which no
+/// identity is found outside the repository: where libgit2 looks for
+/// configuration is process-wide. `false` in the parent, once the child
+/// has passed; `true` in the child, which goes on with the test.
+fn in_a_process_without_an_identity(name: &str) -> bool {
+    let Some(home) = std::env::var_os(UNIDENTIFIED_HOME) else {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("remotes::{name}"), "--nocapture"])
+            .env(UNIDENTIFIED_HOME, home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the child ran no test"
+        );
+        return false;
+    };
+    for level in [
+        git2::ConfigLevel::System,
+        git2::ConfigLevel::Global,
+        git2::ConfigLevel::XDG,
+        git2::ConfigLevel::ProgramData,
+    ] {
+        // This exact-test child runs nothing else, so no other use of
+        // libgit2 overlaps the change.
+        unsafe { git2::opts::set_search_path(level, &home).unwrap() };
+    }
+    true
+}
+
+#[test]
+fn a_selection_with_no_identity_to_commit_as_is_identity_required_and_leaves_nothing() {
+    if !in_a_process_without_an_identity(
+        "a_selection_with_no_identity_to_commit_as_is_identity_required_and_leaves_nothing",
+    ) {
+        return;
+    }
+    let world = world_with_origin(plain);
+    let before = world.primary_head();
+    let mut local = git2::Repository::open(&world.root)
+        .unwrap()
+        .config()
+        .unwrap()
+        .open_level(git2::ConfigLevel::Local)
+        .unwrap();
+    local.remove("user.name").unwrap();
+    local.remove("user.email").unwrap();
+
+    let refused = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(
+        (refused.outcome, refused.code, refused.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::IdentityRequired,
+            Some(FailureClass::Blocked)
+        )
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(&refused), ["repo.identity_set"]);
+    assert_eq!(remote_data(&refused).name.as_deref(), Some("origin"));
+    assert!(world.record(REQUEST_1).is_none());
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.primary_head(), before);
+    assert_configuration_clean(&world);
+
+    // With an identity, the same request ID selects the remote.
+    world.set_local_config("user.name", "Manyhands Test");
+    world.set_local_config("user.email", "manyhands-test@example.invalid");
+    let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &selected, Some("origin"), world.primary_head());
 }
