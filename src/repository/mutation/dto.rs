@@ -67,7 +67,8 @@ pub enum MutationDataDto {
     Ticket(TicketMutationDto),
 }
 
-/// What `ticket create` and `ticket save` report about the ticket.
+/// What `ticket create`, `ticket save` and `ticket slug-assign` report
+/// about the ticket.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TicketMutationDto {
     pub id: String,
@@ -116,7 +117,7 @@ impl MutationDataDto {
     /// that command's family. `None` for data that is not of that shape.
     pub(crate) fn from_stored(command: Command, stored: &serde_json::Value) -> Option<Self> {
         match command {
-            Command::TicketCreate | Command::TicketSave => {
+            Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
         }

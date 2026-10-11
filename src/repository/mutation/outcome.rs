@@ -238,7 +238,8 @@ pub(crate) fn recovery(
         // either way the same request is the one to send.
         ResultCode::Busy => vec![retry_request()],
         // Decided: these have no action of their own. They are the codes
-        // a ticket create or save, or the boundary itself, ends with. The
+        // a ticket create, save or short code assignment, or the boundary
+        // itself, ends with. The
         // same request is offered when its record was left accepted, and
         // nothing otherwise.
         ResultCode::Ok
@@ -257,6 +258,7 @@ pub(crate) fn recovery(
         | ResultCode::RequestMismatch
         | ResultCode::NotConfirmable
         | ResultCode::OccupiedPath
+        | ResultCode::SlugAlreadyAssigned
         | ResultCode::TicketClosed
         | ResultCode::WrongBranch
         | ResultCode::WorktreeNotClean
@@ -274,7 +276,6 @@ pub(crate) fn recovery(
         | ResultCode::OperationNotFound
         | ResultCode::RequestNotFound
         | ResultCode::ConfirmationMismatch
-        | ResultCode::SlugAlreadyAssigned
         | ResultCode::NotRepairable
         | ResultCode::RemoteNameConflict
         | ResultCode::InvalidRemote

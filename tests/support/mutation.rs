@@ -16,6 +16,7 @@ use manyhands::{
         CancellationToken, ConfirmationId, Mutation, MutationCall, MutationDataDto, NoProgress,
         OperationFamily, OperationId, RelationshipWrite, RepositoryService, RequestId,
         ResolvedRepository, TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput,
+        TicketSlugAssignInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         request_store::{Clock, JournalRow, RequestRecord, ScopeKey},
     },
@@ -168,6 +169,8 @@ pub const CASES: &[&str] = &[
     "ticket_save_reentered_external_change",
     "ticket_save_reentered_superseded",
     "ticket_save_replay",
+    "ticket_slug_assign",
+    "ticket_slug_assign_already_assigned",
 ];
 
 pub fn fixture_directory() -> PathBuf {
@@ -365,6 +368,20 @@ impl World {
             draft: Self::draft(TITLE, BODY),
             deps: Vec::new(),
             parent: None,
+            initials: None,
+        }
+    }
+
+    /// A short code assignment for `id`, with no initials of its own.
+    pub fn slug_assign(&self, id: &str, observation: &str) -> Mutation {
+        Mutation::TicketSlugAssign(self.slug_assign_input(id, observation))
+    }
+
+    pub fn slug_assign_input(&self, id: &str, observation: &str) -> TicketSlugAssignInput {
+        TicketSlugAssignInput {
+            root: self.root.clone(),
+            id: items::item_id(id),
+            observation: observation.to_owned(),
             initials: None,
         }
     }

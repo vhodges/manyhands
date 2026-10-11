@@ -404,7 +404,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         return Effects::not_requested();
     }
     match Command::parse(&record.command) {
-        Some(Command::TicketCreate | Command::TicketSave) => {
+        Some(Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign) => {
             ticket::recorded_effects(record, &accepted)
         }
         // A record of no bound command: nothing is known of its effects.

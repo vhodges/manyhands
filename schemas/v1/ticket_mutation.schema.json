@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 ticket mutation data",
-  "description": "The data of a ticket create or ticket save envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the ticket. It never holds the ticket's title, body or source.",
+  "description": "The data of a ticket create, ticket save or ticket slug-assign envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the ticket. It never holds the ticket's title, body or source.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "path", "slug", "unresolved", "rejected"],

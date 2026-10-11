@@ -52,8 +52,11 @@ mod replay;
 mod reply;
 mod settle;
 
-pub use bind::ticket::{TicketCreateInput, TicketSaveInput};
-use bind::{Binding, ticket::TicketBinding};
+pub use bind::ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput};
+use bind::{
+    Binding,
+    ticket::{SlugAssignBinding, TicketBinding},
+};
 use command::Command;
 pub use dto::{
     MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
@@ -224,6 +227,7 @@ pub struct MutationCall {
 pub enum Mutation {
     TicketCreate(TicketCreateInput),
     TicketSave(TicketSaveInput),
+    TicketSlugAssign(TicketSlugAssignInput),
 }
 
 impl Mutation {
@@ -236,6 +240,7 @@ impl Mutation {
         match self {
             Self::TicketCreate(_) => Command::TicketCreate,
             Self::TicketSave(_) => Command::TicketSave,
+            Self::TicketSlugAssign(_) => Command::TicketSlugAssign,
         }
     }
 
@@ -243,6 +248,7 @@ impl Mutation {
         match self {
             Self::TicketCreate(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSave(input) => Box::new(TicketBinding::from(input)),
+            Self::TicketSlugAssign(input) => Box::new(SlugAssignBinding::from(input)),
         }
     }
 }

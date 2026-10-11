@@ -354,6 +354,24 @@ pub(crate) fn path_evidence(
     read().map_err(|_| Unreadable)
 }
 
+/// The bytes of the file at `path` in `commit`. `None` when no file is
+/// there, or the repository does not hold the commit.
+pub(crate) fn file_at(root: &Path, commit: Oid, path: &str) -> Result<Option<Vec<u8>>, Unreadable> {
+    let read = || -> Result<Option<Vec<u8>>, git2::Error> {
+        let repository = Repository::open(root)?;
+        let commit = match repository.find_commit(commit) {
+            Ok(commit) => commit,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        match blob_at(&commit, Path::new(path))? {
+            Some(blob) => Ok(Some(repository.find_blob(blob)?.content().to_vec())),
+            None => Ok(None),
+        }
+    };
+    read().map_err(|_| Unreadable)
+}
+
 /// Git could not be read, so the check has no answer. This is not "not
 /// found": a caller must not take it for the absence of a commit. The Git
 /// error is dropped here; its text can hold a path.

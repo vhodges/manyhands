@@ -57,7 +57,7 @@ pub(crate) trait Save {
 
     /// Sets what `prepare` worked out for the domain call, for a request
     /// that is entered again, and makes none of its checks.
-    fn resume(&mut self, service: &RepositoryService) -> Result<(), Answer>;
+    fn resume(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<(), Answer>;
 }
 
 /// What Git shows of the save's path since the request was accepted.
@@ -164,7 +164,7 @@ pub(crate) fn reenter<S: Save + ?Sized>(
     journal: JournalRow,
 ) -> Result<Before, Ran> {
     let root = accepted.root();
-    if let Err(answer) = save.resume(service) {
+    if let Err(answer) = save.resume(service, accepted) {
         return Err(Ran {
             answer,
             standing: Standing::NotRun { journal },

@@ -1,10 +1,12 @@
-//! `ticket create` and `ticket save`: one call of `save_ticket_with`.
+//! `ticket create`, `ticket save` and `ticket slug-assign`: one call of
+//! `save_ticket_with`.
 //!
 //! Both check the proposed relationships before anything else is done, so
 //! a rejected request leaves no context, branch or record. A create
 //! composes the ticket's short code; the caller cannot supply one. A save
 //! refuses a lifecycle-closed ticket and checks the caller's observation
-//! token.
+//! token. A short code assignment is a save that changes nothing but the
+//! short code, of a ticket that has none.
 
 use std::path::{Path, PathBuf};
 
@@ -18,14 +20,14 @@ use super::{
         super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
             ExpectedPathObservation, ItemDtoKind, OperationFamily, ProposedRelationships,
-            RelationshipWrite, RepositoryError, RepositoryOperation, RepositoryService,
-            ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft, TicketWriteOptions,
-            apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
+            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
+            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
         dto::{MutationDataDto, TicketMutationDto},
-        evidence::Position,
+        evidence::{self, Position},
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
         records::RequestRecord,
@@ -194,6 +196,48 @@ pub(crate) fn recorded_effects(record: &RequestRecord, accepted: &Accepted) -> E
         context_file(root, &record.target).as_deref(),
         record.expected_digest.as_ref(),
     )
+}
+
+/// What a ticket request is accepted with: its position on the ticket's
+/// branch and what it expects at the ticket's path.
+fn prepared(root: &Path, id: &str, expected: ExpectedPathObservation) -> Result<Prepared, Answer> {
+    let position = Position::of(root, &ticket_context(root, id).branch_ref)
+        .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
+    Ok(Prepared {
+        family: OperationFamily::Local,
+        position,
+        expected: Some(expected),
+    })
+}
+
+/// The repository a mutation names by its root. A linked worktree
+/// resolves to its owner for a read; here it would give the request a
+/// scope that is not the repository's.
+pub(super) fn resolve_root(
+    service: &RepositoryService,
+    root: &Path,
+) -> Result<ResolvedRepository, Answer> {
+    let repository = service
+        .resolve_repository(root)
+        .map_err(|error| Answer::of_read(&error))?;
+    if std::fs::canonicalize(root).ok().as_deref() != Some(repository.root()) {
+        return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+    }
+    Ok(repository)
+}
+
+/// The scope of a ticket request's results.
+fn ticket_scope(id: &str, repository: Option<String>, position: Option<&Position>) -> Scope {
+    let context = position.zip(repository.as_deref());
+    Scope {
+        item_id: Some(id.to_owned()),
+        branch: context.and_then(|(position, _)| position.branch().map(str::to_owned)),
+        worktree: context.and_then(|(_, root)| {
+            absolute_path_string(&ticket_context(Path::new(root), id).worktree)
+        }),
+        repository,
+        remote: None,
+    }
 }
 
 /// Which call of a request is checking its relationships.
@@ -393,59 +437,65 @@ impl TicketBinding {
         Ok(())
     }
 
-    /// The short code of a ticket this request creates: the prefix and
-    /// code length primary's committed configuration sets, the initials of
-    /// this call, of the repository's local configuration or of the
-    /// effective identity's name, in that order, and the code of the ID.
+    /// The short code of a ticket this request creates.
     fn compose_slug(
         &self,
         service: &RepositoryService,
         repository: &ResolvedRepository,
     ) -> Result<String, Answer> {
-        let stopped = |code| Answer::stopped(code);
-        let git = git2::Repository::open(repository.root())
-            .map_err(|_| stopped(ResultCode::RepositoryInaccessible))?;
-        let configuration = committed_configuration(&git).map_err(stopped)?;
-        let (prefix, length) = match canonical::slug_settings(&configuration) {
-            Ok(settings) => settings,
-            Err(
-                canonical::SlugSettingsProblem::InvalidPrefix
-                | canonical::SlugSettingsProblem::InvalidCodeLength,
-            ) => return Err(stopped(ResultCode::InvalidSlugConfiguration)),
-        };
-        let given = |text: &str| match canonical::normalize_initials(text) {
-            Ok(initials) => Ok(initials),
-            Err(canonical::InitialsProblem::Invalid) => Err(stopped(ResultCode::InitialsRequired)),
-        };
-        let initials = match (&self.initials, local_initials(&git)) {
-            (Some(initials), _) => given(initials)?,
-            (None, Some(initials)) => given(&initials)?,
-            (None, None) => {
-                let identity = service
-                    .repository_identity(repository)
-                    .map_err(|error| Answer::of_read(&error))?;
-                let name = identity
-                    .name
-                    .ok_or_else(|| stopped(ResultCode::IdentityRequired))?;
-                canonical::derive_initials(&name)
-                    .ok_or_else(|| stopped(ResultCode::InitialsRequired))?
-            }
-        };
-        Ok(canonical::compose_slug(
-            prefix.as_deref(),
-            &initials,
-            &canonical::short_code(&self.id_text(), length),
-        ))
+        compose_slug(service, repository, &self.id, self.initials.as_deref())
     }
+}
 
+/// The short code of the ticket `id`, composed now: the prefix and code
+/// length primary's committed configuration sets, the initials given for
+/// this call, of the repository's local configuration or of the effective
+/// identity's name, in that order, and the code of the ID.
+fn compose_slug(
+    service: &RepositoryService,
+    repository: &ResolvedRepository,
+    id: &ItemId,
+    initials: Option<&str>,
+) -> Result<String, Answer> {
+    let stopped = |code| Answer::stopped(code);
+    let git = git2::Repository::open(repository.root())
+        .map_err(|_| stopped(ResultCode::RepositoryInaccessible))?;
+    let configuration = committed_configuration(&git).map_err(stopped)?;
+    let (prefix, length) = match canonical::slug_settings(&configuration) {
+        Ok(settings) => settings,
+        Err(
+            canonical::SlugSettingsProblem::InvalidPrefix
+            | canonical::SlugSettingsProblem::InvalidCodeLength,
+        ) => return Err(stopped(ResultCode::InvalidSlugConfiguration)),
+    };
+    let given = |text: &str| match canonical::normalize_initials(text) {
+        Ok(initials) => Ok(initials),
+        Err(canonical::InitialsProblem::Invalid) => Err(stopped(ResultCode::InitialsRequired)),
+    };
+    let initials = match (initials, local_initials(&git)) {
+        (Some(initials), _) => given(initials)?,
+        (None, Some(initials)) => given(&initials)?,
+        (None, None) => {
+            let identity = service
+                .repository_identity(repository)
+                .map_err(|error| Answer::of_read(&error))?;
+            let name = identity
+                .name
+                .ok_or_else(|| stopped(ResultCode::IdentityRequired))?;
+            canonical::derive_initials(&name)
+                .ok_or_else(|| stopped(ResultCode::InitialsRequired))?
+        }
+    };
+    Ok(canonical::compose_slug(
+        prefix.as_deref(),
+        &initials,
+        &canonical::short_code(&id.to_string(), length),
+    ))
+}
+
+impl TicketBinding {
     fn prepared(&self, root: &Path, expected: ExpectedPathObservation) -> Result<Prepared, Answer> {
-        let position = Position::of(root, &ticket_context(root, &self.id_text()).branch_ref)
-            .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
-        Ok(Prepared {
-            family: OperationFamily::Local,
-            position,
-            expected: Some(expected),
-        })
+        prepared(root, &self.id_text(), expected)
     }
 
     /// The already-applied rule for a create whose item already exists,
@@ -668,7 +718,7 @@ impl save::Save for TicketBinding {
     /// one the file holds, so the file's is passed when there is one: the
     /// initials or the prefix may have changed since, to something no
     /// short code can be composed from.
-    fn resume(&mut self, service: &RepositoryService) -> Result<(), Answer> {
+    fn resume(&mut self, service: &RepositoryService, _accepted: &Accepted) -> Result<(), Answer> {
         let repository = service
             .resolve_repository(&self.root)
             .map_err(|error| Answer::of_read(&error))?;
@@ -826,33 +876,394 @@ impl Binding for TicketBinding {
     }
 
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
-        let context = position.zip(repository.as_deref());
-        Scope {
-            item_id: Some(self.id_text()),
-            branch: context.and_then(|(position, _)| position.branch().map(str::to_owned)),
-            worktree: context.and_then(|(_, root)| {
-                absolute_path_string(&ticket_context(Path::new(root), &self.id_text()).worktree)
-            }),
-            repository,
-            remote: None,
-        }
+        ticket_scope(&self.id_text(), repository, position)
     }
 
     fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
         self.validate()?;
-        let repository = service
-            .resolve_repository(&self.root)
-            .map_err(|error| Answer::of_read(&error))?;
-        // A mutation names the repository by its root. A linked worktree
-        // resolves to its owner for a read; here it would give the request
-        // a scope that is not the repository's.
-        if std::fs::canonicalize(&self.root).ok().as_deref() != Some(repository.root()) {
-            return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
-        }
+        let repository = resolve_root(service, &self.root)?;
         match self.observation.clone() {
             Some(token) => self.prepare_save(service, &repository, &token),
             None => self.prepare_create(service, &repository),
         }
+    }
+
+    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        save::run(self, service, accepted)
+    }
+
+    fn reenter(
+        &mut self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        journal: JournalRow,
+    ) -> Result<Before, Ran> {
+        save::reenter(self, service, accepted, journal)
+    }
+
+    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
+        save::rerun(self, service, accepted, before)
+    }
+}
+
+/// The input of `ticket slug-assign`: a generated short code for a ticket
+/// that has none. The caller cannot supply the code.
+#[derive(Clone)]
+pub struct TicketSlugAssignInput {
+    pub root: PathBuf,
+    pub id: ItemId,
+    /// The token `show_item` gave for the ticket as the caller saw it.
+    pub observation: String,
+    /// Initials for the short code, for this one call. They are not stored.
+    pub initials: Option<String>,
+}
+
+/// `ticket slug-assign`: a save of the ticket as it is, with a short code
+/// where its file has none.
+pub(crate) struct SlugAssignBinding {
+    root: PathBuf,
+    id: ItemId,
+    observation: String,
+    initials: Option<String>,
+    /// What `prepare` and `resume` work out for the domain call: the
+    /// ticket's fields as the request found them, which the save writes
+    /// back unchanged, and the short code to write where the file has none.
+    draft: Option<TicketDraft>,
+    slug: Option<String>,
+}
+
+impl From<TicketSlugAssignInput> for SlugAssignBinding {
+    fn from(input: TicketSlugAssignInput) -> Self {
+        // Every field is named, as for a create.
+        let TicketSlugAssignInput {
+            root,
+            id,
+            observation,
+            initials,
+        } = input;
+        Self {
+            root,
+            id,
+            observation,
+            initials,
+            draft: None,
+            slug: None,
+        }
+    }
+}
+
+/// The fields a save sets, as a ticket's file has them: a save with these
+/// changes none of them.
+fn draft_of(ticket: &canonical::Ticket) -> TicketDraft {
+    // Every field of the ticket is named: one added to it is carried
+    // through by the save or is one the draft must hold.
+    let canonical::Ticket {
+        id: _,
+        title,
+        ticket_type,
+        status,
+        project,
+        team,
+        // The save carries these through from the file.
+        closed_at: _,
+        closed_by: _,
+        body,
+        unknown: _,
+    } = ticket.clone();
+    TicketDraft {
+        title,
+        ticket_type,
+        status,
+        project,
+        team,
+        body,
+    }
+}
+
+/// Whether the ticket's file holds a short code: any `slug` value that is
+/// not null, valid or not.
+fn has_slug(ticket: &canonical::Ticket) -> bool {
+    ticket
+        .unknown
+        .get("slug")
+        .is_some_and(|slug| !slug.is_null())
+}
+
+impl SlugAssignBinding {
+    fn id_text(&self) -> String {
+        self.id.to_string()
+    }
+
+    fn data(&self, slug: Option<String>) -> MutationDataDto {
+        MutationDataDto::Ticket(TicketMutationDto {
+            id: self.id_text(),
+            path: ticket_path(&self.id_text()),
+            slug,
+            unresolved: Vec::new(),
+            rejected: Vec::new(),
+        })
+    }
+
+    /// The ticket's file as it was when the request was accepted, for a
+    /// request that is entered again: the bytes its recorded expectation
+    /// is the digest of, looked for in the editing context, in the primary
+    /// worktree, which is the effective copy until a context exists, and
+    /// in the commit the request was accepted at.
+    ///
+    /// When none of those is it, the file had been edited and not
+    /// committed when the request was accepted, and an earlier attempt, or
+    /// someone else, has written it since. Then the file in the context is
+    /// all there is to go by.
+    fn found_file(&self, accepted: &Accepted) -> Option<Vec<u8>> {
+        let id = self.id_text();
+        let path = ticket_path(&id);
+        let root = accepted.root();
+        let expected = accepted.expectation();
+        let context = context_file(&root, &id);
+        let primary = owned_file_bytes(&root, Path::new(&path), RepositoryOperation::Read, &root)
+            .ok()
+            .flatten();
+        let committed = accepted
+            .position
+            .base_oid
+            .and_then(|base| evidence::file_at(&root, base, &path).ok().flatten());
+        [context.clone(), primary, committed]
+            .into_iter()
+            .flatten()
+            .find(|bytes| ExpectedPathObservation::from_bytes(bytes) == expected)
+            .or(context)
+    }
+}
+
+impl save::Save for SlugAssignBinding {
+    fn path(&self) -> String {
+        ticket_path(&self.id_text())
+    }
+
+    fn worktree(&self, root: &Path) -> PathBuf {
+        ticket_context(root, &self.id_text()).worktree
+    }
+
+    fn context_file(&self, root: &Path) -> Option<Vec<u8>> {
+        context_file(root, &self.id_text())
+    }
+
+    /// The request intends the ticket to hold a short code. Which one is
+    /// not asked: it is written once, and the initials or the prefix it
+    /// was composed from may have changed since.
+    fn holds_bytes(&self, bytes: &[u8]) -> bool {
+        parse_ticket(&ticket_path(&self.id_text()), bytes).is_some_and(|ticket| has_slug(&ticket))
+    }
+
+    fn call_domain(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+    ) -> Result<SaveOutcome, RepositoryError> {
+        let (Some(draft), Some(slug)) = (self.draft.clone(), self.slug.clone()) else {
+            // Neither `prepare` nor `resume` lets a call come here
+            // without them.
+            return Err(RepositoryError::new(
+                RepositoryOperation::SaveTicket,
+                Some(accepted.root()),
+                RepositoryErrorKind::OperationMismatch,
+                "a short code assignment was not set up",
+            ));
+        };
+        service.save_ticket_with(
+            SaveTicketRequest {
+                target: AuthoringTarget {
+                    root: accepted.root(),
+                    kind: AuthoringKind::Ticket,
+                    item_id: self.id.clone(),
+                    intent: ContextIntent::Edit,
+                    operation_id: accepted.operation_id,
+                },
+                draft,
+                expected_path: accepted.expectation(),
+            },
+            TicketWriteOptions {
+                slug: Some(slug),
+                ..TicketWriteOptions::default()
+            },
+        )
+    }
+
+    fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer {
+        let slug = context_file(root, &self.id_text())
+            .as_deref()
+            .and_then(|bytes| parse_ticket(&ticket_path(&self.id_text()), bytes))
+            .and_then(|ticket| slug_of(&ticket));
+        Answer {
+            effects,
+            ..Answer::stopped(code).with_data(self.data(slug))
+        }
+    }
+
+    /// The fields the save writes back are those of the ticket as the
+    /// request found it, not as it is now: an edit someone made to the
+    /// file since, committed or not, is then refused by the domain as an
+    /// external change and is not committed as this request's.
+    ///
+    /// The short code is the one the file holds, when an earlier attempt
+    /// wrote one, since the domain keeps it whatever is passed; otherwise
+    /// it is composed now.
+    fn resume(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<(), Answer> {
+        let repository = service
+            .resolve_repository(&self.root)
+            .map_err(|error| Answer::of_read(&error))?;
+        let id = self.id_text();
+        let path = ticket_path(&id);
+        let found = self
+            .found_file(accepted)
+            .as_deref()
+            .and_then(|bytes| parse_ticket(&path, bytes))
+            // The file is gone or is no ticket any more.
+            .ok_or_else(|| Answer::stopped(ResultCode::ExternalChange))?;
+        self.draft = Some(draft_of(&found));
+        let written = context_file(repository.root(), &id)
+            .as_deref()
+            .and_then(|bytes| parse_ticket(&path, bytes))
+            .and_then(|ticket| slug_of(&ticket));
+        self.slug = Some(match written {
+            Some(written) => written,
+            None => compose_slug(service, &repository, &self.id, self.initials.as_deref())?,
+        });
+        Ok(())
+    }
+}
+
+impl Binding for SlugAssignBinding {
+    fn command(&self) -> Command {
+        Command::TicketSlugAssign
+    }
+
+    /// An authoring save, as a ticket save is.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::DidNothing
+    }
+
+    fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn target(&self) -> String {
+        self.id_text()
+    }
+
+    fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
+        // Every field of the binding is named, as in the ticket binding.
+        let Self {
+            // What the digest is begun with.
+            root: _,
+            id: _,
+            observation,
+            initials,
+            // Worked out from the repository: no part of what the caller
+            // asked for.
+            draft: _,
+            slug: _,
+        } = self;
+        builder
+            .field("observation", FieldValue::Text(observation))
+            .field(
+                "initials",
+                match initials {
+                    Some(initials) => FieldValue::Text(initials),
+                    None => FieldValue::Absent,
+                },
+            )
+    }
+
+    fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
+        ticket_scope(&self.id_text(), repository, position)
+    }
+
+    /// In order: the ticket is read, and a lifecycle-closed one refused.
+    /// A ticket that already holds a short code is answered here. It is
+    /// `slug_already_assigned`, unless the code is exactly the one this
+    /// request would assign: then the request's end state holds, and it is
+    /// answered as any request whose end state holds is, by the
+    /// already-applied rule. Otherwise the caller's token is checked, the
+    /// short code composed and the request accepted.
+    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+        let repository = resolve_root(service, &self.root)?;
+        let not_found = || Answer::stopped(ResultCode::ItemNotFound);
+        let item = service
+            .show_item(&repository, &self.id)
+            .map_err(|error| Answer::of_read(&error))?;
+        let (ItemDtoKind::Ticket, Some(source), Some(observation)) =
+            (item.kind, item.source, item.observation)
+        else {
+            return Err(not_found());
+        };
+        let current = parse_ticket(&item.path, source.as_bytes()).ok_or_else(not_found)?;
+        if current.id != self.id {
+            return Err(not_found());
+        }
+        if item
+            .closure
+            .is_some_and(|closure| closure.state == ClosureState::Closed)
+        {
+            return Err(Answer::stopped(ResultCode::TicketClosed));
+        }
+        let observed = ObservedFile {
+            token: observation,
+            bytes: source.into_bytes(),
+        };
+        let expected = observed.check(&self.observation);
+        let committed = || {
+            observe::is_committed(
+                Path::new(&item.context.worktree),
+                &item.path,
+                &observed.bytes,
+            )
+            .unwrap_or(false)
+        };
+        let slug = if has_slug(&current) {
+            let data = self.data(slug_of(&current));
+            // A short code that cannot be composed now is not the one the
+            // ticket holds.
+            let composed =
+                compose_slug(service, &repository, &self.id, self.initials.as_deref()).ok();
+            let Some(held) = slug_of(&current).filter(|held| Some(held) == composed.as_ref())
+            else {
+                return Err(Answer::stopped(ResultCode::SlugAlreadyAssigned).with_data(data));
+            };
+            match (committed(), &expected) {
+                (true, _) => {
+                    let (code, effects) = save::settled(None);
+                    return Err(Answer {
+                        effects,
+                        ..Answer::stopped(code).with_data(data)
+                    });
+                }
+                // Written by an attempt that did not commit, and the
+                // caller has seen it: the save commits it.
+                (false, Some(_)) => held,
+                (false, None) => {
+                    return Err(Answer::stopped(ResultCode::ExternalChange).with_data(data));
+                }
+            }
+        } else {
+            compose_slug(service, &repository, &self.id, self.initials.as_deref())?
+        };
+        let Some(expected) = expected else {
+            // The token is not the file's, and the file has no short code.
+            return Err(Answer::stopped(ResultCode::ExternalChange).with_data(self.data(None)));
+        };
+        // As for a save: with no editing context the effective copy is
+        // primary's file, which must be committed and unmodified.
+        let id = self.id_text();
+        if !ticket_context(repository.root(), &id).worktree.is_dir()
+            && !observe::is_committed(repository.root(), &item.path, &observed.bytes)
+                .unwrap_or(false)
+        {
+            return Err(Answer::stopped(ResultCode::WorktreeNotClean));
+        }
+        self.draft = Some(draft_of(&current));
+        self.slug = Some(slug);
+        prepared(repository.root(), &id, expected)
     }
 
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {

@@ -5,7 +5,7 @@
 use manyhands::{
     repository::{
         FailurePoint, Mutation, MutationDataDto, RelationshipWrite, TicketCreateInput,
-        TicketSaveInput,
+        TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -239,4 +239,30 @@ fn a_ticket_create_whose_item_already_exists_matches_its_schema_and_golden() {
         (Outcome::Noop, ResultCode::AlreadyApplied)
     );
     assert_ticket_contract("ticket_create_already_applied", &world, &envelope);
+}
+
+#[test]
+fn a_short_code_assignment_matches_its_schema_and_goldens() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let envelope = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_ticket_contract("ticket_slug_assign", &world, &envelope);
+
+    // Another request asks for another code: the ticket has one.
+    let envelope = world.execute(
+        REQUEST_2,
+        Mutation::TicketSlugAssign(TicketSlugAssignInput {
+            initials: Some("zz".to_owned()),
+            ..world.slug_assign_input(TICKET_A, &world.token(TICKET_A))
+        }),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Error, ResultCode::SlugAlreadyAssigned)
+    );
+    assert_ticket_contract("ticket_slug_assign_already_assigned", &world, &envelope);
 }
