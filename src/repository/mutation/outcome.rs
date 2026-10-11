@@ -571,9 +571,14 @@ pub(crate) fn recovery(
         ResultCode::RecoveryRequired
         | ResultCode::InvalidSlugConfiguration
         | ResultCode::InvalidConfiguration => vec![at_root(RecoveryActionKind::RepoInspect)],
-        ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable => {
-            vec![at_root(RecoveryActionKind::IndexRebuild)]
-        }
+        // A rebuild is of one repository and takes its root. A result
+        // that names no repository, as that of a key command on an index
+        // that cannot be read is, has no root to give: an action without
+        // its argument could not be carried out, so none is offered.
+        ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable => match root {
+            Some(_) => vec![at_root(RecoveryActionKind::IndexRebuild)],
+            None => Vec::new(),
+        },
         // An external change to an item is not answered by the same
         // request: it is refused again for as long as the change stands,
         // also when its record stays accepted because its operation is

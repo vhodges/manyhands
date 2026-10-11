@@ -407,9 +407,9 @@ fn a_key_command_on_an_unreadable_index_is_index_unavailable() {
         let refused = execute_with(&service, REQUEST_1, request);
         assert_eq!(refused.code, ResultCode::IndexUnavailable, "{command}");
         assert_of_the_application(&refused);
-        // The action names no repository: the request has none.
-        assert_eq!(recovery_actions(&refused), ["index.rebuild"], "{command}");
-        assert!(refused.recovery[0].arguments.is_empty(), "{command}");
+        // A rebuild is of a repository, by its root, and this result
+        // names none: no action is offered that could not be carried out.
+        assert!(recovery_actions(&refused).is_empty(), "{command}");
         assert_eq!(std::fs::read(&index).unwrap(), unreadable, "{command}");
     }
 }

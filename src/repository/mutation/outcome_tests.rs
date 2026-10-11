@@ -1265,3 +1265,32 @@ fn a_selection_whose_registration_is_pending_reports_its_commit_and_is_owed() {
     assert_eq!(effects.commit_oid, Some(oid(4).to_string()));
     assert!(effects.is_durable());
 }
+
+/// `index.rebuild` takes the root of the repository to rebuild. A result
+/// that names no repository, as one of a key command is, has none to
+/// give, so it offers no such action.
+#[test]
+fn a_result_that_names_no_repository_offers_no_rebuild() {
+    let request_id = RequestId::new();
+    for code in [
+        ResultCode::IndexUnavailable,
+        ResultCode::RepositoryNotRegistered,
+    ] {
+        for retry in [false, true] {
+            assert!(
+                recovery(code, None, request_id, None, retry).is_empty(),
+                "{code:?}, retry {retry}"
+            );
+        }
+        let offered = recovery(code, Some("/repository"), request_id, None, false);
+        assert_eq!(offered.len(), 1, "{code:?}");
+        assert_eq!(offered[0].action, RecoveryActionKind::IndexRebuild);
+        assert_eq!(
+            offered[0]
+                .arguments
+                .get("root")
+                .and_then(|root| root.as_str()),
+            Some("/repository")
+        );
+    }
+}
