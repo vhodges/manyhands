@@ -62,7 +62,7 @@ owner approved that affected paragraph on 2026-10-10; the Task 0 gate is met.
   applied-but-unreleased cancellation repair; independent source review.
 - [x] Task 5 complete real-SSH acceptance and fault/privacy matrix; independent review.
 - [x] Task 6 full local gates and independent whole-branch code review.
-- [ ] Task 6 authorized five-target native evidence and review-ready handoff.
+- [x] Task 6 authorized five-target native evidence and review-ready handoff.
 
 The public SSH regression exposed terminal cancellation after the resolution
 checkpoint but before cleanup. The owner-authorized shared predicate repair now
@@ -71,11 +71,33 @@ negatives. Task 5's 41 real-SSH cases and independent review pass. Task 6 reprod
 and fixed the redundant binding-migration marker write behind the concurrent
 opening failure; all final local gates and whole-branch source review pass
 (library 504, read-items 67, all integration/SSH targets and CLI smoke).
-Five-target native execution remains pending separate push/dispatch authorization.
-The ticket is open and not review-ready.
+The owner-authorized native iteration corrected the read-preservation fixture's
+transient SQLite WAL read marks. Both Windows targets pass, all five targets are
+restored, and the final five-target run passes on `b3715e1`.
+The ticket is open and review-ready.
 
 ## Exit Evidence
 
 A new root comment and reply are published when possible, remain discoverable
 locally when no remote or remote recovery failure exists, and publish on a
 later retry without duplicate files or commits.
+
+## Review-Ready Verification — 2026-10-11
+
+- Independent whole-branch and fixture-correction reviews approve the changes.
+- Required Devenv check, fmt, clippy, full tests and CLI smoke pass; library 504,
+  publication SSH 41, read-boundary 19; one existing characterization intentionally
+  ignored. Dependency/lockfile inputs unchanged.
+- [Windows-only iteration](https://github.com/vhodges/manyhands/actions/runs/38135479344)
+  passes both x86_64 and aarch64 after the reviewed fixture correction.
+- [Final five-target native run](https://github.com/vhodges/manyhands/actions/runs/38139344507)
+  passes Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 on
+  `b3715e1ad09d63c3709a76979bdcf5e049281145`, including both release binaries,
+  the complete headless test command and artifacts on every target.
+- Full five-target manual-only workflow restored byte-for-byte; publication 41
+  and read-boundary 19 pass on every target. The
+  [execution ledger](../../../docs/plans/2026-10-07-wave-02-cycle-07-comment-publication-execution.md)
+  records each run, review, source revision and evidence boundary.
+
+Implementation/verification handoff is ready. Closure, PR, merge and cleanup
+follow their separately authorized lifecycle stages; this ticket stays open.

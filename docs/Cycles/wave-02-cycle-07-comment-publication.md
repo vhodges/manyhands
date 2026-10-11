@@ -234,3 +234,20 @@ implementation and verification. Closure follows code-review or PR approval,
 normally in the authorized final pre-merge push. Push/PR, merge, closure, and
 worktree cleanup require separate authorization. Nothing in this proposal
 claims implementation or passing native CI.
+
+## Execution Evidence — 2026-10-11
+
+Implementation and local/native verification are complete and review-ready;
+the ticket remains open. Independent whole-branch and bounded fixture-correction
+reviews approve the changes. Required full Devenv gates and CLI smoke pass.
+
+The owner-requested Windows-only iteration passed both Windows architectures,
+then the original five-target manual workflow was restored byte-for-byte. The
+[final native run](https://github.com/vhodges/manyhands/actions/runs/38139344507)
+passes Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 on
+`b3715e1ad09d63c3709a76979bdcf5e049281145`: release builds, verification of both
+binaries, the complete headless contract suite and artifacts. The public comment
+publication target passes all 41 cases on every platform. The execution ledger
+and canonical ticket comments preserve the full fault/recovery/privacy matrix,
+original identity/effect proofs, the initial failed run and its reviewed fixture
+correction, and final verification evidence.

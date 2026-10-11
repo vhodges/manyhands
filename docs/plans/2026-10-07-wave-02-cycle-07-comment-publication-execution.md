@@ -851,3 +851,62 @@ Restore the workflow byte-for-byte to its pre-iteration five-target version and
 run the final matrix as requested. The validated Rust tree is unchanged from
 the complete resumed local gate. The final all-target native gate and review-ready
 handoff remain pending; ticket stays open.
+
+## Task 6 Complete: Final Native Gate and Review-Ready Handoff — 2026-10-11T13:35:19Z
+
+Restoration commit `b3715e1ad09d63c3709a76979bdcf5e049281145` restores the original
+five-target workflow **byte-for-byte**; `git diff --exit-code bac4903 --
+.github/workflows/build.yml` passes. Manual-only triggering and every original
+native build/test/artifact step remain intact. `git diff --exit-code 4f7c263 --
+src tests Cargo.toml Cargo.lock devenv.nix devenv.lock` proves the final checked
+Rust/toolchain tree is identical to the fully locally verified fixture-corrected
+tree. Changes since then are workflow iteration/restoration and ticket evidence.
+
+The requested final
+[Build run 38139344507](https://github.com/vhodges/manyhands/actions/runs/38139344507)
+checked exact HEAD `b3715e1ad09d63c3709a76979bdcf5e049281145` and **passed all five
+native targets**. Inspected individual job/step conclusions and complete logs,
+not just the overall badge. Both release binaries were built and verified, the
+complete headless contract command passed, and both artifacts were uploaded for
+every target:
+
+| Target / job | Release build / binary verification | Headless contracts | Artifacts | Publication SSH / read boundary |
+| --- | --- | --- | --- | --- |
+| [Linux x86_64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789361) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Linux aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789541) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Windows x86_64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789492) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [Windows aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789495) | PASS / PASS | PASS | uploaded | 41 / 19 |
+| [macOS aarch64](https://github.com/vhodges/manyhands/actions/runs/38139344507/job/114469789444) | PASS / PASS | PASS | uploaded | 41 / 19 |
+
+Full final native log `tool_12b2cdbf40011WSzn9LsCG2Baq` confirms the original SHM
+preservation regression and new real read-only/write-negative-control case pass
+on each target. Applied/unreleased resolution cancellation reports the intended
+recoverable phase (fixed observation 202) on all five. Windows library **468**
+and local authoring **107** pass on each architecture; Linux library **504** and
+local authoring **131** pass on each architecture. OS-conditioned suite counts
+differ normally. Canonical comments and owned resolution staging/index/reflog
+paths are exercised on the actual native runner paths; no fixture path failure
+occurred. These are native execution results, not cross-compilation claims.
+
+### Final acceptance and review state
+
+Tasks 0–6 implementation, recovery/preservation/privacy acceptance, required full
+local gates and the five-target native gate are complete. The independent
+whole-branch review and bounded fixture-correction review approvals remain valid:
+no implementation changed after those reviews. The restored workflow matches
+the already-reviewed version. Original checkpoint/blob/time/child and resolution
+candidate/attempt invariants are covered by the 41-case target on every native
+platform; original writer/read-preservation guarantees remain intact.
+
+No new Cargo/devenv input or lockfile change. The resumed local full gate
+`tool_12a8b46590016KiUrVOXk0RBZn` remains the final local Rust evidence (library 504,
+publication 41, read boundary 19 and all other suites/doctests passing; one existing
+intentionally ignored characterization). The earlier interrupted run is retained
+as interrupted history. Final evidence updates are documentation/ticket-only and
+do not require another unchanged-code full run.
+
+**Review-ready; ticket remains open.** Record this handoff as a canonical comment
+and publish the documentation-only checkpoint with a normal fast-forward push.
+The tested source revision is `b3715e1`; any following evidence commit changes no
+Rust, dependency or workflow file. PR creation, closure, merge and worktree cleanup
+remain their separately authorized lifecycle stages.
