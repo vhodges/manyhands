@@ -303,9 +303,11 @@ pub(crate) enum Entered {
     /// authoring way; see `Before::committing`.
     Authoring(Before),
     /// A command whose completed row has no checkpoint step whatever it
-    /// did, and whose work its binding found not to be done. The call's
-    /// result is judged by the operation's row after the call, so nothing
-    /// read before it is kept.
+    /// did, and whose work its binding found not to be done, or leaves to
+    /// its domain call to find: a key generation's call is itself the
+    /// check of what an earlier attempt left. The call's result is judged
+    /// by what the call returns and by the operation's row after it, so
+    /// nothing read before it is kept.
     Unfinished,
 }
 
