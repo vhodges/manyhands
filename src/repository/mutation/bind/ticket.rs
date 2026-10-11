@@ -23,6 +23,7 @@ use super::{
             TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
             recovery::{FinalKind, JournalRow},
         },
+        command::Command,
         dto::{MutationDataDto, TicketMutationDto},
         evidence::{self, Claim, PathEvidence, Position, Unreadable},
         identity::{FieldValue, IntentDigestBuilder},
@@ -32,9 +33,6 @@ use super::{
     },
     Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Found, Prepared, Ran, Standing,
 };
-
-pub(crate) const TICKET_CREATE: &str = "ticket create";
-pub(crate) const TICKET_SAVE: &str = "ticket save";
 
 /// Where item worktrees are, below the repository root.
 const WORKTREES_DIRECTORY: &str = ".manyhands/worktrees";
@@ -71,7 +69,7 @@ pub struct TicketSaveInput {
 }
 
 pub(crate) struct TicketBinding {
-    command: &'static str,
+    command: Command,
     root: PathBuf,
     id: ItemId,
     intent: ContextIntent,
@@ -89,7 +87,7 @@ pub(crate) struct TicketBinding {
 impl From<TicketCreateInput> for TicketBinding {
     fn from(input: TicketCreateInput) -> Self {
         Self {
-            command: TICKET_CREATE,
+            command: Command::TicketCreate,
             root: input.root,
             id: input.id,
             intent: ContextIntent::Create,
@@ -110,7 +108,7 @@ impl From<TicketCreateInput> for TicketBinding {
 impl From<TicketSaveInput> for TicketBinding {
     fn from(input: TicketSaveInput) -> Self {
         Self {
-            command: TICKET_SAVE,
+            command: Command::TicketSave,
             root: input.root,
             id: input.id,
             intent: ContextIntent::Edit,
@@ -749,7 +747,7 @@ fn local_initials(repository: &git2::Repository) -> Option<String> {
 }
 
 impl Binding for TicketBinding {
-    fn command(&self) -> &'static str {
+    fn command(&self) -> Command {
         self.command
     }
 

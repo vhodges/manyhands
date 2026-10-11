@@ -5,6 +5,7 @@
 
 use serde::{Serialize, Serializer};
 
+use super::command::Command;
 use crate::{
     repository::OperationFamily,
     results::{Effects, Outcome, ResultCode, contract_enum},
@@ -113,13 +114,11 @@ impl TicketMutationDto {
 impl MutationDataDto {
     /// The data a finished record of `command` stored, in the shape of
     /// that command's family. `None` for data that is not of that shape.
-    pub(crate) fn from_stored(command: &str, stored: &serde_json::Value) -> Option<Self> {
-        use super::bind::ticket::{TICKET_CREATE, TICKET_SAVE};
-
-        if command == TICKET_CREATE || command == TICKET_SAVE {
-            TicketMutationDto::from_stored(stored).map(Self::Ticket)
-        } else {
-            None
+    pub(crate) fn from_stored(command: Command, stored: &serde_json::Value) -> Option<Self> {
+        match command {
+            Command::TicketCreate | Command::TicketSave => {
+                TicketMutationDto::from_stored(stored).map(Self::Ticket)
+            }
         }
     }
 }

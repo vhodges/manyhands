@@ -13,8 +13,10 @@ struct NeverCheckpoints {
 }
 
 impl Binding for NeverCheckpoints {
-    fn command(&self) -> &'static str {
-        "test never checkpoints"
+    // The set of commands is closed, and no bound command is of this kind
+    // yet: the name is not what is asked of this binding.
+    fn command(&self) -> Command {
+        Command::TicketSave
     }
 
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {

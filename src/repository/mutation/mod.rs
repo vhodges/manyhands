@@ -33,6 +33,7 @@ use super::{
 };
 
 mod bind;
+mod command;
 mod dto;
 mod evidence;
 mod identity;
@@ -44,6 +45,7 @@ pub use bind::ticket::{TicketCreateInput, TicketSaveInput};
 use bind::{
     Accepted, Answer, Binding, EndedWithoutCheckpoint, Ran, Standing, ticket::TicketBinding,
 };
+use command::Command;
 pub use dto::{
     MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
     TicketMutationDto,
@@ -218,9 +220,13 @@ pub enum Mutation {
 impl Mutation {
     /// The command, as the envelope names it.
     pub fn command(&self) -> &'static str {
+        self.kind().name()
+    }
+
+    fn kind(&self) -> Command {
         match self {
-            Self::TicketCreate(_) => bind::ticket::TICKET_CREATE,
-            Self::TicketSave(_) => bind::ticket::TICKET_SAVE,
+            Self::TicketCreate(_) => Command::TicketCreate,
+            Self::TicketSave(_) => Command::TicketSave,
         }
     }
 
@@ -277,7 +283,7 @@ impl RequestIdentity {
             binding
                 .fields(IntentDigest::builder(
                     DigestSalt::Request(request_id),
-                    binding.command(),
+                    binding.command().name(),
                     scope,
                     &binding.target(),
                 ))
@@ -300,7 +306,7 @@ impl RequestIdentity {
 
     fn matches(&self, binding: &dyn Binding, record: &RequestRecord) -> bool {
         self.scope.as_ref() == Some(&record.scope)
-            && record.command == binding.command()
+            && record.command == binding.command().name()
             && record.target == binding.target()
             && self.digest == Some(record.intent_digest)
     }
@@ -346,7 +352,7 @@ impl Reply<'_> {
             recovery
         };
         let mut envelope = Envelope::classified_mutation(
-            self.binding.command(),
+            self.binding.command().name(),
             scope,
             code == ResultCode::Cancelled,
             code,
@@ -499,7 +505,7 @@ impl RepositoryService {
         let inserted = self.insert_request(&NewRequest {
             request_id: accepted.request_id,
             scope,
-            command: binding.command().to_owned(),
+            command: binding.command().name().to_owned(),
             target: binding.target(),
             intent_digest: digest,
             confirmation: None,
@@ -665,10 +671,16 @@ impl RepositoryService {
             }
         }
         let data = match result.data.as_ref() {
-            Some(stored) => match MutationDataDto::from_stored(&record.command, stored) {
-                Some(data) => Some(data),
-                None => return reply.stopped(ResultCode::InternalError),
-            },
+            // Stored data of a command this build does not bind cannot be
+            // given its shape.
+            Some(stored) => {
+                match Command::parse(&record.command)
+                    .and_then(|command| MutationDataDto::from_stored(command, stored))
+                {
+                    Some(data) => Some(data),
+                    None => return reply.stopped(ResultCode::InternalError),
+                }
+            }
             None => None,
         };
         // The one place an outcome is not derived: it is the stored one.

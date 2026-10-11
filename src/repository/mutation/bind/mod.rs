@@ -15,6 +15,7 @@ use super::{
         ExpectedPathObservation, OperationFamily, OperationId, ReadError, RepositoryService,
         recovery::{FinalKind, JournalRow},
     },
+    command::Command,
     dto::MutationDataDto,
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
@@ -256,8 +257,8 @@ pub(crate) enum EndedWithoutCheckpoint {
 }
 
 pub(crate) trait Binding {
-    /// The command, as the envelope names it.
-    fn command(&self) -> &'static str;
+    /// The command. Its name is what the envelope gives.
+    fn command(&self) -> Command;
 
     /// What a final row of this command's operation that never reached a
     /// checkpoint says of the request, when the request is entered again.
@@ -342,10 +343,15 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(JournalRow::Absent) => false,
         Some(JournalRow::Pending(_) | JournalRow::Final { .. }) | None => true,
     };
-    if ran && (record.command == ticket::TICKET_CREATE || record.command == ticket::TICKET_SAVE) {
-        ticket::recorded_effects(record, &accepted)
-    } else {
-        Effects::not_requested()
+    if !ran {
+        return Effects::not_requested();
+    }
+    match Command::parse(&record.command) {
+        Some(Command::TicketCreate | Command::TicketSave) => {
+            ticket::recorded_effects(record, &accepted)
+        }
+        // A record of no bound command: nothing is known of its effects.
+        None => Effects::not_requested(),
     }
 }
 
