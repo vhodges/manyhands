@@ -4336,3 +4336,258 @@ fn a_removal_whose_step_never_reached_the_journal_is_completed_without_observing
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);
 }
+
+// ---------------------------------------------------------------------
+// `remote remove`: what Git removes by the remote's refspecs
+// ---------------------------------------------------------------------
+
+/// Every reference of the repository, by name, with what it points at.
+fn references(root: &Path) -> BTreeMap<String, String> {
+    let repository = git2::Repository::open(root).unwrap();
+    repository
+        .references()
+        .unwrap()
+        .map(|reference| {
+            let reference = reference.unwrap();
+            (
+                reference.name().unwrap().to_owned(),
+                reference
+                    .target()
+                    .map(|oid| oid.to_string())
+                    .or_else(|| reference.symbolic_target().map(str::to_owned))
+                    .unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// A remote whose refspecs name the repository's own references as
+/// their destination, and a branch and a tag for Git to take with it.
+/// Returns the references as they are.
+fn remote_over_local_refs(
+    home: &Home,
+    fetch: &str,
+    push: Option<&str>,
+) -> BTreeMap<String, String> {
+    let repository = home.git();
+    repository
+        .remote_with_fetch("backup", BACKUP, fetch)
+        .unwrap();
+    if let Some(push) = push {
+        repository.remote_add_push("backup", push).unwrap();
+    }
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    repository
+        .tag_lightweight("v1", head.as_object(), false)
+        .unwrap();
+    let before = references(home.root());
+    assert!(before.contains_key("refs/heads/main"));
+    assert!(before.contains_key("refs/tags/v1"));
+    before
+}
+
+const USUAL_FETCH: &str = "+refs/heads/*:refs/remotes/backup/*";
+
+/// Git removes with a remote every reference that matches the
+/// destination of one of its refspecs. For a mirror those are the
+/// repository's branches and tags; for a push refspec onto
+/// `refs/heads/*`, its branches. Before this was observed, the preview
+/// of each said `remote_removed` and its execution deleted them. No
+/// preview is given of such a remote, and nothing is removed.
+#[test]
+fn a_remote_whose_removal_would_delete_branches_or_tags_is_refused_at_prepare() {
+    for (what, fetch, push) in [
+        ("a mirror", "+refs/*:refs/*", None),
+        (
+            "a push refspec onto local branches",
+            USUAL_FETCH,
+            Some("refs/heads/*:refs/heads/*"),
+        ),
+        (
+            "a fetch refspec onto another remote's references",
+            "+refs/heads/*:refs/remotes/upstream/*",
+            None,
+        ),
+    ] {
+        let home = Home::new();
+        remote_over_local_refs(&home, fetch, push);
+        let repository = home.git();
+        let head = repository.head().unwrap().peel_to_commit().unwrap().id();
+        repository
+            .reference("refs/remotes/upstream/main", head, false, "test")
+            .unwrap();
+        let before: BTreeMap<_, _> = references(home.root());
+        assert!(before.len() >= 3, "{what}");
+
+        let refused = home.prepare(&home.remove_remote("backup"));
+
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{what}");
+        assert_eq!(refused.outcome, Outcome::Error, "{what}");
+        assert_eq!(refused.data, None, "{what}");
+        assert_eq!(home.confirmation_rows(), 0, "{what}");
+        assert_eq!(references(home.root()), before, "{what}");
+        assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP), "{what}");
+    }
+}
+
+/// The refspec that makes a removal destructive is added after the
+/// preview. The request is refused before it is accepted, as `prepare`
+/// would refuse it, and every reference is as it was.
+#[test]
+fn a_destructive_refspec_added_after_the_preview_is_refused_at_execute() {
+    let home = Home::new();
+    let before = remote_over_local_refs(&home, USUAL_FETCH, None);
+    let (confirmation, preview) = home.preview(&home.remove_remote("backup"));
+    assert_eq!(effects(&preview), [PreviewEffect::RemoteRemoved]);
+    home.git()
+        .remote_add_push("backup", "refs/heads/*:refs/heads/*")
+        .unwrap();
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_refused(&refused, ResultCode::InvalidRemote, &[]);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(references(home.root()), before);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+}
+
+/// The same, with the request already accepted when the refspec is
+/// added: the retry is refused before its domain call.
+#[test]
+fn a_destructive_refspec_added_under_an_accepted_request_is_refused_on_its_retry() {
+    let mut home = Home::new();
+    let before = remote_over_local_refs(&home, USUAL_FETCH, None);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+    home.git()
+        .remote_add_fetch("backup", "+refs/*:refs/*")
+        .unwrap();
+
+    let refused = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::InvalidRemote);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(references(home.root()), before);
+    assert_eq!(home.remote_url("backup").as_deref(), Some(BACKUP));
+}
+
+/// A refspec that changes after the preview and names only the remote's
+/// own tracking references is still not what was shown.
+#[test]
+fn a_refspec_changed_after_the_preview_is_external_change() {
+    let home = Home::new();
+    let before = remote_over_local_refs(&home, USUAL_FETCH, None);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.git()
+        .remote_add_fetch("backup", "+refs/tags/*:refs/remotes/backup/tags/*")
+        .unwrap();
+
+    let refused = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(references(home.root()), before);
+}
+
+/// What Git does remove with a remote configured in the usual way, and
+/// what it leaves: the tracking references and the upstream of a branch
+/// that follows the remote go; HEAD, every branch and tag, another
+/// remote and its tracking references, and the upstream of a branch
+/// that follows that other remote stay.
+#[test]
+fn a_removal_takes_the_remote_s_own_references_and_upstreams_and_nothing_else() {
+    let home = Home::new();
+    remote_over_local_refs(&home, USUAL_FETCH, None);
+    home.add_remote("other", "git@example.invalid:team/other.git");
+    let repository = home.git();
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("side", &head, false).unwrap();
+    for name in ["refs/remotes/backup/main", "refs/remotes/other/main"] {
+        repository
+            .reference(name, head.id(), false, "test")
+            .unwrap();
+    }
+    let mut config = repository.config().unwrap();
+    for (branch, remote) in [("main", "backup"), ("side", "other")] {
+        config
+            .set_str(&format!("branch.{branch}.remote"), remote)
+            .unwrap();
+        config
+            .set_str(&format!("branch.{branch}.merge"), "refs/heads/main")
+            .unwrap();
+    }
+    let mut expected = references(home.root());
+    let head_before = fs::read(home.root().join(".git/HEAD")).unwrap();
+    let (confirmation, preview) = home.preview(&home.remove_remote("backup"));
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::RemoteRemoved,
+            PreviewEffect::RemoteTrackingRefsRemoved,
+            PreviewEffect::BranchUpstreamsRemoved,
+        ]
+    );
+
+    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
+
+    expected.remove("refs/remotes/backup/main");
+    assert_eq!(references(home.root()), expected);
+    assert_eq!(
+        fs::read(home.root().join(".git/HEAD")).unwrap(),
+        head_before
+    );
+    let config = home.git().config().unwrap();
+    assert!(config.get_string("branch.main.remote").is_err());
+    assert!(config.get_string("branch.main.merge").is_err());
+    assert_eq!(config.get_string("branch.side.remote").unwrap(), "other");
+    assert_eq!(
+        config.get_string("branch.side.merge").unwrap(),
+        "refs/heads/main"
+    );
+    assert!(home.remote_url("other").is_some());
+    assert_eq!(home.remote_url("backup"), None);
+}
+
+/// The request removed its remote and was interrupted, and a remote of
+/// the same name is added by hand before the retry. The domain operation
+/// would remove whatever remote has the name: it is not called, and the
+/// new remote stays. The record is kept: the request's operation is
+/// still pending.
+#[test]
+fn a_remote_added_again_under_an_interrupted_removal_is_not_removed_by_the_retry() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::AfterRemoteMutation);
+    home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(home.remote_url("backup"), None);
+    home.git()
+        .remote_with_fetch(
+            "backup",
+            "git@example.invalid:team/new.git",
+            "+refs/*:refs/*",
+        )
+        .unwrap();
+    let before = references(home.root());
+
+    home.reopen();
+    let refused = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(refused.outcome, Outcome::Partial);
+    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+    assert_eq!(references(home.root()), before);
+    assert!(home.remote_url("backup").is_some());
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+
+    // With the remote that was added taken away again, by hand and
+    // without Git's deletion of what its refspecs name, the request ends.
+    let mut config = home.git().config().unwrap();
+    config.remove("remote.backup.url").unwrap();
+    config.remove("remote.backup.fetch").unwrap();
+    assert_done(&home.retry(REQUEST_1, home.remove_remote("backup")));
+    assert_eq!(references(home.root()), before);
+    assert_eq!(home.world.pending_journal_rows(), 0);
+}

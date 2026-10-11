@@ -608,10 +608,20 @@ pub struct RemoteRemoveInput {
 ///
 /// **What its preview covers.** Whether the repository has the remote,
 /// and where it fetches from and pushes to; whether it is the publication
-/// remote; whether the repository holds tracking references of it and
-/// branches that follow it, which Git removes with it; and the
-/// repository's polling policy, with the remote polling observes. The
-/// command reads no identity.
+/// remote; the remote's refspecs, and whether the repository holds
+/// references they name and branches that follow the remote, which Git
+/// removes with it; and the repository's polling policy, with the remote
+/// polling observes. The command reads no identity.
+///
+/// **What Git removes with a remote.** Not the references under
+/// `refs/remotes/<name>/` as such: every reference of the repository
+/// that matches the destination of any of the remote's refspecs, fetch
+/// or push. For a remote configured in the usual way those are its
+/// tracking references. For a mirror, `+refs/*:refs/*`, or a remote
+/// with a push refspec onto `refs/heads/*`, they are the repository's
+/// own branches and tags. A preview cannot stand for that, so such a
+/// remote is refused, at `prepare` and before every domain call, and
+/// is never removed through this command.
 ///
 /// **A row that ended without a checkpoint step** says nothing here, as
 /// for `remote add`: `remove_remote` records `remote_changed` when it
@@ -650,8 +660,15 @@ struct Removal {
     remote: Option<Configured>,
     /// Whether the remote is the publication remote.
     selected: bool,
-    /// Whether any reference is under `refs/remotes/<name>/`.
+    /// The remote's refspecs as its configuration holds them, each with
+    /// its direction, in the order Git reads them.
+    refspecs: Vec<String>,
+    /// Whether Git would remove any reference with the remote: one that
+    /// matches the destination of one of its refspecs.
     tracking_refs: bool,
+    /// Whether any of those is outside `refs/remotes/<name>/`: a
+    /// reference that is not the remote's own tracking reference.
+    foreign_refs: bool,
     /// Whether any local branch has the remote as its upstream's.
     upstreams: bool,
     polling: Option<PollingPolicy>,
@@ -718,8 +735,43 @@ impl RemoteRemoveBinding {
         let resolved = resolve_root(service, &self.root)?;
         let root = resolved.root().to_owned();
         let repository = git2::Repository::open(&root).map_err(unreadable)?;
+        let own = format!("refs/remotes/{}/", self.name);
+        let mut refspecs = Vec::new();
+        let (mut tracking_refs, mut foreign_refs) = (false, false);
         let remote = match repository.find_remote(&self.name) {
             Ok(remote) => {
+                // As `git_remote_delete` does it: every reference of the
+                // repository is asked of every refspec of the remote,
+                // fetch and push alike, whether it matches the refspec's
+                // destination. The match is libgit2's own.
+                for refspec in remote.refspecs() {
+                    refspecs.push(format!(
+                        "{} {}",
+                        match refspec.direction() {
+                            git2::Direction::Fetch => "fetch",
+                            git2::Direction::Push => "push",
+                        },
+                        String::from_utf8_lossy(refspec.bytes())
+                    ));
+                }
+                let references = repository.references().map_err(unreadable)?;
+                for reference in references {
+                    let reference = reference.map_err(unreadable)?;
+                    // A name that is not text is one Git would still
+                    // match: it is taken to be removed, and not the
+                    // remote's own.
+                    let name = reference.name();
+                    let removed = match name {
+                        Some(name) => remote.refspecs().any(|refspec| refspec.dst_matches(name)),
+                        None => true,
+                    };
+                    if removed {
+                        tracking_refs = true;
+                        if !name.is_some_and(|name| name.starts_with(&own)) {
+                            foreign_refs = true;
+                        }
+                    }
+                }
                 let listed = service
                     .list_remotes_redacted(&resolved)
                     .map_err(|error| Answer::of_read(&error))?
@@ -746,18 +798,14 @@ impl RemoteRemoveBinding {
             }
             ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => false,
         };
-        let tracking_refs = repository
-            .references_glob(&format!("refs/remotes/{}/*", self.name))
-            .map_err(unreadable)?
-            .next()
-            .is_some();
         let config = repository
             .config()
             .and_then(|mut config| config.snapshot())
             .map_err(unreadable)?;
         let mut upstreams = false;
         let mut entries = config
-            .entries(Some("^branch\\..*\\.remote$"))
+            // The entries `git_remote_delete` looks through.
+            .entries(Some("branch\\..+\\.remote"))
             .map_err(unreadable)?;
         while let Some(entry) = entries.next() {
             if entry.map_err(unreadable)?.value() == Some(self.name.as_str()) {
@@ -771,7 +819,9 @@ impl RemoteRemoveBinding {
             root,
             remote,
             selected,
+            refspecs,
             tracking_refs,
+            foreign_refs,
             upstreams,
             polling,
         })
@@ -785,7 +835,9 @@ impl RemoteRemoveBinding {
             root: _,
             remote,
             selected,
+            refspecs,
             tracking_refs,
+            foreign_refs,
             upstreams,
             polling,
         } = removal;
@@ -812,7 +864,12 @@ impl RemoteRemoveBinding {
             None => observation.absent("remote").absent("fetch").absent("push"),
         };
         let observation = flag(observation, "selected", *selected);
+        let mut observation = observation.text("refspecs", &refspecs.len().to_string());
+        for refspec in refspecs {
+            observation = observation.text("refspec", refspec);
+        }
         let observation = flag(observation, "tracking_refs", *tracking_refs);
+        let observation = flag(observation, "foreign_refs", *foreign_refs);
         let observation = flag(observation, "upstreams", *upstreams);
         let observation = match polling {
             Some(PollingPolicy {
@@ -845,7 +902,19 @@ impl RemoteRemoveBinding {
         if removal.remote.is_none() {
             return Err(self.answer(ResultCode::AlreadyApplied, false));
         }
-        Ok(())
+        self.removable(removal)
+    }
+
+    /// Refuses a remote whose removal would take with it a reference
+    /// that is not its own tracking reference: a branch, a tag, or
+    /// another remote's. No preview is given of it and it is not
+    /// removed; it is not a remote this command can remove.
+    fn removable(&self, removal: &Removal) -> Result<(), Answer> {
+        if removal.foreign_refs {
+            Err(self.answer(ResultCode::InvalidRemote, false))
+        } else {
+            Ok(())
+        }
     }
 
     /// Whether the request's operation removed the remote and has not
@@ -1010,6 +1079,9 @@ impl Binding for RemoteRemoveBinding {
         let removal = self
             .observe(call.service)
             .map_err(|answer| answer.with_data(self.data()))?;
+        // The one check made here. It is of no state a preview can have
+        // covered: no confirmation is ever given of such a remote.
+        self.removable(&removal)?;
         Ok(Prepared {
             family: Some(OperationFamily::Local),
             // Nothing is committed, so there is no branch to bound.
@@ -1033,7 +1105,10 @@ impl Binding for RemoteRemoveBinding {
     /// 2. A row that holds a step removed the remote. The request's own
     ///    work has changed what would be observed, so nothing is
     ///    compared, and the confirmation is the request's however old it
-    ///    is: the domain call completes the row and its hand-off.
+    ///    is: the domain call completes the row and its hand-off. Not so
+    ///    while a remote of the name is there again: the domain call
+    ///    would remove it, so the answer is `external_change` and the
+    ///    record stays as it is.
     /// 3. With no step recorded, nothing of the request's is known to be
     ///    done. When the repository has no such remote, the request's
     ///    end state holds: with no row it is a no-op and is finished,
@@ -1073,7 +1148,21 @@ impl Binding for RemoteRemoveBinding {
             }
         };
         if step.is_some() {
-            return Ok(Entered::Unfinished);
+            // The domain operation removes whatever remote has the name
+            // when it is called, also under a row that has removed one.
+            // A remote that is there now was added since, and nobody was
+            // shown it: the operation is not called while it stands.
+            return match self.in_place(&accepted.root()) {
+                Ok(false) => Ok(Entered::Unfinished),
+                Ok(true) => Err(not_run(
+                    self.answer(ResultCode::ExternalChange, true),
+                    journal,
+                )),
+                Err(()) => Err(not_run(
+                    Answer::stopped(ResultCode::RepositoryInaccessible),
+                    journal,
+                )),
+            };
         }
         match self.in_place(&accepted.root()) {
             Ok(true) => {}
@@ -1095,6 +1184,9 @@ impl Binding for RemoteRemoveBinding {
             Ok(removal) => removal,
             Err(answer) => return Err(not_run(answer, journal)),
         };
+        if let Err(answer) = self.removable(&removal) {
+            return Err(not_run(answer, journal));
+        }
         // A request whose record holds no consent that can be read has
         // none that anything could be compared with: nothing is run.
         if call.previewed() != Some(self.digest(&removal)) {
