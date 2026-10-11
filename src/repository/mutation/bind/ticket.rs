@@ -24,6 +24,7 @@ use super::{
             recovery::{FinalKind, JournalRow},
         },
         command::Command,
+        context::{ContextNames, context_names},
         dto::{MutationDataDto, TicketMutationDto},
         evidence::{self, PathEvidence, Position, Unreadable},
         identity::{FieldValue, IntentDigestBuilder},
@@ -35,8 +36,6 @@ use super::{
     save,
 };
 
-/// Where item worktrees are, below the repository root.
-const WORKTREES_DIRECTORY: &str = ".manyhands/worktrees";
 /// The key of the initials a user set for this repository, in its local
 /// Git configuration.
 const INITIALS_KEY: &str = "manyhands.initials";
@@ -147,12 +146,9 @@ fn ticket_path(id: &str) -> String {
     format!(".manyhands/tickets/{id}/ticket.md")
 }
 
-fn worktree(root: &Path, id: &str) -> PathBuf {
-    root.join(WORKTREES_DIRECTORY).join(id)
-}
-
-fn branch_ref(id: &str) -> String {
-    format!("refs/heads/manyhands/ticket/{id}")
+/// The names of the ticket's editing context.
+fn ticket_context(root: &Path, id: &str) -> ContextNames {
+    context_names(root, &AuthoringKind::Ticket, id)
 }
 
 /// The short code a ticket's metadata holds, when it is text.
@@ -177,7 +173,7 @@ fn parse_ticket(path: &str, bytes: &[u8]) -> Option<canonical::Ticket> {
 /// there is no context, no file, or the file cannot be read.
 fn context_file(root: &Path, id: &str) -> Option<Vec<u8>> {
     owned_file_bytes(
-        &worktree(root, id),
+        &ticket_context(root, id).worktree,
         Path::new(&ticket_path(id)),
         RepositoryOperation::Read,
         root,
@@ -450,7 +446,7 @@ impl TicketBinding {
     }
 
     fn prepared(&self, root: &Path, expected: ExpectedPathObservation) -> Result<Prepared, Answer> {
-        let position = Position::of(root, &branch_ref(&self.id_text()))
+        let position = Position::of(root, &ticket_context(root, &self.id_text()).branch_ref)
             .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
         Ok(Prepared {
             family: OperationFamily::Local,
@@ -587,7 +583,9 @@ impl TicketBinding {
         // With no editing context the effective copy is primary's file,
         // and the domain creates the context from primary's head: the same
         // bytes only if the file is committed and unmodified.
-        if !worktree(repository.root(), &self.id_text()).is_dir()
+        if !ticket_context(repository.root(), &self.id_text())
+            .worktree
+            .is_dir()
             && !observe::is_committed(repository.root(), &item.path, &observed.bytes)
                 .unwrap_or(false)
         {
@@ -704,10 +702,12 @@ impl TicketBinding {
     fn already_applied(&self, root: &Path, file: Option<&[u8]>) -> Result<bool, Unreadable> {
         let id = self.id_text();
         match file {
-            Some(bytes) if self.holds_bytes(bytes) => {
-                observe::is_committed(&worktree(root, &id), &ticket_path(&id), bytes)
-                    .map_err(|_| Unreadable)
-            }
+            Some(bytes) if self.holds_bytes(bytes) => observe::is_committed(
+                &ticket_context(root, &id).worktree,
+                &ticket_path(&id),
+                bytes,
+            )
+            .map_err(|_| Unreadable),
             Some(_) | None => Ok(false),
         }
     }
@@ -847,7 +847,7 @@ impl Binding for TicketBinding {
             item_id: Some(self.id_text()),
             branch: context.and_then(|(position, _)| position.branch().map(str::to_owned)),
             worktree: context.and_then(|(_, root)| {
-                absolute_path_string(&worktree(Path::new(root), &self.id_text()))
+                absolute_path_string(&ticket_context(Path::new(root), &self.id_text()).worktree)
             }),
             repository,
             remote: None,

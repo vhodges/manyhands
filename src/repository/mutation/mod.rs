@@ -34,6 +34,7 @@ use super::{
 
 mod bind;
 mod command;
+mod context;
 mod dto;
 mod evidence;
 mod identity;
