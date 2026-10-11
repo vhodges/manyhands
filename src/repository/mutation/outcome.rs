@@ -526,7 +526,8 @@ const REQUEST_ARGUMENT: &str = "request_id";
 /// then offered to be sent again. `retry` says the request's record was
 /// left accepted, so repeating the same request continues it; a code with
 /// an action of its own keeps that one, and `external_change` is never
-/// offered the same request.
+/// offered the same request: for a confirmed command it says instead
+/// whether a new preview can be used.
 pub(crate) fn recovery(
     code: ResultCode,
     command: Command,
@@ -606,16 +607,19 @@ pub(crate) fn recovery(
         // refused again for as long as the change stands, also when its
         // record stays accepted because its operation is still in flight.
         // For a command that needs confirmation, what was previewed is no
-        // longer what is there, and a new preview shows what is. For an
+        // longer what is there, and a new preview shows what is. Not so
+        // when the record was left accepted: the request then has an
+        // operation of its own pending, which refuses every other
+        // operation on the repository, a new request with a new preview
+        // among them. What is offered is to look at the repository: with
+        // what was previewed put back, the same request goes on. For an
         // item write the caller reads the item again and submits a new
         // request, and no action is offered.
-        ResultCode::ExternalChange => {
-            if command.needs_confirmation() {
-                prepare_again()
-            } else {
-                Vec::new()
-            }
-        }
+        ResultCode::ExternalChange => match (command.needs_confirmation(), retry) {
+            (true, false) => prepare_again(),
+            (true, true) => vec![at_root(RecoveryActionKind::RepoInspect)],
+            (false, _) => Vec::new(),
+        },
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send.
         ResultCode::Busy => retry_request(),

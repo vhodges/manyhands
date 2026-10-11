@@ -1369,17 +1369,20 @@ fn a_request_with_no_usable_consent_is_offered_a_new_preview() {
     }
 }
 
-/// What was previewed is no longer there: a confirmed command is offered
-/// a new preview, also when its record was left accepted. An item write
-/// is offered nothing, as before.
+/// What was previewed is no longer there. A confirmed command whose
+/// request left nothing is offered a new preview. One whose record was
+/// left accepted has its own operation pending, which refuses every
+/// other operation on the repository: a new preview could not be used,
+/// so the repository is what is looked at. An item write is offered
+/// nothing, as before.
 #[test]
-fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview() {
+fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection() {
     for command in Command::ALL {
         for retry in [false, true] {
-            let expected: &[&str] = if command.needs_confirmation() {
-                &["request.prepare"]
-            } else {
-                &[]
+            let expected: &[&str] = match (command.needs_confirmation(), retry) {
+                (true, false) => &["request.prepare"],
+                (true, true) => &["repo.inspect"],
+                (false, _) => &[],
             };
             assert_eq!(
                 actions_of(command, ResultCode::ExternalChange, retry),
