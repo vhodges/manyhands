@@ -86,18 +86,28 @@ pub(crate) struct TicketBinding {
 
 impl From<TicketCreateInput> for TicketBinding {
     fn from(input: TicketCreateInput) -> Self {
+        // Every field is named: one added to the input does not compile
+        // until it is taken into the binding or left out here.
+        let TicketCreateInput {
+            root,
+            id,
+            draft,
+            deps,
+            parent,
+            initials,
+        } = input;
         Self {
             command: Command::TicketCreate,
-            root: input.root,
-            id: input.id,
+            root,
+            id,
             intent: ContextIntent::Create,
-            draft: input.draft,
-            deps: RelationshipWrite::Set(input.deps),
-            parent: match input.parent {
+            draft,
+            deps: RelationshipWrite::Set(deps),
+            parent: match parent {
                 Some(parent) => RelationshipWrite::Set(parent),
                 None => RelationshipWrite::Unchanged,
             },
-            initials: input.initials,
+            initials,
             observation: None,
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
@@ -107,16 +117,25 @@ impl From<TicketCreateInput> for TicketBinding {
 
 impl From<TicketSaveInput> for TicketBinding {
     fn from(input: TicketSaveInput) -> Self {
+        // Every field is named, as for a create.
+        let TicketSaveInput {
+            root,
+            id,
+            draft,
+            deps,
+            parent,
+            observation,
+        } = input;
         Self {
             command: Command::TicketSave,
-            root: input.root,
-            id: input.id,
+            root,
+            id,
             intent: ContextIntent::Edit,
-            draft: input.draft,
-            deps: input.deps,
-            parent: input.parent,
+            draft,
+            deps,
+            parent,
             initials: None,
-            observation: Some(input.observation),
+            observation: Some(observation),
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
         }
@@ -234,16 +253,25 @@ impl TicketBinding {
     /// applied, so the file is as intended exactly when applying them
     /// changes nothing.
     fn holds(&self, file: &canonical::Ticket) -> bool {
-        let draft = self.draft.clone();
+        // Every field of the draft is named: one added to it does not
+        // compile until the intended file below has it or leaves it out.
+        let TicketDraft {
+            title,
+            ticket_type,
+            status,
+            project,
+            team,
+            body,
+        } = self.draft.clone();
         let intended = match self.intent {
             ContextIntent::Edit => {
                 let mut ticket = file.clone();
-                ticket.title = draft.title;
-                ticket.ticket_type = draft.ticket_type;
-                ticket.status = draft.status;
-                ticket.project = draft.project;
-                ticket.team = draft.team;
-                ticket.body = draft.body;
+                ticket.title = title;
+                ticket.ticket_type = ticket_type;
+                ticket.status = status;
+                ticket.project = project;
+                ticket.team = team;
+                ticket.body = body;
                 apply_ticket_write_options(&mut ticket.unknown, self.options.clone());
                 ticket
             }
@@ -258,14 +286,14 @@ impl TicketBinding {
                 apply_ticket_write_options(&mut unknown, self.options.clone());
                 canonical::Ticket {
                     id: self.id.clone(),
-                    title: draft.title,
-                    ticket_type: draft.ticket_type,
-                    status: draft.status,
-                    project: draft.project,
-                    team: draft.team,
+                    title,
+                    ticket_type,
+                    status,
+                    project,
+                    team,
                     closed_at: None,
                     closed_by: None,
-                    body: draft.body,
+                    body,
                     unknown,
                 }
             }
@@ -281,17 +309,26 @@ impl TicketBinding {
     /// anything is read: a draft that cannot be written as a ticket is the
     /// caller's mistake.
     fn validate(&self) -> Result<(), Answer> {
-        let draft = self.draft.clone();
+        // Every field of the draft is named, so that one added to it is
+        // validated here or deliberately not.
+        let TicketDraft {
+            title,
+            ticket_type,
+            status,
+            project,
+            team,
+            body,
+        } = self.draft.clone();
         let probe = canonical::Ticket {
             id: self.id.clone(),
-            title: draft.title,
-            ticket_type: draft.ticket_type,
-            status: draft.status,
-            project: draft.project,
-            team: draft.team,
+            title,
+            ticket_type,
+            status,
+            project,
+            team,
             closed_at: None,
             closed_by: None,
-            body: draft.body,
+            body,
             unknown: serde_yaml::Mapping::new(),
         };
         canonical::serialize_item(&canonical::CanonicalItem::Ticket(probe))
@@ -779,35 +816,64 @@ impl Binding for TicketBinding {
                 None => FieldValue::Absent,
             }
         }
-        let deps: Vec<&str> = match &self.deps {
+        // Every field of the binding and of its draft is named. One that
+        // is added does not compile until it is a field of the digest or
+        // is left out here, with the reason it is not part of the intent.
+        let Self {
+            // The command, the repository and the target are what the
+            // digest is begun with.
+            command: _,
+            root: _,
+            id: _,
+            // Fixed by the command.
+            intent: _,
+            draft:
+                TicketDraft {
+                    title,
+                    ticket_type,
+                    status,
+                    project,
+                    team,
+                    body,
+                },
+            deps,
+            parent,
+            initials,
+            observation,
+            // Worked out by `prepare` from the input and the repository:
+            // no part of what the caller asked for.
+            options: _,
+            unresolved: _,
+        } = self;
+        let listed: Vec<&str> = match deps {
             RelationshipWrite::Set(deps) => deps.iter().map(String::as_str).collect(),
             RelationshipWrite::Unchanged | RelationshipWrite::Clear => Vec::new(),
         };
         builder
-            .field("title", FieldValue::Text(&self.draft.title))
-            .field("type", FieldValue::Text(&self.draft.ticket_type))
-            .field("status", FieldValue::Text(&self.draft.status))
-            .field("project", optional(&self.draft.project))
-            .field("team", optional(&self.draft.team))
-            .field("body", FieldValue::Text(&self.draft.body))
+            .field("title", FieldValue::Text(title))
+            .field("type", FieldValue::Text(ticket_type))
+            .field("status", FieldValue::Text(status))
+            .field("project", optional(project))
+            .field("team", optional(team))
+            .field("body", FieldValue::Text(body))
             .field(
                 "deps",
-                match &self.deps {
+                match deps {
                     RelationshipWrite::Unchanged => FieldValue::Absent,
                     RelationshipWrite::Clear => FieldValue::Null,
-                    RelationshipWrite::Set(_) => FieldValue::List(&deps),
+                    RelationshipWrite::Set(_) => FieldValue::List(&listed),
                 },
             )
             .field(
                 "parent",
-                match &self.parent {
+                match parent {
                     RelationshipWrite::Unchanged => FieldValue::Absent,
                     RelationshipWrite::Clear => FieldValue::Null,
                     RelationshipWrite::Set(parent) => FieldValue::Text(parent),
                 },
             )
-            .field("initials", supplied(&self.initials))
-            .field("observation", supplied(&self.observation))
+            .field("initials", supplied(initials))
+            .field("observation", supplied(observation))
     }
 
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
