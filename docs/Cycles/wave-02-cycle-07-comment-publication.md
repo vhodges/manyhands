@@ -238,7 +238,8 @@ claims implementation or passing native CI.
 ## Execution Evidence — 2026-10-11
 
 Implementation and local/native verification are complete and review-ready;
-the ticket remains open. Independent whole-branch and bounded fixture-correction
+the owner authorized ticket closure and PR delivery on 2026-10-11. Independent
+whole-branch and bounded fixture-correction
 reviews approve the changes. Required full Devenv gates and CLI smoke pass.
 
 The owner-requested Windows-only iteration passed both Windows architectures,

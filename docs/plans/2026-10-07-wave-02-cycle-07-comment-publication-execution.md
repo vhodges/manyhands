@@ -910,3 +910,28 @@ and publish the documentation-only checkpoint with a normal fast-forward push.
 The tested source revision is `b3715e1`; any following evidence commit changes no
 Rust, dependency or workflow file. PR creation, closure, merge and worktree cleanup
 remain their separately authorized lifecycle stages.
+
+## Owner-Authorized Closure and PR Delivery — 2026-10-11T13:41:04Z
+
+Owner request: "Mark the ticket as closed, commit and push to github. open a pr".
+This authorizes closure, its commit/push and a pull request against main. It does
+not authorize merge or worktree cleanup. Independent whole-branch and bounded
+fixture reviews already approve the implementation; local gates and the final
+five-target native run pass.
+
+Preflight: clean ticket worktree at `851944ff9e065955922a170bb68854ebad61dec9`,
+matching the freshly fetched remote ticket. Origin/main remains
+`f87ce81001f75ff6fc21192b71019b0bcaef6ea6`; clean ticket rebase is a no-op. Inspected
+the complete branch commit list and base diff, and confirmed no existing open PR
+for this branch. Fresh GitHub inspection reconfirms final native run 38139344507
+is completed/successful with all five jobs successful at tested source `b3715e1`.
+Source, tests, dependencies and the restored workflow are identical to that
+revision; closure updates are ticket/documentation-only.
+
+Marked the canonical ticket closed with the timestamp above and
+`closed_by: "Vince Hodges <vince@imbas.ca>"`, matching the repository's closure
+convention and configured author identity. Added the closure comment using the
+canonical filesystem fallback: the current CLI still only initializes startup
+and has no ticket/comment mutation commands. Publish this checkpoint with a
+normal fast-forward push, then open the owner-requested PR. No unchanged-code
+full test repetition is needed for this metadata-only delivery update.
