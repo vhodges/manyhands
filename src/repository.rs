@@ -346,6 +346,9 @@ pub enum LifecycleLeasePhase {
     SetPublicationRemoteExisting,
 }
 
+/// The message of the commit enablement makes.
+const INITIALIZATION_MESSAGE: &str = "Initialize Manyhands";
+
 #[derive(Clone)]
 pub struct CommitIdentity {
     pub name: String,
@@ -4592,7 +4595,7 @@ impl RepositoryService {
                     Some("HEAD"),
                     &signature,
                     &signature,
-                    "Initialize Manyhands",
+                    INITIALIZATION_MESSAGE,
                     &tree,
                     &parents.iter().collect::<Vec<_>>(),
                 )

@@ -2460,3 +2460,174 @@ fn of_two_requests_racing_for_one_confirmation_one_is_confirmation_used() {
     assert_eq!(desk.accepted_confirmations(), 1);
     assert_eq!(plain.initializations(), 1);
 }
+
+// ---------------------------------------------------------------------
+// Which commit is the request's, and what a row that has ended says
+// ---------------------------------------------------------------------
+
+/// The reason a completed row with no checkpoint step says nothing for
+/// these commands. An enablement is cut off after its commit and before
+/// the step that records it. The call that takes its row up finds the
+/// repository enabled and completes the row, which still holds the step
+/// before the commit; that call's result is lost as well. The next call
+/// meets a completed row with no checkpoint step, of an operation that
+/// committed: it reports that commit and makes no second one, and does
+/// not ask for the confirmation again.
+#[test]
+fn a_row_that_completed_without_its_checkpoint_step_still_reports_its_commit() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::AfterInitializationCommit);
+
+    let cut_off = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(cut_off.outcome, Outcome::Partial, "{}", cut_off.message);
+    let commit = plain.head();
+    assert_eq!(cut_off.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(plain.initializations(), 1);
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE state != 'completed' AND completed_step = 'configuration_written'"
+        ),
+        1
+    );
+
+    desk.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    desk.execute(REQUEST_1, &confirmation, plain.enable());
+    // The row has completed, and holds no checkpoint step.
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE state = 'completed' AND completed_step = 'configuration_written'"
+        ),
+        1
+    );
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    desk.reopen();
+    desk.clock.set(START + 3600);
+    let finished = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(assert_enabled(&finished, &plain.root), commit.to_string());
+    assert_eq!(plain.head(), commit);
+    assert_eq!(plain.initializations(), 1);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
+
+/// An enablement is killed after it wrote the configuration and before
+/// it committed it, and someone commits the file by hand. The row shows
+/// the operation wrote the file; the commit that holds it is not the
+/// operation's, and is not reported as the request's.
+#[test]
+fn a_configuration_committed_by_hand_is_not_reported_as_the_request_s_commit() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    killed_at(
+        &desk,
+        &plain.root,
+        true,
+        &confirmation,
+        FailurePoint::BeforeInitializationCommit,
+    );
+    let written = plain
+        .configuration()
+        .expect("the configuration was written");
+    assert_eq!(plain.initializations(), 0);
+    let by_hand = World::commit_in(&plain.root, canonical::CONFIG_PATH, &written);
+
+    desk.reopen();
+    let answered = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(
+        answered.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        answered.message
+    );
+    assert_eq!(answered.outcome, Outcome::Noop);
+    assert_eq!(answered.effects.commit_oid, None);
+    assert_eq!(plain.head(), by_hand);
+    assert_eq!(plain.initializations(), 0);
+    assert_eq!(desk.pending_journal_rows(), 0);
+}
+
+/// An enablement ends having done nothing, for want of an identity, and
+/// its answer is lost. By the retry the identity is back and nothing has
+/// changed. The retry does not say that something has: the request did
+/// not run, its record is gone, and the same request is what is sent.
+#[test]
+fn a_lost_refusal_whose_cause_has_gone_is_not_called_a_change() {
+    let Some(_home) = in_a_process_with_its_own_git_home(
+        "a_lost_refusal_whose_cause_has_gone_is_not_called_a_change",
+    ) else {
+        return;
+    };
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let config_path = plain.root.join(".git/config");
+    let with_identity = fs::read(&config_path).unwrap();
+    let path = config_path.clone();
+    desk.service.set_request_hook_for_testing(move || {
+        let mut config = git2::Config::open(&path).unwrap();
+        config.remove("user.name").unwrap();
+        config.remove("user.email").unwrap();
+    });
+    desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(plain.configuration(), None);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    fs::write(&config_path, with_identity).unwrap();
+
+    desk.reopen();
+    let answered = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(answered.code, ResultCode::Busy, "{}", answered.message);
+    assert_eq!(recovery_actions(&answered), ["request.retry"]);
+    desk.assert_nothing_left(REQUEST_1);
+    assert_enabled(
+        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+}
+
+/// The same lost refusal while its cause stands is answered with the
+/// cause.
+#[test]
+fn a_lost_refusal_whose_cause_stands_is_answered_with_the_cause() {
+    let Some(_home) = in_a_process_with_its_own_git_home(
+        "a_lost_refusal_whose_cause_stands_is_answered_with_the_cause",
+    ) else {
+        return;
+    };
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let path = plain.root.join(".git/config");
+    desk.service.set_request_hook_for_testing(move || {
+        let mut config = git2::Config::open(&path).unwrap();
+        config.remove("user.name").unwrap();
+        config.remove("user.email").unwrap();
+    });
+    desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    desk.reopen();
+    let answered = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_eq!(answered.code, ResultCode::IdentityRequired);
+    assert_eq!(recovery_actions(&answered), ["repo.identity_set"]);
+    desk.assert_nothing_left(REQUEST_1);
+}

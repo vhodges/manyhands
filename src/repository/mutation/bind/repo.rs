@@ -40,10 +40,10 @@ use super::{
     super::{
         super::{
             CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
-            EnableRepositoryOutcome, EnableRepositoryRequest, OperationFamily, RepositoryError,
-            RepositoryErrorKind, RepositoryOperation, RepositoryService, WorktreeState,
-            canonical_configuration, canonical_repository_root, checked_out_branch,
-            read_configuration_for,
+            EnableRepositoryOutcome, EnableRepositoryRequest, INITIALIZATION_MESSAGE,
+            OperationFamily, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+            RepositoryService, WorktreeState, canonical_configuration, canonical_repository_root,
+            checked_out_branch, read_configuration_for,
             recovery::{FinalKind, JournalRow, PendingOperation},
             resolve_identity, validate_identity, worktree_state,
         },
@@ -238,9 +238,17 @@ fn is_repository_root(root: &Path) -> bool {
 /// names: the newest commit on the branch's first-parent line that holds
 /// the file and whose parent does not. `None` when the branch does not
 /// hold the file, or held it already at the recorded commit.
+///
+/// The commit is named only when it is one enablement makes: its message
+/// is enablement's, and the configuration it holds is `written`, the
+/// file the request's operation wrote, when the caller has the request's
+/// input to say what that is. A commit of the file that someone made by
+/// hand, or that another repository put at the path holds, is none of
+/// the request's.
 fn initialization_commit(
     root: &Path,
     position: &Position,
+    written: Option<&str>,
 ) -> Result<Option<git2::Oid>, git2::Error> {
     let repository = Repository::open(root)?;
     let absent = |error: &git2::Error| {
@@ -270,19 +278,35 @@ fn initialization_commit(
         }
     };
     let mut commit = repository.find_commit(tip)?;
-    loop {
+    let found = loop {
         if Some(commit.id()) == position.base_oid || !holds(&commit)? {
             return Ok(None);
         }
         if commit.parent_count() == 0 {
-            return Ok(Some(commit.id()));
+            break commit;
         }
         let parent = commit.parent(0)?;
         if !holds(&parent)? {
-            return Ok(Some(commit.id()));
+            break commit;
         }
         commit = parent;
+    };
+    if found.message_bytes() != INITIALIZATION_MESSAGE.as_bytes() {
+        return Ok(None);
     }
+    if let Some(written) = written {
+        let entry = found.tree()?.get_path(Path::new(canonical::CONFIG_PATH))?;
+        let holds_what_was_written = match repository.find_blob(entry.id()) {
+            Ok(blob) => blob.content() == written.as_bytes(),
+            // Something other than a file is committed there.
+            Err(error) if error.code() == git2::ErrorCode::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        if !holds_what_was_written {
+            return Ok(None);
+        }
+    }
+    Ok(Some(found.id()))
 }
 
 /// The last step the request's operation recorded, whether its row is
@@ -308,9 +332,15 @@ fn recorded_step(service: &RepositoryService, accepted: &Accepted) -> Result<Opt
 /// The initialization commit that is the request's own: the commit that
 /// put the configuration file on the branch, when the request's operation
 /// recorded that it wrote that file. `Ok(None)` when the operation wrote
-/// no configuration, or no commit holds what it wrote. `Err` when the
-/// journal or Git could not be read.
-fn own_commit(service: &RepositoryService, accepted: &Accepted) -> Result<Option<git2::Oid>, ()> {
+/// no configuration, or no commit of enablement's holds what it wrote.
+/// `Err` when the journal or Git could not be read. `written` is the
+/// configuration the request writes, when its input is at hand; see
+/// `initialization_commit`.
+fn own_commit(
+    service: &RepositoryService,
+    accepted: &Accepted,
+    written: Option<&str>,
+) -> Result<Option<git2::Oid>, ()> {
     let wrote = matches!(
         recorded_step(service, accepted)?.as_deref(),
         Some(CONFIGURATION_WRITTEN_STEP | INITIALIZATION_COMMITTED_STEP)
@@ -318,7 +348,7 @@ fn own_commit(service: &RepositoryService, accepted: &Accepted) -> Result<Option
     if !wrote {
         return Ok(None);
     }
-    initialization_commit(&accepted.root(), &accepted.position).map_err(|_| ())
+    initialization_commit(&accepted.root(), &accepted.position, written).map_err(|_| ())
 }
 
 /// Whether the row says the operation has done something and has not
@@ -349,8 +379,22 @@ pub(crate) fn recorded_effects(
     accepted: &Accepted,
     journal: Option<&JournalRow>,
 ) -> Recorded {
+    recorded(service, accepted, journal, None)
+}
+
+/// `recorded_effects`, with the configuration the request writes when
+/// its input is at hand.
+fn recorded(
+    service: &RepositoryService,
+    accepted: &Accepted,
+    journal: Option<&JournalRow>,
+    written: Option<&str>,
+) -> Recorded {
     Recorded {
-        effects: outcome::stopped_save_effects(own_commit(service, accepted).ok().flatten(), false),
+        effects: outcome::stopped_save_effects(
+            own_commit(service, accepted, written).ok().flatten(),
+            false,
+        ),
         local_change: begun_and_unfinished(journal),
     }
 }
@@ -375,6 +419,18 @@ impl RepoBinding {
             Verb::Create => RepositoryOperation::CreateAndEnable,
             Verb::Enable => RepositoryOperation::Enable,
         }
+    }
+
+    /// The configuration file the request writes. `None` for an input
+    /// that could not be written, which no request is accepted with.
+    fn written(&self) -> Option<String> {
+        canonical_configuration(
+            &self.primary_branch,
+            self.slug_prefix.as_deref(),
+            &self.root,
+            self.operation(),
+        )
+        .ok()
     }
 
     /// The checks of the input alone.
@@ -781,7 +837,7 @@ impl RepoBinding {
         // made it. Every other result names the head it found, or none.
         let own = |named: Option<git2::Oid>| match named {
             Some(commit) => Ok(Some(commit)),
-            None => own_commit(service, accepted),
+            None => own_commit(service, accepted, self.written().as_deref()),
         };
         let unconfirmed = || Ran {
             answer: Answer::stopped(ResultCode::RepositoryInaccessible),
@@ -858,7 +914,12 @@ impl RepoBinding {
             outcome::repository_error_code(kind)
         };
         let journal = accepted.journal_row(service);
-        let recorded = recorded_effects(service, accepted, journal.as_ref());
+        let recorded = recorded(
+            service,
+            accepted,
+            journal.as_ref(),
+            self.written().as_deref(),
+        );
         Ran {
             answer: Answer {
                 effects: recorded.effects,
@@ -871,8 +932,14 @@ impl RepoBinding {
 
     /// A row that has completed: what the request is answered with, and
     /// what becomes of its record. No domain call is made.
-    fn ended(&self, service: &RepositoryService, accepted: &Accepted, journal: JournalRow) -> Ran {
-        match own_commit(service, accepted) {
+    fn ended(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        journal: JournalRow,
+        previewed: Option<&ObservationDigest>,
+    ) -> Ran {
+        match own_commit(service, accepted, self.written().as_deref()) {
             Err(()) => Ran {
                 answer: Answer::stopped(ResultCode::RepositoryInaccessible),
                 standing: Standing::Unconfirmed,
@@ -894,15 +961,25 @@ impl RepoBinding {
             // The operation ended having done nothing: for want of an
             // identity, say. Had that answer not been lost, settling
             // would have deleted the record; it is deleted now, which
-            // releases the confirmation. The answer is what stands in
-            // the request's way as things are, or that what was
-            // previewed is not what is there.
+            // releases the confirmation. The answer says what is true
+            // as things are:
+            //
+            // - what stands in the request's way, when something does;
+            // - that what was previewed is not what is there, when it is
+            //   not;
+            // - otherwise that the request did not run and can be sent
+            //   again. Nothing has changed and nothing is in its way, so
+            //   to call it a change would be untrue; `busy` is the code
+            //   whose one meaning to a caller is "send this again".
             Ok(None) => Ran {
-                answer: self
-                    .observe()
-                    .and_then(|observed| self.check(&observed))
-                    .err()
-                    .unwrap_or_else(|| Answer::stopped(ResultCode::ExternalChange)),
+                answer: match self.observe().and_then(|observed| {
+                    self.check(&observed)?;
+                    Ok(self.digest(&observed))
+                }) {
+                    Err(answer) => answer,
+                    Ok(found) if previewed == Some(&found) => Answer::stopped(ResultCode::Busy),
+                    Ok(_) => Answer::stopped(ResultCode::ExternalChange),
+                },
                 standing: Standing::Stopped {
                     journal: Some(journal),
                 },
@@ -1043,6 +1120,13 @@ impl Binding for RepoBinding {
             answer,
             standing: Standing::NotRun { journal },
         };
+        // What the request's consent was to. A request whose record
+        // holds none, or one that cannot be read as a digest, has none
+        // that anything could be compared with: nothing is run on that.
+        let previewed = call
+            .confirmation
+            .and_then(|consent| consent.observation_digest.as_deref())
+            .and_then(ObservationDigest::from_stored);
         let stepped = match &journal {
             JournalRow::Absent => false,
             JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.is_some(),
@@ -1050,7 +1134,7 @@ impl Binding for RepoBinding {
                 kind: FinalKind::Completed,
                 owes_work: false,
                 checkpointed: _,
-            } => return Err(self.ended(service, accepted, journal)),
+            } => return Err(self.ended(service, accepted, journal, previewed.as_ref())),
             // No local operation is in another journal, ends in another
             // way or owes work once it has completed. Nothing is run or
             // settled on a row that says so.
@@ -1066,13 +1150,6 @@ impl Binding for RepoBinding {
             }
         };
         let root = accepted.root();
-        // What the request's consent was to. A request whose record
-        // holds none, or one that cannot be read as a digest, has none
-        // that anything could be compared with: nothing is run on that.
-        let previewed = call
-            .confirmation
-            .and_then(|consent| consent.observation_digest.as_deref())
-            .and_then(ObservationDigest::from_stored);
         let changed =
             |journal: JournalRow| not_run(Answer::stopped(ResultCode::ExternalChange), journal);
         let Some(previewed) = previewed else {
