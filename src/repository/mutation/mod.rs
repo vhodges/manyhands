@@ -41,7 +41,9 @@ mod outcome;
 mod records;
 
 pub use bind::ticket::{TicketCreateInput, TicketSaveInput};
-use bind::{Accepted, Answer, Binding, Ran, Standing, ticket::TicketBinding};
+use bind::{
+    Accepted, Answer, Binding, EndedWithoutCheckpoint, Ran, Standing, ticket::TicketBinding,
+};
 pub use dto::{
     MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
     TicketMutationDto,
@@ -761,12 +763,7 @@ impl RepositoryService {
                     return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
                 }
             };
-        if let JournalRow::Final {
-            kind: FinalKind::Completed,
-            owes_work: false,
-            checkpointed: false,
-        } = journal
-        {
+        match Reentry::of(&journal, binding.ended_without_checkpoint()) {
             // The operation ended before its checkpoint: it stopped or was
             // refused with nothing in flight. Had that answer not been
             // lost, settling would have deleted the record. It is deleted
@@ -776,10 +773,13 @@ impl RepositoryService {
             // left alone; calling the domain on it again would record a
             // checkpoint on a row that never had one, and a later retry
             // could then take another request's commit for this one's.
-            return match self.delete_request(accepted.request_id, accepted.attempt) {
-                Ok(_) => None,
-                Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
-            };
+            Reentry::AsNew => {
+                return match self.delete_request(accepted.request_id, accepted.attempt) {
+                    Ok(_) => None,
+                    Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
+                };
+            }
+            Reentry::AsRecorded => {}
         }
         let before = binding.reenter(self, &accepted, journal);
         let reply = Reply { binding, identity };
@@ -789,6 +789,38 @@ impl RepositoryService {
             }),
             Err(ran) => self.settled(&reply, &accepted, ran),
         })
+    }
+}
+
+/// How a call that re-enters an accepted record takes it, decided from the
+/// operation's journal row as it was before the call and from what the
+/// binding says of a row that ended without a checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reentry {
+    /// The record is released and the call is run as a new request.
+    AsNew,
+    /// The record is kept: the binding reads its evidence, and the request
+    /// is continued or answered from what its operation did.
+    AsRecorded,
+}
+
+impl Reentry {
+    fn of(journal: &JournalRow, rule: EndedWithoutCheckpoint) -> Self {
+        let _ = rule;
+        match journal {
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: false,
+                checkpointed: false,
+            } => Self::AsNew,
+            JournalRow::Absent
+            | JournalRow::Pending(_)
+            | JournalRow::Final {
+                kind: _,
+                owes_work: _,
+                checkpointed: _,
+            } => Self::AsRecorded,
+        }
     }
 }
 
@@ -869,3 +901,7 @@ pub mod request_store {
 #[cfg(test)]
 #[path = "settle_tests.rs"]
 mod settle_tests;
+
+#[cfg(test)]
+#[path = "reentry_tests.rs"]
+mod reentry_tests;

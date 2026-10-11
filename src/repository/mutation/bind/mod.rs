@@ -237,9 +237,42 @@ impl Before {
     }
 }
 
+/// What it says of a request that its operation's journal row is final,
+/// completed, owes no work and never recorded a checkpoint step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EndedWithoutCheckpoint {
+    /// The operation did nothing: it records a checkpoint step whenever it
+    /// gets as far as its work, so a row without one stopped or was
+    /// refused before it. The record is released and the call is run as a
+    /// new request.
+    DidNothing,
+    /// Nothing: the operation's completed row has no checkpoint step
+    /// whatever it did. The request is re-entered as any other whose
+    /// operation has ended, and is answered from what it did.
+    // Both bound commands are authoring saves. The first binding of a
+    // command that is not one gives this, and removes the attribute.
+    #[cfg_attr(not(test), allow(dead_code))]
+    SaysNothing,
+}
+
 pub(crate) trait Binding {
     /// The command, as the envelope names it.
     fn command(&self) -> &'static str;
+
+    /// What a final row of this command's operation that never reached a
+    /// checkpoint says of the request, when the request is entered again.
+    ///
+    /// There is no default, because neither answer is safe for a binding
+    /// that has not thought about it. `DidNothing` is right only where
+    /// the domain operation records a checkpoint step on every row that
+    /// did its work, as an authoring save does: there, running the
+    /// request as new is what settling would have done had the first
+    /// answer not been lost. For an operation whose completed row never
+    /// has such a step, an index refresh or a confirmed command among
+    /// them, `DidNothing` would run completed work a second time after
+    /// lost output, and send a confirmed command back through a
+    /// confirmation it has already used. Those answer `SaysNothing`.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint;
 
     /// The repository root as the caller gave it.
     fn root(&self) -> &Path;

@@ -30,7 +30,7 @@ use super::{
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, Found, Prepared, Ran, Standing,
+    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Found, Prepared, Ran, Standing,
 };
 
 pub(crate) const TICKET_CREATE: &str = "ticket create";
@@ -755,6 +755,13 @@ impl Binding for TicketBinding {
 
     fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// A create and a save are authoring saves: the operation records its
+    /// checkpoint step whether the checkpoint committed or found nothing
+    /// to commit, so a completed row without one wrote nothing.
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::DidNothing
     }
 
     fn target(&self) -> String {
