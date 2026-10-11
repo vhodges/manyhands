@@ -645,3 +645,136 @@ fn an_undone_look_alike_is_no_change_from_elsewhere_for_a_request_that_cannot_ha
     assert!(foreign.superseded(STARTED));
     assert!(foreign.superseded(NOT_STARTED));
 }
+
+/// Commits the removal of `path` on `reference`, on top of `parent`.
+fn remove(repository: &Repository, reference: &str, parent: Oid, path: &str) -> Oid {
+    let signature = Signature::new("Test", "test@example.invalid", &Time::new(0, 0)).unwrap();
+    let parent = repository.find_commit(parent).unwrap();
+    let mut index = git2::Index::new().unwrap();
+    index.read_tree(&parent.tree().unwrap()).unwrap();
+    index.remove(Path::new(path), 0).unwrap();
+    let tree = repository
+        .find_tree(index.write_tree_to(repository).unwrap())
+        .unwrap();
+    let oid = repository
+        .commit(None, &signature, &signature, "c", &tree, &[&parent])
+        .unwrap();
+    repository.reference(reference, oid, true, "test").unwrap();
+    oid
+}
+
+/// The evidence of a request that intends `PATH` to hold no file, as a
+/// move does of the path it moves its document from.
+fn removal_evidence(fixture: &Fixture) -> PathEvidence {
+    path_evidence_of(
+        fixture.root(),
+        &fixture.position(),
+        PATH,
+        &ExpectedPathObservation::from_bytes(b"before\n"),
+        &|file| file.is_none(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_request_that_intends_no_file_at_a_path_owns_the_commit_that_removed_it() {
+    let fixture = fixture();
+    assert_eq!(removal_evidence(&fixture).own(), None);
+    assert!(!removal_evidence(&fixture).superseded(true));
+
+    let removed = remove(&fixture.repository, BRANCH, fixture.base, PATH);
+    let evidence = removal_evidence(&fixture);
+    assert_eq!(evidence.own(), Some(removed));
+    assert!(!evidence.superseded(true));
+    assert!(!evidence.superseded(false));
+
+    // A request that intends a file there does not own a removal.
+    let saving = path_evidence(
+        fixture.root(),
+        &fixture.position(),
+        PATH,
+        &ExpectedPathObservation::from_bytes(b"before\n"),
+        &|bytes| bytes == b"intended\n",
+    )
+    .unwrap();
+    assert_eq!(saving.own(), None);
+    assert!(saving.superseded(true));
+}
+
+#[test]
+fn another_file_committed_at_a_path_a_request_intends_to_empty_is_from_elsewhere() {
+    let fixture = fixture();
+    // Before the request removed anything.
+    let foreign = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        PATH,
+        "foreign\n",
+    );
+    let evidence = removal_evidence(&fixture);
+    assert_eq!(evidence.own(), None);
+    assert!(evidence.superseded(true));
+    assert!(evidence.superseded(false));
+
+    // And after someone put the file back as the request found it: what
+    // came and went has left the path as it was.
+    commit(&fixture.repository, BRANCH, Some(foreign), PATH, "before\n");
+    assert!(!removal_evidence(&fixture).superseded(false));
+}
+
+#[test]
+fn the_files_of_a_commit_are_read_by_path_and_below_a_directory() {
+    let fixture = fixture();
+    let first = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(fixture.base),
+        "docs/a.md",
+        "a\n",
+    );
+    let second = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(first),
+        "docs/deep/b.md",
+        "b\n",
+    );
+    let third = commit(
+        &fixture.repository,
+        BRANCH,
+        Some(second),
+        "docsx/c.md",
+        "c\n",
+    );
+
+    assert_eq!(
+        file_at(fixture.root(), third, "docs/a.md"),
+        Ok(Some(b"a\n".to_vec()))
+    );
+    assert_eq!(file_at(fixture.root(), third, "docs/absent.md"), Ok(None));
+    // A directory is no file, and a commit the repository lacks holds none.
+    assert_eq!(file_at(fixture.root(), third, "docs"), Ok(None));
+    assert_eq!(
+        file_at(fixture.root(), Oid::from_bytes(&[7; 20]).unwrap(), PATH),
+        Ok(None)
+    );
+
+    let mut files = files_under(fixture.root(), third, "docs").unwrap();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            ("docs/a.md".to_owned(), b"a\n".to_vec()),
+            ("docs/deep/b.md".to_owned(), b"b\n".to_vec()),
+        ]
+    );
+    assert_eq!(
+        files_under(fixture.root(), fixture.base, "docs"),
+        Ok(vec![])
+    );
+    assert_eq!(
+        files_under(&fixture.root().join("absent"), third, "docs"),
+        Err(Unreadable)
+    );
+}

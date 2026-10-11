@@ -57,6 +57,7 @@ pub use dto::{
     RelationshipRejectionDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
     RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
 };
+pub(crate) use items::observe_in_context;
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub use resolve::ResolvedRepository;
 

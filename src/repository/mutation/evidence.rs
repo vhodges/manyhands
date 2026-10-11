@@ -306,6 +306,21 @@ pub(crate) fn path_evidence(
     expected: &ExpectedPathObservation,
     intended: &dyn Fn(&[u8]) -> bool,
 ) -> Result<PathEvidence, Unreadable> {
+    path_evidence_of(root, position, path, expected, &|file| {
+        file.is_some_and(intended)
+    })
+}
+
+/// As `path_evidence`, for a request that may intend the path to hold no
+/// file: `intended` is asked with `None` of a commit that has none
+/// there. A move intends that of the path it moves its document from.
+pub(crate) fn path_evidence_of(
+    root: &Path,
+    position: &Position,
+    path: &str,
+    expected: &ExpectedPathObservation,
+    intended: &dyn Fn(Option<&[u8]>) -> bool,
+) -> Result<PathEvidence, Unreadable> {
     let read = || -> Result<PathEvidence, git2::Error> {
         let repository = Repository::open(root)?;
         let path = Path::new(path);
@@ -322,9 +337,9 @@ pub(crate) fn path_evidence(
             changes.push(PathChange {
                 commit: *commit,
                 intended: match blob_at(&found, path)? {
-                    Some(blob) => intended(repository.find_blob(blob)?.content()),
+                    Some(blob) => intended(Some(repository.find_blob(blob)?.content())),
                     // The commit removed the file.
-                    None => false,
+                    None => intended(None),
                 },
                 // A root commit changed the path from nothing.
                 from_expected: if found.parent_count() == 0 {
@@ -337,8 +352,8 @@ pub(crate) fn path_evidence(
         let anchored = base.map(holds_expected).transpose()?.unwrap_or(false);
         let base_intended = match base {
             Some(base) => match blob_at(&repository.find_commit(base)?, path)? {
-                Some(blob) => intended(repository.find_blob(blob)?.content()),
-                None => false,
+                Some(blob) => intended(Some(repository.find_blob(blob)?.content())),
+                None => intended(None),
             },
             None => false,
         };
@@ -368,6 +383,45 @@ pub(crate) fn file_at(root: &Path, commit: Oid, path: &str) -> Result<Option<Vec
             Some(blob) => Ok(Some(repository.find_blob(blob)?.content().to_vec())),
             None => Ok(None),
         }
+    };
+    read().map_err(|_| Unreadable)
+}
+
+/// The files `commit` holds below the directory `under`, each with its
+/// path from the root, with forward slashes. None when the repository
+/// does not hold the commit or the commit has no such directory.
+pub(crate) fn files_under(
+    root: &Path,
+    commit: Oid,
+    under: &str,
+) -> Result<Vec<(String, Vec<u8>)>, Unreadable> {
+    let read = || -> Result<Vec<(String, Vec<u8>)>, git2::Error> {
+        let repository = Repository::open(root)?;
+        let tree = match repository.find_commit(commit) {
+            Ok(commit) => commit.tree()?,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let prefix = format!("{under}/");
+        let mut blobs = Vec::new();
+        tree.walk(git2::TreeWalkMode::PreOrder, |directory, entry| {
+            let name = String::from_utf8_lossy(entry.name_bytes());
+            let path = format!("{directory}{name}");
+            match entry.kind() {
+                Some(git2::ObjectType::Blob) if path.starts_with(&prefix) => {
+                    blobs.push((path, entry.id()));
+                    git2::TreeWalkResult::Ok
+                }
+                Some(git2::ObjectType::Tree) if path != under && !path.starts_with(&prefix) => {
+                    git2::TreeWalkResult::Skip
+                }
+                _ => git2::TreeWalkResult::Ok,
+            }
+        })?;
+        blobs
+            .into_iter()
+            .map(|(path, blob)| Ok((path, repository.find_blob(blob)?.content().to_vec())))
+            .collect()
     };
     read().map_err(|_| Unreadable)
 }

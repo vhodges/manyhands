@@ -15,8 +15,8 @@ use crate::results::{Effects, ResultCode};
 use super::{
     super::{
         super::{
-            ExpectedPathObservation, RepositoryError, RepositoryErrorKind, RepositoryService,
-            SaveOutcome,
+            ExpectedPathObservation, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+            RepositoryService, SaveOutcome, owned_file_bytes,
             recovery::{FinalKind, JournalRow},
         },
         evidence::{self, Claim, PathEvidence, Position, Unreadable},
@@ -55,6 +55,20 @@ pub(crate) trait Save {
     /// command reports of its item as the repository at `root` holds it.
     fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer;
 
+    /// What the request expected at `path` when it was accepted. For a
+    /// save of a file where it is, the recorded expectation.
+    fn expected(&self, accepted: &Accepted) -> ExpectedPathObservation {
+        accepted.expectation()
+    }
+
+    /// What Git shows of another path the request changes, since the
+    /// request was accepted: for a move, the path it moves its document
+    /// from. A commit from elsewhere to that path stops the request as one
+    /// to `path` does. `None` for a save of one file.
+    fn other_path(&self, _accepted: &Accepted) -> Result<Option<PathEvidence>, Unreadable> {
+        Ok(None)
+    }
+
     /// Sets what `prepare` worked out for the domain call, for a request
     /// that is entered again, and makes none of its checks.
     fn resume(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<(), Answer>;
@@ -69,9 +83,49 @@ fn path_evidence<S: Save + ?Sized>(
         &accepted.root(),
         &accepted.position,
         &save.path(),
-        &accepted.expectation(),
+        &save.expected(accepted),
         &|bytes| save.holds_bytes(bytes),
     )
+}
+
+/// The file a request that is entered again was accepted against: the
+/// bytes its recorded expectation is the digest of. They are looked for
+/// at `path` in the item's editing context, in the primary worktree,
+/// which is the effective copy until a context exists, and in the commit
+/// the request was accepted at.
+///
+/// When none of those is it, the file had been edited and not committed
+/// when the request was accepted, and an earlier attempt, or someone
+/// else, has written it since. Then `otherwise`, the item's file as it is
+/// now, is all there is to go by.
+///
+/// A command whose input does not say what the item's fields are to be,
+/// a short code assignment or a move, writes back the fields of this
+/// file. Taking them from the file as it is now instead would have the
+/// domain find the file as intended whatever someone else had done to it
+/// since, and commit their edit as the request's own.
+pub(crate) fn found_file(
+    accepted: &Accepted,
+    worktree: &Path,
+    path: &str,
+    otherwise: Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    let root = accepted.root();
+    let expected = accepted.expectation();
+    let read = |directory: &Path| {
+        owned_file_bytes(directory, Path::new(path), RepositoryOperation::Read, &root)
+            .ok()
+            .flatten()
+    };
+    let committed = accepted
+        .position
+        .base_oid
+        .and_then(|base| evidence::file_at(&root, base, path).ok().flatten());
+    [read(worktree), read(&root), committed]
+        .into_iter()
+        .flatten()
+        .find(|bytes| ExpectedPathObservation::from_bytes(bytes) == expected)
+        .or(otherwise)
 }
 
 /// The already-applied rule, for the save's file in its editing context:
@@ -99,7 +153,7 @@ pub(crate) fn run<S: Save + ?Sized>(
 ) -> Ran {
     let path = save.path();
     let root = accepted.root();
-    let expected = accepted.expectation();
+    let expected = save.expected(accepted);
     let result = save.call_domain(service, accepted);
     let file = save.context_file(&root);
     let (code, effects, standing) = match result {
@@ -183,16 +237,8 @@ pub(crate) fn reenter<S: Save + ?Sized>(
         }
     };
     let before = Before { journal, evidence };
-    match before.found() {
-        Found::Continue => Ok(before),
-        Found::Done { commit } => {
-            let (code, effects) = settled(Some(commit));
-            Err(Ran {
-                answer: save.answer(code, effects, &root),
-                standing: Standing::Final,
-            })
-        }
-        Found::Foreign { own } => Err(Ran {
+    let foreign = |own: Option<Oid>, before: Before| {
+        Err(Ran {
             answer: save.answer(
                 ResultCode::ExternalChange,
                 outcome::stopped_save_effects(own, own.is_some()),
@@ -201,7 +247,27 @@ pub(crate) fn reenter<S: Save + ?Sized>(
             standing: Standing::Stopped {
                 journal: Some(before.journal),
             },
-        }),
+        })
+    };
+    match before.found() {
+        Found::Continue => match save.other_path(accepted) {
+            Ok(Some(other)) if other.superseded(before.committing()) => {
+                foreign(before.own(), before)
+            }
+            Ok(Some(_) | None) => Ok(before),
+            Err(Unreadable) => Err(Ran {
+                answer: Answer::stopped(ResultCode::InternalError),
+                standing: Standing::Unconfirmed,
+            }),
+        },
+        Found::Done { commit } => {
+            let (code, effects) = settled(Some(commit));
+            Err(Ran {
+                answer: save.answer(code, effects, &root),
+                standing: Standing::Final,
+            })
+        }
+        Found::Foreign { own } => foreign(own, before),
     }
 }
 
@@ -304,7 +370,7 @@ pub(crate) fn rerun<S: Save + ?Sized>(
                                 journal.as_ref(),
                                 || commit,
                                 file.as_deref(),
-                                &accepted.expectation(),
+                                &save.expected(accepted),
                                 &|bytes| save.holds_bytes(bytes),
                             );
                             (code, effects, Standing::Stopped { journal })

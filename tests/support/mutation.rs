@@ -13,8 +13,9 @@ use std::{
 
 use manyhands::{
     repository::{
-        CancellationToken, ConfirmationId, Mutation, MutationCall, MutationDataDto, NoProgress,
-        OperationFamily, OperationId, RelationshipWrite, RepositoryService, RequestId,
+        CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
+        DocumentMutationDto, DocumentSaveInput, Mutation, MutationCall, MutationDataDto,
+        NoProgress, OperationFamily, OperationId, RelationshipWrite, RepositoryService, RequestId,
         ResolvedRepository, TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput,
         TicketSlugAssignInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
@@ -152,6 +153,12 @@ pub fn assert_request_stores_exclude(data_directory: &Path, sentinels: &[&str]) 
 /// fixture with no entry, or an entry with no fixture, fails
 /// `tests/mutation_replay.rs`.
 pub const CASES: &[&str] = &[
+    "document_create",
+    "document_create_occupied",
+    "document_move",
+    "document_move_external_change",
+    "document_save",
+    "document_save_invalid_input",
     "failure_request_not_found",
     "request_show_accepted",
     "request_show_finished",
@@ -251,8 +258,18 @@ pub const TICKET_CLOSED: &str = items::TICKET_B;
 /// A ticket no scenario's fixture holds: the one a create makes.
 pub const TICKET_NEW: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCN";
 
+/// The document the fixture commits, and where.
+pub const DOCUMENT: &str = items::DOCUMENT_A;
+pub const DOCUMENT_PATH: &str = "docs/guide.md";
+/// A document no scenario's fixture holds, and where a create puts it.
+pub const DOCUMENT_NEW: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDN";
+pub const DOCUMENT_NEW_PATH: &str = "docs/notes/new.md";
+/// Where a move takes `DOCUMENT`.
+pub const DOCUMENT_MOVED_PATH: &str = "docs/moved/guide.md";
+
 /// A repository with two committed, indexed tickets, `TICKET_A` open and
-/// `TICKET_CLOSED` closed, and neither with an editing context.
+/// `TICKET_CLOSED` closed, and one committed, indexed document,
+/// `DOCUMENT`, none of them with an editing context.
 ///
 /// Every envelope `execute` returns is scanned for the sentinels, and the
 /// request stores are scanned when the world is dropped, so each scenario
@@ -293,7 +310,16 @@ impl World {
                 items::CLOSURE,
             ),
         );
-        items::commit(&fixture, &[&open_ticket, &closed], items::COMMITTED_AT);
+        items::write(
+            &root,
+            DOCUMENT_PATH,
+            &items::document_source(DOCUMENT, "Guide", ""),
+        );
+        items::commit(
+            &fixture,
+            &[&open_ticket, &closed, DOCUMENT_PATH],
+            items::COMMITTED_AT,
+        );
         items::refresh_completely(&enabled.service, &root);
         let super::EnabledRepository {
             service,
@@ -432,13 +458,18 @@ impl World {
         format!("manyhands/ticket/{id}")
     }
 
-    /// The tip of the item's editing branch, if it has one.
+    /// The tip of the item's editing branch, a ticket's or a document's,
+    /// if it has one.
     pub fn branch_tip(&self, id: &str) -> Option<git2::Oid> {
-        git2::Repository::open(&self.root)
-            .unwrap()
-            .find_branch(&Self::branch(id), git2::BranchType::Local)
-            .ok()
+        let repository = git2::Repository::open(&self.root).unwrap();
+        [Self::branch(id), Self::document_branch(id)]
+            .iter()
+            .find_map(|name| repository.find_branch(name, git2::BranchType::Local).ok())
             .and_then(|branch| branch.get().target())
+    }
+
+    pub fn document_branch(id: &str) -> String {
+        format!("manyhands/document/{id}")
     }
 
     pub fn primary_head(&self) -> git2::Oid {
@@ -614,6 +645,119 @@ impl World {
 pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::Ticket(data) => data,
+        MutationDataDto::Document(_) => panic!("a document's data"),
+    }
+}
+
+/// What a document request reported about its document.
+pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationDto {
+    match envelope.data.as_ref().expect("document data") {
+        MutationDataDto::Document(data) => data,
+        MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+    }
+}
+
+impl World {
+    pub fn document_draft() -> DocumentDraft {
+        DocumentDraft {
+            title: TITLE.to_owned(),
+            body: BODY.to_owned(),
+        }
+    }
+
+    /// A create of the document `id` at `path` with the sentinel title
+    /// and body.
+    pub fn document_create(&self, id: &str, path: &str) -> Mutation {
+        Mutation::DocumentCreate(DocumentCreateInput {
+            root: self.root.clone(),
+            id: items::item_id(id),
+            path: PathBuf::from(path),
+            draft: Self::document_draft(),
+        })
+    }
+
+    pub fn document_save_input(&self, id: &str, observation: &str) -> DocumentSaveInput {
+        DocumentSaveInput {
+            root: self.root.clone(),
+            id: items::item_id(id),
+            draft: Self::document_draft(),
+            observation: Some(observation.to_owned()),
+        }
+    }
+
+    /// A save of the document `id` with the sentinel title and body.
+    pub fn document_save(&self, id: &str, observation: &str) -> Mutation {
+        Mutation::DocumentSave(self.document_save_input(id, observation))
+    }
+
+    pub fn document_move_input(
+        &self,
+        id: &str,
+        observation: &str,
+        destination: &str,
+        destination_observation: &str,
+    ) -> DocumentMoveInput {
+        DocumentMoveInput {
+            root: self.root.clone(),
+            id: items::item_id(id),
+            observation: Some(observation.to_owned()),
+            destination_path: PathBuf::from(destination),
+            destination_observation: destination_observation.to_owned(),
+        }
+    }
+
+    pub fn document_move(
+        &self,
+        id: &str,
+        observation: &str,
+        destination: &str,
+        destination_observation: &str,
+    ) -> Mutation {
+        Mutation::DocumentMove(self.document_move_input(
+            id,
+            observation,
+            destination,
+            destination_observation,
+        ))
+    }
+
+    /// The token `observe_path` gives for `path` in the context the item
+    /// `id` is read from now.
+    pub fn observe(&self, id: &str, path: &str) -> String {
+        let repo = self.resolved();
+        let item = self.service.show_item(&repo, &items::item_id(id)).unwrap();
+        let worktree = PathBuf::from(&item.context.worktree);
+        let context = (worktree != self.root).then_some(worktree.as_path());
+        self.service
+            .observe_path(&repo, context, Path::new(path))
+            .unwrap()
+            .observation
+    }
+
+    /// The file at `path` in the primary worktree.
+    pub fn primary_source_at(&self, path: &str) -> String {
+        fs::read_to_string(self.root.join(path)).unwrap()
+    }
+
+    /// The file at `path` in the item's editing context, if it is there.
+    pub fn context_source(&self, id: &str, path: &str) -> Option<String> {
+        fs::read_to_string(self.worktree(id).join(path)).ok()
+    }
+
+    /// The paths under `docs/` that the commit `commit` holds a file at.
+    pub fn documents_at(&self, commit: git2::Oid) -> Vec<String> {
+        let repository = git2::Repository::open(&self.root).unwrap();
+        let tree = repository.find_commit(commit).unwrap().tree().unwrap();
+        let mut paths = Vec::new();
+        tree.walk(git2::TreeWalkMode::PreOrder, |directory, entry| {
+            if entry.kind() == Some(git2::ObjectType::Blob) && directory.starts_with("docs/") {
+                paths.push(format!("{directory}{}", entry.name().unwrap()));
+            }
+            git2::TreeWalkResult::Ok
+        })
+        .unwrap();
+        paths.sort();
+        paths
     }
 }
 

@@ -64,7 +64,32 @@ pub struct RequestDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum MutationDataDto {
+    Document(DocumentMutationDto),
     Ticket(TicketMutationDto),
+}
+
+/// What `document create`, `document save` and `document move` report
+/// about the document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentMutationDto {
+    pub id: String,
+    /// The file the request writes, relative to the document's context,
+    /// with forward slashes: for a move, the destination. Null when the
+    /// request stopped before the document's file was found.
+    pub path: Option<String>,
+}
+
+impl DocumentMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            id: stored.get("id")?.as_str()?.to_owned(),
+            path: match stored.get("path")? {
+                serde_json::Value::Null => None,
+                path => Some(path.as_str()?.to_owned()),
+            },
+        })
+    }
 }
 
 /// What `ticket create`, `ticket save` and `ticket slug-assign` report
@@ -117,6 +142,9 @@ impl MutationDataDto {
     /// that command's family. `None` for data that is not of that shape.
     pub(crate) fn from_stored(command: Command, stored: &serde_json::Value) -> Option<Self> {
         match command {
+            Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
+                DocumentMutationDto::from_stored(stored).map(Self::Document)
+            }
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }

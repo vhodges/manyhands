@@ -12,22 +12,22 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     canonical::{self, ItemId},
-    results::{Effects, ResultCode, Scope, absolute_path_string},
+    results::{Effects, ResultCode, Scope},
 };
 
 use super::{
     super::{
         super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
-            ExpectedPathObservation, ItemDtoKind, OperationFamily, ProposedRelationships,
-            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
-            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
+            ExpectedPathObservation, ItemDtoKind, ProposedRelationships, RelationshipWrite,
+            RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+            ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft, TicketWriteOptions,
+            apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
         dto::{MutationDataDto, TicketMutationDto},
-        evidence::{self, Position},
+        evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
         records::RequestRecord,
@@ -201,13 +201,7 @@ pub(crate) fn recorded_effects(record: &RequestRecord, accepted: &Accepted) -> E
 /// What a ticket request is accepted with: its position on the ticket's
 /// branch and what it expects at the ticket's path.
 fn prepared(root: &Path, id: &str, expected: ExpectedPathObservation) -> Result<Prepared, Answer> {
-    let position = Position::of(root, &ticket_context(root, id).branch_ref)
-        .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
-    Ok(Prepared {
-        family: OperationFamily::Local,
-        position,
-        expected: Some(expected),
-    })
+    super::prepared(root, &AuthoringKind::Ticket, id, expected)
 }
 
 /// The repository a mutation names by its root. A linked worktree
@@ -228,16 +222,7 @@ pub(super) fn resolve_root(
 
 /// The scope of a ticket request's results.
 fn ticket_scope(id: &str, repository: Option<String>, position: Option<&Position>) -> Scope {
-    let context = position.zip(repository.as_deref());
-    Scope {
-        item_id: Some(id.to_owned()),
-        branch: context.and_then(|(position, _)| position.branch().map(str::to_owned)),
-        worktree: context.and_then(|(_, root)| {
-            absolute_path_string(&ticket_context(Path::new(root), id).worktree)
-        }),
-        repository,
-        remote: None,
-    }
+    super::item_scope(&AuthoringKind::Ticket, id, repository, position)
 }
 
 /// Which call of a request is checking its relationships.
@@ -1005,33 +990,16 @@ impl SlugAssignBinding {
     }
 
     /// The ticket's file as it was when the request was accepted, for a
-    /// request that is entered again: the bytes its recorded expectation
-    /// is the digest of, looked for in the editing context, in the primary
-    /// worktree, which is the effective copy until a context exists, and
-    /// in the commit the request was accepted at.
-    ///
-    /// When none of those is it, the file had been edited and not
-    /// committed when the request was accepted, and an earlier attempt, or
-    /// someone else, has written it since. Then the file in the context is
-    /// all there is to go by.
+    /// request that is entered again.
     fn found_file(&self, accepted: &Accepted) -> Option<Vec<u8>> {
         let id = self.id_text();
-        let path = ticket_path(&id);
         let root = accepted.root();
-        let expected = accepted.expectation();
-        let context = context_file(&root, &id);
-        let primary = owned_file_bytes(&root, Path::new(&path), RepositoryOperation::Read, &root)
-            .ok()
-            .flatten();
-        let committed = accepted
-            .position
-            .base_oid
-            .and_then(|base| evidence::file_at(&root, base, &path).ok().flatten());
-        [context.clone(), primary, committed]
-            .into_iter()
-            .flatten()
-            .find(|bytes| ExpectedPathObservation::from_bytes(bytes) == expected)
-            .or(context)
+        save::found_file(
+            accepted,
+            &ticket_context(&root, &id).worktree,
+            &ticket_path(&id),
+            context_file(&root, &id),
+        )
     }
 }
 

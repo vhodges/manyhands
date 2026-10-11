@@ -1,0 +1,538 @@
+//! `document create`, `document save` and `document move`.
+
+use manyhands::{
+    repository::{
+        DocumentMoveInput, DocumentSaveInput, FailurePoint, Mutation, MutationDataDto, RequestState,
+    },
+    results::{
+        CheckpointEffect, DiscoveryEffect, Effects, Envelope, FailureClass, Outcome, ResultCode,
+        WriteEffect,
+    },
+};
+
+use crate::support::{
+    FailOnce,
+    items::{self, TICKET_A},
+    mutation::{
+        BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
+        REQUEST_1, REQUEST_2, REQUEST_3, TITLE, World, document_data, recovery_actions,
+    },
+};
+
+fn assert_committed(world: &World, id: &str, envelope: &Envelope<MutationDataDto>, what: &str) {
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None),
+        "{what}"
+    );
+    assert_eq!(envelope.effects.write, WriteEffect::Written, "{what}");
+    assert_eq!(
+        envelope.effects.checkpoint,
+        CheckpointEffect::Committed,
+        "{what}"
+    );
+    assert_eq!(
+        envelope.effects.discovery,
+        DiscoveryEffect::Current,
+        "{what}"
+    );
+    assert_eq!(
+        envelope.effects.commit_oid,
+        world.branch_tip(id).map(|tip| tip.to_string()),
+        "{what}"
+    );
+    assert_eq!(world.pending_journal_rows(), 0, "{what}");
+}
+
+fn assert_rejected(
+    envelope: &Envelope<MutationDataDto>,
+    outcome: Outcome,
+    code: ResultCode,
+    class: FailureClass,
+    what: &str,
+) {
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (outcome, code, Some(class)),
+        "{what}"
+    );
+    assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
+    assert_eq!(envelope.operation_id, None, "{what}");
+    assert!(recovery_actions(envelope).is_empty(), "{what}");
+}
+
+/// A move of the fixture's document to `DOCUMENT_MOVED_PATH`, with the
+/// tokens of the document and of the destination as they are now.
+fn move_now(world: &World) -> Mutation {
+    world.document_move(
+        DOCUMENT,
+        &world.token(DOCUMENT),
+        DOCUMENT_MOVED_PATH,
+        &world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+    )
+}
+
+#[test]
+fn a_document_is_created_at_its_path() {
+    let world = World::new();
+    let envelope = world.execute(
+        REQUEST_1,
+        world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+    );
+
+    assert_committed(&world, DOCUMENT_NEW, &envelope, "the create");
+    assert_eq!(envelope.command, "document create");
+    assert_eq!(envelope.scope.item_id.as_deref(), Some(DOCUMENT_NEW));
+    assert_eq!(
+        envelope.scope.branch,
+        Some(World::document_branch(DOCUMENT_NEW))
+    );
+    assert_eq!(
+        envelope.scope.worktree.as_deref(),
+        world.worktree(DOCUMENT_NEW).to_str()
+    );
+    let data = document_data(&envelope);
+    assert_eq!(
+        (data.id.as_str(), data.path.as_deref()),
+        (DOCUMENT_NEW, Some(DOCUMENT_NEW_PATH))
+    );
+    assert_eq!(world.branch_commits(DOCUMENT_NEW), 1);
+    let source = world
+        .context_source(DOCUMENT_NEW, DOCUMENT_NEW_PATH)
+        .expect("the document's file");
+    assert!(source.contains(TITLE) && source.contains(BODY), "{source}");
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.command, "document create");
+    assert_eq!(record.target, DOCUMENT_NEW);
+
+    // Another request for the same document: what it asks for holds.
+    let again = world.execute(
+        REQUEST_2,
+        world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+    );
+    assert_eq!(
+        (again.outcome, again.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_eq!(again.effects.commit_oid, None);
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.branch_commits(DOCUMENT_NEW), 1);
+}
+
+#[test]
+fn a_create_with_an_id_or_a_path_that_is_taken_is_occupied_path() {
+    let world = World::new();
+    let primary = world.primary_head();
+    let cases = [
+        (
+            "a document's ID, at another path",
+            world.document_create(DOCUMENT, DOCUMENT_NEW_PATH),
+            DOCUMENT,
+        ),
+        (
+            "a document's ID, at its path, with other content",
+            world.document_create(DOCUMENT, DOCUMENT_PATH),
+            DOCUMENT,
+        ),
+        (
+            "a ticket's ID",
+            world.document_create(TICKET_A, DOCUMENT_NEW_PATH),
+            TICKET_A,
+        ),
+        (
+            "a new ID, at a path a document is at",
+            world.document_create(DOCUMENT_NEW, DOCUMENT_PATH),
+            DOCUMENT_NEW,
+        ),
+    ];
+    for (what, mutation, id) in cases {
+        let envelope = world.execute(REQUEST_1, mutation);
+        assert_rejected(
+            &envelope,
+            Outcome::Error,
+            ResultCode::OccupiedPath,
+            FailureClass::Input,
+            what,
+        );
+        world.assert_nothing_exists(REQUEST_1, id);
+    }
+    assert_eq!(world.primary_head(), primary);
+    assert_eq!(
+        world.primary_source(TICKET_A),
+        items::ticket_source(TICKET_A, "Open ticket", "")
+    );
+}
+
+#[test]
+fn a_create_at_a_path_no_document_can_be_at_is_an_invalid_path() {
+    let world = World::new();
+    for path in [
+        "notes/new.md",
+        "docs/new.txt",
+        "docs/../new.md",
+        "/docs/new.md",
+        "docs",
+    ] {
+        let envelope = world.execute(REQUEST_1, world.document_create(DOCUMENT_NEW, path));
+        assert_rejected(
+            &envelope,
+            Outcome::Error,
+            ResultCode::InvalidPath,
+            FailureClass::Input,
+            path,
+        );
+        world.assert_nothing_exists(REQUEST_1, DOCUMENT_NEW);
+    }
+}
+
+#[test]
+fn a_save_or_a_move_without_the_source_observation_is_invalid_input() {
+    let world = World::new();
+    let primary = world.primary_source_at(DOCUMENT_PATH);
+    let token = world.token(DOCUMENT);
+    let absent = world.observe(DOCUMENT, DOCUMENT_MOVED_PATH);
+    let cases = [
+        (
+            "a save",
+            Mutation::DocumentSave(DocumentSaveInput {
+                observation: None,
+                ..world.document_save_input(DOCUMENT, &token)
+            }),
+        ),
+        (
+            "a move",
+            Mutation::DocumentMove(DocumentMoveInput {
+                observation: None,
+                ..world.document_move_input(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent)
+            }),
+        ),
+    ];
+    for (what, mutation) in cases {
+        let envelope = world.execute(REQUEST_1, mutation);
+        assert_rejected(
+            &envelope,
+            Outcome::Error,
+            ResultCode::InvalidInput,
+            FailureClass::Input,
+            what,
+        );
+        // Before any write, removal or checkpoint.
+        world.assert_nothing_exists(REQUEST_1, DOCUMENT);
+        assert_eq!(world.primary_source_at(DOCUMENT_PATH), primary, "{what}");
+        assert!(!world.root.join(DOCUMENT_MOVED_PATH).exists(), "{what}");
+        assert_eq!(world.request_rows(), 0, "{what}");
+    }
+}
+
+#[test]
+fn a_document_is_saved_where_it_is() {
+    let world = World::new();
+    let token = world.token(DOCUMENT);
+    let envelope = world.execute(REQUEST_1, world.document_save(DOCUMENT, &token));
+
+    assert_committed(&world, DOCUMENT, &envelope, "the save");
+    assert_eq!(envelope.command, "document save");
+    assert_eq!(
+        document_data(&envelope).path.as_deref(),
+        Some(DOCUMENT_PATH)
+    );
+    assert_eq!(world.branch_commits(DOCUMENT), 1);
+    let source = world.context_source(DOCUMENT, DOCUMENT_PATH).unwrap();
+    assert!(source.contains(TITLE) && source.contains(BODY), "{source}");
+    // Primary is as it was.
+    assert_eq!(
+        world.primary_source_at(DOCUMENT_PATH),
+        items::document_source(DOCUMENT, "Guide", "")
+    );
+
+    // The first token is stale now. The same content under another
+    // request is what already holds; other content is an external change.
+    let late = world.execute(REQUEST_2, world.document_save(DOCUMENT, &token));
+    assert_eq!(
+        (late.outcome, late.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    let other = world.execute(
+        REQUEST_3,
+        Mutation::DocumentSave(DocumentSaveInput {
+            draft: manyhands::repository::DocumentDraft {
+                title: "Another title".to_owned(),
+                body: BODY.to_owned(),
+            },
+            ..world.document_save_input(DOCUMENT, &token)
+        }),
+    );
+    assert_rejected(
+        &other,
+        Outcome::Blocked,
+        ResultCode::ExternalChange,
+        FailureClass::Blocked,
+        "a stale token",
+    );
+    assert_eq!(world.branch_commits(DOCUMENT), 1);
+    assert_eq!(world.request_rows(), 1);
+
+    // A save that changes nothing is a no-op with no commit.
+    let unchanged = world.execute(
+        REQUEST_3,
+        world.document_save(DOCUMENT, &world.token(DOCUMENT)),
+    );
+    assert_eq!(
+        (unchanged.outcome, unchanged.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_eq!(unchanged.effects.commit_oid, None);
+    assert_eq!(world.branch_commits(DOCUMENT), 1);
+}
+
+#[test]
+fn an_uncommitted_edit_of_a_document_on_primary_is_not_saved_over() {
+    let world = World::new();
+    std::fs::write(
+        world.root.join(DOCUMENT_PATH),
+        items::document_source(DOCUMENT, "Edited by hand", ""),
+    )
+    .unwrap();
+    // The caller has seen the edited file: its token is current.
+    let token = world.token(DOCUMENT);
+    let envelope = world.execute(REQUEST_1, world.document_save(DOCUMENT, &token));
+    assert_rejected(
+        &envelope,
+        Outcome::Blocked,
+        ResultCode::WorktreeNotClean,
+        FailureClass::Blocked,
+        "the save",
+    );
+    world.assert_nothing_exists(REQUEST_1, DOCUMENT);
+}
+
+#[test]
+fn a_move_commits_both_paths_in_one_commit() {
+    let world = World::new();
+    let before = world.primary_source_at(DOCUMENT_PATH);
+    let envelope = world.execute(REQUEST_1, move_now(&world));
+
+    assert_committed(&world, DOCUMENT, &envelope, "the move");
+    assert_eq!(envelope.command, "document move");
+    assert_eq!(
+        document_data(&envelope).path.as_deref(),
+        Some(DOCUMENT_MOVED_PATH)
+    );
+    // One commit: the file is at the destination and no longer at the
+    // path it was moved from.
+    assert_eq!(world.branch_commits(DOCUMENT), 1);
+    let tip = world.branch_tip(DOCUMENT).unwrap();
+    assert_eq!(world.documents_at(tip), [DOCUMENT_MOVED_PATH]);
+    assert_eq!(world.documents_at(world.primary_head()), [DOCUMENT_PATH]);
+    assert_eq!(world.context_source(DOCUMENT, DOCUMENT_PATH), None);
+    // The document is the one it was: its ID, title and body.
+    let moved = world
+        .context_source(DOCUMENT, DOCUMENT_MOVED_PATH)
+        .expect("the document at its destination");
+    assert!(
+        moved.contains(&format!("id: {DOCUMENT}")) && moved.contains("title: Guide"),
+        "{moved}"
+    );
+    assert!(moved.ends_with("---\n# Guide\n"), "{moved}");
+    assert_eq!(world.primary_source_at(DOCUMENT_PATH), before);
+
+    // Another request for the same move: the document is there already.
+    let again = world.execute(
+        REQUEST_2,
+        world.document_move(DOCUMENT, "v1:stale", DOCUMENT_MOVED_PATH, "v1:stale"),
+    );
+    assert_eq!(
+        (again.outcome, again.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_eq!(world.branch_commits(DOCUMENT), 1);
+}
+
+#[test]
+fn a_move_checks_the_token_of_each_path() {
+    let world = World::new();
+    let token = world.token(DOCUMENT);
+    let absent = world.observe(DOCUMENT, DOCUMENT_MOVED_PATH);
+    let source = world.primary_source_at(DOCUMENT_PATH);
+    let refused = |what: &str, mutation: Mutation, outcome, code, class| {
+        let envelope = world.execute(REQUEST_1, mutation);
+        assert_rejected(&envelope, outcome, code, class, what);
+        world.assert_nothing_exists(REQUEST_1, DOCUMENT);
+        assert_eq!(world.primary_source_at(DOCUMENT_PATH), source, "{what}");
+    };
+    let external = (
+        Outcome::Blocked,
+        ResultCode::ExternalChange,
+        FailureClass::Blocked,
+    );
+
+    refused(
+        "a stale source token",
+        world.document_move(DOCUMENT, "v1:stale", DOCUMENT_MOVED_PATH, &absent),
+        external.0,
+        external.1,
+        external.2,
+    );
+    refused(
+        "a stale destination token",
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, "v1:stale"),
+        external.0,
+        external.1,
+        external.2,
+    );
+    // The absent token of another path is not this destination's.
+    refused(
+        "the absent token of another path",
+        world.document_move(
+            DOCUMENT,
+            &token,
+            DOCUMENT_MOVED_PATH,
+            &world.observe(DOCUMENT, "docs/moved/other.md"),
+        ),
+        external.0,
+        external.1,
+        external.2,
+    );
+
+    // Someone puts a file at the destination after the caller observed
+    // it absent: the caller's token of the destination is stale.
+    items::write(&world.root, DOCUMENT_MOVED_PATH, "Something else.\n");
+    refused(
+        "a destination that was absent and is not",
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent),
+        external.0,
+        external.1,
+        external.2,
+    );
+    // The caller has seen that file: the destination is occupied.
+    refused(
+        "an occupied destination",
+        world.document_move(
+            DOCUMENT,
+            &token,
+            DOCUMENT_MOVED_PATH,
+            &world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+        ),
+        Outcome::Error,
+        ResultCode::OccupiedPath,
+        FailureClass::Input,
+    );
+    assert_eq!(
+        world.primary_source_at(DOCUMENT_MOVED_PATH),
+        "Something else.\n"
+    );
+    assert_eq!(world.request_rows(), 0);
+}
+
+/// A move interrupted before it wrote anything: its record is accepted,
+/// its operation's row is pending and the document's context exists.
+fn interrupted_move() -> (World, Mutation) {
+    let mut world =
+        World::with_service(|data| FailOnce::at(FailurePoint::BeforeItemWrite).open_service(data));
+    let (token, absent) = (
+        world.token(DOCUMENT),
+        world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+    );
+    let request =
+        |world: &World| world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent);
+    let first = world.execute(REQUEST_1, request(&world));
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    assert!(world.worktree(DOCUMENT).is_dir());
+    world.reopen();
+    let retry = request(&world);
+    (world, retry)
+}
+
+#[test]
+fn a_foreign_commit_to_either_path_of_a_move_in_flight_is_an_external_change() {
+    for (what, path) in [
+        ("the path it moves from", DOCUMENT_PATH),
+        ("its destination", DOCUMENT_MOVED_PATH),
+    ] {
+        let (world, retry) = interrupted_move();
+        let foreign = world.commit_in_context(
+            DOCUMENT,
+            path,
+            &items::document_source(DOCUMENT, "Someone else's", ""),
+        );
+
+        let envelope = world.execute(REQUEST_1, retry);
+        assert_eq!(
+            (envelope.outcome, envelope.code, envelope.failure_class()),
+            (
+                Outcome::Blocked,
+                ResultCode::ExternalChange,
+                Some(FailureClass::Blocked)
+            ),
+            "{what}"
+        );
+        assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
+        // Read the item again and use a new request: no action is offered.
+        assert!(recovery_actions(&envelope).is_empty(), "{what}");
+        // Nothing was written, and the other commit is the branch's tip.
+        assert_eq!(world.branch_tip(DOCUMENT), Some(foreign), "{what}");
+        assert_eq!(
+            world.context_source(DOCUMENT, path),
+            Some(items::document_source(DOCUMENT, "Someone else's", "")),
+            "{what}"
+        );
+    }
+}
+
+#[test]
+fn an_unrelated_commit_does_not_stop_a_move_in_flight() {
+    let (world, retry) = interrupted_move();
+    world.commit_in_context(DOCUMENT, "docs/unrelated.md", "Unrelated.\n");
+
+    let envelope = world.execute(REQUEST_1, retry);
+    assert_committed(&world, DOCUMENT, &envelope, "the retry");
+    assert_eq!(world.branch_commits(DOCUMENT), 2);
+    let tip = world.branch_tip(DOCUMENT).unwrap();
+    assert_eq!(
+        world.documents_at(tip),
+        [DOCUMENT_MOVED_PATH, "docs/unrelated.md"]
+    );
+}
+
+#[test]
+fn an_edit_made_under_an_interrupted_move_is_not_committed_as_its_own() {
+    let mut world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence).open_service(data)
+    });
+    let (token, absent) = (
+        world.token(DOCUMENT),
+        world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+    );
+    let first = world.execute(
+        REQUEST_1,
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent),
+    );
+    assert_eq!(first.outcome, Outcome::Partial);
+    assert_eq!(first.effects.checkpoint, CheckpointEffect::Pending);
+
+    // Someone edits the file at the destination and does not commit.
+    let edited = items::document_source(DOCUMENT, "Edited by hand", "");
+    std::fs::write(world.worktree(DOCUMENT).join(DOCUMENT_MOVED_PATH), &edited).unwrap();
+
+    world.reopen();
+    let retry = world.execute(
+        REQUEST_1,
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent),
+    );
+    assert_eq!(retry.code, ResultCode::ExternalChange);
+    assert!(recovery_actions(&retry).is_empty());
+    assert_eq!(world.branch_commits(DOCUMENT), 0, "nothing was committed");
+    assert_eq!(
+        world.context_source(DOCUMENT, DOCUMENT_MOVED_PATH),
+        Some(edited)
+    );
+}

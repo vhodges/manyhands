@@ -118,7 +118,7 @@ impl RepositoryService {
         confirmation: Option<ConfirmationId>,
         cancel: &CancellationToken,
     ) -> Option<Envelope<MutationDataDto>> {
-        // Neither bound command takes a confirmation.
+        // No bound command takes a confirmation.
         if confirmation.is_some() {
             return Some(Reply { binding, identity }.stopped(ResultCode::NotConfirmable));
         }

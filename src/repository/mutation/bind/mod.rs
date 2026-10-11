@@ -8,22 +8,64 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::results::{Effects, RecoveryAction, ResultCode, Scope};
+use crate::results::{Effects, RecoveryAction, ResultCode, Scope, absolute_path_string};
 
 use super::{
     super::{
-        ExpectedPathObservation, OperationFamily, OperationId, ReadError, RepositoryService,
+        AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
+        RepositoryService,
         recovery::{FinalKind, JournalRow},
     },
     command::Command,
+    context::context_names,
     dto::MutationDataDto,
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     records::RequestRecord,
 };
 
+pub(crate) mod document;
 pub(crate) mod save;
 pub(crate) mod ticket;
+
+/// The scope of the results of a request that writes the item `id`, of
+/// kind `kind`. The branch and the worktree are named once the request
+/// is accepted, from its recorded position: before that neither may exist.
+pub(crate) fn item_scope(
+    kind: &AuthoringKind,
+    id: &str,
+    repository: Option<String>,
+    position: Option<&Position>,
+) -> Scope {
+    let context = position.zip(repository.as_deref());
+    Scope {
+        item_id: Some(id.to_owned()),
+        branch: context.and_then(|(position, _)| position.branch().map(str::to_owned)),
+        worktree: context.and_then(|(_, root)| {
+            absolute_path_string(&context_names(Path::new(root), kind, id).worktree)
+        }),
+        repository,
+        remote: None,
+    }
+}
+
+/// What a request that commits to the editing branch of the item `id` is
+/// accepted with: its position on that branch, and what it expects of the
+/// file its recorded expectation is about.
+pub(crate) fn prepared(
+    root: &Path,
+    kind: &AuthoringKind,
+    id: &str,
+    expected: ExpectedPathObservation,
+) -> Result<Prepared, Answer> {
+    let position = Position::of(root, &context_names(root, kind, id).branch_ref)
+        .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
+    Ok(Prepared {
+        family: OperationFamily::Local,
+        position,
+        expected: Some(expected),
+    })
+}
 
 /// What a request is answered with, before the boundary classifies it: the
 /// outcome is derived from the code and the effects, never chosen here.
@@ -220,6 +262,13 @@ impl Before {
         }
     }
 
+    /// The request's own commit, as read before the domain call: a commit
+    /// of the intended content is the request's own only when an attempt
+    /// of the request may have committed.
+    pub(crate) fn own(&self) -> Option<git2::Oid> {
+        self.evidence.own().filter(|_| self.committing())
+    }
+
     /// What re-entry does about what it read, for an authoring save.
     ///
     /// It rests on `committing`, and so on the authoring reading of a
@@ -232,9 +281,7 @@ impl Before {
     /// and answers from `Binding::reenter` with
     /// `Err(Ran { standing: Standing::Final, .. })` when it is.
     pub(crate) fn found(&self) -> Found {
-        // A commit of the intended content is the request's own only when
-        // an attempt of the request may have committed.
-        let own = self.evidence.own().filter(|_| self.committing());
+        let own = self.own();
         match (&self.journal, own) {
             (
                 JournalRow::Final {
@@ -296,7 +343,7 @@ pub(crate) enum EndedWithoutCheckpoint {
     /// `Before::reported` are not that evidence: they read a row
     /// without a checkpoint as an authoring save's, and would have the
     /// domain called again or the request refused as `external_change`.
-    // Both bound commands are authoring saves. The first binding of a
+    // Every bound command is an authoring save. The first binding of a
     // command that is not one gives this, and the expectation then fails
     // until the attribute is removed.
     #[cfg_attr(not(test), expect(dead_code))]
@@ -404,6 +451,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         return Effects::not_requested();
     }
     match Command::parse(&record.command) {
+        Some(Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove) => {
+            document::recorded_effects(record, &accepted)
+        }
         Some(Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign) => {
             ticket::recorded_effects(record, &accepted)
         }

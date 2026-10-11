@@ -8,9 +8,6 @@
 macro_rules! commands {
     ($($(#[$meta:meta])* $variant:ident => $name:literal),+ $(,)?) => {
         /// A command the boundary binds.
-        // Every bound command is a ticket's until the document commands
-        // are bound.
-        #[allow(clippy::enum_variant_names)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(crate) enum Command {
             $($(#[$meta])* $variant),+
@@ -33,6 +30,9 @@ macro_rules! commands {
 }
 
 commands! {
+    DocumentCreate => "document create",
+    DocumentSave => "document save",
+    DocumentMove => "document move",
     TicketCreate => "ticket create",
     TicketSave => "ticket save",
     TicketSlugAssign => "ticket slug-assign",

@@ -52,15 +52,19 @@ mod replay;
 mod reply;
 mod settle;
 
-pub use bind::ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput};
 use bind::{
     Binding,
+    document::DocumentBinding,
     ticket::{SlugAssignBinding, TicketBinding},
+};
+pub use bind::{
+    document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
+    ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
 pub use dto::{
-    MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    TicketMutationDto,
+    DocumentMutationDto, MutationDataDto, RequestDto, RequestOperationDto, RequestResultDto,
+    RequestState, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -225,6 +229,9 @@ pub struct MutationCall {
 /// command, holding that command's typed input. The variant fixes the
 /// envelope's `command`.
 pub enum Mutation {
+    DocumentCreate(DocumentCreateInput),
+    DocumentSave(DocumentSaveInput),
+    DocumentMove(DocumentMoveInput),
     TicketCreate(TicketCreateInput),
     TicketSave(TicketSaveInput),
     TicketSlugAssign(TicketSlugAssignInput),
@@ -238,6 +245,9 @@ impl Mutation {
 
     fn kind(&self) -> Command {
         match self {
+            Self::DocumentCreate(_) => Command::DocumentCreate,
+            Self::DocumentSave(_) => Command::DocumentSave,
+            Self::DocumentMove(_) => Command::DocumentMove,
             Self::TicketCreate(_) => Command::TicketCreate,
             Self::TicketSave(_) => Command::TicketSave,
             Self::TicketSlugAssign(_) => Command::TicketSlugAssign,
@@ -246,6 +256,9 @@ impl Mutation {
 
     fn into_binding(self) -> Box<dyn Binding> {
         match self {
+            Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
+            Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
+            Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),
             Self::TicketCreate(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSave(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSlugAssign(input) => Box::new(SlugAssignBinding::from(input)),

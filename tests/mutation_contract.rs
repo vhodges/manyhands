@@ -4,8 +4,8 @@
 
 use manyhands::{
     repository::{
-        FailurePoint, Mutation, MutationDataDto, RelationshipWrite, TicketCreateInput,
-        TicketSaveInput, TicketSlugAssignInput,
+        DocumentSaveInput, FailurePoint, Mutation, MutationDataDto, RelationshipWrite,
+        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -16,15 +16,33 @@ use support::{
     FailOnce,
     golden::ContractCase,
     items::TICKET_A,
-    mutation::{self, BODY, REQUEST_1, REQUEST_2, SENTINELS, TICKET_NEW, TITLE, World},
+    mutation::{
+        self, BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
+        REQUEST_1, REQUEST_2, SENTINELS, TICKET_NEW, TITLE, World,
+    },
 };
 
 const TICKET_SCHEMA: &str = "ticket_mutation.schema.json";
+const DOCUMENT_SCHEMA: &str = "document_mutation.schema.json";
 
 /// Checks a ticket envelope against its fixture, with what differs from
 /// run to run replaced: the repository's path, the commit and the
 /// operation ID the boundary allocated.
 fn assert_ticket_contract(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
+    assert_data_contract(name, TICKET_SCHEMA, world, envelope);
+}
+
+/// As `assert_ticket_contract`, for a document's envelope.
+fn assert_document_contract(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
+    assert_data_contract(name, DOCUMENT_SCHEMA, world, envelope);
+}
+
+fn assert_data_contract(
+    name: &str,
+    schema: &str,
+    world: &World,
+    envelope: &Envelope<MutationDataDto>,
+) {
     let root = world.root.to_str().unwrap().to_owned();
     let commit = envelope.effects.commit_oid.clone();
     let operation = envelope.operation_id.clone();
@@ -38,7 +56,7 @@ fn assert_ticket_contract(name: &str, world: &World, envelope: &Envelope<Mutatio
     mutation::assert_contract(
         &ContractCase {
             name,
-            data_schema: envelope.data.as_ref().map(|_| TICKET_SCHEMA),
+            data_schema: envelope.data.as_ref().map(|_| schema),
             placeholders: &placeholders,
             sentinels: &SENTINELS,
         },
@@ -265,4 +283,86 @@ fn a_short_code_assignment_matches_its_schema_and_goldens() {
         (Outcome::Error, ResultCode::SlugAlreadyAssigned)
     );
     assert_ticket_contract("ticket_slug_assign_already_assigned", &world, &envelope);
+}
+
+#[test]
+fn a_document_create_matches_its_schema_and_goldens() {
+    let world = World::new();
+    let envelope = world.execute(
+        REQUEST_1,
+        world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_document_contract("document_create", &world, &envelope);
+
+    // A create at a path a document is at.
+    let envelope = world.execute(
+        REQUEST_2,
+        world.document_create(DOCUMENT_NEW, DOCUMENT_PATH),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Error, ResultCode::OccupiedPath)
+    );
+    assert_document_contract("document_create_occupied", &world, &envelope);
+}
+
+#[test]
+fn a_document_save_matches_its_schema_and_goldens() {
+    let world = World::new();
+    let token = world.token(DOCUMENT);
+
+    // Without the caller's observation nothing is read and nothing is
+    // said of the document.
+    let envelope = world.execute(
+        REQUEST_1,
+        Mutation::DocumentSave(DocumentSaveInput {
+            observation: None,
+            ..world.document_save_input(DOCUMENT, &token)
+        }),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Error, ResultCode::InvalidInput)
+    );
+    assert_eq!(envelope.data, None);
+    assert_document_contract("document_save_invalid_input", &world, &envelope);
+
+    let envelope = world.execute(REQUEST_1, world.document_save(DOCUMENT, &token));
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_document_contract("document_save", &world, &envelope);
+}
+
+#[test]
+fn a_document_move_matches_its_schema_and_goldens() {
+    let world = World::new();
+    let token = world.token(DOCUMENT);
+    let absent = world.observe(DOCUMENT, DOCUMENT_MOVED_PATH);
+
+    // The destination is not as the caller says it saw it.
+    let envelope = world.execute(
+        REQUEST_1,
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, "v1:stale"),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Blocked, ResultCode::ExternalChange)
+    );
+    assert_document_contract("document_move_external_change", &world, &envelope);
+
+    let envelope = world.execute(
+        REQUEST_1,
+        world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent),
+    );
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_document_contract("document_move", &world, &envelope);
 }

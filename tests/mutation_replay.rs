@@ -2187,6 +2187,9 @@ mod reenter;
 #[path = "mutation_replay/slug_assign.rs"]
 mod slug_assign;
 
+#[path = "mutation_replay/documents.rs"]
+mod documents;
+
 /// The process `support::hold_lease_in_child` starts: it holds the lease
 /// it is told to until it is released.
 #[test]
