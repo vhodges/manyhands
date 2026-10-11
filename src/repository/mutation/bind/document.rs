@@ -502,8 +502,32 @@ impl DocumentBinding {
         self.prepared(repository.root(), expected)
     }
 
+    /// Whether the document's branch holds the document at `path` and at
+    /// no other: the end state of a move there. A branch that also holds
+    /// it where it was moved from has not had the removal committed,
+    /// which is so after a move that wrote and did not commit was
+    /// finished by a save: a save commits the file where it is and
+    /// nothing else. A branch that cannot be read is not known to hold it.
+    fn only_at(&self, root: &Path, path: &str) -> bool {
+        let Some(tip) = Position::of(root, &document_context(root, &self.id_text()).branch_ref)
+            .ok()
+            .and_then(|position| position.base_oid)
+        else {
+            return false;
+        };
+        evidence::files_under(root, tip, DOCUMENTS_DIRECTORY).is_ok_and(|files| {
+            files
+                .iter()
+                .filter(|(held, bytes)| {
+                    parse_document(held, bytes).is_some_and(|document| document.id == self.id)
+                })
+                .all(|(held, _)| held == path)
+        })
+    }
+
     /// A move. In order: the document is read. One that is already at the
-    /// destination is answered by the already-applied rule. Then the
+    /// destination is answered by the already-applied rule: a no-op when
+    /// the branch holds it there, committed, and nowhere else. Then the
     /// caller's token of the document's file is checked, and its token of
     /// the destination: a destination that is not as the caller saw it is
     /// an external change, and one the caller saw a file at is
@@ -523,7 +547,8 @@ impl DocumentBinding {
             body: current.body.clone(),
         });
         if item.path == destination {
-            return Err(self.already_applied(&item, &observed.bytes, true));
+            let moved = self.only_at(repository.root(), &destination);
+            return Err(self.already_applied(&item, &observed.bytes, moved));
         }
         self.source = Some(item.path.clone());
         let external = || Answer::stopped(ResultCode::ExternalChange).with_data(self.data());

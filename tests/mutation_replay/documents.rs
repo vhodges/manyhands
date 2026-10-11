@@ -597,3 +597,70 @@ fn a_create_s_own_file_in_a_context_the_index_has_not_seen_is_not_an_occupied_pa
         assert_eq!(other.code, ResultCode::OccupiedPath, "{what}");
     }
 }
+
+#[test]
+fn a_move_whose_removal_was_never_committed_is_not_answered_as_a_no_op() {
+    // The move writes the destination, removes the file it moved from and
+    // dies before its commit. Then its record is lost.
+    let mut world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeCheckpointCommit).open_service(data)
+    });
+    let (token, absent) = (
+        world.token(DOCUMENT),
+        world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+    );
+    let request =
+        |world: &World| world.document_move(DOCUMENT, &token, DOCUMENT_MOVED_PATH, &absent);
+    let first = world.execute(REQUEST_1, request(&world));
+    assert_eq!(first.outcome, Outcome::Partial);
+    assert_eq!(world.branch_commits(DOCUMENT), 0);
+    world.lose_cache();
+    world.rebuild();
+
+    // Sent again it is a new request: written and not committed.
+    let retry = world.execute(REQUEST_1, request(&world));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Blocked, ResultCode::ExternalChange)
+    );
+
+    // The caller reads the document again and saves it. A save commits
+    // the file where it is, and not the removal of the file it was moved
+    // from: the branch now holds the document at both paths.
+    let saved = world.execute(
+        REQUEST_2,
+        world.document_save(DOCUMENT, &world.token(DOCUMENT)),
+    );
+    assert_eq!(saved.code, ResultCode::Ok);
+    let tip = world.branch_tip(DOCUMENT).unwrap();
+    assert_eq!(
+        world.documents_at(tip),
+        [DOCUMENT_PATH, DOCUMENT_MOVED_PATH]
+    );
+
+    // The move's end state does not hold, and no move is told it does:
+    // not the first one sent again, and not a new one with current tokens.
+    for (what, mutation) in [
+        ("the same move", request(&world)),
+        (
+            "a move with current tokens",
+            world.document_move(
+                DOCUMENT,
+                &world.token(DOCUMENT),
+                DOCUMENT_MOVED_PATH,
+                &world.observe(DOCUMENT, DOCUMENT_MOVED_PATH),
+            ),
+        ),
+    ] {
+        let envelope = world.execute(REQUEST_3, mutation);
+        assert_rejected(
+            &envelope,
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+            FailureClass::Blocked,
+            what,
+        );
+        assert!(world.record(REQUEST_3).is_none(), "{what}");
+        assert_eq!(world.branch_tip(DOCUMENT), Some(tip), "{what}");
+    }
+}
