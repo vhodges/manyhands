@@ -1210,7 +1210,7 @@ fn below(root: &Path, relative: &Path) -> PathBuf {
 /// forward slashes, with no NUL, no empty, `.` or `..` component, and not
 /// under the directory that holds item worktrees. This says nothing about whether it
 /// is a place an item can be.
-pub(super) fn is_plain_relative(path: &str) -> bool {
+pub(crate) fn is_plain_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', '\0'])
         && path
@@ -2058,7 +2058,6 @@ pub(super) fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadEr
     error.with_recovery(vec![refresh_action(repo)])
 }
 
-/// The recovery that refreshes this repository's index.
 /// The worktree a caller named as a read's context, as the index writes
 /// one: `None` is the repository root.
 fn named_worktree(repo: &ResolvedRepository, context: Option<&Path>) -> Result<String, ReadError> {
@@ -2127,6 +2126,7 @@ pub(crate) fn observe_in_context(
     }
 }
 
+/// The recovery that refreshes this repository's index.
 fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
     let root = absolute_path_string(repo.root());
     root_action(RecoveryActionKind::IndexRefresh, root.as_deref())

@@ -10,17 +10,23 @@ use std::path::{Path, PathBuf};
 
 use git2::Oid;
 
-use crate::results::{Effects, ResultCode};
+use crate::{
+    canonical::ItemId,
+    results::{Effects, ResultCode},
+};
 
 use super::{
     super::{
         super::{
-            ExpectedPathObservation, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, SaveOutcome, owned_file_bytes,
+            AuthoringKind, ExpectedPathObservation, ItemDto, ItemDtoKind, RepositoryError,
+            RepositoryErrorKind, RepositoryOperation, RepositoryService, ResolvedRepository,
+            SaveOutcome, owned_file_bytes,
             recovery::{FinalKind, JournalRow},
         },
+        context::context_names,
+        dto::MutationDataDto,
         evidence::{self, Claim, PathEvidence, Position, Unreadable},
-        observe,
+        observe::{self, ObservedFile},
         outcome::{self, SaveReport},
     },
     Accepted, Answer, Before, Found, Ran, Standing,
@@ -72,6 +78,82 @@ pub(crate) trait Save {
     /// Sets what `prepare` worked out for the domain call, for a request
     /// that is entered again, and makes none of its checks.
     fn resume(&mut self, service: &RepositoryService, accepted: &Accepted) -> Result<(), Answer>;
+}
+
+/// The item a request writes, as `show_item` reads its effective copy:
+/// the item, its file's bytes and token, and what `parse` makes of the
+/// file. An item of another kind, one with no file, a file `parse` does
+/// not take, and one whose ID, by `id_of`, is another's are
+/// `item_not_found`.
+pub(crate) fn read_item<T>(
+    service: &RepositoryService,
+    repository: &ResolvedRepository,
+    id: &ItemId,
+    kind: ItemDtoKind,
+    parse: impl FnOnce(&str, &[u8]) -> Option<T>,
+    id_of: impl FnOnce(&T) -> &ItemId,
+) -> Result<(ItemDto, ObservedFile, T), Answer> {
+    let not_found = || Answer::stopped(ResultCode::ItemNotFound);
+    let mut item = service
+        .show_item(repository, id)
+        .map_err(|error| Answer::of_read(&error))?;
+    let (true, Some(source), Some(observation)) = (
+        item.kind == kind,
+        item.source.take(),
+        item.observation.take(),
+    ) else {
+        return Err(not_found());
+    };
+    let current = parse(&item.path, source.as_bytes()).ok_or_else(not_found)?;
+    if id_of(&current) != id {
+        return Err(not_found());
+    }
+    let observed = ObservedFile {
+        token: observation,
+        bytes: source.into_bytes(),
+    };
+    Ok((item, observed, current))
+}
+
+/// The already-applied rule, for a request whose token is not the file's
+/// or whose end state may already hold: `bytes` are the file at `path`
+/// in the worktree `worktree`, and `as_intended` says they are what the
+/// request intends. A no-op when they are and the file is committed at
+/// its branch tip; an external change otherwise.
+pub(crate) fn stale_token_answer(
+    worktree: &Path,
+    path: &str,
+    bytes: &[u8],
+    as_intended: bool,
+    data: MutationDataDto,
+) -> Answer {
+    // A worktree that cannot be read is not known to be committed.
+    let committed = observe::is_committed(worktree, path, bytes).unwrap_or(false);
+    let code = observe::stale_token_code(as_intended, committed);
+    let mut answer = Answer::stopped(code).with_data(data);
+    if code == ResultCode::AlreadyApplied {
+        (_, answer.effects) = settled(None);
+    }
+    answer
+}
+
+/// The primary-is-committed rule. With no editing context the item's
+/// effective copy is primary's file, and the domain creates the context
+/// from primary's head: the same bytes only if the file is committed and
+/// unmodified. Otherwise the answer is `worktree_not_clean`.
+pub(crate) fn primary_is_committed(
+    root: &Path,
+    kind: &AuthoringKind,
+    id: &str,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), Answer> {
+    if !context_names(root, kind, id).worktree.is_dir()
+        && !observe::is_committed(root, path, bytes).unwrap_or(false)
+    {
+        return Err(Answer::stopped(ResultCode::WorktreeNotClean));
+    }
+    Ok(())
 }
 
 /// What Git shows of the save's path since the request was accepted.

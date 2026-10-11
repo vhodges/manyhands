@@ -19,10 +19,10 @@ use super::{
     super::{
         super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
-            ExpectedPathObservation, ItemDtoKind, ProposedRelationships, RelationshipWrite,
-            RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-            ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft, TicketWriteOptions,
-            apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
+            ExpectedPathObservation, ItemDto, ItemDtoKind, ProposedRelationships,
+            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
+            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
@@ -32,7 +32,7 @@ use super::{
         observe::{self, ObservedFile},
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, save,
+    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, resolve_root, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -204,20 +204,34 @@ fn prepared(root: &Path, id: &str, expected: ExpectedPathObservation) -> Result<
     super::prepared(root, &AuthoringKind::Ticket, id, expected)
 }
 
-/// The repository a mutation names by its root. A linked worktree
-/// resolves to its owner for a read; here it would give the request a
-/// scope that is not the repository's.
-pub(super) fn resolve_root(
+/// A ticket as `show_item` reads its effective copy.
+fn read_ticket(
     service: &RepositoryService,
-    root: &Path,
-) -> Result<ResolvedRepository, Answer> {
-    let repository = service
-        .resolve_repository(root)
-        .map_err(|error| Answer::of_read(&error))?;
-    if std::fs::canonicalize(root).ok().as_deref() != Some(repository.root()) {
-        return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+    repository: &ResolvedRepository,
+    id: &ItemId,
+) -> Result<(ItemDto, ObservedFile, canonical::Ticket), Answer> {
+    save::read_item(
+        service,
+        repository,
+        id,
+        ItemDtoKind::Ticket,
+        parse_ticket,
+        |ticket| &ticket.id,
+    )
+}
+
+/// The guard of a write to a lifecycle-closed ticket. It is in the
+/// bindings and not in the domain operation, whose other callers, the
+/// closure operation among them, are not refused.
+fn refuse_closed(item: &ItemDto) -> Result<(), Answer> {
+    if item
+        .closure
+        .as_ref()
+        .is_some_and(|closure| closure.state == ClosureState::Closed)
+    {
+        return Err(Answer::stopped(ResultCode::TicketClosed));
     }
-    Ok(repository)
+    Ok(())
 }
 
 /// The scope of a ticket request's results.
@@ -518,19 +532,13 @@ impl TicketBinding {
         if !self.holds(&current) {
             return Err(Answer::stopped(ResultCode::OccupiedPath).with_data(data));
         }
-        // A worktree that cannot be read is not known to be committed.
-        let committed = observe::is_committed(
+        Err(save::stale_token_answer(
             Path::new(&item.context.worktree),
             &item.path,
             source.as_bytes(),
-        )
-        .unwrap_or(false);
-        let code = observe::stale_token_code(true, committed);
-        let mut answer = Answer::stopped(code).with_data(data);
-        if code == ResultCode::AlreadyApplied {
-            (_, answer.effects) = save::settled(None);
-        }
-        Err(answer)
+            true,
+            data,
+        ))
     }
 
     fn prepare_create(
@@ -558,67 +566,32 @@ impl TicketBinding {
         repository: &ResolvedRepository,
         token: &str,
     ) -> Result<Prepared, Answer> {
-        let not_found = || Answer::stopped(ResultCode::ItemNotFound);
-        let item = service
-            .show_item(repository, &self.id)
-            .map_err(|error| Answer::of_read(&error))?;
-        let (ItemDtoKind::Ticket, Some(source), Some(observation)) =
-            (item.kind, item.source, item.observation)
-        else {
-            return Err(not_found());
-        };
-        let current = parse_ticket(&item.path, source.as_bytes()).ok_or_else(not_found)?;
-        if current.id != self.id {
-            return Err(not_found());
-        }
-        // The guard is here and not in the domain operation, whose other
-        // callers, the closure operation among them, are not refused.
-        if item
-            .closure
-            .is_some_and(|closure| closure.state == ClosureState::Closed)
-        {
-            return Err(Answer::stopped(ResultCode::TicketClosed));
-        }
+        let (item, observed, current) = read_ticket(service, repository, &self.id)?;
+        refuse_closed(&item)?;
         self.check_relationships(
             service,
             repository,
             current_relationships(item.deps, item.parent),
             Checking::NewRequest,
         )?;
-
-        let observed = ObservedFile {
-            token: observation,
-            bytes: source.into_bytes(),
-        };
         let Some(expected) = observed.check(token) else {
             // The token is not the file's. Asking for the state that
             // already exists is not a conflict; anything else is.
-            let committed = observe::is_committed(
+            return Err(save::stale_token_answer(
                 Path::new(&item.context.worktree),
                 &item.path,
                 &observed.bytes,
-            )
-            .unwrap_or(false);
-            let code = observe::stale_token_code(self.holds(&current), committed);
-            let (_, effects) = save::settled(None);
-            let mut answer =
-                Answer::stopped(code).with_data(self.data(slug_of(&current), Vec::new()));
-            if code == ResultCode::AlreadyApplied {
-                answer.effects = effects;
-            }
-            return Err(answer);
+                self.holds(&current),
+                self.data(slug_of(&current), Vec::new()),
+            ));
         };
-        // With no editing context the effective copy is primary's file,
-        // and the domain creates the context from primary's head: the same
-        // bytes only if the file is committed and unmodified.
-        if !ticket_context(repository.root(), &self.id_text())
-            .worktree
-            .is_dir()
-            && !observe::is_committed(repository.root(), &item.path, &observed.bytes)
-                .unwrap_or(false)
-        {
-            return Err(Answer::stopped(ResultCode::WorktreeNotClean));
-        }
+        save::primary_is_committed(
+            repository.root(),
+            &AuthoringKind::Ticket,
+            &self.id_text(),
+            &item.path,
+            &observed.bytes,
+        )?;
         self.prepared(repository.root(), expected)
     }
 }
@@ -1156,38 +1129,10 @@ impl Binding for SlugAssignBinding {
     /// short code composed and the request accepted.
     fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
         let repository = resolve_root(service, &self.root)?;
-        let not_found = || Answer::stopped(ResultCode::ItemNotFound);
-        let item = service
-            .show_item(&repository, &self.id)
-            .map_err(|error| Answer::of_read(&error))?;
-        let (ItemDtoKind::Ticket, Some(source), Some(observation)) =
-            (item.kind, item.source, item.observation)
-        else {
-            return Err(not_found());
-        };
-        let current = parse_ticket(&item.path, source.as_bytes()).ok_or_else(not_found)?;
-        if current.id != self.id {
-            return Err(not_found());
-        }
-        if item
-            .closure
-            .is_some_and(|closure| closure.state == ClosureState::Closed)
-        {
-            return Err(Answer::stopped(ResultCode::TicketClosed));
-        }
-        let observed = ObservedFile {
-            token: observation,
-            bytes: source.into_bytes(),
-        };
+        let (item, observed, current) = read_ticket(service, &repository, &self.id)?;
+        refuse_closed(&item)?;
         let expected = observed.check(&self.observation);
-        let committed = || {
-            observe::is_committed(
-                Path::new(&item.context.worktree),
-                &item.path,
-                &observed.bytes,
-            )
-            .unwrap_or(false)
-        };
+        let worktree = Path::new(&item.context.worktree);
         let slug = if has_slug(&current) {
             let data = self.data(slug_of(&current));
             // A short code that cannot be composed now is not the one the
@@ -1198,21 +1143,21 @@ impl Binding for SlugAssignBinding {
             else {
                 return Err(Answer::stopped(ResultCode::SlugAlreadyAssigned).with_data(data));
             };
-            match (committed(), &expected) {
-                (true, _) => {
-                    let (code, effects) = save::settled(None);
-                    return Err(Answer {
-                        effects,
-                        ..Answer::stopped(code).with_data(data)
-                    });
-                }
-                // Written by an attempt that did not commit, and the
-                // caller has seen it: the save commits it.
-                (false, Some(_)) => held,
-                (false, None) => {
-                    return Err(Answer::stopped(ResultCode::ExternalChange).with_data(data));
-                }
+            // A worktree that cannot be read is not known to be committed.
+            let committed =
+                observe::is_committed(worktree, &item.path, &observed.bytes).unwrap_or(false);
+            if committed || expected.is_none() {
+                return Err(save::stale_token_answer(
+                    worktree,
+                    &item.path,
+                    &observed.bytes,
+                    true,
+                    data,
+                ));
             }
+            // Written by an attempt that did not commit, and the caller
+            // has seen it: the save commits it.
+            held
         } else {
             compose_slug(service, &repository, &self.id, self.initials.as_deref())?
         };
@@ -1220,15 +1165,14 @@ impl Binding for SlugAssignBinding {
             // The token is not the file's, and the file has no short code.
             return Err(Answer::stopped(ResultCode::ExternalChange).with_data(self.data(None)));
         };
-        // As for a save: with no editing context the effective copy is
-        // primary's file, which must be committed and unmodified.
         let id = self.id_text();
-        if !ticket_context(repository.root(), &id).worktree.is_dir()
-            && !observe::is_committed(repository.root(), &item.path, &observed.bytes)
-                .unwrap_or(false)
-        {
-            return Err(Answer::stopped(ResultCode::WorktreeNotClean));
-        }
+        save::primary_is_committed(
+            repository.root(),
+            &AuthoringKind::Ticket,
+            &id,
+            &item.path,
+            &observed.bytes,
+        )?;
         self.draft = Some(draft_of(&current));
         self.slug = Some(slug);
         prepared(repository.root(), &id, expected)

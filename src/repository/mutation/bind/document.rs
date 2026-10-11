@@ -8,7 +8,7 @@
 //! at the destination, and a commit from elsewhere to either path stops
 //! the request.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::{
     canonical::{self, ItemId},
@@ -21,7 +21,8 @@ use super::{
             AuthoringKind, AuthoringTarget, ContextIntent, DocumentDraft, ExpectedPathObservation,
             ItemDto, ItemDtoKind, RepositoryError, RepositoryErrorKind, RepositoryOperation,
             RepositoryService, ResolvedRepository, SaveDocumentRequest, SaveOutcome,
-            collect_canonical_sources, owned_file_bytes, read::observe_in_context,
+            collect_canonical_sources, owned_file_bytes,
+            read::{is_plain_relative, observe_in_context},
             recovery::JournalRow,
         },
         command::Command,
@@ -33,8 +34,7 @@ use super::{
         outcome,
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, save,
-    ticket::resolve_root,
+    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, resolve_root, save,
 };
 
 /// Where documents are, below a context's root.
@@ -199,13 +199,7 @@ fn parse_document(path: &str, bytes: &[u8]) -> Option<canonical::Document> {
 /// document can be. `None` for any other.
 fn document_path(path: &Path) -> Option<String> {
     let text = path.to_str()?;
-    let plain = !text.contains(['\\', '\0'])
-        && text
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)));
+    let plain = is_plain_relative(text);
     let document = matches!(
         canonical::item_path_kind(path),
         Ok(canonical::ItemKind::Document)
@@ -379,15 +373,13 @@ impl DocumentBinding {
     /// when the file is as intended and committed at its branch tip, and
     /// an external change otherwise.
     fn already_applied(&self, item: &ItemDto, bytes: &[u8], as_intended: bool) -> Answer {
-        // A worktree that cannot be read is not known to be committed.
-        let committed = observe::is_committed(Path::new(&item.context.worktree), &item.path, bytes)
-            .unwrap_or(false);
-        let code = observe::stale_token_code(as_intended, committed);
-        let mut answer = Answer::stopped(code).with_data(self.data());
-        if code == ResultCode::AlreadyApplied {
-            (_, answer.effects) = save::settled(None);
-        }
-        answer
+        save::stale_token_answer(
+            Path::new(&item.context.worktree),
+            &item.path,
+            bytes,
+            as_intended,
+            self.data(),
+        )
     }
 
     /// A create: no item may hold the ID, and nothing may be at the path.
@@ -448,24 +440,14 @@ impl DocumentBinding {
         service: &RepositoryService,
         repository: &ResolvedRepository,
     ) -> Result<(ItemDto, ObservedFile, canonical::Document), Answer> {
-        let not_found = || Answer::stopped(ResultCode::ItemNotFound);
-        let mut item = service
-            .show_item(repository, &self.id)
-            .map_err(|error| Answer::of_read(&error))?;
-        let (ItemDtoKind::Document, Some(source), Some(observation)) =
-            (item.kind, item.source.take(), item.observation.take())
-        else {
-            return Err(not_found());
-        };
-        let current = parse_document(&item.path, source.as_bytes()).ok_or_else(not_found)?;
-        if current.id != self.id {
-            return Err(not_found());
-        }
-        let observed = ObservedFile {
-            token: observation,
-            bytes: source.into_bytes(),
-        };
-        Ok((item, observed, current))
+        save::read_item(
+            service,
+            repository,
+            &self.id,
+            ItemDtoKind::Document,
+            parse_document,
+            |document| &document.id,
+        )
     }
 
     /// With no editing context the effective copy is primary's file, and
@@ -477,15 +459,13 @@ impl DocumentBinding {
         item: &ItemDto,
         observed: &ObservedFile,
     ) -> Result<(), Answer> {
-        if !document_context(repository.root(), &self.id_text())
-            .worktree
-            .is_dir()
-            && !observe::is_committed(repository.root(), &item.path, &observed.bytes)
-                .unwrap_or(false)
-        {
-            return Err(Answer::stopped(ResultCode::WorktreeNotClean));
-        }
-        Ok(())
+        save::primary_is_committed(
+            repository.root(),
+            &AuthoringKind::Document,
+            &self.id_text(),
+            &item.path,
+            &observed.bytes,
+        )
     }
 
     fn prepare_save(

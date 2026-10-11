@@ -13,7 +13,7 @@ use crate::results::{Effects, RecoveryAction, ResultCode, Scope, absolute_path_s
 use super::{
     super::{
         AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
-        RepositoryService,
+        RepositoryService, ResolvedRepository,
         recovery::{FinalKind, JournalRow},
     },
     command::Command,
@@ -65,6 +65,22 @@ pub(crate) fn prepared(
         position,
         expected: Some(expected),
     })
+}
+
+/// The repository a mutation names by its root. A linked worktree
+/// resolves to its owner for a read; here it would give the request a
+/// scope that is not the repository's.
+pub(crate) fn resolve_root(
+    service: &RepositoryService,
+    root: &Path,
+) -> Result<ResolvedRepository, Answer> {
+    let repository = service
+        .resolve_repository(root)
+        .map_err(|error| Answer::of_read(&error))?;
+    if std::fs::canonicalize(root).ok().as_deref() != Some(repository.root()) {
+        return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+    }
+    Ok(repository)
 }
 
 /// What a request is answered with, before the boundary classifies it: the

@@ -57,8 +57,8 @@ pub use dto::{
     RelationshipRejectionDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
     RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
 };
-pub(crate) use items::observe_in_context;
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
+pub(crate) use items::{is_plain_relative, observe_in_context};
 pub use resolve::ResolvedRepository;
 
 /// The argument of a recovery action that names a repository root.
