@@ -30,8 +30,9 @@ impl RepositoryService {
         reply: &Reply<'_>,
         record: RequestRecord,
     ) -> Envelope<MutationDataDto> {
-        let accepted = Accepted::of_record(&record, record.attempt);
-        let Some(result) = record.result else {
+        let (Some(accepted), Some(result)) =
+            (Accepted::of_record(&record, record.attempt), record.result)
+        else {
             return reply.stopped(ResultCode::InternalError);
         };
         // A result that names a commit is given again only while that

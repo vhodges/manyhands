@@ -186,11 +186,22 @@ pub(crate) struct Accepted {
 }
 
 impl Accepted {
-    /// An accepted record, entered as `attempt`. A record that holds no
-    /// operation is of a request that has none.
-    pub(crate) fn of_record(record: &RequestRecord, attempt: u64) -> Self {
+    /// An accepted record, entered as `attempt`.
+    ///
+    /// `None` for a record that does not hold what its command's records
+    /// hold: an operation for a command that has one, and none for a
+    /// command that has none. No call of this build accepts such a
+    /// record, and nothing is run, answered or settled from it: a request
+    /// that lost its operation would otherwise be entered again under an
+    /// operation ID that is not its own. A record of a command this build
+    /// does not bind is read as one of a command that has an operation.
+    pub(crate) fn of_record(record: &RequestRecord, attempt: u64) -> Option<Self> {
         let operation = record.operations.first();
-        Self {
+        let has_operation = Command::parse(&record.command).is_none_or(Command::has_operation);
+        if operation.is_some() != has_operation {
+            return None;
+        }
+        Some(Self {
             request_id: record.request_id,
             attempt,
             scope: record.scope.clone(),
@@ -202,7 +213,7 @@ impl Accepted {
                 base_oid: record.base_oid,
             },
             expected: record.expected_digest.clone(),
-        }
+        })
     }
 
     /// The request's operation, as its record and its results name it:
@@ -573,7 +584,9 @@ impl Recorded {
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
 pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
-    let accepted = Accepted::of_record(record, record.attempt);
+    let Some(accepted) = Accepted::of_record(record, record.attempt) else {
+        return Recorded::nothing();
+    };
     let journal = accepted.journal_row(service);
     let ran = match journal {
         Some(JournalRow::Absent) => false,

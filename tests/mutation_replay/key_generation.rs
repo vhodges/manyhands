@@ -606,3 +606,45 @@ fn a_generated_key_removed_before_its_lost_result_is_asked_for_is_not_generated_
         assert_eq!(world.key_operations(), 1);
     }
 }
+
+/// A record of a generation holds its operation. One that has lost it is
+/// not a record any call wrote: it is not entered again under another
+/// operation ID, which would generate a second key, and it is not
+/// replayed.
+#[test]
+fn a_generation_s_record_that_lost_its_operation_is_not_run_or_replayed() {
+    let forget_the_operation = |world: &KeyWorld| {
+        let removed = crate::support::items::index(world.data.path())
+            .execute("DELETE FROM request_operations", [])
+            .unwrap();
+        assert_eq!(removed, 1);
+    };
+
+    // An accepted record.
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+    });
+    world.execute(REQUEST_1, world.generate(LABEL, None));
+    let files = world.private_key_files();
+    assert_eq!(files.len(), 1);
+    world.reopen();
+    forget_the_operation(&world);
+    let entered = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(
+        (entered.outcome, entered.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(entered.operation_id, None);
+    assert_eq!(world.private_key_files(), files);
+    assert_eq!(world.key_operations(), 1);
+    assert_eq!(state(&world, REQUEST_1), Some(RequestState::Accepted));
+
+    // A finished one.
+    let world = KeyWorld::new();
+    let generated = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_generated(&world, &generated);
+    forget_the_operation(&world);
+    let replayed = world.execute(REQUEST_1, world.generate(LABEL, None));
+    assert_eq!(replayed.code, ResultCode::InternalError);
+    assert_eq!(world.key_operations(), 1);
+}

@@ -54,6 +54,28 @@ impl Command {
         Self::ALL.into_iter().find(|command| command.name() == name)
     }
 
+    /// Whether a request of the command has an operation: a domain
+    /// operation under an operation ID, with a row in a journal. A change
+    /// to the key registry is one transaction with neither. A record of
+    /// the command holds an operation exactly when this says so, and one
+    /// that does not is not a record any call of this build wrote.
+    pub(crate) const fn has_operation(self) -> bool {
+        match self {
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate => true,
+            Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
+        }
+    }
+
     /// Whether the command is how the index comes back. When the index is
     /// unavailable and no request record can be read, the boundary brings
     /// the index back for such a command, and for no other, before it
@@ -103,6 +125,17 @@ mod tests {
         assert_eq!(Command::KeySelect.name(), "key select");
         assert_eq!(Command::KeyClear.name(), "key clear");
         assert_eq!(Command::KeyRemove.name(), "key remove");
+    }
+
+    #[test]
+    fn only_a_change_to_the_key_registry_has_no_operation() {
+        for command in Command::ALL {
+            let registry_change = matches!(
+                command,
+                Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove
+            );
+            assert_eq!(command.has_operation(), !registry_change, "{command:?}");
+        }
     }
 
     #[test]

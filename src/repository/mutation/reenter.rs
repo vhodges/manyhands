@@ -1,7 +1,7 @@
 //! Re-entry: a call that finds an accepted record of its own request. An
 //! earlier call of the request started and its end was not recorded.
 
-use crate::results::Envelope;
+use crate::results::{Envelope, ResultCode};
 
 use super::{
     super::{
@@ -93,7 +93,9 @@ impl RepositoryService {
             Ok(None) => return None,
             Err(error) => return Some(Reply { binding, identity }.read_failure(&error)),
         };
-        let accepted = Accepted::of_record(record, attempt);
+        let Some(accepted) = Accepted::of_record(record, attempt) else {
+            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
+        };
         // The row as it is before this call: its state afterwards proves
         // nothing about an earlier attempt.
         let journal = match accepted.read_journal_row(self) {
