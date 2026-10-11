@@ -18,22 +18,19 @@ use super::{
         super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
             ExpectedPathObservation, ItemDtoKind, OperationFamily, ProposedRelationships,
-            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft,
-            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
-            recovery::{FinalKind, JournalRow},
+            RelationshipWrite, RepositoryError, RepositoryOperation, RepositoryService,
+            ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft, TicketWriteOptions,
+            apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
         dto::{MutationDataDto, TicketMutationDto},
-        evidence::{self, PathEvidence, Position, Unreadable},
+        evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
-        outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Found, Prepared, Ran, Standing,
-    save,
+    Accepted, Answer, Before, Binding, EndedWithoutCheckpoint, Prepared, Ran, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -288,10 +285,6 @@ impl TicketBinding {
             }
         };
         intended == *file
-    }
-
-    fn holds_bytes(&self, bytes: &[u8]) -> bool {
-        parse_ticket(&ticket_path(&self.id_text()), bytes).is_some_and(|ticket| self.holds(&ticket))
     }
 
     /// The input is checked the way the domain will check it, before
@@ -610,6 +603,33 @@ fn current_relationships(
 }
 
 impl TicketBinding {
+    /// The short code the ticket's file holds in its editing context.
+    fn written_slug(&self, root: &Path) -> Option<String> {
+        let id = self.id_text();
+        context_file(root, &id)
+            .as_deref()
+            .and_then(|bytes| parse_ticket(&ticket_path(&id), bytes))
+            .and_then(|ticket| slug_of(&ticket))
+    }
+}
+
+impl save::Save for TicketBinding {
+    fn path(&self) -> String {
+        ticket_path(&self.id_text())
+    }
+
+    fn worktree(&self, root: &Path) -> PathBuf {
+        ticket_context(root, &self.id_text()).worktree
+    }
+
+    fn context_file(&self, root: &Path) -> Option<Vec<u8>> {
+        context_file(root, &self.id_text())
+    }
+
+    fn holds_bytes(&self, bytes: &[u8]) -> bool {
+        parse_ticket(&ticket_path(&self.id_text()), bytes).is_some_and(|ticket| self.holds(&ticket))
+    }
+
     /// The one domain call, under the recorded operation ID and
     /// expectation.
     fn call_domain(
@@ -633,31 +653,11 @@ impl TicketBinding {
         )
     }
 
-    /// The short code the ticket's file holds in its editing context.
-    fn written_slug(&self, root: &Path) -> Option<String> {
-        let id = self.id_text();
-        context_file(root, &id)
-            .as_deref()
-            .and_then(|bytes| parse_ticket(&ticket_path(&id), bytes))
-            .and_then(|ticket| slug_of(&ticket))
-    }
-
     fn answer(&self, code: ResultCode, effects: Effects, root: &Path) -> Answer {
         Answer {
             effects,
             ..Answer::stopped(code).with_data(self.data(self.written_slug(root), Vec::new()))
         }
-    }
-
-    /// What Git shows of the ticket's path since the request was accepted.
-    fn evidence(&self, accepted: &Accepted) -> Result<PathEvidence, Unreadable> {
-        evidence::path_evidence(
-            &accepted.root(),
-            &accepted.position,
-            &ticket_path(&self.id_text()),
-            &accepted.expectation(),
-            &|bytes| self.holds_bytes(bytes),
-        )
     }
 
     /// Sets the domain call's options for a request that is entered
@@ -694,22 +694,6 @@ impl TicketBinding {
             }
         }
         Ok(())
-    }
-
-    /// The already-applied rule, for the ticket's file in its editing
-    /// context: whether it is what the request intends and is committed at
-    /// its branch tip.
-    fn already_applied(&self, root: &Path, file: Option<&[u8]>) -> Result<bool, Unreadable> {
-        let id = self.id_text();
-        match file {
-            Some(bytes) if self.holds_bytes(bytes) => observe::is_committed(
-                &ticket_context(root, &id).worktree,
-                &ticket_path(&id),
-                bytes,
-            )
-            .map_err(|_| Unreadable),
-            Some(_) | None => Ok(false),
-        }
     }
 }
 
@@ -872,70 +856,7 @@ impl Binding for TicketBinding {
     }
 
     fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        let id = self.id_text();
-        let path = ticket_path(&id);
-        let root = accepted.root();
-        let expected = accepted.expectation();
-        let result = self.call_domain(service, accepted);
-        let file = context_file(&root, &id);
-        let slug = file
-            .as_deref()
-            .and_then(|bytes| parse_ticket(&path, bytes))
-            .and_then(|ticket| slug_of(&ticket));
-        let (code, effects, standing) = match result {
-            Ok(outcome) => {
-                let report = SaveReport::of(outcome);
-                // The commit and the effects come from what Git shows, made
-                // after the domain call: a save that changed nothing can
-                // name a commit it did not make.
-                match save::confirmed(&root, &accepted.position, &path, report.claimed()) {
-                    Ok(commit) => {
-                        let (code, effects) = report.result(commit);
-                        let standing = save::standing(report, || accepted.journal_row(service));
-                        (code, effects, standing)
-                    }
-                    // The domain names a commit and Git cannot be read to
-                    // say whose it is. Calling that a no-op would be stored
-                    // and replayed for good, so no result is claimed: the
-                    // answer is an internal failure with no effect and no
-                    // commit, and the record stays accepted for a retry.
-                    Err(Unreadable) => (
-                        ResultCode::InternalError,
-                        Effects::not_requested(),
-                        Standing::Unconfirmed,
-                    ),
-                }
-            }
-            Err(error) => {
-                // Only the kind is read: the error's text can hold a path
-                // or a backend's message.
-                let code = outcome::repository_error_code(error.kind);
-                let journal = accepted.journal_row(service);
-                let holds = |bytes: &[u8]| self.holds_bytes(bytes);
-                let effects = save::stopped_effects(
-                    journal.as_ref(),
-                    // A range that cannot be read shows no commit. The
-                    // record stays accepted either way: the row is in
-                    // flight.
-                    || {
-                        evidence::intended_commit(&root, &accepted.position, &path, &holds)
-                            .ok()
-                            .flatten()
-                    },
-                    file.as_deref(),
-                    &expected,
-                    &holds,
-                );
-                (code, effects, Standing::Stopped { journal })
-            }
-        };
-        Ran {
-            answer: Answer {
-                effects,
-                ..Answer::stopped(code).with_data(self.data(slug, Vec::new()))
-            },
-            standing,
-        }
+        save::run(self, service, accepted)
     }
 
     fn reenter(
@@ -944,155 +865,10 @@ impl Binding for TicketBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Before, Ran> {
-        let root = accepted.root();
-        if let Err(answer) = self.resume(service) {
-            return Err(Ran {
-                answer,
-                standing: Standing::NotRun { journal },
-            });
-        }
-        let evidence = match self.evidence(accepted) {
-            Ok(evidence) => evidence,
-            // Git could not be read, so nothing is known of what an
-            // earlier attempt committed: nothing is run, finished or
-            // deleted on that.
-            Err(Unreadable) => {
-                return Err(Ran {
-                    answer: Answer::stopped(ResultCode::InternalError),
-                    standing: Standing::Unconfirmed,
-                });
-            }
-        };
-        let before = Before { journal, evidence };
-        match before.found() {
-            Found::Continue => Ok(before),
-            Found::Done { commit } => {
-                let (code, effects) = save::settled(Some(commit));
-                Err(Ran {
-                    answer: self.answer(code, effects, &root),
-                    standing: Standing::Final,
-                })
-            }
-            Found::Foreign { own } => Err(Ran {
-                answer: self.answer(
-                    ResultCode::ExternalChange,
-                    outcome::stopped_save_effects(own, own.is_some()),
-                    &root,
-                ),
-                standing: Standing::Stopped {
-                    journal: Some(before.journal),
-                },
-            }),
-        }
+        save::reenter(self, service, accepted, journal)
     }
 
     fn rerun(&self, service: &RepositoryService, accepted: &Accepted, before: &Before) -> Ran {
-        let id = self.id_text();
-        let root = accepted.root();
-        let result = self.call_domain(service, accepted);
-        // What Git shows now. The commit is taken from this and from what
-        // it showed before the call, never from what the domain names: a
-        // second call of a save that committed names none.
-        let after = self.evidence(accepted);
-        let file = context_file(&root, &id);
-        let (code, effects, standing) = match result {
-            Ok(outcome) => match (SaveReport::of(outcome), after) {
-                (SaveReport::IdentityRequired, _) => (
-                    ResultCode::IdentityRequired,
-                    Effects::not_requested(),
-                    Standing::Stopped {
-                        journal: accepted.journal_row(service),
-                    },
-                ),
-                (report @ SaveReport::Saved { .. }, Ok(after)) => {
-                    let (code, effects) = report.result(before.reported(&after));
-                    // The journal is not read here: `standing` asks for
-                    // it only for a save that needs an identity, which is
-                    // matched above.
-                    let standing = save::standing(report, || accepted.journal_row(service));
-                    (code, effects, standing)
-                }
-                // The save returned and Git cannot be read to say whether
-                // the request committed. A no-op stored now would be
-                // replayed for good.
-                (SaveReport::Saved { .. }, Err(Unreadable)) => (
-                    ResultCode::InternalError,
-                    Effects::not_requested(),
-                    Standing::Unconfirmed,
-                ),
-            },
-            Err(error) => {
-                // No attempt of this request had started, and the domain
-                // found the file other than the request expected: the
-                // content came from elsewhere. Asking for the state that
-                // already exists is not a conflict.
-                let applied =
-                    if error.kind == RepositoryErrorKind::ExternalChange && !before.started() {
-                        Some(self.already_applied(&root, file.as_deref()))
-                    } else {
-                        None
-                    };
-                match applied {
-                    Some(Ok(true)) => {
-                        let (code, effects) = save::settled(None);
-                        (code, effects, Standing::Final)
-                    }
-                    Some(Err(Unreadable)) => (
-                        ResultCode::InternalError,
-                        Effects::not_requested(),
-                        Standing::Unconfirmed,
-                    ),
-                    Some(Ok(false)) | None => {
-                        let code = outcome::repository_error_code(error.kind);
-                        let journal = accepted.journal_row(service);
-                        let completed = matches!(
-                            journal,
-                            Some(JournalRow::Final {
-                                kind: FinalKind::Completed,
-                                owes_work: false,
-                                checkpointed: _,
-                            })
-                        );
-                        let commit = after.as_ref().ok().and_then(|after| before.reported(after));
-                        match (completed, commit, after) {
-                            // This call was refused, and the request's work
-                            // is done all the same: its operation has
-                            // completed and its commit is there, made by an
-                            // earlier attempt or by a call of the same
-                            // request that ran beside this one. What is
-                            // true of the request is its result.
-                            (true, Some(commit), _) => {
-                                let (code, effects) = save::settled(Some(commit));
-                                (code, effects, Standing::Final)
-                            }
-                            // The operation completed and Git cannot be
-                            // read to say whether the request committed.
-                            // Deleting the record now could lose a commit's
-                            // report: it is left for a retry to settle.
-                            (true, None, Err(Unreadable)) => {
-                                (code, Effects::not_requested(), Standing::Unconfirmed)
-                            }
-                            (true, None, Ok(_)) | (false, _, _) => {
-                                // A range that cannot be read shows no
-                                // commit. The record stays accepted either
-                                // way: the row is in flight.
-                                let effects = save::stopped_effects(
-                                    journal.as_ref(),
-                                    || commit,
-                                    file.as_deref(),
-                                    &accepted.expectation(),
-                                    &|bytes| self.holds_bytes(bytes),
-                                );
-                                (code, effects, Standing::Stopped { journal })
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        Ran {
-            answer: self.answer(code, effects, &root),
-            standing,
-        }
+        save::rerun(self, service, accepted, before)
     }
 }
