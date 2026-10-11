@@ -14,15 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Temporary Cycle 07 Windows iteration; restore all five for the final run.
         include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            os: linux
-            executable-suffix: ""
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            os: linux
-            executable-suffix: ""
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
             os: windows
@@ -31,10 +24,6 @@ jobs:
             target: aarch64-pc-windows-msvc
             os: windows
             executable-suffix: .exe
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            os: macos
-            executable-suffix: ""
     steps:
       - uses: actions/checkout@v4
 
