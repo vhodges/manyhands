@@ -202,6 +202,7 @@ fn repository_operations() -> Vec<RepositoryOperation> {
         RebuildRepository,
         RepositorySnapshot,
         Read,
+        AbandonOperation,
     ];
     for operation in &all {
         match operation {
@@ -227,7 +228,8 @@ fn repository_operations() -> Vec<RepositoryOperation> {
             | RefreshRepository
             | RebuildRepository
             | RepositorySnapshot
-            | Read => {}
+            | Read
+            | AbandonOperation => {}
         }
     }
     all

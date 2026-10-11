@@ -92,6 +92,7 @@ pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestI
 pub(crate) use observe::absent_token;
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
+pub(super) use records::{operation_owner, release_operation_owner};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.

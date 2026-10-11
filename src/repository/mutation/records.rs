@@ -688,6 +688,61 @@ fn delete_request(
     Ok(true)
 }
 
+/// The request whose record holds the local operation `operation_id` of
+/// `scope_key` and is not finished: the one that owns the operation's
+/// pending row. A finished record is no owner: its result is stored, and
+/// it is answered from that whatever becomes of the row.
+pub(in super::super) fn operation_owner(
+    connection: &Connection,
+    scope_key: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT request_records.request_ulid
+               FROM request_operations
+               JOIN request_records USING (request_ulid)
+              WHERE request_operations.family = 'local'
+                AND request_operations.operation_ulid = ?2
+                AND request_records.scope_key = ?1
+                AND request_records.state = 'accepted'
+              ORDER BY request_records.request_ulid LIMIT 1",
+            params![scope_key, operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
+/// Deletes the record `operation_owner` finds, and releases the
+/// confirmation it accepted, as settling does for a request that ended
+/// with nothing in flight: the request ID is free, and its next use is a
+/// new request with a new operation ID. This is whatever attempt the
+/// record is at: a call that is still running under it settles nothing,
+/// since its record is gone. Returns the request that was released.
+pub(in super::super) fn release_operation_owner(
+    transaction: &Transaction<'_>,
+    scope_key: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<String>> {
+    let Some(owner) = operation_owner(transaction, scope_key, operation_id)? else {
+        return Ok(None);
+    };
+    transaction.execute(
+        "UPDATE confirmation_records SET accepted_by_request = NULL, accepted_at = NULL
+          WHERE accepted_by_request = ?1",
+        [&owner],
+    )?;
+    transaction.execute(
+        "DELETE FROM request_operations WHERE request_ulid = ?1",
+        [&owner],
+    )?;
+    transaction.execute(
+        "DELETE FROM request_records WHERE request_ulid = ?1 AND state = 'accepted'",
+        [&owner],
+    )?;
+    Ok(Some(owner))
+}
+
 impl RepositoryService {
     /// The time records are timed by, in seconds: the clock's.
     pub(super) fn record_time(&self) -> i64 {

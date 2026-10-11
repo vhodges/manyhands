@@ -794,7 +794,10 @@ pub struct OperationDto {
     ///
     /// A local operation that is `completed` with the step `rejected` was
     /// refused and changed nothing. Asking for it again under the same ID
-    /// begins it anew.
+    /// begins it anew. One that is `completed` with the step `abandoned`
+    /// was closed by `operation abandon` while it was pending: what it
+    /// had written was left where it was, and its ID is never begun
+    /// again.
     pub completed_step: Option<String>,
     /// Null when nothing is left to do. Also null for a remote operation
     /// that holds the reservation, whose store does not say whether

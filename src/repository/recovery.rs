@@ -325,6 +325,13 @@ fn begin_or_reconcile(
             return Err(mismatch(operation, root));
         }
     }
+    // An abandoned operation is neither replayed as completed nor begun
+    // again: its ID is spent. Nothing has been written at this point.
+    if let Some((_, _, _, _, _, Some(step))) = &existing
+        && step == ABANDONED_STEP
+    {
+        return Err(abandoned(operation, root));
+    }
 
     let pending = transaction
         .prepare(
@@ -456,6 +463,11 @@ fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
 }
 
 const REJECTED_STEP: &str = "rejected";
+/// The step of a row that `abandon_operation` closed. Such a row is
+/// `completed`, so it blocks nothing, and is told apart from a row that
+/// ran to its end and from one that was rejected: its ID is never begun
+/// again and never replayed.
+const ABANDONED_STEP: &str = "abandoned";
 /// Whether `step`, the last step a local row recorded, is at or past the
 /// point where the operation's work is committed.
 fn is_checkpoint_step(step: &str) -> bool {
@@ -599,7 +611,10 @@ fn is_stored_name(stored: &str) -> bool {
 /// registration: an operation that creates or enables a repository
 /// precedes its registration, and the root may since have gone. A row
 /// that is completed with the step `rejected` is the kept row of a call
-/// that left nothing behind, and is reported as absent.
+/// that left nothing behind, and is reported as absent. So is a row that
+/// was abandoned: nothing is in flight under its ID, the request that
+/// owned it was released with it, and what tells it apart from a rejected
+/// row is the domain's to act on, which refuses a repeat of its ID.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(super) fn lookup_operation(
     connection: &Connection,
@@ -622,7 +637,7 @@ pub(super) fn lookup_operation(
     }
     Ok(if state != "completed" {
         JournalRow::Pending(PendingOperation::Local { state, step })
-    } else if step.as_deref() == Some(REJECTED_STEP) {
+    } else if matches!(step.as_deref(), Some(REJECTED_STEP | ABANDONED_STEP)) {
         JournalRow::Absent
     } else {
         // A local operation that completed owes nothing more.
@@ -638,7 +653,8 @@ pub(super) fn lookup_operation(
 /// recorded, when the operation has completed. `None` for an operation
 /// that has not completed, that the journal does not hold, or that
 /// completed having recorded no step of its own: such a row holds
-/// `completed`, or `rejected` when its call left nothing behind.
+/// `completed`, `rejected` when its call left nothing behind, or
+/// `abandoned` when it was closed by `abandon_operation`.
 ///
 /// `lookup_operation` says whether a row has completed. This says what
 /// the completed row recorded, for an operation whose step tells what it
@@ -660,9 +676,86 @@ pub(super) fn completed_step(
         .optional()?;
     match step.flatten() {
         Some(step) if !is_stored_name(&step) => Err(ReadError::new(ResultCode::InternalError)),
-        Some(step) if step == "completed" || step == REJECTED_STEP => Ok(None),
+        Some(step) if step == "completed" || step == REJECTED_STEP || step == ABANDONED_STEP => {
+            Ok(None)
+        }
         step => Ok(step),
     }
+}
+
+/// One row of the local journal, as `abandon_operation` reads it.
+pub(super) struct LocalRow {
+    pub(super) id: i64,
+    pub(super) action: String,
+    pub(super) target: Option<String>,
+    pub(super) state: String,
+    pub(super) step: Option<String>,
+    pub(super) observed_at: i64,
+}
+
+/// How a local row stands for someone who would abandon it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LocalStanding {
+    Pending,
+    Completed,
+    Rejected,
+    Abandoned,
+}
+
+impl LocalRow {
+    pub(super) fn standing(&self) -> LocalStanding {
+        if self.state != "completed" {
+            LocalStanding::Pending
+        } else {
+            match self.step.as_deref() {
+                Some(REJECTED_STEP) => LocalStanding::Rejected,
+                Some(ABANDONED_STEP) => LocalStanding::Abandoned,
+                Some(_) | None => LocalStanding::Completed,
+            }
+        }
+    }
+
+    /// Whether the row's state and step have the form of the names the
+    /// journal stores; see `is_stored_name`.
+    pub(super) fn is_well_formed(&self) -> bool {
+        is_stored_name(&self.state) && self.step.as_deref().is_none_or(is_stored_name)
+    }
+}
+
+/// The row of the local operation `operation_id` on `root_path`.
+pub(super) fn local_row(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<LocalRow>> {
+    connection
+        .query_row(
+            "SELECT id, action, target, state, completed_step, observed_at
+               FROM operation_records WHERE root_path = ?1 AND operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| {
+                Ok(LocalRow {
+                    id: row.get(0)?,
+                    action: row.get(1)?,
+                    target: row.get(2)?,
+                    state: row.get(3)?,
+                    step: row.get(4)?,
+                    observed_at: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+}
+
+/// Closes the pending row `record_id` as abandoned. The step it had
+/// reached is replaced by the marker: what it was is in the result of the
+/// abandon. Returns whether a pending row was closed.
+pub(super) fn abandon_row(connection: &Connection, record_id: i64) -> rusqlite::Result<bool> {
+    Ok(connection.execute(
+        "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
+          WHERE id = ?1 AND state != 'completed'",
+        params![record_id, ABANDONED_STEP, now()],
+    )? == 1)
 }
 
 pub(super) fn advance_after_observation(
@@ -910,6 +1003,15 @@ fn mismatch(operation: RepositoryOperation, root: &Path) -> RepositoryError {
         Some(root.to_owned()),
         RepositoryErrorKind::OperationMismatch,
         "the operation ID is already bound to a different root or action",
+    )
+}
+
+fn abandoned(operation: RepositoryOperation, root: &Path) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(root.to_owned()),
+        RepositoryErrorKind::OperationAbandoned,
+        "the operation was abandoned and its ID cannot be used again",
     )
 }
 

@@ -57,6 +57,11 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         // The boundary allocates operation IDs, so a mismatch is its own
         // fault.
         RepositoryErrorKind::OperationMismatch => ResultCode::InternalError,
+        // The request's operation was abandoned while a call of the
+        // request was under way: its record went with the row. What the
+        // request was based on is no longer there to go on with; an item
+        // is read again and a confirmed command prepared again.
+        RepositoryErrorKind::OperationAbandoned => ResultCode::ExternalChange,
         // A backend failure. Its text stays in the error.
         RepositoryErrorKind::Io
         | RepositoryErrorKind::Sqlite

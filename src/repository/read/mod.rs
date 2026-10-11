@@ -306,6 +306,7 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         // Recoverable operations, which only a mutation begins or resumes.
         RepositoryErrorKind::RegistryRefreshPending
         | RepositoryErrorKind::OperationMismatch
+        | RepositoryErrorKind::OperationAbandoned
         | RepositoryErrorKind::RecoveryRequired
         | RepositoryErrorKind::ExternalChange
         | RepositoryErrorKind::RollbackIncomplete

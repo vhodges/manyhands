@@ -25,6 +25,7 @@ use time::OffsetDateTime;
 
 use crate::canonical;
 
+mod bridges;
 mod coordination;
 mod discovery;
 pub mod keys;
@@ -39,6 +40,10 @@ mod recovery;
 mod remote;
 pub mod transport;
 
+pub use bridges::abandon::{
+    AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationRemains,
+    PendingStanding,
+};
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
     cache_read_guard, cache_write_guard, repository_lease,
@@ -850,6 +855,7 @@ pub enum RepositoryOperation {
     RebuildRepository,
     RepositorySnapshot,
     Read,
+    AbandonOperation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -877,6 +883,9 @@ pub enum RepositoryErrorKind {
     IndexUnavailable,
     RepositoryBusy,
     OperationMismatch,
+    /// The operation ID names an operation that was abandoned: it is
+    /// neither replayed nor begun again.
+    OperationAbandoned,
     RecoveryRequired,
     ExternalChange,
     DirtyConfigurationPath,
