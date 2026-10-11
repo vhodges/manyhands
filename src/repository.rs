@@ -285,6 +285,7 @@ pub struct RepositoryService {
     /// What a test runs in the mutation boundary, immediately before a
     /// request's domain call.
     request_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    acceptance_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// What the request records read the time from.
     clock: Arc<dyn mutation::Clock>,
 }
@@ -3400,6 +3401,7 @@ impl RepositoryService {
             corrupt_cache_critical_hook: Mutex::new(None),
             rebuild_error_hook: Mutex::new(None),
             request_hook: Mutex::new(None),
+            acceptance_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
         })
     }

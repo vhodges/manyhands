@@ -104,6 +104,30 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         .with_recovery(recovery)
 }
 
+/// What `consent` found for a request no record holds.
+pub(super) enum Consent {
+    /// The command needs no confirmation, and the request presents none.
+    NotNeeded,
+    /// The confirmation the request presents is its own to use.
+    Given(Box<ConfirmationRecord>),
+    /// The command needs a confirmation, and the request names a root
+    /// that cannot be resolved: it has no scope key, so no confirmation
+    /// can be of it and none was looked for. This is no consent. The
+    /// binding's own check of the root is what answers such a request,
+    /// and a request that passed that check all the same is not run.
+    Unplaced,
+}
+
+impl Consent {
+    /// The confirmation, when one was given.
+    pub(super) fn given(&self) -> Option<&ConfirmationRecord> {
+        match self {
+            Self::Given(record) => Some(record),
+            Self::NotNeeded | Self::Unplaced => None,
+        }
+    }
+}
+
 impl RepositoryService {
     /// Previews a mutation that needs confirmation, and returns the
     /// confirmation an `execute` of the same command, repository, target
@@ -196,9 +220,8 @@ impl RepositoryService {
     }
 
     /// The consent a request no record holds runs with: the confirmation
-    /// it presents, when that is this request's to use. `None` for a
-    /// command that needs none. An `Err` answers the request, with nothing
-    /// recorded and nothing done.
+    /// it presents, when that is this request's to use. An `Err` answers
+    /// the request, with nothing recorded and nothing done.
     ///
     /// In order: a command that needs no confirmation presents none, or
     /// is `not_confirmable`; one that needs it and presents none is
@@ -215,18 +238,16 @@ impl RepositoryService {
         &self,
         reply: &Reply<'_>,
         presented: Option<ConfirmationId>,
-    ) -> Result<Option<ConfirmationRecord>, Envelope<MutationDataDto>> {
+    ) -> Result<Consent, Envelope<MutationDataDto>> {
         let binding = reply.binding;
         let confirmation_id = match (binding.command().needs_confirmation(), presented) {
-            (false, None) => return Ok(None),
+            (false, None) => return Ok(Consent::NotNeeded),
             (false, Some(_)) => return Err(reply.stopped(ResultCode::NotConfirmable)),
             (true, None) => return Err(reply.stopped(ResultCode::ConfirmationRequired)),
             (true, Some(confirmation_id)) => confirmation_id,
         };
-        // A root that cannot be resolved has no scope key, and no
-        // confirmation can be of it: the binding's own check answers.
         let Some(scope) = &reply.identity.scope else {
-            return Ok(None);
+            return Ok(Consent::Unplaced);
         };
         let record = match self.confirmation_record(confirmation_id) {
             Ok(Some(record)) => record,
@@ -248,7 +269,7 @@ impl RepositoryService {
         if expired(record.created_at, record.expires_at, self.record_time()) {
             return Err(reply.stopped(ResultCode::ConfirmationExpired));
         }
-        Ok(Some(record))
+        Ok(Consent::Given(Box::new(record)))
     }
 }
 

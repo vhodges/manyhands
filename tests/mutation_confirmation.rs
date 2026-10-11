@@ -2416,3 +2416,47 @@ fn a_create_killed_after_it_made_its_directory_still_refuses_what_is_put_in_it()
     assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
     assert!(git2::Repository::open(&site.root).is_err());
 }
+
+/// Two requests present one confirmation at once. Each finds it free
+/// when it looks; the write that accepts it is conditional, so one of
+/// them gets it and the other is told it is used.
+#[test]
+fn of_two_requests_racing_for_one_confirmation_one_is_confirmation_used() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    let (data, clock, root) = (
+        desk.data.path().to_owned(),
+        desk.clock.clone(),
+        plain.root.clone(),
+    );
+    let presented = confirmation.clone();
+    // After the first request has found the confirmation its own to use
+    // and before it is written, the second is accepted with it and runs.
+    desk.service.set_acceptance_hook_for_testing(move || {
+        let other = mutation::service_with_clock(&data, &clock);
+        let enabled = execute_confirmed(
+            &other,
+            REQUEST_2,
+            &presented,
+            Mutation::RepoEnable(RepoEnableInput {
+                root,
+                primary_branch: "main".to_owned(),
+                identity: None,
+                slug_prefix: None,
+            }),
+        );
+        assert_eq!(enabled.code, ResultCode::Ok, "{}", enabled.message);
+    });
+
+    let lost = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_refused(&lost, ResultCode::ConfirmationUsed, &[]);
+    assert_eq!(desk.record(REQUEST_1), None);
+    assert_eq!(
+        desk.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(desk.accepted_confirmations(), 1);
+    assert_eq!(plain.initializations(), 1);
+}

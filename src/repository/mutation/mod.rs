@@ -119,6 +119,29 @@ impl RepositoryService {
         *self.request_hook.lock().expect("test request hook lock") = Some(Box::new(hook));
     }
 
+    /// Has `hook` run once in the mutation boundary, immediately before
+    /// the next request an `execute` on this service accepts is written:
+    /// after its checks, the confirmation's among them, and before the
+    /// transaction that records it.
+    #[doc(hidden)]
+    pub fn set_acceptance_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .acceptance_hook
+            .lock()
+            .expect("test acceptance hook lock") = Some(Box::new(hook));
+    }
+
+    fn run_acceptance_hook(&self) {
+        let hook = self
+            .acceptance_hook
+            .lock()
+            .expect("test acceptance hook lock")
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     fn run_request_hook(&self) {
         let hook = self
             .request_hook

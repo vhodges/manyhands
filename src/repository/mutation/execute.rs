@@ -17,6 +17,7 @@ use super::{
     },
     CancellationToken, MutationCall, ProgressSink,
     bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
+    confirm::Consent,
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
@@ -186,11 +187,19 @@ impl RepositoryService {
             Ok(consent) => consent,
             Err(envelope) => return Some(envelope),
         };
-        let call = self.call_context(consent.as_ref());
+        let call = self.call_context(consent.given());
         let prepared = match binding.prepare(&call) {
             Ok(prepared) => prepared,
             Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
         };
+        // No confirmation was looked for, because the request's root has
+        // no scope key. The binding's check of the root refuses such a
+        // request. One that it let through has no consent, and is not
+        // run on that.
+        if let Consent::Unplaced = consent {
+            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
+        }
+        let consent = consent.given();
         let reply = Reply { binding, identity };
         // `prepare` resolved the repository, so the root has a scope key;
         // a request of the application always has one.
@@ -200,7 +209,7 @@ impl RepositoryService {
         // What the preview observed is compared with what is there now,
         // before anything is accepted. A command with no confirmation
         // observes nothing of the kind.
-        if let Some(consent) = &consent
+        if let Some(consent) = consent
             && prepared.observation != consent.observation_digest
         {
             return Some(reply.stopped(ResultCode::ExternalChange));
@@ -219,13 +228,14 @@ impl RepositoryService {
             position: prepared.position,
             expected: prepared.expected,
         };
+        self.run_acceptance_hook();
         let inserted = self.insert_request(&NewRequest {
             request_id: accepted.request_id,
             scope,
             command: binding.command().name().to_owned(),
             target: binding.target(),
             intent_digest: digest,
-            confirmation: consent.as_ref().map(|consent| consent.confirmation_id),
+            confirmation: consent.map(|consent| consent.confirmation_id),
             base_ref: accepted.position.base_ref.clone(),
             base_oid: accepted.position.base_oid,
             expected_digest: accepted.expected.clone(),
