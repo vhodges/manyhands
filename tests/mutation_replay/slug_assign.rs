@@ -250,41 +250,89 @@ fn a_retry_after_a_lost_result_reports_the_assigning_commit() {
     );
 }
 
-#[test]
-fn an_edit_made_under_an_interrupted_assignment_is_not_committed_as_its_own() {
-    let mut world = World::with_service(|data| {
-        FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence).open_service(data)
-    });
+/// An assignment interrupted after it wrote the short code and before it
+/// committed. With `has_context` the ticket was saved before, so the file
+/// the request was accepted against is held by its branch and by nothing
+/// else once the request has written.
+fn interrupted_assignment(has_context: bool) -> (World, String, usize) {
+    let mut world = World::new();
+    let mut commits = 0;
+    if has_context {
+        let earlier = world.execute(REQUEST_2, world.save(TICKET_A, &world.token(TICKET_A)));
+        assert_eq!(earlier.code, ResultCode::Ok);
+        commits = 1;
+    }
+    world.service = FailOnce::at(FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence)
+        .open_service(world.data.path());
     let token = world.token(TICKET_A);
     let first = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
     assert_eq!(first.outcome, Outcome::Partial);
     assert_eq!(first.effects.checkpoint, CheckpointEffect::Pending);
     assert_eq!(world.slug(TICKET_A), Some(derived(TICKET_A)));
-
-    // Someone edits the file in the context and does not commit.
-    let path = world
-        .worktree(TICKET_A)
-        .join(crate::support::items::ticket_path(TICKET_A));
-    let edited = world
-        .worktree_source(TICKET_A)
-        .replace("Body of", "Edited body of");
-    std::fs::write(&path, &edited).unwrap();
-
+    assert_eq!(world.branch_commits(TICKET_A), commits);
     world.reopen();
+    (world, token, commits)
+}
+
+#[test]
+fn an_interrupted_assignment_of_a_ticket_with_a_context_is_finished_by_its_retry() {
+    let (world, token, commits) = interrupted_assignment(true);
+    let source = world.worktree_source(TICKET_A);
+    // The initials have changed since: the code that was written stays.
+    world.set_local_config("manyhands.initials", "QZ");
+
     let retry = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
-    // The first attempt's write is an effect of the request, so the
-    // refusal is partial; the same request is not offered again.
     assert_eq!(
         (retry.outcome, retry.code),
-        (Outcome::Partial, ResultCode::ExternalChange)
+        (Outcome::Success, ResultCode::Ok)
     );
-    assert_eq!(retry.effects.checkpoint, CheckpointEffect::Pending);
-    assert_eq!(retry.effects.commit_oid, None);
-    assert!(recovery_actions(&retry).is_empty());
-    assert_eq!(world.branch_commits(TICKET_A), 0, "nothing was committed");
+    assert_eq!(world.branch_commits(TICKET_A), commits + 1);
     assert_eq!(
-        world.worktree_source(TICKET_A),
-        edited,
-        "nothing was written"
+        retry.effects.commit_oid,
+        world.branch_tip(TICKET_A).map(|tip| tip.to_string())
     );
+    assert_eq!(ticket_data(&retry).slug, Some(derived(TICKET_A)));
+    assert_eq!(world.worktree_source(TICKET_A), source);
+}
+
+#[test]
+fn an_edit_made_under_an_interrupted_assignment_is_not_committed_as_its_own() {
+    for has_context in [false, true] {
+        let what = format!("context {has_context}");
+        let (world, token, commits) = interrupted_assignment(has_context);
+
+        // Someone edits the file in the context and does not commit.
+        let path = world
+            .worktree(TICKET_A)
+            .join(crate::support::items::ticket_path(TICKET_A));
+        let edited = world
+            .worktree_source(TICKET_A)
+            .replace("\n---\n", "\n---\nEdited by hand. ");
+        assert_ne!(edited, world.worktree_source(TICKET_A), "{what}");
+        std::fs::write(&path, &edited).unwrap();
+
+        let retry = world.execute(REQUEST_1, world.slug_assign(TICKET_A, &token));
+        assert_eq!(retry.code, ResultCode::ExternalChange, "{what}");
+        assert_eq!(retry.effects.commit_oid, None, "{what}");
+        // What is reported of the first attempt's write follows the
+        // operation's journal row. The first save of a ticket leaves its
+        // row pending, having recorded the steps that made its context:
+        // the write is reported and the refusal is partial. For a ticket
+        // that had a context the interrupted write recorded no step, and
+        // the domain closes such a row as rejected when it refuses the
+        // repeat: nothing is in flight, so no effect is reported and the
+        // request's record is released.
+        let (outcome, checkpoint, record) = if has_context {
+            (Outcome::Blocked, CheckpointEffect::NotRequested, false)
+        } else {
+            (Outcome::Partial, CheckpointEffect::Pending, true)
+        };
+        assert_eq!(retry.outcome, outcome, "{what}");
+        assert_eq!(retry.effects.checkpoint, checkpoint, "{what}");
+        assert_eq!(world.record(REQUEST_1).is_some(), record, "{what}");
+        // Either way the same request is not offered again.
+        assert!(recovery_actions(&retry).is_empty(), "{what}");
+        assert_eq!(world.branch_commits(TICKET_A), commits, "{what}");
+        assert_eq!(world.worktree_source(TICKET_A), edited, "{what}");
+    }
 }

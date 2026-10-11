@@ -2190,6 +2190,9 @@ mod slug_assign;
 #[path = "mutation_replay/documents.rs"]
 mod documents;
 
+#[path = "mutation_replay/bindings.rs"]
+mod bindings;
+
 /// The process `support::hold_lease_in_child` starts: it holds the lease
 /// it is told to until it is released.
 #[test]
