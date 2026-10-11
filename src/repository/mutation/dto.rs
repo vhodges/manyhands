@@ -148,6 +148,8 @@ impl MutationDataDto {
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
+            // These report no data, so a record of one stores none.
+            Command::IndexRefresh | Command::IndexRebuild => None,
         }
     }
 }

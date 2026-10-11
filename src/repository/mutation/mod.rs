@@ -55,10 +55,12 @@ mod settle;
 use bind::{
     Binding,
     document::DocumentBinding,
+    index::IndexBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
+    index::{IndexRebuildInput, IndexRefreshInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
@@ -235,6 +237,8 @@ pub enum Mutation {
     TicketCreate(TicketCreateInput),
     TicketSave(TicketSaveInput),
     TicketSlugAssign(TicketSlugAssignInput),
+    IndexRefresh(IndexRefreshInput),
+    IndexRebuild(IndexRebuildInput),
 }
 
 impl Mutation {
@@ -251,6 +255,8 @@ impl Mutation {
             Self::TicketCreate(_) => Command::TicketCreate,
             Self::TicketSave(_) => Command::TicketSave,
             Self::TicketSlugAssign(_) => Command::TicketSlugAssign,
+            Self::IndexRefresh(_) => Command::IndexRefresh,
+            Self::IndexRebuild(_) => Command::IndexRebuild,
         }
     }
 
@@ -262,6 +268,8 @@ impl Mutation {
             Self::TicketCreate(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSave(input) => Box::new(TicketBinding::from(input)),
             Self::TicketSlugAssign(input) => Box::new(SlugAssignBinding::from(input)),
+            Self::IndexRefresh(input) => Box::new(IndexBinding::from(input)),
+            Self::IndexRebuild(input) => Box::new(IndexBinding::from(input)),
         }
     }
 }

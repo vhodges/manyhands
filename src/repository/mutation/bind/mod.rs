@@ -25,6 +25,7 @@ use super::{
 };
 
 pub(crate) mod document;
+pub(crate) mod index;
 pub(crate) mod save;
 pub(crate) mod ticket;
 
@@ -231,16 +232,20 @@ pub(crate) struct Before {
 /// What a binding read on re-entry and found no answer in: it is handed
 /// back for the domain call, whose result is judged by it. The boundary
 /// reads none of it.
+///
+/// This is in place of the `Before` that `Binding::reenter` used to
+/// return, which holds the evidence of a path. A command that commits to
+/// no path has none to give.
 pub(crate) enum Entered {
     /// An authoring write: the operation's row, and what Git showed of the
     /// request's path. A row without a checkpoint step is read the
     /// authoring way; see `Before::committing`.
     Authoring(Before),
     /// A command whose completed row has no checkpoint step whatever it
-    /// did, and whose work its binding found not to be done: the
-    /// operation's row, as it was before the call.
-    #[expect(dead_code)]
-    Unfinished(JournalRow),
+    /// did, and whose work its binding found not to be done. The call's
+    /// result is judged by the operation's row after the call, so nothing
+    /// read before it is kept.
+    Unfinished,
 }
 
 impl Entered {
@@ -251,7 +256,7 @@ impl Entered {
     pub(crate) fn authoring(&self) -> Result<&Before, Ran> {
         match self {
             Self::Authoring(before) => Ok(before),
-            Self::Unfinished(_) => Err(Ran {
+            Self::Unfinished => Err(Ran {
                 answer: Answer::stopped(ResultCode::InternalError),
                 standing: Standing::Unconfirmed,
             }),
@@ -390,10 +395,6 @@ pub(crate) enum EndedWithoutCheckpoint {
     /// `Before::reported` are not that evidence: they read a row
     /// without a checkpoint as an authoring save's, and would have the
     /// domain called again or the request refused as `external_change`.
-    // Every bound command is an authoring save. The first binding of a
-    // command that is not one gives this, and the expectation then fails
-    // until the attribute is removed.
-    #[cfg_attr(not(test), expect(dead_code))]
     SaysNothing,
 }
 
@@ -505,6 +506,8 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign) => {
             ticket::recorded_effects(record, &accepted)
         }
+        // A refresh or a rebuild in flight has made no durable effect.
+        Some(Command::IndexRefresh | Command::IndexRebuild) => Effects::not_requested(),
         // A record of no bound command: nothing is known of its effects.
         None => Effects::not_requested(),
     }

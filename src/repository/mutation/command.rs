@@ -36,6 +36,8 @@ commands! {
     TicketCreate => "ticket create",
     TicketSave => "ticket save",
     TicketSlugAssign => "ticket slug-assign",
+    IndexRefresh => "index refresh",
+    IndexRebuild => "index rebuild",
 }
 
 impl Command {
@@ -43,6 +45,22 @@ impl Command {
     /// no bound command's: a record this build did not write.
     pub(crate) fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|command| command.name() == name)
+    }
+
+    /// Whether the command is how the index comes back, and so runs when
+    /// the index is unavailable and no request record can be read or
+    /// written.
+    pub(crate) const fn restores_index(self) -> bool {
+        match self {
+            Self::IndexRebuild => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::IndexRefresh => false,
+        }
     }
 }
 
@@ -61,6 +79,19 @@ mod tests {
     fn the_published_names_are_the_ones_records_hold() {
         assert_eq!(Command::TicketCreate.name(), "ticket create");
         assert_eq!(Command::TicketSave.name(), "ticket save");
+        assert_eq!(Command::IndexRefresh.name(), "index refresh");
+        assert_eq!(Command::IndexRebuild.name(), "index rebuild");
+    }
+
+    #[test]
+    fn only_a_rebuild_runs_while_the_index_is_unavailable() {
+        for command in Command::ALL {
+            assert_eq!(
+                command.restores_index(),
+                command == Command::IndexRebuild,
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

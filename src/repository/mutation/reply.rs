@@ -90,7 +90,14 @@ impl Reply<'_> {
             recovery,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
-        let recovery = if recovery.is_empty() {
+        // A read suggests its action with the root it knows. One that
+        // failed before it knew any, as a read of the request records
+        // does, names none, and this result does: the action is then the
+        // code's own, made with this result's root.
+        let rootless = recovery
+            .iter()
+            .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
+        let recovery = if recovery.is_empty() || rootless {
             outcome::recovery(
                 code,
                 scope.repository.as_deref(),

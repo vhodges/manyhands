@@ -218,8 +218,6 @@ pub(crate) fn remote_outcome_code(outcome: &RemoteOutcome) -> ResultCode {
 /// The code of what `refresh_repository` returns. A refresh that another
 /// owner holds, or that found the repository changing while it observed
 /// it, has stored nothing: the same request is sent again.
-// Used by the index bindings.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn refresh_outcome_code(outcome: &RefreshOutcome) -> ResultCode {
     match outcome {
         RefreshOutcome::Refreshed { snapshot: _ } => ResultCode::Ok,

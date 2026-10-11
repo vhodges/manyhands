@@ -4,8 +4,9 @@
 
 use manyhands::{
     repository::{
-        DocumentSaveInput, FailurePoint, Mutation, MutationDataDto, RelationshipWrite,
-        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput, Mutation,
+        MutationDataDto, RelationshipWrite, TicketCreateInput, TicketSaveInput,
+        TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -365,4 +366,49 @@ fn a_document_move_matches_its_schema_and_goldens() {
         (Outcome::Success, ResultCode::Ok)
     );
     assert_document_contract("document_move", &world, &envelope);
+}
+
+/// As `assert_ticket_contract`, for a command that reports no data.
+fn assert_contract(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.data, None, "{name}");
+    assert_data_contract(name, "", world, envelope);
+}
+
+fn index_refresh(world: &World) -> Mutation {
+    Mutation::IndexRefresh(IndexRefreshInput {
+        root: world.root.clone(),
+    })
+}
+
+fn index_rebuild(world: &World) -> Mutation {
+    Mutation::IndexRebuild(IndexRebuildInput {
+        root: world.root.clone(),
+    })
+}
+
+#[test]
+fn an_index_refresh_and_rebuild_match_the_envelope_schema_and_their_goldens() {
+    let world = World::new();
+    let refreshed = world.execute(REQUEST_1, index_refresh(&world));
+    assert_eq!(refreshed.outcome, Outcome::Success);
+    assert_contract("index_refresh", &world, &refreshed);
+
+    let rebuilt = world.execute(REQUEST_2, index_rebuild(&world));
+    assert_eq!(rebuilt.outcome, Outcome::Success);
+    assert_contract("index_rebuild", &world, &rebuilt);
+
+    // The request ID of the refresh, for the other command.
+    let mismatch = world.execute(REQUEST_1, index_rebuild(&world));
+    assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+    assert_contract("index_refresh_mismatch", &world, &mismatch);
+}
+
+#[test]
+fn a_failed_index_refresh_matches_the_envelope_schema_and_its_golden() {
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let failed = world.execute(REQUEST_1, index_refresh(&world));
+    assert_eq!(failed.outcome, Outcome::Error);
+    assert_contract("index_refresh_failed", &world, &failed);
 }
