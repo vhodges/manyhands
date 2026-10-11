@@ -46,14 +46,14 @@ pub struct RemoteAddInput {
     pub url: String,
 }
 
-/// The step `add_remote` records once the remote is in the repository's
-/// configuration.
+/// The step `add_remote` and `remove_remote` record once the
+/// repository's configuration has the remote, or no longer has it.
 const REMOTE_CHANGED_STEP: &str = "remote_changed";
 
-/// Whether the row of an `add_remote` says that the remote was added and
-/// the operation has not ended: a change that no effect shows, with work
-/// remaining.
-pub(crate) fn added_and_unfinished(journal: Option<&JournalRow>) -> bool {
+/// Whether the row of an `add_remote` or a `remove_remote` says that
+/// the remote was added or removed and the operation has not ended: a
+/// change that no effect shows, with work remaining.
+pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
     match journal {
         Some(JournalRow::Pending(PendingOperation::Local { state: _, step })) => {
             step.as_deref() == Some(REMOTE_CHANGED_STEP)
@@ -172,7 +172,7 @@ impl RemoteAddBinding {
                 let code = outcome::repository_error_code(error.kind);
                 let journal = accepted.journal_row(service);
                 Ran {
-                    answer: self.answer(code, added_and_unfinished(journal.as_ref())),
+                    answer: self.answer(code, changed_and_unfinished(journal.as_ref())),
                     standing: Standing::Stopped { journal },
                 }
             }

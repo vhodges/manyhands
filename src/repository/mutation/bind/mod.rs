@@ -13,14 +13,16 @@ use crate::results::{Effects, RecoveryAction, ResultCode, Scope, absolute_path_s
 use super::{
     super::{
         AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
-        RepositoryService, ResolvedRepository,
-        recovery::{FinalKind, JournalRow},
+        RepositoryError, RepositoryService, ResolvedRepository,
+        recovery::{FinalKind, JournalRow, PendingOperation},
     },
     command::Command,
     context::context_names,
     dto::{MutationDataDto, PreviewDetailsDto, PreviewEffect},
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
+    observe::ObservationDigest,
+    outcome,
     records::{ConfirmationRecord, RequestOperation, RequestRecord},
 };
 
@@ -105,6 +107,49 @@ pub(crate) struct CallContext<'a> {
     /// `prepare`, which is what makes one. The boundary reads the time
     /// a confirmation is judged by; a binding is given none.
     pub(crate) confirmation: Option<&'a ConfirmationRecord>,
+}
+
+impl CallContext<'_> {
+    /// What the request's consent was to: the two digests its
+    /// confirmation stores. `None` for a request whose record holds no
+    /// confirmation, or one whose digest cannot be read as one: there is
+    /// nothing then that anything could be compared with, and nothing is
+    /// run on that.
+    pub(crate) fn previewed(&self) -> Option<ObservationDigest> {
+        self.confirmation
+            .and_then(|consent| consent.observation_digest.as_deref())
+            .and_then(ObservationDigest::from_stored)
+    }
+}
+
+/// The answer for a domain error met while observing. Only its kind is
+/// read: its text can hold a path or a backend's message.
+pub(crate) fn refused(error: RepositoryError) -> Answer {
+    Answer::stopped(outcome::repository_error_code(error.kind))
+}
+
+/// The answer to a confirmed request whose operation ended having done
+/// nothing, with that answer lost: the request is entered again on a
+/// row that completed and changed nothing. Had the answer not been lost,
+/// settling would have deleted the record; the caller deletes it now,
+/// which releases the confirmation. The answer says what is true as
+/// things are. `found` is what the command observes and checks now:
+///
+/// - what stands in the request's way, when something does;
+/// - that what was previewed is not what is there, when it is not;
+/// - otherwise that the request did not run and can be sent again.
+///   Nothing has changed and nothing is in its way, so to call it a
+///   change would be untrue; `busy` is the code whose one meaning to a
+///   caller is "send this again".
+pub(crate) fn lost_refusal(
+    found: Result<ObservationDigest, Answer>,
+    previewed: Option<&ObservationDigest>,
+) -> Answer {
+    match found {
+        Err(answer) => answer,
+        Ok(found) if previewed == Some(&found) => Answer::stopped(ResultCode::Busy),
+        Ok(_) => Answer::stopped(ResultCode::ExternalChange),
+    }
 }
 
 /// Where a request works: what its scope key is made from.
@@ -289,6 +334,30 @@ impl Accepted {
     /// the lookup itself failed.
     pub(crate) fn journal_row(&self, service: &RepositoryService) -> Option<JournalRow> {
         self.read_journal_row(service).ok()
+    }
+
+    /// The last step the request's local operation recorded, whether its
+    /// row is pending or has completed. `Err` when the journal could not
+    /// be read, or the row is of another journal.
+    pub(crate) fn recorded_local_step(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<Option<String>, ()> {
+        match self.read_journal_row(service).map_err(|_| ())? {
+            JournalRow::Absent => Ok(None),
+            JournalRow::Pending(PendingOperation::Local { state: _, step }) => Ok(step),
+            // The operation is a local one.
+            JournalRow::Pending(
+                PendingOperation::Remote { phase: _ } | PendingOperation::KeyMaterial { phase: _ },
+            ) => Err(()),
+            JournalRow::Final {
+                kind: _,
+                owes_work: _,
+                checkpointed: _,
+            } => service
+                .completed_local_step(&self.scope, self.operation_id)
+                .map_err(|_| ()),
+        }
     }
 
     /// Where the request's operation stands in its journal, or why that
@@ -652,7 +721,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // added with work remaining.
         Some(Command::RemoteAdd) => Recorded {
             effects: Effects::not_requested(),
-            local_change: remote::added_and_unfinished(journal.as_ref()),
+            local_change: remote::changed_and_unfinished(journal.as_ref()),
         },
         Some(Command::RemoteSelect) => Recorded::of(remote::recorded_effects(record, &accepted)),
         // A refresh or a rebuild in flight has made no durable effect.

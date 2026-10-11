@@ -93,6 +93,14 @@ impl Observation {
         self
     }
 
+    /// The digest of the identity a command reads, for a request that
+    /// reads none: one that supplies its identity, or a command that
+    /// commits nothing. It is the same for every such request of
+    /// `command`, so it never differs between a preview and a retry.
+    pub(crate) fn no_identity(command: &str) -> String {
+        Self::of(command).absent("identity").finish()
+    }
+
     /// The part's digest: the first 128 bits of the hash, as 32
     /// lowercase hexadecimal digits. Two of them are what one record
     /// column holds.

@@ -41,9 +41,9 @@ use super::{
         super::{
             CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
             EnableRepositoryOutcome, EnableRepositoryRequest, INITIALIZATION_MESSAGE,
-            OperationFamily, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, WorktreeState, canonical_configuration, canonical_repository_root,
-            checked_out_branch, read_configuration_for,
+            OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+            WorktreeState, canonical_configuration, canonical_repository_root, checked_out_branch,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow, PendingOperation},
             resolve_identity, validate_identity, worktree_state,
         },
@@ -59,7 +59,7 @@ use super::{
         outcome::{self, SaveReport},
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
-    Prepared, Previewed, Ran, Recorded, Standing,
+    Prepared, Previewed, Ran, Recorded, Standing, lost_refusal, refused,
 };
 
 /// The input of `repo create`: the directory to make a repository in,
@@ -217,12 +217,6 @@ fn identity_source(level: ConfigLevel) -> Option<PreviewIdentitySource> {
     }
 }
 
-/// The answer for a domain error met while observing. Only its kind is
-/// read: its text can hold a path or a backend's message.
-fn refused(error: RepositoryError) -> Answer {
-    Answer::stopped(outcome::repository_error_code(error.kind))
-}
-
 fn inaccessible(_: git2::Error) -> Answer {
     Answer::stopped(ResultCode::RepositoryInaccessible)
 }
@@ -309,26 +303,6 @@ fn initialization_commit(
     Ok(Some(found.id()))
 }
 
-/// The last step the request's operation recorded, whether its row is
-/// pending or has completed. `Err` when the journal could not be read.
-fn recorded_step(service: &RepositoryService, accepted: &Accepted) -> Result<Option<String>, ()> {
-    match accepted.read_journal_row(service).map_err(|_| ())? {
-        JournalRow::Absent => Ok(None),
-        JournalRow::Pending(PendingOperation::Local { state: _, step }) => Ok(step),
-        // The operation is a local one.
-        JournalRow::Pending(
-            PendingOperation::Remote { phase: _ } | PendingOperation::KeyMaterial { phase: _ },
-        ) => Err(()),
-        JournalRow::Final {
-            kind: _,
-            owes_work: _,
-            checkpointed: _,
-        } => service
-            .completed_local_step(&accepted.scope, accepted.operation_id)
-            .map_err(|_| ()),
-    }
-}
-
 /// The initialization commit that is the request's own: the commit that
 /// put the configuration file on the branch, when the request's operation
 /// recorded that it wrote that file. `Ok(None)` when the operation wrote
@@ -342,7 +316,7 @@ fn own_commit(
     written: Option<&str>,
 ) -> Result<Option<git2::Oid>, ()> {
     let wrote = matches!(
-        recorded_step(service, accepted)?.as_deref(),
+        accepted.recorded_local_step(service)?.as_deref(),
         Some(CONFIGURATION_WRITTEN_STEP | INITIALIZATION_COMMITTED_STEP)
     );
     if !wrote {
@@ -641,7 +615,7 @@ impl RepoBinding {
     ) -> String {
         let observation = Observation::of(self.command().name());
         match (&self.identity, effective) {
-            (Some(_), _) => observation.absent("identity").finish(),
+            (Some(_), _) => Observation::no_identity(self.command().name()),
             (None, None) => observation.text("identity", "none").finish(),
             (None, Some((identity, source))) => observation
                 .text("identity", source.as_str())
@@ -972,14 +946,13 @@ impl RepoBinding {
             //   to call it a change would be untrue; `busy` is the code
             //   whose one meaning to a caller is "send this again".
             Ok(None) => Ran {
-                answer: match self.observe().and_then(|observed| {
-                    self.check(&observed)?;
-                    Ok(self.digest(&observed))
-                }) {
-                    Err(answer) => answer,
-                    Ok(found) if previewed == Some(&found) => Answer::stopped(ResultCode::Busy),
-                    Ok(_) => Answer::stopped(ResultCode::ExternalChange),
-                },
+                answer: lost_refusal(
+                    self.observe().and_then(|observed| {
+                        self.check(&observed)?;
+                        Ok(self.digest(&observed))
+                    }),
+                    previewed,
+                ),
                 standing: Standing::Stopped {
                     journal: Some(journal),
                 },
@@ -1126,10 +1099,7 @@ impl Binding for RepoBinding {
         // What the request's consent was to. A request whose record
         // holds none, or one that cannot be read as a digest, has none
         // that anything could be compared with: nothing is run on that.
-        let previewed = call
-            .confirmation
-            .and_then(|consent| consent.observation_digest.as_deref())
-            .and_then(ObservationDigest::from_stored);
+        let previewed = call.previewed();
         let step = match &journal {
             JournalRow::Absent => None,
             JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.clone(),
