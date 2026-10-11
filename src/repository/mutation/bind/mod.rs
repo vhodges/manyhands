@@ -31,6 +31,7 @@ pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod remote;
 pub(crate) mod repo;
+pub(crate) mod repo_remove;
 pub(crate) mod save;
 pub(crate) mod ticket;
 

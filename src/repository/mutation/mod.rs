@@ -62,7 +62,8 @@ use bind::{
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
-    repo::{RepoBinding, RepoRemoveBinding},
+    repo::RepoBinding,
+    repo_remove::RepoRemoveBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
@@ -73,7 +74,8 @@ pub use bind::{
         KeySelectInput,
     },
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
-    repo::{RepoCreateInput, RepoEnableInput, RepoRemoveInput},
+    repo::{RepoCreateInput, RepoEnableInput},
+    repo_remove::RepoRemoveInput,
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
