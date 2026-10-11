@@ -85,6 +85,32 @@ pub(crate) fn resolve_root(
     Ok(repository)
 }
 
+/// What one call of the boundary gives a binding to work with, in each of
+/// `prepare`, `run`, `reenter` and `rerun`.
+///
+/// It is the one way anything of the call reaches a binding: what a
+/// command needs of its call is a field here, and no binding is given a
+/// parameter of its own. Today that is the service alone. The confirmation
+/// a call presents, the sink its progress goes to, the token that stops it
+/// and the session's credentials are the call's as well, and each is added
+/// here with the first command that reads it.
+pub(crate) struct CallContext<'a> {
+    pub(crate) service: &'a RepositoryService,
+}
+
+/// Where a request works: what its scope key is made from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place<'a> {
+    /// One repository, by its root as the caller gave it.
+    Repository(&'a Path),
+    /// The application: a command that belongs to no repository, as the
+    /// key commands do. Its record's scope is the literal `application`,
+    /// and its results name no repository, item, branch or worktree.
+    // No bound command is of the application until the key commands are.
+    #[expect(dead_code)]
+    Application,
+}
+
 /// What a request is answered with, before the boundary classifies it: the
 /// outcome is derived from the code and the effects, never chosen here.
 pub(crate) struct Answer {
@@ -423,8 +449,9 @@ pub(crate) trait Binding {
     /// confirmation it has already used. Those answer `SaysNothing`.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint;
 
-    /// The repository root as the caller gave it.
-    fn root(&self) -> &Path;
+    /// Where the request works: a repository, by its root as the caller
+    /// gave it, or the application.
+    fn place(&self) -> Place<'_>;
 
     /// The request's target within its repository.
     fn target(&self) -> String;
@@ -442,12 +469,12 @@ pub(crate) trait Binding {
     /// Validates the input and makes the checks that need no lease. An
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer>;
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer>;
 
     /// Makes the domain call for an accepted request, under the recorded
     /// operation ID and expectation, and reports what the repository shows
     /// of it afterwards.
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran;
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran;
 
     /// Re-entry, before the domain call: an earlier call of the request
     /// started and its end was not recorded. Sets what `prepare` worked
@@ -470,7 +497,7 @@ pub(crate) trait Binding {
     /// returns `Err(Ran { standing: Standing::Final, .. })`.
     fn reenter(
         &mut self,
-        service: &RepositoryService,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran>;
@@ -480,7 +507,7 @@ pub(crate) trait Binding {
     /// continued. `entered` is what this binding's `reenter` returned.
     /// For an authoring write the commit is taken from the evidence read
     /// before and after the call, never from what the domain names.
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran;
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran;
 }
 
 /// What the repository shows of an unfinished request, without its input.

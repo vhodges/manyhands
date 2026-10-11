@@ -13,7 +13,7 @@
 //! other operation on the repository until the same request is sent
 //! again; its record stays accepted for that.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::results::{DiscoveryEffect, Effects, ResultCode, Scope};
 
@@ -28,8 +28,8 @@ use super::{
         identity::{IntentDigestBuilder, ScopeKey},
         outcome,
     },
-    Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, Standing,
-    resolve_root,
+    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
+    Standing, resolve_root,
 };
 
 /// The input of `index refresh`: the repository to observe again.
@@ -181,8 +181,8 @@ impl Binding for IndexBinding {
         EndedWithoutCheckpoint::SaysNothing
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     /// The repository as a whole: the command names nothing within it.
@@ -208,7 +208,8 @@ impl Binding for IndexBinding {
     /// not: it is what registers a repository whose registration went
     /// with the index, so only the root itself is asked for, and the
     /// domain operation refuses what is not a repository's root.
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let service = call.service;
         match self.verb {
             Verb::Refresh => {
                 resolve_root(service, &self.root)?;
@@ -230,8 +231,8 @@ impl Binding for IndexBinding {
         })
     }
 
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        self.call(service, accepted)
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        self.call(call.service, accepted)
     }
 
     /// The evidence that the request's work is done is its operation's
@@ -241,7 +242,7 @@ impl Binding for IndexBinding {
     /// the only thing that completes it.
     fn reenter(
         &mut self,
-        _service: &RepositoryService,
+        _call: &CallContext<'_>,
         _accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
@@ -269,7 +270,7 @@ impl Binding for IndexBinding {
         }
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(service, accepted)
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
     }
 }

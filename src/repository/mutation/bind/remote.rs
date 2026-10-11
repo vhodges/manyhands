@@ -34,8 +34,8 @@ use super::{
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, Standing,
-    resolve_root, save,
+    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
+    Standing, resolve_root, save,
 };
 
 /// The input of `remote add`: the remote's name and its location, which
@@ -191,8 +191,8 @@ impl Binding for RemoteAddBinding {
         EndedWithoutCheckpoint::SaysNothing
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     fn target(&self) -> String {
@@ -220,7 +220,8 @@ impl Binding for RemoteAddBinding {
         }
     }
 
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let service = call.service;
         self.validate()?;
         resolve_root(service, &self.root)?;
         Ok(Prepared {
@@ -234,8 +235,8 @@ impl Binding for RemoteAddBinding {
         })
     }
 
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        self.call(service, accepted)
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        self.call(call.service, accepted)
     }
 
     /// A row that has completed is answered here, with no domain call,
@@ -260,7 +261,7 @@ impl Binding for RemoteAddBinding {
     /// hand-off when an earlier attempt added the remote.
     fn reenter(
         &mut self,
-        service: &RepositoryService,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
@@ -276,11 +277,13 @@ impl Binding for RemoteAddBinding {
                     answer,
                     standing: Standing::NotRun { journal },
                 };
-                let step =
-                    match service.completed_local_step(&accepted.scope, accepted.operation_id) {
-                        Ok(step) => step,
-                        Err(error) => return Err(unread(Answer::of_read(&error), journal)),
-                    };
+                let step = match call
+                    .service
+                    .completed_local_step(&accepted.scope, accepted.operation_id)
+                {
+                    Ok(step) => step,
+                    Err(error) => return Err(unread(Answer::of_read(&error), journal)),
+                };
                 if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
                     return Err(Ran {
                         answer: self.answer(ResultCode::Ok, true),
@@ -320,8 +323,8 @@ impl Binding for RemoteAddBinding {
         }
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(service, accepted)
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
     }
 }
 
@@ -508,8 +511,8 @@ impl Binding for RemoteSelectBinding {
         EndedWithoutCheckpoint::DidNothing
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     /// The remote, or nothing for a request that clears the selection.
@@ -541,7 +544,8 @@ impl Binding for RemoteSelectBinding {
     /// The request is accepted against the configuration file as it is,
     /// on the branch that is checked out: the domain operation commits
     /// there, and refuses a branch that is not primary.
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let service = call.service;
         self.validate()?;
         let repository = resolve_root(service, &self.root)?;
         let root = repository.root();
@@ -563,22 +567,22 @@ impl Binding for RemoteSelectBinding {
         })
     }
 
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        save::run(self, service, accepted)
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        save::run(self, call.service, accepted)
     }
 
     fn reenter(
         &mut self,
-        service: &RepositoryService,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
+        save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
         match entered.authoring() {
-            Ok(before) => save::rerun(self, service, accepted, before),
+            Ok(before) => save::rerun(self, call.service, accepted, before),
             Err(ran) => ran,
         }
     }

@@ -8,7 +8,7 @@ use crate::results::{Envelope, ResultCode, Scope, absolute_path_string};
 
 use super::{
     super::ReadError,
-    bind::{Accepted, Answer, Binding},
+    bind::{Accepted, Answer, Binding, Place},
     dto::MutationDataDto,
     evidence::Position,
     identity::{DigestSalt, IntentDigest, RequestId, ScopeKey},
@@ -20,15 +20,19 @@ use super::{
 /// be the same request.
 pub(super) struct RequestIdentity {
     pub(super) request_id: RequestId,
-    /// `None` when the root cannot be resolved to a canonical path: no
-    /// record can be of this request then.
+    /// `None` when the request names a repository whose root cannot be
+    /// resolved to a canonical path: no record can be of this request
+    /// then.
     pub(super) scope: Option<ScopeKey>,
     pub(super) digest: Option<IntentDigest>,
 }
 
 impl RequestIdentity {
     pub(super) fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
-        let scope = ScopeKey::for_repository(binding.root());
+        let scope = match binding.place() {
+            Place::Repository(root) => ScopeKey::for_repository(root),
+            Place::Application => Some(ScopeKey::application()),
+        };
         let digest = scope.as_ref().map(|scope| {
             binding
                 .fields(IntentDigest::builder(
@@ -46,11 +50,13 @@ impl RequestIdentity {
         }
     }
 
-    /// The repository, as a result's scope names it.
+    /// The repository, as a result's scope names it: none for a request
+    /// of the application.
     fn repository(&self, binding: &dyn Binding) -> Option<String> {
-        match &self.scope {
-            Some(scope) => scope.repository().map(str::to_owned),
-            None => absolute_path_string(binding.root()),
+        match (&self.scope, binding.place()) {
+            (Some(scope), _) => scope.repository().map(str::to_owned),
+            (None, Place::Repository(root)) => absolute_path_string(root),
+            (None, Place::Application) => None,
         }
     }
 

@@ -33,7 +33,8 @@ use super::{
         outcome::SaveReport,
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, EndedWithoutCheckpoint, Entered, Prepared, Ran, resolve_root, save,
+    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
+    resolve_root, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -748,8 +749,8 @@ impl Binding for TicketBinding {
         self.command
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     /// A create and a save are authoring saves: the operation records its
@@ -840,7 +841,8 @@ impl Binding for TicketBinding {
         ticket_scope(&self.id_text(), repository, position)
     }
 
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let service = call.service;
         self.validate()?;
         let repository = resolve_root(service, &self.root)?;
         match self.observation.clone() {
@@ -849,22 +851,22 @@ impl Binding for TicketBinding {
         }
     }
 
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        save::run(self, service, accepted)
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        save::run(self, call.service, accepted)
     }
 
     fn reenter(
         &mut self,
-        service: &RepositoryService,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
+        save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
         match entered.authoring() {
-            Ok(before) => save::rerun(self, service, accepted, before),
+            Ok(before) => save::rerun(self, call.service, accepted, before),
             Err(ran) => ran,
         }
     }
@@ -1121,8 +1123,8 @@ impl Binding for SlugAssignBinding {
         EndedWithoutCheckpoint::DidNothing
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     fn target(&self) -> String {
@@ -1165,7 +1167,8 @@ impl Binding for SlugAssignBinding {
     /// answered as any request whose end state holds is, by the
     /// already-applied rule. Otherwise the caller's token is checked, the
     /// short code composed and the request accepted.
-    fn prepare(&mut self, service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        let service = call.service;
         let repository = resolve_root(service, &self.root)?;
         let (item, observed, current) = read_ticket(service, &repository, &self.id)?;
         refuse_closed(&item)?;
@@ -1217,22 +1220,22 @@ impl Binding for SlugAssignBinding {
         prepared(repository.root(), &id, expected)
     }
 
-    fn run(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        save::run(self, service, accepted)
+    fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        save::run(self, call.service, accepted)
     }
 
     fn reenter(
         &mut self,
-        service: &RepositoryService,
+        call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, service, accepted, journal).map(Entered::Authoring)
+        save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
     }
 
-    fn rerun(&self, service: &RepositoryService, accepted: &Accepted, entered: &Entered) -> Ran {
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
         match entered.authoring() {
-            Ok(before) => save::rerun(self, service, accepted, before),
+            Ok(before) => save::rerun(self, call.service, accepted, before),
             Err(ran) => ran,
         }
     }

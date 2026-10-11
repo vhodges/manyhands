@@ -16,7 +16,7 @@ use super::{
         keys::{SessionCredentialProvider, SessionCredentials},
     },
     CancellationToken, MutationCall, ProgressSink,
-    bind::{Accepted, Answer, Binding, Ran},
+    bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
@@ -93,8 +93,16 @@ impl RepositoryService {
                         }
                         .stopped(code);
                     }
+                    // Only a repository's index is restored for it.
+                    let Place::Repository(root) = binding.place() else {
+                        return Reply {
+                            binding: binding.as_ref(),
+                            identity: &identity,
+                        }
+                        .read_failure(&error);
+                    };
                     restored = true;
-                    match self.restore_index_for_rebuild(binding.root()) {
+                    match self.restore_index_for_rebuild(root) {
                         Ok(()) => continue,
                         // Only the kind is read.
                         Err(error) => {
@@ -172,12 +180,13 @@ impl RepositoryService {
         if confirmation.is_some() {
             return Some(Reply { binding, identity }.stopped(ResultCode::NotConfirmable));
         }
-        let prepared = match binding.prepare(self) {
+        let prepared = match binding.prepare(&self.call_context()) {
             Ok(prepared) => prepared,
             Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
         };
         let reply = Reply { binding, identity };
-        // `prepare` resolved the repository, so the root has a scope key.
+        // `prepare` resolved the repository, so the root has a scope key;
+        // a request of the application always has one.
         let (Some(scope), Some(digest)) = (identity.scope.clone(), identity.digest) else {
             return Some(reply.stopped(ResultCode::InternalError));
         };
@@ -225,7 +234,14 @@ impl RepositoryService {
     /// Makes the binding's domain call for an accepted request and settles
     /// its record from what the call left.
     fn run_accepted(&self, reply: &Reply<'_>, accepted: &Accepted) -> Envelope<MutationDataDto> {
-        self.called(reply, accepted, || reply.binding.run(self, accepted))
+        self.called(reply, accepted, || {
+            reply.binding.run(&self.call_context(), accepted)
+        })
+    }
+
+    /// What this call gives a binding to work with.
+    pub(super) fn call_context(&self) -> CallContext<'_> {
+        CallContext { service: self }
     }
 
     /// Makes a domain call, `call`, for an accepted request and settles its

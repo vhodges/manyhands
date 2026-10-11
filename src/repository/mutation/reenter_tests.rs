@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{
     super::{
         Mutation, TicketCreateInput, TicketSaveInput,
-        bind::{Entered, Prepared},
+        bind::{CallContext, Entered, Place, Prepared},
         command::Command,
         evidence::Position,
         identity::IntentDigestBuilder,
@@ -30,8 +30,8 @@ impl Binding for NeverCheckpoints {
         EndedWithoutCheckpoint::SaysNothing
     }
 
-    fn root(&self) -> &Path {
-        &self.root
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
     }
 
     fn target(&self) -> String {
@@ -49,24 +49,24 @@ impl Binding for NeverCheckpoints {
         }
     }
 
-    fn prepare(&mut self, _service: &RepositoryService) -> Result<Prepared, Answer> {
+    fn prepare(&mut self, _call: &CallContext<'_>) -> Result<Prepared, Answer> {
         unreachable!("the decision is made before any check")
     }
 
-    fn run(&self, _service: &RepositoryService, _accepted: &Accepted) -> Ran {
+    fn run(&self, _call: &CallContext<'_>, _accepted: &Accepted) -> Ran {
         unreachable!("the decision is made before any domain call")
     }
 
     fn reenter(
         &mut self,
-        _service: &RepositoryService,
+        _call: &CallContext<'_>,
         _accepted: &Accepted,
         _journal: JournalRow,
     ) -> Result<Entered, Ran> {
         unreachable!("the decision is made before the evidence is read")
     }
 
-    fn rerun(&self, _service: &RepositoryService, _accepted: &Accepted, _entered: &Entered) -> Ran {
+    fn rerun(&self, _call: &CallContext<'_>, _accepted: &Accepted, _entered: &Entered) -> Ran {
         unreachable!("the decision is made before any domain call")
     }
 }
