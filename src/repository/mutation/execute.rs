@@ -20,7 +20,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
-    records::{InsertRequestOutcome, NewRequest, RequestOperation},
+    records::{InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
 
@@ -214,10 +214,7 @@ impl RepositoryService {
             base_ref: accepted.position.base_ref.clone(),
             base_oid: accepted.position.base_oid,
             expected_digest: accepted.expected.clone(),
-            operations: vec![RequestOperation {
-                family: accepted.family,
-                operation_id: accepted.operation_id,
-            }],
+            operations: accepted.operation().into_iter().collect(),
         });
         match inserted {
             Ok(InsertRequestOutcome::Inserted) => {}

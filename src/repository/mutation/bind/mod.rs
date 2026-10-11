@@ -21,7 +21,7 @@ use super::{
     dto::MutationDataDto,
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
-    records::RequestRecord,
+    records::{RequestOperation, RequestRecord},
 };
 
 pub(crate) mod document;
@@ -63,7 +63,7 @@ pub(crate) fn prepared(
     let position = Position::of(root, &context_names(root, kind, id).branch_ref)
         .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
     Ok(Prepared {
-        family: OperationFamily::Local,
+        family: Some(OperationFamily::Local),
         position,
         expected: Some(expected),
     })
@@ -155,8 +155,11 @@ impl Answer {
 
 /// What a binding's checks give the boundary to accept a request with.
 pub(crate) struct Prepared {
-    /// The journal the binding's domain operation is recorded in.
-    pub(crate) family: OperationFamily,
+    /// The journal the binding's domain operation is recorded in. `None`
+    /// for a command whose domain call has no operation ID and no journal
+    /// row: a single step that happened or did not, as a change to the
+    /// key registry is.
+    pub(crate) family: Option<OperationFamily>,
     pub(crate) position: Position,
     /// The digest of the canonical file's bytes as they were before the
     /// request, which the domain operation is given as its expectation.
@@ -172,28 +175,43 @@ pub(crate) struct Accepted {
     /// it still being the record's.
     pub(crate) attempt: u64,
     pub(crate) scope: ScopeKey,
-    pub(crate) family: OperationFamily,
+    /// The journal of the request's operation, or `None` for a request
+    /// that has no operation; see `Prepared::family`.
+    pub(crate) family: Option<OperationFamily>,
+    /// The ID the request's domain operation runs under. For a request
+    /// with no operation it names nothing: no record and no result holds
+    /// it, and `operation` is what both are given.
     pub(crate) operation_id: OperationId,
     pub(crate) position: Position,
     pub(crate) expected: Option<ExpectedPathObservation>,
 }
 
 impl Accepted {
-    /// An accepted record, entered as `attempt`. `None` for a record with
-    /// no operation, which no binding accepts.
-    pub(crate) fn of_record(record: &RequestRecord, attempt: u64) -> Option<Self> {
-        let operation = record.operations.first()?;
-        Some(Self {
+    /// An accepted record, entered as `attempt`. A record that holds no
+    /// operation is of a request that has none.
+    pub(crate) fn of_record(record: &RequestRecord, attempt: u64) -> Self {
+        let operation = record.operations.first();
+        Self {
             request_id: record.request_id,
             attempt,
             scope: record.scope.clone(),
-            family: operation.family,
-            operation_id: operation.operation_id,
+            family: operation.map(|operation| operation.family),
+            operation_id: operation
+                .map_or_else(OperationId::new, |operation| operation.operation_id),
             position: Position {
                 base_ref: record.base_ref.clone(),
                 base_oid: record.base_oid,
             },
             expected: record.expected_digest.clone(),
+        }
+    }
+
+    /// The request's operation, as its record and its results name it:
+    /// none for a request that has no operation.
+    pub(crate) fn operation(&self) -> Option<RequestOperation> {
+        self.family.map(|family| RequestOperation {
+            family,
+            operation_id: self.operation_id,
         })
     }
 
@@ -214,9 +232,21 @@ impl Accepted {
     /// Where the request's operation stands in its journal. `None` when
     /// the lookup itself failed.
     pub(crate) fn journal_row(&self, service: &RepositoryService) -> Option<JournalRow> {
-        service
-            .journal_row(self.family, &self.scope, self.operation_id)
-            .ok()
+        self.read_journal_row(service).ok()
+    }
+
+    /// Where the request's operation stands in its journal, or why that
+    /// could not be read. A request with no operation has no row, and
+    /// nothing is in flight under it: it reads as absent, and no journal
+    /// is asked.
+    pub(crate) fn read_journal_row(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<JournalRow, ReadError> {
+        match self.family {
+            Some(family) => service.journal_row(family, &self.scope, self.operation_id),
+            None => Ok(JournalRow::Absent),
+        }
     }
 }
 
@@ -542,9 +572,7 @@ impl Recorded {
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
 pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
-    let Some(accepted) = Accepted::of_record(record, record.attempt) else {
-        return Recorded::nothing();
-    };
+    let accepted = Accepted::of_record(record, record.attempt);
     let journal = accepted.journal_row(service);
     let ran = match journal {
         Some(JournalRow::Absent) => false,

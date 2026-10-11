@@ -1,7 +1,7 @@
 //! Re-entry: a call that finds an accepted record of its own request. An
 //! earlier call of the request started and its end was not recorded.
 
-use crate::results::{Envelope, ResultCode};
+use crate::results::Envelope;
 
 use super::{
     super::{
@@ -93,22 +93,19 @@ impl RepositoryService {
             Ok(None) => return None,
             Err(error) => return Some(Reply { binding, identity }.read_failure(&error)),
         };
-        let Some(accepted) = Accepted::of_record(record, attempt) else {
-            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
-        };
+        let accepted = Accepted::of_record(record, attempt);
         // The row as it is before this call: its state afterwards proves
         // nothing about an earlier attempt.
-        let journal =
-            match self.journal_row(accepted.family, &accepted.scope, accepted.operation_id) {
-                Ok(journal) => journal,
-                Err(error) => {
-                    let ran = Ran {
-                        answer: Answer::of_read(&error),
-                        standing: Standing::Stopped { journal: None },
-                    };
-                    return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
-                }
-            };
+        let journal = match accepted.read_journal_row(self) {
+            Ok(journal) => journal,
+            Err(error) => {
+                let ran = Ran {
+                    answer: Answer::of_read(&error),
+                    standing: Standing::Stopped { journal: None },
+                };
+                return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
+            }
+        };
         match Reentry::of(&journal, binding.ended_without_checkpoint()) {
             // The operation ended before its checkpoint: it stopped or was
             // refused with nothing in flight. Had that answer not been

@@ -97,6 +97,8 @@ impl Reply<'_> {
             local_change,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
+        // A request with no operation names none.
+        let operation = accepted.and_then(Accepted::operation);
         // A read suggests its action with the root it knows. One that
         // failed before it knew any, as a read of the request records
         // does, names none, and this result does: the action is then the
@@ -109,7 +111,7 @@ impl Reply<'_> {
                 code,
                 scope.repository.as_deref(),
                 self.identity.request_id,
-                accepted.map(|accepted| accepted.operation_id),
+                operation.map(|operation| operation.operation_id),
                 retry,
             )
         } else {
@@ -125,8 +127,8 @@ impl Reply<'_> {
         )
         .with_request_id(self.identity.request_id.to_string())
         .with_recovery(recovery);
-        if let Some(accepted) = accepted {
-            envelope = envelope.with_operation_id(accepted.operation_id.to_string());
+        if let Some(operation) = operation {
+            envelope = envelope.with_operation_id(operation.operation_id.to_string());
         }
         match data {
             Some(data) => envelope.with_data(data),
