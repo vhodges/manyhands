@@ -721,6 +721,36 @@ pub(in super::super) fn lookup_material_operation(
     })
 }
 
+/// The key that the generation `operation_id` registered, with the
+/// fingerprint its row recorded, for the mutation boundary: `None` when
+/// the journal holds no generation of that ID that has completed.
+///
+/// A generation's row is completed in the transaction that registers its
+/// key and in no other, so a completed row is a key that was registered,
+/// whatever has been done to the key or its files since. Of the row only
+/// these two values are read: neither its paths nor its label.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn completed_generation(
+    connection: &rusqlite::Connection,
+    operation_id: super::OperationId,
+) -> Result<Option<(SharedKeyId, Option<String>)>, ReadError> {
+    let stored: Option<(String, Option<String>)> = connection
+        .query_row(
+            "SELECT key_id, public_key_fingerprint FROM key_material_operations
+              WHERE operation_id = ?1 AND action = 'generate' AND phase = 'completed'",
+            [operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    stored
+        .map(|(key_id, fingerprint)| {
+            SharedKeyId::parse(&key_id)
+                .map(|key_id| (key_id, fingerprint))
+                .map_err(|_| ReadError::new(crate::results::ResultCode::InternalError))
+        })
+        .transpose()
+}
+
 fn require_no_pending_material(
     connection: &rusqlite::Connection,
     id: SharedKeyId,

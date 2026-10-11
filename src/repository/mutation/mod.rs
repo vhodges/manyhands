@@ -170,6 +170,19 @@ impl RepositoryService {
     }
 }
 
+impl RepositoryService {
+    /// The key a generation that has completed registered, and the
+    /// fingerprint its row recorded; see `keys::completed_generation`.
+    pub(crate) fn completed_generation(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<(keys::SharedKeyId, Option<String>)>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            keys::completed_generation(connection, operation_id)
+        })
+    }
+}
+
 /// The command `show_request` answers.
 const REQUEST_SHOW: &str = "request show";
 

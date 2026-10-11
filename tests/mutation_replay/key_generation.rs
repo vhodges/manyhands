@@ -574,36 +574,80 @@ fn a_changed_request_under_an_interrupted_generation_s_id_is_partial() {
     assert_eq!(world.key_operations(), 1);
 }
 
-/// A limit, pinned: the key a generation registered is removed before
-/// the generation's lost result is asked for again. The domain no longer
-/// finds the registration and says so. The record is kept: released, the
-/// next call would be a new request and would generate a second key for
-/// the same request ID.
+/// A generation whose row has completed registered its key: the domain
+/// completes the row in the transaction that registers the key and in
+/// no other. Its lost result is given from the row, whatever has
+/// happened to the key since, and the record is finished. Nothing is
+/// generated, registered or written again.
 #[test]
-fn a_generated_key_removed_before_its_lost_result_is_asked_for_is_not_generated_again() {
-    let mut world = KeyWorld::with_service(|data| {
-        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
-    });
-    let lost = world.execute(REQUEST_1, world.generate(LABEL, None));
-    assert_eq!(lost.code, ResultCode::InternalError);
-    let [(id, false)] = world.keys()[..] else {
-        panic!("one key: {:?}", world.keys());
-    };
-    world.reopen();
-    world.service.unregister_shared_key(id).unwrap();
+fn a_completed_generation_s_lost_result_is_given_from_its_row_whatever_became_of_the_key() {
+    /// What is done to the key between the lost result and the retry.
+    #[derive(Clone, Copy, Debug)]
+    enum Since {
+        Nothing,
+        Removed,
+        FilesDeleted,
+    }
+    for since in [Since::Nothing, Since::Removed, Since::FilesDeleted] {
+        let mut world = KeyWorld::with_service(|data| {
+            FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+        });
+        let lost = world.execute(REQUEST_1, world.generate(LABEL, None));
+        assert_eq!(lost.code, ResultCode::InternalError, "{since:?}");
+        let keys = world.service.list_shared_keys().unwrap();
+        let [key] = &keys[..] else {
+            panic!("one key: {keys:?}");
+        };
+        let (id, fingerprint) = (key.id, key.public_key_fingerprint.clone());
+        assert!(fingerprint.is_some());
+        world.reopen();
+        match since {
+            Since::Nothing => {}
+            Since::Removed => {
+                world.service.unregister_shared_key(id).unwrap();
+            }
+            Since::FilesDeleted => {
+                std::fs::remove_file(world.store_directory().join(id.to_string())).unwrap();
+                std::fs::remove_file(world.store_directory().join(format!("{id}.pub"))).unwrap();
+            }
+        }
+        let files = world.private_key_files();
+        let registered = world.keys();
 
-    for _ in 0..2 {
         let retry = world.execute(REQUEST_1, world.generate(LABEL, None));
         assert_eq!(
-            (retry.outcome, retry.code),
-            (Outcome::Error, ResultCode::KeyNotFound)
+            (retry.outcome, retry.code, retry.failure_class()),
+            (Outcome::Success, ResultCode::Ok, None),
+            "{since:?}"
         );
         assert_of_the_application(&retry);
-        assert_eq!(recovery_actions(&retry), ["request.retry"]);
-        assert_eq!(state(&world, REQUEST_1), Some(RequestState::Accepted));
-        assert!(world.keys().is_empty());
-        assert_eq!(world.private_key_files(), [id.to_string()]);
-        assert_eq!(world.key_operations(), 1);
+        assert!(retry.recovery.is_empty(), "{since:?}");
+        assert_eq!(
+            key_data(&retry),
+            &KeyMutationDto {
+                id: Some(id.to_string()),
+                label: Some(LABEL.to_owned()),
+                fingerprint: fingerprint.clone(),
+                generation: None,
+            },
+            "{since:?}"
+        );
+        assert_eq!(journal_row(&world, &retry), COMPLETED, "{since:?}");
+        // Nothing was generated, registered or written for it.
+        assert_eq!(world.private_key_files(), files, "{since:?}");
+        assert_eq!(world.keys(), registered, "{since:?}");
+        assert_eq!(world.key_operations(), 1, "{since:?}");
+        let record = world.record(REQUEST_1).expect("a record");
+        assert_eq!(
+            (record.state, record.attempt),
+            (RequestState::Finished, 2),
+            "{since:?}"
+        );
+        assert_eq!(
+            world.execute(REQUEST_1, world.generate(LABEL, None)),
+            retry,
+            "{since:?}"
+        );
     }
 }
 

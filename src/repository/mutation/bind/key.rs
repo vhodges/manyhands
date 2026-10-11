@@ -20,8 +20,9 @@
 //! record waits on nothing but its own retry. A row that has completed
 //! is a key that was registered, since the domain completes a
 //! generation's row in the transaction that registers the key and in no
-//! other; and a row whose files were retained for inspection is final,
-//! and nothing continues it.
+//! other, so a request that is entered again on such a row is given
+//! that key from the row; and a row whose files were retained for
+//! inspection is final, and nothing continues it.
 //!
 //! The passphrase of a new key is given to the one domain call and to
 //! nothing else. It is no field of the digest, and no record, journal
@@ -549,10 +550,10 @@ impl KeyGenerateBinding {
     /// The record is finished only when the domain has made the result
     /// final, by retaining the files for inspection. In every other
     /// phase the same request continues the generation, and the record
-    /// stays accepted for it. That includes a row that has completed and
-    /// whose files then failed their check: the key is registered, and a
-    /// record released for it would have the next call generate a second
-    /// key for the same request.
+    /// stays accepted for it. That includes a call that registered its
+    /// key and then failed: the row has completed, a record released for
+    /// it would have the next call generate a second key for the same
+    /// request, and the same request is given the key from the row.
     fn interrupted(
         &self,
         service: &RepositoryService,
@@ -639,8 +640,8 @@ impl KeyGenerateBinding {
                     GenerateSharedKeyOutcome::Created(registration) => created(code, &registration),
                     // The operation is the request's own, so a key it
                     // had already created is the key this request
-                    // generated: the work of an earlier call whose
-                    // answer was lost, and no no-op.
+                    // generated, and no no-op: the work of a call of the
+                    // same request that ran beside this one.
                     GenerateSharedKeyOutcome::AlreadyCreated(registration) => {
                         created(ResultCode::Ok, &registration)
                     }
@@ -676,11 +677,12 @@ impl KeyGenerateBinding {
                     Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
                         Standing::Stopped { journal }
                     }
-                    // The generation had ended, and this call failed all
-                    // the same: the store was busy, or the key's
-                    // registration is no longer what the generation
-                    // made. The error is no result of the generation.
-                    // Nothing is stored and nothing is deleted.
+                    // The generation has ended, and this call failed all
+                    // the same: the store was busy over files that were
+                    // retained, or a call beside this one completed the
+                    // row. The error is no result of the generation.
+                    // Nothing is stored and nothing is deleted; the same
+                    // request is answered from the row.
                     Some(JournalRow::Final {
                         kind: _,
                         owes_work: _,
@@ -752,23 +754,57 @@ impl Binding for KeyGenerateBinding {
         self.call(call.service, accepted)
     }
 
-    /// The domain operation is called whatever the row says, and its
-    /// answer is the evidence of what the request did. No reading of the
-    /// row here could stand in for it: on a row that has completed the
-    /// call checks the key's files and its registration and returns the
-    /// key, on a pair that was written it verifies and registers it, and
-    /// on anything less it retains the files and makes that final.
+    /// A row that has completed is a key that was registered: the domain
+    /// completes a generation's row in the transaction that registers its
+    /// key and in no other. The request is finished here with that key,
+    /// read from the row, and no domain call is made: the call would
+    /// check the key's files and its registration as they are now, and a
+    /// key that was since removed, or whose files were deleted, would
+    /// have it refuse for good a request that succeeded.
+    ///
+    /// For every other row the domain operation is called, and its answer
+    /// is the evidence: with no row it generates, on a pair that was
+    /// written it verifies and registers, on anything less it retains the
+    /// files and makes that final, and on a row already retained it says
+    /// so again.
     fn reenter(
         &mut self,
-        _call: &CallContext<'_>,
-        _accepted: &Accepted,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         match journal {
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: _,
+                checkpointed: _,
+            } => {
+                // What cannot be read answers the call and leaves the
+                // record as it is.
+                let unread = |answer: Answer| Ran {
+                    answer: answer.with_data(self.data(None, None, None)),
+                    standing: Standing::NotRun {
+                        journal: journal.clone(),
+                    },
+                };
+                match call.service.completed_generation(accepted.operation_id) {
+                    Ok(Some((id, fingerprint))) => Err(Ran {
+                        answer: Answer::stopped(ResultCode::Ok).with_data(self.data(
+                            Some(id),
+                            fingerprint.as_deref(),
+                            None,
+                        )),
+                        standing: Standing::Final,
+                    }),
+                    // The row is no completed generation after all.
+                    Ok(None) => Err(unread(Answer::stopped(ResultCode::InternalError))),
+                    Err(error) => Err(unread(Answer::of_read(&error))),
+                }
+            }
             JournalRow::Absent
             | JournalRow::Pending(PendingOperation::KeyMaterial { phase: _ })
             | JournalRow::Final {
-                kind: FinalKind::Completed | FinalKind::RetainedForInspection,
+                kind: FinalKind::RetainedForInspection,
                 owes_work: _,
                 checkpointed: _,
             } => Ok(Entered::Unfinished),
