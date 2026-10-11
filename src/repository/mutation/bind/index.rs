@@ -115,24 +115,38 @@ impl IndexBinding {
         let operation_id = accepted.operation_id;
         // Only the kind of an error is read: its text can hold a path or
         // a backend's message.
+        //
+        // A call that returned without an error has not always brought
+        // the index up to date itself, and its row says whether the
+        // operation has: only one that ran to its end has completed.
+        // A rebuild also returns what the index holds when it found the
+        // repository changing under it and stored nothing. A refresh
+        // says the index is pending when it could not claim its row,
+        // which is also what it says of a row that a call of the same
+        // request beside this one has since completed.
+        let done = |otherwise: ResultCode| match accepted.journal_row(service) {
+            Some(journal) if completed(&journal) => ResultCode::Ok,
+            Some(_) => otherwise,
+            None => ResultCode::InternalError,
+        };
         let code = match self.verb {
             Verb::Refresh => {
                 match service.refresh_repository(RefreshRepositoryRequest { root, operation_id }) {
-                    Ok(outcome) => outcome::refresh_outcome_code(&outcome),
+                    Ok(outcome) => match outcome::refresh_outcome_code(&outcome) {
+                        ResultCode::Ok => ResultCode::Ok,
+                        code => match done(code) {
+                            // The answer of the refresh stands when its
+                            // row cannot be read.
+                            ResultCode::InternalError => code,
+                            read => read,
+                        },
+                    },
                     Err(error) => outcome::repository_error_code(error.kind),
                 }
             }
             Verb::Rebuild => {
                 match service.rebuild_repository(RebuildRepositoryRequest { root, operation_id }) {
-                    // A rebuild also returns what the index holds when it
-                    // found the repository changing under it and stored
-                    // nothing. Its row says which: only one that ran to
-                    // its end has completed.
-                    Ok(_) => match accepted.journal_row(service) {
-                        Some(journal) if completed(&journal) => ResultCode::Ok,
-                        Some(_) => ResultCode::Busy,
-                        None => ResultCode::InternalError,
-                    },
+                    Ok(_) => done(ResultCode::Busy),
                     Err(error) => outcome::repository_error_code(error.kind),
                 }
             }

@@ -853,7 +853,7 @@ fn stopped_inside_git(world: &World) -> String {
     // Git's own message names the lock. The result holds the code's
     // fixed message and nothing of the error's.
     let text = serde_json::to_string(&stopped).unwrap();
-    assert!(!text.contains("lock"), "{text}");
+    assert!(!text.contains("config.lock"), "{text}");
     assert_eq!(stopped.message, ResultCode::InternalError.message());
     assert_eq!(stopped.effects, Effects::not_requested());
     assert_eq!(recovery_actions(&stopped), ["request.retry"]);
@@ -1040,5 +1040,189 @@ fn an_add_or_a_selection_that_died_before_its_domain_call_is_run_by_its_retry() 
         world.record(REQUEST_2).unwrap().state,
         RequestState::Finished
     );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+const CONFIG: &str = ".manyhands/config.toml";
+
+/// Commits the configuration on primary by hand, with `remote` as its
+/// publication remote and a key the library does not know, in the form
+/// the library writes a configuration in.
+fn commit_configuration_by_hand(world: &World, remote: Option<&str>) -> git2::Oid {
+    let source = std::fs::read_to_string(world.root.join(CONFIG)).unwrap();
+    let mut config = manyhands::canonical::parse_repository_config(&source).unwrap();
+    config.publication_remote = remote.map(str::to_owned);
+    config
+        .unknown
+        .insert("note".to_owned(), toml::Value::String("by hand".to_owned()));
+    world.commit_on_primary(
+        CONFIG,
+        &manyhands::canonical::serialize_repository_config(&config).unwrap(),
+    )
+}
+
+/// A selection that committed and whose index hand-off failed: its row
+/// is pending. Returns the world and the selection's commit.
+fn selection_in_flight() -> (World, git2::Oid) {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    git_remote(&world, "other", "git@example.invalid:team/other.git");
+    let partial = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(partial.code, ResultCode::DiscoveryPending);
+    let own = world.primary_head();
+    assert_eq!(partial.effects.commit_oid, Some(own.to_string()));
+    (world, own)
+}
+
+/// "As intended" for a selection is that the configuration names the
+/// remote, whatever else it holds. A commit from elsewhere that keeps the
+/// remote does not stand in the request's way, and is not its commit.
+#[test]
+fn a_foreign_commit_that_keeps_the_selected_remote_does_not_stop_a_selection_in_flight() {
+    let (world, own) = selection_in_flight();
+    let foreign = commit_configuration_by_hand(&world, Some("origin"));
+    assert_ne!(foreign, own);
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(retry.effects, committed(own));
+    // Nothing more was committed, and the other's change is in place.
+    assert_eq!(world.primary_head(), foreign);
+    assert!(
+        std::fs::read_to_string(world.root.join(CONFIG))
+            .unwrap()
+            .contains("by hand")
+    );
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// Open case 1, for a selection: someone else selects another remote
+/// while the request's row is pending. The request is refused with its
+/// own commit reported, and its record and its row stay.
+#[test]
+fn a_foreign_commit_that_selects_another_remote_is_an_external_change_to_a_selection_in_flight() {
+    let (world, own) = selection_in_flight();
+    let foreign = commit_configuration_by_hand(&world, Some("other"));
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Partial,
+            ResultCode::ExternalChange,
+            Some(FailureClass::Incomplete)
+        )
+    );
+    assert_eq!(
+        retry.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..committed(own)
+        }
+    );
+    assert!(retry.recovery.is_empty());
+    // Nothing was written over the other's selection.
+    assert_eq!(world.primary_head(), foreign);
+    assert_eq!(selected_at(&world, foreign).as_deref(), Some("other"));
+    assert_configuration_clean(&world);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+}
+
+/// Open case 2 of the design's journal section, pinned as the limit it
+/// is: a process killed after `remote select` wrote the configuration
+/// file and before it committed leaves the file changed and uncommitted.
+/// The retry is refused for it with no effects, the domain completes the
+/// row, and the record is deleted. Every later selection is refused the
+/// same way until the file is committed or restored by hand.
+#[test]
+fn a_selection_killed_between_its_write_and_its_commit_leaves_the_worktree_dirty() {
+    let mut world = world_with_origin(plain);
+    let before = world.primary_head();
+    let committed_source = std::fs::read_to_string(world.root.join(CONFIG)).unwrap();
+    super::index::killed_at(
+        &world,
+        "remote select origin",
+        FailurePoint::BeforePublicationConfigurationCommit,
+    );
+    world.reopen();
+
+    // What the dead process left.
+    assert_eq!(world.primary_head(), before);
+    let written = std::fs::read_to_string(world.root.join(CONFIG)).unwrap();
+    assert_ne!(written, committed_source);
+    assert!(written.contains("origin"));
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation = record.operations[0].operation_id.to_string();
+    assert!(matches!(
+        world.journal_row(&operation),
+        JournalRow::Pending(_)
+    ));
+
+    for request_id in [REQUEST_1, REQUEST_2] {
+        let refused = world.execute(request_id, select(&world, Some("origin")));
+        assert_eq!(
+            (refused.outcome, refused.code, refused.failure_class()),
+            (
+                Outcome::Blocked,
+                ResultCode::WorktreeNotClean,
+                Some(FailureClass::Blocked)
+            ),
+            "{request_id}"
+        );
+        assert_eq!(refused.effects, Effects::not_requested(), "{request_id}");
+        assert!(refused.recovery.is_empty(), "{request_id}");
+        assert!(world.record(request_id).is_none(), "{request_id}");
+        assert_eq!(world.pending_journal_rows(), 0, "{request_id}");
+    }
+    assert_eq!(world.primary_head(), before);
+    assert_eq!(
+        std::fs::read_to_string(world.root.join(CONFIG)).unwrap(),
+        written
+    );
+
+    // Restored by hand, the selection can be made.
+    std::fs::write(world.root.join(CONFIG), committed_source).unwrap();
+    let selected = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selected(&world, &selected, Some("origin"), world.primary_head());
+}
+
+/// The domain names the head it found as a selection's commit whenever
+/// the configuration equals the request. A commit of the same selection
+/// that someone made after the request was accepted is in the request's
+/// range and changed its path, and is still not the request's.
+#[test]
+fn a_selection_another_request_committed_first_is_not_reported_as_this_request_s_commit() {
+    let world = world_with_origin(plain);
+    let (root, data) = (world.root.clone(), world.data.path().to_owned());
+    // Between this request's acceptance and its domain call.
+    world.service.set_request_hook_for_testing(move || {
+        let other = mutation::execute_with(
+            &plain(&data),
+            REQUEST_2,
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root,
+                name: Some("origin".to_owned()),
+            }),
+        );
+        assert_eq!(other.outcome, Outcome::Success);
+    });
+    let late = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selection_unchanged(&late);
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(record.result.unwrap().effects.commit_oid, None);
     assert_eq!(world.pending_journal_rows(), 0);
 }

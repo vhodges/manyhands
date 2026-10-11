@@ -415,10 +415,13 @@ impl save::Save for RemoteSelectBinding {
     /// requested publication remote, or none for a request that clears
     /// the selection. Nothing else in it is the request's.
     fn holds_bytes(&self, bytes: &[u8]) -> bool {
+        // Every field is named: one added to the input does not compile
+        // until it is part of what the request intends or left out here.
+        let Self { root: _, name } = self;
         std::str::from_utf8(bytes)
             .ok()
             .and_then(|source| canonical::parse_repository_config(source).ok())
-            .is_some_and(|config| config.publication_remote == self.name)
+            .is_some_and(|config| config.publication_remote == *name)
     }
 
     /// The one domain call. It takes no expectation of the file: it
@@ -427,6 +430,15 @@ impl save::Save for RemoteSelectBinding {
     /// With no identity to commit as it returns an identity error, which
     /// is reported as a save's "identity required": the identity is the
     /// repository's, and no part of the request's input.
+    ///
+    /// The commit it names is the head it found whenever the
+    /// configuration equals the request, whoever committed it. Its row
+    /// says whether this operation committed: it records
+    /// `publication_committed` when it did, and a row that has ended
+    /// without that step committed nothing. The commit named by such a
+    /// call is dropped here, so that a selection someone else committed
+    /// after this request was accepted, which is in the request's range
+    /// and changed its path, is not reported as its own.
     fn call_domain(
         &self,
         service: &RepositoryService,
@@ -438,7 +450,29 @@ impl save::Save for RemoteSelectBinding {
             operation_id: accepted.operation_id,
         });
         match result {
-            Ok(outcome) => Ok(SaveReport::of_publication_remote(outcome)),
+            Ok(outcome) => {
+                let report = SaveReport::of_publication_remote(outcome);
+                Ok(match accepted.journal_row(service) {
+                    Some(JournalRow::Final {
+                        kind: _,
+                        owes_work: _,
+                        checkpointed: false,
+                    }) => report.naming_no_commit(),
+                    // A row that passed its commit, one still pending,
+                    // and one that could not be read: the evidence check
+                    // decides.
+                    Some(
+                        JournalRow::Absent
+                        | JournalRow::Pending(_)
+                        | JournalRow::Final {
+                            kind: _,
+                            owes_work: _,
+                            checkpointed: true,
+                        },
+                    )
+                    | None => report,
+                })
+            }
             Err(error) if error.kind == RepositoryErrorKind::InvalidIdentity => {
                 Ok(SaveReport::IdentityRequired)
             }

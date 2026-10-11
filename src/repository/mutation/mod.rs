@@ -329,6 +329,14 @@ impl ProgressSink for NoProgress {}
 /// public so that the integration tests can reach it.
 #[doc(hidden)]
 pub mod request_store {
+    /// The published name of every command the boundary binds.
+    pub fn bound_commands() -> Vec<&'static str> {
+        super::Command::ALL
+            .into_iter()
+            .map(super::Command::name)
+            .collect()
+    }
+
     pub use super::{
         Clock, SystemClock,
         identity::{DigestSalt, FieldValue, IntentDigest, IntentDigestBuilder, ScopeKey},

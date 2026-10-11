@@ -407,6 +407,23 @@ impl SaveReport {
         }
     }
 
+    /// The same report, naming no commit: for a domain call whose
+    /// operation is known to have committed nothing, whatever commit it
+    /// names.
+    pub(crate) fn naming_no_commit(self) -> Self {
+        match self {
+            Self::IdentityRequired => Self::IdentityRequired,
+            Self::Saved {
+                claimed: _,
+                discovered,
+            } => Self::Saved {
+                claimed: None,
+                discovered,
+            },
+            Self::RegistrationPending { claimed: _ } => Self::RegistrationPending { claimed: None },
+        }
+    }
+
     /// The commit the domain names, for the evidence check to confirm.
     pub(crate) fn claimed(self) -> Option<git2::Oid> {
         match self {

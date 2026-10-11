@@ -7,7 +7,7 @@ use crate::{
         keys::{KeyMaterialAction, KeyMaterialPhase, KeyMaterialRecovery},
         transport::{HostKeyIdentity, SshDirection, SshTransportError},
     },
-    results::{CheckpointEffect, DiscoveryEffect, Envelope, Scope, WriteEffect},
+    results::{CheckpointEffect, DiscoveryEffect, WriteEffect},
 };
 
 /// Every repository error kind and the code a mutation reports for it.
@@ -136,8 +136,53 @@ const KINDS: [(RepositoryErrorKind, ResultCode); 35] = [
     ),
 ];
 
+/// How many repository error kinds there are. The match has no wildcard
+/// arm, so a kind added later does not compile until it is counted here,
+/// and the table test then fails until it is in the table.
+fn kind_count(kind: RepositoryErrorKind) -> usize {
+    use RepositoryErrorKind as Kind;
+    match kind {
+        Kind::InvalidSharedKeyMetadata
+        | Kind::InvalidSharedKeySourcePath
+        | Kind::SharedKeyRegistryUnavailable
+        | Kind::SharedKeyMaterialPending
+        | Kind::InvalidPath
+        | Kind::InaccessibleRepository
+        | Kind::NotRepository
+        | Kind::BareRepository
+        | Kind::DetachedHead
+        | Kind::WrongCheckedOutBranch
+        | Kind::DirtyWorktree
+        | Kind::ConflictedWorktree
+        | Kind::InvalidConfiguration
+        | Kind::InvalidPublicationRemote
+        | Kind::UnavailablePublicationRemote
+        | Kind::SelectedRemoteRemoval
+        | Kind::RemoteNameConflict
+        | Kind::RegistryRefreshPending
+        | Kind::RepositoryNotRegistered
+        | Kind::IndexUnavailable
+        | Kind::RepositoryBusy
+        | Kind::OperationMismatch
+        | Kind::RecoveryRequired
+        | Kind::ExternalChange
+        | Kind::DirtyConfigurationPath
+        | Kind::InvalidIdentity
+        | Kind::RepositoryNotEnabled
+        | Kind::MissingAuthoringTarget
+        | Kind::OccupiedItemPath
+        | Kind::MismatchedAuthoringContext
+        | Kind::RollbackIncomplete
+        | Kind::Io
+        | Kind::Sqlite
+        | Kind::Git
+        | Kind::InjectedFailure => 35,
+    }
+}
+
 #[test]
 fn every_repository_error_kind_has_its_code() {
+    assert_complete(&KINDS, kind_count(KINDS[0].0));
     for (kind, code) in KINDS {
         assert_eq!(repository_error_code(kind), code, "{kind:?}");
         assert!(
@@ -503,8 +548,11 @@ fn every_key_material_error_kind_has_its_code() {
     }
 }
 
-/// What a domain error holds that no result may: here, in its message and
-/// in its source.
+/// Text a domain error holds, in its message and in its source. No
+/// mapping here can pass it on: each takes the error's kind and returns a
+/// `ResultCode`, which holds no text. That an envelope carries none of an
+/// error's text is shown where a real error is made, by
+/// `remotes::stopped_inside_git` in `tests/mutation_replay`.
 const SENTINEL: &str = "SENTINEL-ERROR-5d1e";
 
 fn repository_error(kind: RepositoryErrorKind) -> RepositoryError {
@@ -648,55 +696,6 @@ fn every_synchronization_error_has_its_code() {
             synchronization_error_code(&SynchronizationError::Transport(transport_error(kind))),
             code
         );
-    }
-}
-
-/// The envelope a binding answers a stopped request with, as text.
-fn stopped_envelope(code: ResultCode) -> String {
-    let envelope: Envelope<()> = Envelope::classified_mutation(
-        "remote add",
-        Scope::default(),
-        code == ResultCode::Cancelled,
-        code,
-        Effects::not_requested(),
-        false,
-    )
-    .with_recovery(recovery(
-        code,
-        None,
-        RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap(),
-        None,
-        true,
-    ));
-    serde_json::to_string(&envelope).unwrap()
-}
-
-#[test]
-fn an_error_s_message_and_source_do_not_reach_its_envelope() {
-    // The errors hold the sentinel where a formatter would find it.
-    let error = repository_error(RepositoryErrorKind::Git);
-    assert!(format!("{error:?}").contains(SENTINEL));
-    assert!(error.to_string().contains(SENTINEL));
-    assert!(
-        format!(
-            "{:?}",
-            transport_error(SshTransportErrorKind::ProtocolFailure)
-        )
-        .contains(SENTINEL)
-    );
-
-    for (kind, _) in KINDS {
-        let envelope = stopped_envelope(repository_error_code(repository_error(kind).kind));
-        assert!(!envelope.contains(SENTINEL), "{kind:?}: {envelope}");
-    }
-    for (kind, _) in ssh_kinds() {
-        let error = transport_error(kind);
-        let envelope = stopped_envelope(ssh_transport_error_code(&error.kind));
-        assert!(!envelope.contains(SENTINEL), "{envelope}");
-    }
-    for (error, _) in synchronization_errors() {
-        let envelope = stopped_envelope(synchronization_error_code(&error));
-        assert!(!envelope.contains(SENTINEL), "{envelope}");
     }
 }
 

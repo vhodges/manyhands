@@ -619,3 +619,27 @@ fn a_rebuild_killed_on_a_corrupt_database_after_its_row_began_is_finished_by_its
     );
     assert_registered_again(&world);
 }
+
+/// Two calls of one request at once: the second runs the refresh to its
+/// end while the first is between its acceptance and its domain call.
+/// The first's own call then finds the row completed and is told the
+/// index is pending. Its request's work is done, and it says so.
+#[test]
+fn a_refresh_that_a_call_beside_it_completed_is_answered_as_done() {
+    let world = World::new();
+    let (root, data) = (world.root.clone(), world.data.path().to_owned());
+    world.service.set_request_hook_for_testing(move || {
+        let beside = crate::support::mutation::execute_with(
+            &manyhands::repository::RepositoryService::open_at(&data).unwrap(),
+            REQUEST_1,
+            Mutation::IndexRefresh(IndexRefreshInput { root }),
+        );
+        assert_eq!(beside.code, ResultCode::Ok);
+    });
+    let first = world.execute(REQUEST_1, refresh(&world));
+    assert_current(&world, "index refresh", &first);
+    let record = world.record(REQUEST_1).expect("the record is kept");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.execute(REQUEST_1, refresh(&world)), first);
+}

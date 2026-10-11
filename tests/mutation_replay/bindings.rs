@@ -532,17 +532,43 @@ fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
 /// shows that no request store kept any of it.
 #[test]
 fn the_table_covers_every_command_the_boundary_binds() {
-    let mut commands: Vec<&str> = CASES.iter().map(|case| case.command).collect();
-    commands.sort_unstable();
-    assert_eq!(
-        commands,
-        [
-            "document create",
-            "document move",
-            "document save",
-            "ticket create",
-            "ticket save",
-            "ticket slug-assign",
-        ]
-    );
+    let mut covered: Vec<&str> = CASES
+        .iter()
+        .map(|case| case.command)
+        .chain(ELSEWHERE.iter().map(|(command, _)| *command))
+        .collect();
+    covered.sort_unstable();
+    let mut bound = manyhands::repository::request_store::bound_commands();
+    bound.sort_unstable();
+    // Each bound command once: in the table, or with where it is driven
+    // instead and why.
+    assert_eq!(covered, bound);
+    for (command, reason) in ELSEWHERE {
+        assert!(!reason.is_empty(), "{command}");
+    }
 }
+
+/// The bound commands this table does not drive, each with the reason
+/// and the module of this test target that drives it through the same
+/// four sequences instead. The table's columns are an item's: its
+/// editing branch, the commits on it, its context's files and its token.
+/// None of these commands has an item.
+const ELSEWHERE: [(&str, &str); 4] = [
+    (
+        "remote add",
+        "commits nothing and writes no canonical file: `remotes`",
+    ),
+    (
+        "remote select",
+        "an authoring write of the configuration file on primary, with no item, context or \
+         token: `remotes`",
+    ),
+    (
+        "index refresh",
+        "commits nothing and writes no canonical file: `index`",
+    ),
+    (
+        "index rebuild",
+        "commits nothing and writes no canonical file: `index`",
+    ),
+];
