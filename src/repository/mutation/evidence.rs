@@ -262,13 +262,21 @@ impl PathEvidence {
     /// the request expected, and the range shows no commit of the
     /// request's own, nothing foreign stands at the path: what the range
     /// shows is history older than the request, which a widened range
-    /// holds. When the request's own commit is in range and the tip is
-    /// back at what the request expected, someone undid that commit, and
-    /// that is a change from elsewhere.
+    /// holds, or changes that came and went and left the file as the
+    /// request found it. When the request's own commit is in range and
+    /// the tip is back at what the request expected, someone undid that
+    /// commit, and that is a change from elsewhere.
+    ///
+    /// `committing` says whether an earlier attempt of the request may
+    /// have committed, and a commit is the request's own here only then,
+    /// as it is wherever a commit is counted or reported. For a request
+    /// that cannot have committed, a commit in range that looks exactly
+    /// like its own is someone else's: undone, it leaves nothing of the
+    /// request's undone, and the exception holds.
     pub(crate) fn superseded(&self, committing: bool) -> bool {
-        let _ = committing;
         let newest_is_foreign = self.changes.first().is_some_and(|change| !change.intended);
-        newest_is_foreign && !(self.tip_as_expected && self.own().is_none())
+        let own = self.own().filter(|_| committing);
+        newest_is_foreign && !(self.tip_as_expected && own.is_none())
     }
 
     /// The commit a call reports, given this evidence read after its
