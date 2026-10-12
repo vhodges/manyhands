@@ -11,7 +11,7 @@
     "publication": "not_requested",
     "write": "not_requested"
   },
-  "message": "The repository is not enabled in Manyhands.",
+  "message": "The repository is not registered with Manyhands.",
   "operation_id": null,
   "outcome": "blocked",
   "recovery": [],

@@ -543,7 +543,7 @@ result_codes! {
     BareRepository => "bare_repository", Some(FailureClass::Input),
         "The repository has no working tree.";
     RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),
-        "The repository is not enabled in Manyhands.";
+        "The repository is not registered with Manyhands.";
     RepositoryNotEnabled => "repository_not_enabled", Some(FailureClass::Input),
         "The repository has never been enabled in Manyhands; enable it first.";
     RepositoryInaccessible => "repository_inaccessible", Some(FailureClass::Blocked),

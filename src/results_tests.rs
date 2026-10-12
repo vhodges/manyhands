@@ -155,7 +155,7 @@ fn result_code_messages_are_fixed() {
         "No Git repository exists at that path.",
         "That path is inside a repository but is not its root or a linked worktree root.",
         "The repository has no working tree.",
-        "The repository is not enabled in Manyhands.",
+        "The repository is not registered with Manyhands.",
         "The repository has never been enabled in Manyhands; enable it first.",
         "The repository cannot be read.",
         "That ID is not a canonical ULID.",
