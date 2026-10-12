@@ -3367,6 +3367,17 @@ fn a_resume_does_not_continue_a_merge_made_some_other_way() -> Result<(), Fixtur
     let rows = merge_rows(&w)?;
     assert!(rows > 0);
     let before = phase(&w, merging.operation_id)?;
+    // What a restart changes of a row before anything else: it takes
+    // the operation from its executor, which raises the owner epoch.
+    let touched = || -> Result<(i64, i64), FixtureError> {
+        fixed(w.db()?.query_row(
+            "SELECT owner_epoch, updated_at FROM remote_operation_records
+              WHERE operation_ulid = ?1",
+            [merging.operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ))
+    };
+    let untouched = touched()?;
     let opened = connections(&w);
     let pushes = accepted(&w.server);
 
@@ -3378,6 +3389,9 @@ fn a_resume_does_not_continue_a_merge_made_some_other_way() -> Result<(), Fixtur
     assert_no_record_of(&w, REQUEST_1, &refused);
     assert_eq!(merge_rows(&w)?, rows);
     assert_eq!(phase(&w, merging.operation_id)?, before);
+    // It was refused before it was restarted: the row was not taken
+    // from its executor, and nothing of it was written.
+    assert_eq!(touched()?, untouched);
     assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
     assert_eq!(connections(&w), opened);
     assert_eq!(accepted(&w.server), pushes);
