@@ -309,8 +309,8 @@ impl Answer {
 pub(crate) struct Prepared {
     /// The journal the binding's domain operation is recorded in. `None`
     /// for a command whose domain call has no operation ID and no journal
-    /// row: a single step that happened or did not, as a change to the
-    /// key registry is.
+    /// row: a single step that happened or did not and is never made
+    /// twice, as the removal of a key is.
     pub(crate) family: Option<OperationFamily>,
     pub(crate) position: Position,
     /// The digest of the canonical file's bytes as they were before the
@@ -895,11 +895,13 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RemoteSelect) => Recorded::of(remote::recorded_effects(record, &accepted)),
         // A refresh or a rebuild in flight has made no durable effect.
         Some(Command::IndexRefresh | Command::IndexRebuild) => Recorded::nothing(),
-        // A change to the key registry has no operation, so none is ever
-        // found to have run: this is not reached, and nothing is claimed.
-        Some(Command::KeyImport | Command::KeySelect | Command::KeyClear | Command::KeyRemove) => {
-            Recorded::nothing()
-        }
+        // A change to the key registry is shown by no effect, and one
+        // that is recorded is done: nothing of it is ever made with work
+        // remaining.
+        Some(Command::KeyImport | Command::KeySelect | Command::KeyClear) => Recorded::nothing(),
+        // A removal has no operation, so none is ever found to have run:
+        // this is not reached, and nothing is claimed.
+        Some(Command::KeyRemove) => Recorded::nothing(),
         // A key file is shown by no effect. The generation's row says
         // whether one was written with the generation not yet ended.
         Some(Command::KeyGenerate) => Recorded {

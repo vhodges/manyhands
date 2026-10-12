@@ -7,11 +7,25 @@
 //! says whether anything changed.
 //!
 //! `key import`, `key select`, `key clear` and `key remove` change the
-//! key registry and nothing else. The domain call of each is one transaction with no
-//! operation ID and no journal row: it happened or it did not. A request
-//! of one is therefore accepted with no operation, nothing is ever in
-//! flight under it, and it is settled as any request with no journal row
-//! is: finished when its end state holds, deleted when it was refused.
+//! key registry and nothing else. The domain call of each is one
+//! transaction: it happened or it did not, and nothing is ever in flight
+//! under it.
+//!
+//! An import, a selection and a clearing can each be made a second time:
+//! a source can be registered again once its key is removed, and a
+//! selection can be put back. So each is an operation, of the key
+//! journal's family, and the transaction that makes the change records
+//! it against the operation's ID. A request that is entered again is
+//! answered from that record, with the key its first call named,
+//! whatever has been done to the key or to the selection since, and
+//! changes nothing. One whose operation recorded nothing makes its change
+//! in a transaction that first compares the setting with what the
+//! request observed when it was accepted: a setting someone has changed
+//! since is an `external_change`, and is not overwritten.
+//!
+//! `key remove` has no operation and records nothing. It cannot be made
+//! twice: a key's ID is never registered again, so a retry that finds
+//! the key gone has nothing to do and nothing to undo.
 //!
 //! `key generate` writes a key pair into the user's key store and
 //! registers it, as one operation in the key journal. That journal is
@@ -44,13 +58,14 @@ use super::{
     super::{
         super::{
             ExpectedPathObservation, GeneratedKeyDeletionPreflight, OperationFamily,
-            PrivateKeySourceState, PublicKeyMetadataState, ReadError, RegisterSharedKeyOutcome,
-            RegisterSharedKeyRequest, RepositoryErrorKind, RepositoryService, SharedKeyId,
-            SharedKeyOwnership, SharedKeySelectionOutcome,
+            PrivateKeySourceState, PublicKeyMetadataState, ReadError, RegisterSharedKeyRequest,
+            RepositoryError, RepositoryErrorKind, RepositoryService, SharedKeyId,
+            SharedKeyOwnership,
             keys::{
-                DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, GenerateSharedKeyRequest,
-                GeneratedKeyDeletionReview, KeyMaterialErrorKind, KeyMaterialPhase,
-                KeyMaterialRecovery, KeyProtection, KeyStore,
+                self, DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome,
+                GenerateSharedKeyRequest, GeneratedKeyDeletionReview, KeyMaterialErrorKind,
+                KeyMaterialPhase, KeyMaterialRecovery, KeyProtection, KeyRegistryChange,
+                KeyRegistryMark, KeyRegistrySetting, KeyStore, MarkedRegistryChange,
             },
             recovery::{FinalKind, PendingOperation},
         },
@@ -119,15 +134,6 @@ fn key_data(
     })
 }
 
-/// The data of a registration the domain returned.
-fn registered(registration: &SharedKeyRegistration) -> MutationDataDto {
-    key_data(
-        Some(registration.id),
-        Some(&registration.label),
-        registration.public_key_fingerprint.as_deref(),
-    )
-}
-
 /// A path as the digest reads it: the bytes the caller gave, whatever
 /// their encoding. A path is fed to the digest and stored nowhere by the
 /// boundary.
@@ -147,16 +153,8 @@ enum Change {
     Remove(SharedKeyId),
 }
 
-/// What a registry change reads of the setting it would change.
-struct Observed {
-    /// The setting, as the request's record holds it once accepted.
-    digest: ExpectedPathObservation,
-    /// Whether the setting is already as the request asks.
-    holds: bool,
-}
-
 /// `key import`, `key select`, `key clear` and `key remove`: one binding,
-/// since each is one registry transaction with no operation.
+/// since each is one registry transaction.
 pub(crate) struct KeyRegistryBinding {
     change: Change,
 }
@@ -228,99 +226,142 @@ impl KeyRegistryBinding {
         Answer::of_read(error).with_data(self.named())
     }
 
-    /// The one domain call and what it came to.
+    /// Whether the command's change is recorded against an operation;
+    /// see the module's text. Only a removal's is not.
+    fn recorded(&self) -> bool {
+        match self.change {
+            Change::Import { .. } | Change::Select(_) | Change::Clear => true,
+            Change::Remove(_) => false,
+        }
+    }
+
+    /// The answer a recorded change gives: the key as the record names
+    /// it, and whether anything changed. It is the same answer for the
+    /// call that made the change and for every later call of the request.
+    fn answered(change: &KeyRegistryChange) -> Answer {
+        let KeyRegistryChange {
+            // The request's own, as the domain checked.
+            action: _,
+            key_id,
+            label,
+            public_key_fingerprint,
+            // Read by the code.
+            changed: _,
+        } = change;
+        Answer::stopped(outcome::key_registry_change_code(change)).with_data(key_data(
+            *key_id,
+            label.as_deref(),
+            public_key_fingerprint.as_deref(),
+        ))
+    }
+
+    /// The one domain call and what it came to, settled.
     ///
-    /// Each of these is also the evidence that the request's work is
-    /// done, for a call that enters the request again: the registry is
-    /// read, or changed, in the state it is in now, and a state that is
-    /// already as requested is a no-op.
-    fn change(&self, service: &RepositoryService) -> Answer {
-        let answer = |code, data| Answer::stopped(code).with_data(data);
-        // Only the kind of a domain error is read.
-        let failed = |kind| answer(outcome::repository_error_code(kind), self.named());
-        match &self.change {
+    /// A change that is recorded is made under the request's operation:
+    /// one transaction answers from a record already there, compares the
+    /// setting with `expected` when that is given, makes the change and
+    /// records it. What is recorded is the request's end state, and so is
+    /// a setting that has moved: the request is finished as an external
+    /// change, since made later its change would put an older choice
+    /// over a later one. Anything else stopped the request with nothing
+    /// done.
+    ///
+    /// `expected` is given by a call that enters the request again, and
+    /// not by its first call, which observed the setting a moment before.
+    fn call(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        expected: Option<ExpectedPathObservation>,
+    ) -> Ran {
+        let mark = KeyRegistryMark {
+            operation_id: accepted.operation_id,
+            expected,
+        };
+        let made = match &self.change {
             Change::Import {
                 label,
                 private_key_path,
                 public_key_path,
-            } => {
-                let registration = service.register_shared_key(RegisterSharedKeyRequest {
+            } => service.register_shared_key_under(
+                &mark,
+                RegisterSharedKeyRequest {
                     label: label.clone(),
                     ownership: SharedKeyOwnership::Imported,
                     private_key_path: private_key_path.clone(),
                     public_key_path: public_key_path.clone(),
-                });
-                match registration {
-                    Ok(registration) => {
-                        let code = outcome::register_key_outcome_code(&registration);
-                        match registration {
-                            RegisterSharedKeyOutcome::Registered(registration) => {
-                                answer(code, registered(&registration))
-                            }
-                            // The key that holds the source, with its
-                            // own label and not the request's. A read
-                            // of it that fails is the request's answer,
-                            // naming the key: nothing was registered,
-                            // and a no-op is not stored for a key the
-                            // registry could not show.
-                            RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing } => {
-                                match service.show_key(existing) {
-                                    Ok(key) => answer(
-                                        code,
-                                        key_data(
-                                            Some(existing),
-                                            Some(&key.label),
-                                            key.fingerprint.as_deref(),
-                                        ),
-                                    ),
-                                    Err(error) => Answer::of_read(&error).with_data(key_data(
-                                        Some(existing),
-                                        None,
-                                        None,
-                                    )),
-                                }
-                            }
-                        }
+                },
+            ),
+            &Change::Select(id) => service.select_shared_key_under(&mark, id),
+            Change::Clear => service.clear_shared_key_selection_under(&mark),
+            &Change::Remove(id) => return self.remove(service, accepted, id),
+        };
+        self.settled(service, accepted, made)
+    }
+
+    /// What a change made under the request's operation came to.
+    fn settled(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        made: Result<MarkedRegistryChange, RepositoryError>,
+    ) -> Ran {
+        let code = match &made {
+            Ok(made) => outcome::marked_registry_change_code(made),
+            // Only the kind of a domain error is read.
+            Err(error) => outcome::repository_error_code(error.kind),
+        };
+        match made {
+            Ok(MarkedRegistryChange::Recorded(change)) => Ran {
+                answer: Self::answered(&change),
+                standing: Standing::Final,
+            },
+            Ok(MarkedRegistryChange::Moved) => Ran {
+                answer: Answer::stopped(code).with_data(self.named()),
+                standing: Standing::Final,
+            },
+            Ok(MarkedRegistryChange::NotRegistered) | Err(_) => {
+                let journal = accepted.journal_row(service);
+                let standing = match journal {
+                    // Nothing is recorded: nothing was done, and nothing
+                    // is in flight.
+                    Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
+                        Standing::Stopped { journal }
                     }
-                    Err(error) => failed(error.kind),
+                    // The change is recorded, by a call of the request
+                    // that ran beside this one, and this call failed all
+                    // the same. The failure is no result of the change:
+                    // nothing is stored and nothing is deleted, and the
+                    // same request is answered from the record.
+                    Some(JournalRow::Final {
+                        kind: _,
+                        owes_work: _,
+                        checkpointed: _,
+                    }) => Standing::Unconfirmed,
+                };
+                Ran {
+                    answer: Answer::stopped(code).with_data(self.named()),
+                    standing,
                 }
             }
-            // The domain selects a key that is already selected and says
-            // the same of both, so the registry is read first. A key
-            // that already is selected is left as it is.
-            &Change::Select(id) => match service.show_key(id) {
-                Ok(key) if key.selected => answer(
-                    ResultCode::AlreadyApplied,
-                    key_data(Some(id), Some(&key.label), key.fingerprint.as_deref()),
-                ),
-                Ok(_) => match service.select_shared_key(id) {
-                    Ok(selection) => {
-                        let code = outcome::key_selection_outcome_code(&selection);
-                        match selection {
-                            SharedKeySelectionOutcome::Selected(registration) => {
-                                answer(code, registered(&registration))
-                            }
-                            // Not what a selection returns.
-                            SharedKeySelectionOutcome::Cleared
-                            | SharedKeySelectionOutcome::AlreadyCleared => {
-                                answer(ResultCode::InternalError, self.named())
-                            }
-                        }
-                    }
-                    Err(error) => failed(error.kind),
+        }
+    }
+
+    /// `key remove`: the one domain call, which is its own evidence of
+    /// what is done. A key that is gone is the request's end state.
+    fn remove(&self, service: &RepositoryService, accepted: &Accepted, id: SharedKeyId) -> Ran {
+        let code = match service.unregister_shared_key(id) {
+            Ok(removal) => outcome::unregister_key_outcome_code(removal),
+            // Only the kind of a domain error is read.
+            Err(error) => outcome::repository_error_code(error.kind),
+        };
+        Ran {
+            answer: Answer::stopped(code).with_data(self.named()),
+            standing: match code.failure_class() {
+                None => Standing::Final,
+                Some(_) => Standing::Stopped {
+                    journal: accepted.journal_row(service),
                 },
-                Err(error) => self.unread(&error),
-            },
-            Change::Clear => match service.clear_shared_key_selection() {
-                Ok(selection) => answer(
-                    outcome::key_selection_outcome_code(&selection),
-                    self.named(),
-                ),
-                Err(error) => failed(error.kind),
-            },
-            &Change::Remove(id) => match service.unregister_shared_key(id) {
-                Ok(removal) => answer(outcome::unregister_key_outcome_code(removal), self.named()),
-                Err(error) => failed(error.kind),
             },
         }
     }
@@ -334,21 +375,13 @@ impl KeyRegistryBinding {
     /// call refuses it, and nothing is observed of it.
     ///
     /// What is digested is a key ID or the absence of one, under the
-    /// name of the setting. No path, label, fingerprint or key material
-    /// is part of it.
-    fn observe(&self, service: &RepositoryService) -> Result<Option<Observed>, Answer> {
-        let digest = |setting: &str, key: Option<&str>| {
-            let mut text = String::from(setting);
-            text.push('\0');
-            match key {
-                Some(key) => {
-                    text.push('1');
-                    text.push_str(key);
-                }
-                None => text.push('0'),
-            }
-            ExpectedPathObservation::from_bytes(text.as_bytes())
-        };
+    /// name of the setting; see `keys::observed_setting`. The same digest
+    /// is made again by the domain, in the transaction of a retry's
+    /// change.
+    fn observe(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<Option<ExpectedPathObservation>, Answer> {
         let selected = || -> Result<Option<String>, Answer> {
             Ok(service
                 .list_keys()
@@ -359,32 +392,19 @@ impl KeyRegistryBinding {
                 .map(|key| key.id))
         };
         Ok(match &self.change {
-            Change::Select(id) => {
-                let selected = selected()?;
-                Some(Observed {
-                    digest: digest("key selection", selected.as_deref()),
-                    holds: selected.as_deref() == Some(id.to_string().as_str()),
-                })
-            }
-            Change::Clear => {
-                let selected = selected()?;
-                Some(Observed {
-                    digest: digest("key selection", selected.as_deref()),
-                    holds: selected.is_none(),
-                })
-            }
+            Change::Select(_) | Change::Clear => Some(keys::observed_setting(
+                KeyRegistrySetting::Selection,
+                selected()?.as_deref(),
+            )),
             Change::Import {
                 label: _,
                 private_key_path,
                 public_key_path: _,
             } => match service.registered_key_source(private_key_path) {
-                Ok(registered) => {
-                    let registered = registered.map(|id| id.to_string());
-                    Some(Observed {
-                        digest: digest("key source", registered.as_deref()),
-                        holds: registered.is_some(),
-                    })
-                }
+                Ok(registered) => Some(keys::observed_setting(
+                    KeyRegistrySetting::Source,
+                    registered.map(|id| id.to_string()).as_deref(),
+                )),
                 Err(error) if error.kind == RepositoryErrorKind::InvalidSharedKeySourcePath => None,
                 Err(error) => {
                     return Err(Answer::stopped(outcome::repository_error_code(error.kind))
@@ -393,20 +413,6 @@ impl KeyRegistryBinding {
             },
             Change::Remove(_) => None,
         })
-    }
-
-    /// The domain call, settled: a code with no failure class is the
-    /// request's end state, and anything else stopped it with nothing in
-    /// flight, since nothing of a registry change is ever in flight.
-    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
-        let answer = self.change(service);
-        let standing = match answer.code.failure_class() {
-            None => Standing::Final,
-            Some(_) => Standing::Stopped {
-                journal: accepted.journal_row(service),
-            },
-        };
-        Ran { answer, standing }
     }
 }
 
@@ -420,9 +426,9 @@ impl Binding for KeyRegistryBinding {
         }
     }
 
-    /// A registry change has no operation, so no row of one is ever read
-    /// as final. It answers as every command that is no authoring write
-    /// does: no row says of it that nothing was done.
+    /// A recorded registry change reads as a row that has completed, and
+    /// is no authoring write: the row is the change, made. The record is
+    /// kept and `reenter` answers from what was recorded.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
         EndedWithoutCheckpoint::SaysNothing
     }
@@ -481,34 +487,37 @@ impl Binding for KeyRegistryBinding {
             }
             Change::Import { .. } | Change::Clear => {}
         }
-        // The setting as this call finds it, for a retry to compare: a
-        // registry change leaves no mark of its own, and without this a
-        // late retry would make its change over one made since.
-        let observed = self.observe(call.service)?;
+        // The setting as this call finds it, for a retry whose operation
+        // recorded nothing to compare: without this, a late retry would
+        // make its change over one made since.
+        let expected = self.observe(call.service)?;
         Ok(Prepared {
             observation: None,
-            family: None,
+            // The key journal's family: a recorded change is an
+            // operation of the application's, as a generation is.
+            family: self.recorded().then_some(OperationFamily::KeyMaterial),
             position: no_position(),
-            expected: observed.map(|observed| observed.digest),
+            expected,
         })
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, None)
     }
 
-    /// The request has no operation, so its row is absent whatever an
-    /// earlier call did, and the domain call is made again: it is its own
-    /// evidence of what is done, as `change` has it.
+    /// A change that is recorded against the request's operation was
+    /// made: the request is finished here with what the record holds,
+    /// and no domain call is made. The call would read the registry as it
+    /// is now, and a key that was since removed, or a selection that was
+    /// since changed, or changed and put back, would have it register
+    /// the source again or put the request's choice over a later one.
     ///
-    /// It is made again only while the setting stands where the request
-    /// can still act on it: as the first call observed it, when that
-    /// call changed nothing, or already as the request asks, when it
-    /// did. A setting that is neither was changed by someone since. The
-    /// request is then finished as an external change and nothing is
-    /// changed: made again, its change would put an older choice over a
-    /// later one. A record that holds no observation, as one an earlier
-    /// build accepted, is entered as before.
+    /// With nothing recorded no call of the request made its change. The
+    /// domain call is made, and compares the setting with what the first
+    /// call observed in the transaction that would change it; see `call`.
+    ///
+    /// A removal has no operation, so its row is absent whatever an
+    /// earlier call did, and its domain call is made again.
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
@@ -516,28 +525,35 @@ impl Binding for KeyRegistryBinding {
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         match journal {
-            JournalRow::Absent => {
-                let now = self.observe(call.service).map_err(|answer| Ran {
-                    answer,
-                    standing: Standing::Stopped { journal: None },
-                })?;
-                let moved = match (now, &accepted.expected) {
-                    (Some(now), Some(then)) => now.digest != *then && !now.holds,
-                    (Some(_), None) | (None, Some(_)) | (None, None) => false,
+            JournalRow::Absent => Ok(Entered::Unfinished),
+            JournalRow::Final {
+                kind: FinalKind::Completed,
+                owes_work: _,
+                checkpointed: _,
+            } if self.recorded() => {
+                // What cannot be read answers the call and leaves the
+                // record as it is.
+                let unread = |answer: Answer| Ran {
+                    answer: answer.with_data(self.named()),
+                    standing: Standing::NotRun {
+                        journal: journal.clone(),
+                    },
                 };
-                if moved {
-                    return Err(Ran {
-                        answer: Answer::stopped(ResultCode::ExternalChange).with_data(self.named()),
+                match call.service.key_registry_change(accepted.operation_id) {
+                    Ok(Some(change)) => Err(Ran {
+                        answer: Self::answered(&change),
                         standing: Standing::Final,
-                    });
+                    }),
+                    // The row is no recorded change after all.
+                    Ok(None) => Err(unread(Answer::stopped(ResultCode::InternalError))),
+                    Err(error) => Err(unread(Answer::of_read(&error))),
                 }
-                Ok(Entered::Unfinished)
             }
-            // No row is read for a request with no operation. Nothing is
-            // run or settled on one that is.
+            // No row of a registry change reads so, and a removal has no
+            // row. Nothing is run or settled on one that does.
             JournalRow::Pending(_)
             | JournalRow::Final {
-                kind: _,
+                kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
                 owes_work: _,
                 checkpointed: _,
             } => Err(Ran {
@@ -551,8 +567,12 @@ impl Binding for KeyRegistryBinding {
         None
     }
 
+    /// The setting is compared with what the request's first call
+    /// observed, in the transaction of the change. A record that holds
+    /// no observation, as one an earlier build accepted, makes its change
+    /// as before.
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, accepted.expected.clone())
     }
 }
 

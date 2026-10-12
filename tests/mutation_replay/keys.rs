@@ -3,8 +3,10 @@
 //! the outcome says whether anything changed.
 //!
 //! `key import`, `key select`, `key clear` and `key remove` change the key
-//! registry in one step with no operation: a request of one names none, is finished
-//! when its end state holds, and leaves nothing when it is refused.
+//! registry in one step: a request of one is finished when its end state
+//! holds, and leaves nothing when it is refused. An import, a selection
+//! and a clearing are recorded against an operation in that step, and a
+//! retry is answered from the record; a removal has no operation.
 
 use std::path::Path;
 
@@ -41,12 +43,38 @@ fn remove(id: SharedKeyId) -> Mutation {
 }
 
 /// What every result of a key command holds, whatever its outcome: no
-/// effect, a scope that names nothing, and no operation for a change to
-/// the registry.
+/// effect, and a scope that names nothing.
 fn assert_of_the_application(envelope: &Envelope<MutationDataDto>) {
     assert_eq!(envelope.effects, Effects::not_requested());
     assert_eq!(envelope.scope, Scope::default());
+}
+
+/// The same for a request that was not accepted: it names no operation.
+fn assert_not_accepted(envelope: &Envelope<MutationDataDto>) {
+    assert_of_the_application(envelope);
     assert_eq!(envelope.operation_id, None);
+}
+
+/// Whether a change of the command is recorded against an operation: an
+/// import, a selection and a clearing are, and a removal is not.
+fn recorded(command: &str) -> bool {
+    match command {
+        "key import" | "key select" | "key clear" => true,
+        "key remove" => false,
+        other => panic!("no change to the key registry: {other}"),
+    }
+}
+
+/// A result of a request that was accepted names the request's
+/// operation, for a command that has one.
+fn assert_accepted(envelope: &Envelope<MutationDataDto>) {
+    assert_of_the_application(envelope);
+    assert_eq!(
+        envelope.operation_id.is_some(),
+        recorded(&envelope.command),
+        "{}",
+        envelope.command
+    );
 }
 
 fn assert_success(envelope: &Envelope<MutationDataDto>) {
@@ -54,7 +82,7 @@ fn assert_success(envelope: &Envelope<MutationDataDto>) {
         (envelope.outcome, envelope.code, envelope.failure_class()),
         (Outcome::Success, ResultCode::Ok, None)
     );
-    assert_of_the_application(envelope);
+    assert_accepted(envelope);
     assert!(envelope.recovery.is_empty());
 }
 
@@ -63,8 +91,62 @@ fn assert_noop(envelope: &Envelope<MutationDataDto>) {
         (envelope.outcome, envelope.code, envelope.failure_class()),
         (Outcome::Noop, ResultCode::AlreadyApplied, None)
     );
-    assert_of_the_application(envelope);
+    assert_accepted(envelope);
     assert!(envelope.recovery.is_empty());
+}
+
+/// The rows of the recorded registry changes, by operation: what was
+/// asked, the key and whether anything changed.
+fn changes(world: &KeyWorld) -> Vec<(String, String, Option<String>, bool)> {
+    items::index(world.data.path())
+        .prepare(
+            "SELECT operation_id, action, key_id, changed FROM key_registry_changes
+              ORDER BY rowid",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Asserts that the record holds what its command's records hold of an
+/// operation: one of the key journal's family for a change that is
+/// recorded, which the table of recorded changes holds once under that
+/// ID exactly when `made`, and none for a removal.
+fn assert_operation(world: &KeyWorld, request_id: &str, made: bool) {
+    let record = world.record(request_id).expect("a record");
+    if !recorded(&record.command) {
+        assert!(record.operations.is_empty(), "{:?}", record.operations);
+        return;
+    }
+    let [operation] = &record.operations[..] else {
+        panic!("{}: one operation: {:?}", record.command, record.operations);
+    };
+    assert_eq!(
+        operation.family,
+        manyhands::repository::OperationFamily::KeyMaterial,
+        "{}",
+        record.command
+    );
+    let action = record.command.trim_start_matches("key ");
+    let held = changes(world)
+        .into_iter()
+        .filter(|(id, _, _, _)| *id == operation.operation_id.to_string())
+        .map(|(_, action, _, _)| action)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        held,
+        if made {
+            vec![action.to_owned()]
+        } else {
+            Vec::new()
+        },
+        "{}",
+        record.command
+    );
 }
 
 /// What a request reports of the key `id` when it read its registration.
@@ -90,10 +172,11 @@ fn named(id: Option<SharedKeyId>) -> KeyMutationDto {
     }
 }
 
-/// Asserts that the request left a finished record of the application
-/// that holds no operation. A selection, a clearing and an import record
-/// a digest of the setting their first call observed, for a late retry to
-/// compare; a removal records none.
+/// Asserts that the request left a finished record of the application,
+/// with the operation its change is recorded against. A selection, a
+/// clearing and an import record a digest of the setting their first
+/// call observed, for a retry whose operation recorded nothing to
+/// compare; a removal records none, and has no operation.
 fn assert_finished(world: &KeyWorld, request_id: &str, command: &str, target: &str) {
     let record = world.record(request_id).expect("a record");
     assert_eq!(record.state, RequestState::Finished);
@@ -101,7 +184,7 @@ fn assert_finished(world: &KeyWorld, request_id: &str, command: &str, target: &s
     assert_eq!(record.scope.as_str(), "application");
     assert_eq!(record.command, command);
     assert_eq!(record.target, target);
-    assert!(record.operations.is_empty(), "{:?}", record.operations);
+    assert_operation(world, request_id, true);
     assert_eq!((record.base_ref, record.base_oid), (None, None));
     assert_eq!(
         matches!(
@@ -158,7 +241,7 @@ fn selecting_a_key_that_is_not_registered_is_key_not_found_and_leaves_nothing() 
             Some(FailureClass::Input)
         )
     );
-    assert_of_the_application(&refused);
+    assert_not_accepted(&refused);
     assert_eq!(key_data(&refused), &named(Some(unknown)));
     assert!(refused.recovery.is_empty());
     assert_eq!(world.selected(), None);
@@ -224,7 +307,7 @@ fn removing_the_selected_key_is_selected_key_in_use() {
             Some(FailureClass::Blocked)
         )
     );
-    assert_of_the_application(&refused);
+    assert_not_accepted(&refused);
     assert_eq!(key_data(&refused), &named(Some(work)));
     assert!(refused.recovery.is_empty());
     // Nothing is left of it: the key, its selection, and no record.
@@ -252,7 +335,7 @@ fn removing_a_key_that_is_not_registered_is_key_not_found() {
             Some(FailureClass::Input)
         )
     );
-    assert_of_the_application(&refused);
+    assert_not_accepted(&refused);
     assert_eq!(key_data(&refused), &named(Some(unknown)));
     assert!(refused.recovery.is_empty());
     assert_eq!(world.keys(), [(work, false)]);
@@ -285,7 +368,7 @@ fn a_changed_key_request_is_rejected_and_nothing_runs() {
             ),
             "{command}"
         );
-        assert_of_the_application(&mismatch);
+        assert_not_accepted(&mismatch);
         assert_eq!(mismatch.command, command);
     }
     assert_eq!(world.keys(), [(work, true), (other, false)]);
@@ -317,7 +400,9 @@ fn a_request_id_of_a_repository_command_is_not_a_key_command_s() {
 
 /// Makes the request under a service that dies before it settles the
 /// record, and then again as a new process would: `holds` says the
-/// request's end state is there.
+/// request's end state is there. A change that is recorded is answered
+/// as its first call would have been, from its record; a removal finds
+/// its key gone, which is a no-op.
 fn lost_then_retried(
     world: &mut KeyWorld,
     request_id: &str,
@@ -336,11 +421,15 @@ fn lost_then_retried(
     assert!(holds(world), "{command}: the change was made");
     let record = world.record(request_id).expect("a record");
     assert_eq!(record.state, RequestState::Accepted, "{command}");
-    assert!(record.operations.is_empty(), "{command}");
+    assert_operation(world, request_id, true);
 
     world.reopen();
     let retry = world.execute(request_id, request());
-    assert_noop(&retry);
+    if recorded(command) {
+        assert_success(&retry);
+    } else {
+        assert_noop(&retry);
+    }
     assert!(holds(world), "{command}");
     let record = world.record(request_id).expect("a record");
     assert_eq!(record.state, RequestState::Finished, "{command}");
@@ -349,11 +438,11 @@ fn lost_then_retried(
     assert_eq!(world.execute(request_id, request()), retry, "{command}");
 }
 
-/// A registry change is one step with no operation. A call that made it
-/// and whose result was lost left its record accepted; the same request
-/// finds the state as it asked for, and that is its answer.
+/// A registry change is one step. A call that made it and whose result
+/// was lost left its record accepted; the same request is answered as
+/// that call would have been.
 #[test]
-fn a_registry_change_whose_result_was_lost_is_a_no_op_on_its_retry() {
+fn a_registry_change_whose_result_was_lost_is_answered_on_its_retry() {
     let mut world = KeyWorld::new();
     let work = world.register("work", "Work laptop");
     let other = world.register("other", "Other");
@@ -419,7 +508,7 @@ fn a_key_command_on_an_unreadable_index_is_index_unavailable() {
         let command = request.command();
         let refused = execute_with(&service, REQUEST_1, request);
         assert_eq!(refused.code, ResultCode::IndexUnavailable, "{command}");
-        assert_of_the_application(&refused);
+        assert_not_accepted(&refused);
         // A rebuild is of a repository, by its root, and this result
         // names none: no action is offered that could not be carried out.
         assert!(recovery_actions(&refused).is_empty(), "{command}");
@@ -439,7 +528,7 @@ fn a_request_with_a_confirmation_or_cancelled_before_acceptance_does_nothing() {
         select(work),
     );
     assert_eq!(confirmed.code, ResultCode::NotConfirmable);
-    assert_of_the_application(&confirmed);
+    assert_not_accepted(&confirmed);
 
     let cancel = manyhands::repository::CancellationToken::new();
     cancel.cancel();
@@ -448,7 +537,7 @@ fn a_request_with_a_confirmation_or_cancelled_before_acceptance_does_nothing() {
         (cancelled.outcome, cancelled.code),
         (Outcome::Cancelled, ResultCode::Cancelled)
     );
-    assert_of_the_application(&cancelled);
+    assert_not_accepted(&cancelled);
     assert_eq!(world.selected(), None);
     assert_eq!(world.request_rows(), 0);
     assert!(recovery_actions(&cancelled).is_empty());
@@ -560,7 +649,7 @@ fn an_import_with_a_changed_label_or_source_is_another_request() {
             (mismatch.outcome, mismatch.code),
             (Outcome::Error, ResultCode::RequestMismatch)
         );
-        assert_of_the_application(&mismatch);
+        assert_not_accepted(&mismatch);
     }
     assert_eq!(world.keys().len(), 1);
     assert_eq!(world.request_rows(), 1);
@@ -585,11 +674,14 @@ fn an_import_the_registry_refuses_is_invalid_input_and_leaves_nothing() {
                 Some(FailureClass::Input)
             )
         );
-        assert_of_the_application(&refused);
+        // Refused by the domain call, after the request was accepted:
+        // the result names the operation nothing was recorded against.
+        assert_accepted(&refused);
         assert_eq!(key_data(&refused), &named(None));
         assert!(refused.recovery.is_empty());
         assert!(world.keys().is_empty());
         assert_eq!(world.request_rows(), 0);
+        assert!(changes(&world).is_empty());
     }
 
     // The same request ID, with the input corrected, runs at once.
@@ -601,7 +693,7 @@ fn an_import_the_registry_refuses_is_invalid_input_and_leaves_nothing() {
 }
 
 /// An import whose result was lost registered the key. The same request
-/// finds its source registered, and is answered with that key: one key.
+/// is answered with that key, as registered by it: one key.
 #[test]
 fn an_import_whose_result_was_lost_names_its_key_on_its_retry() {
     let mut world = KeyWorld::new();
@@ -657,63 +749,18 @@ fn assert_refused_as_late(
         ),
         "{command}"
     );
-    assert_of_the_application(retry);
+    assert_accepted(retry);
     assert!(retry.recovery.is_empty(), "{command}");
     let record = world.record(request_id).expect("a record");
     assert_eq!(record.state, RequestState::Finished, "{command}");
+    // Nothing was made, so nothing is recorded against the operation.
+    assert_operation(world, request_id, false);
     assert_eq!(&world.execute(request_id, request()), retry, "{command}");
 }
 
-/// A retry of a request that was accepted before does not put an older
-/// choice back over a later one. A registry change has no operation and
-/// leaves no mark of its own, so its record holds a digest of the setting
-/// its first call observed. A retry that finds neither that setting nor
-/// the one it asks for is an external change, and changes nothing.
-#[test]
-fn a_registry_change_retried_after_someone_else_s_change_is_an_external_change() {
-    // A selection: the key someone else selected since stays selected.
-    let mut world = KeyWorld::new();
-    let work = world.register("work", "Work laptop");
-    let other = world.register("other", "Other");
-    lose_the_result(&mut world, REQUEST_1, select(work));
-    assert_eq!(world.selected(), Some(work));
-    world.service.select_shared_key(other).unwrap();
-    let retry = world.execute(REQUEST_1, select(work));
-    assert_refused_as_late(&world, REQUEST_1, || select(work), &retry);
-    assert_eq!(key_data(&retry), &named(Some(work)));
-    assert_eq!(world.selected(), Some(other));
-
-    // A clearing: the key someone else selected since stays selected.
-    world.service.select_shared_key(work).unwrap();
-    lose_the_result(&mut world, REQUEST_2, clear());
-    assert_eq!(world.selected(), None);
-    world.service.select_shared_key(other).unwrap();
-    let retry = world.execute(REQUEST_2, clear());
-    assert_refused_as_late(&world, REQUEST_2, clear, &retry);
-    assert_eq!(world.selected(), Some(other));
-
-    // An import that found its source registered and changed nothing:
-    // the key someone else removed since is not registered again.
-    let (private, public) = world.key_files("imported");
-    let import_it = || import("Imported", &private, Some(&public));
-    assert_success(&world.execute(REQUEST_3, import_it()));
-    let first = world.keys()[2].0;
-    const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
-    lose_the_result(&mut world, REQUEST_4, import_it());
-    world.service.unregister_shared_key(first).unwrap();
-    let retry = world.execute(REQUEST_4, import_it());
-    assert_refused_as_late(&world, REQUEST_4, import_it, &retry);
-    assert_eq!(world.keys().len(), 2);
-
-    // A removal is never made twice: an ID is not registered again.
-    world.service.clear_shared_key_selection().unwrap();
-    const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
-    lose_the_result(&mut world, REQUEST_5, remove(other));
-    assert_noop(&world.execute(REQUEST_5, remove(other)));
-}
-
-/// The same for a call that died before its step: it changed nothing,
-/// and its retry does not make its change over one made since.
+/// A call that died before its step changed and recorded nothing. Its
+/// retry does not make its change over one made since: the setting is
+/// neither as the first call observed it nor as the request asks.
 #[test]
 fn a_registry_change_that_died_before_its_step_is_not_made_over_a_later_one() {
     let mut world = KeyWorld::with_service(|data| {
@@ -730,40 +777,6 @@ fn a_registry_change_that_died_before_its_step_is_not_made_over_a_later_one() {
     let retry = world.execute(REQUEST_1, select(work));
     assert_refused_as_late(&world, REQUEST_1, || select(work), &retry);
     assert_eq!(world.selected(), Some(other));
-}
-
-/// What the digest of the observed setting cannot tell, pinned. The
-/// registry keeps no count of its changes, so a setting that was changed
-/// and put back is the setting the first call observed.
-///
-/// An import whose key someone removed since finds its source not
-/// registered, as its first call did, and registers it again under a new
-/// ID. A clearing whose key someone selected again finds that key
-/// selected, as its first call did, and clears it again.
-#[test]
-fn a_registry_change_retried_after_its_setting_was_put_back_is_made_again() {
-    let mut world = KeyWorld::new();
-    let work = world.register("work", "Work laptop");
-    let (private, public) = world.key_files("imported");
-    lose_the_result(
-        &mut world,
-        REQUEST_1,
-        import("Imported", &private, Some(&public)),
-    );
-    let first = world.keys()[1].0;
-    world.service.unregister_shared_key(first).unwrap();
-    let retry = world.execute(REQUEST_1, import("Imported", &private, Some(&public)));
-    assert_success(&retry);
-    let second = world.keys()[1].0;
-    assert_ne!(second, first);
-    assert_eq!(key_data(&retry).id, Some(second.to_string()));
-
-    world.service.select_shared_key(work).unwrap();
-    lose_the_result(&mut world, REQUEST_2, clear());
-    assert_eq!(world.selected(), None);
-    world.service.select_shared_key(work).unwrap();
-    assert_success(&world.execute(REQUEST_2, clear()));
-    assert_eq!(world.selected(), None);
 }
 
 /// Every table of the index that holds `text` in any column of any row.
@@ -803,15 +816,14 @@ fn tables_holding(world: &KeyWorld, text: &str) -> Vec<String> {
     holding
 }
 
-/// Why the limit above stands: a registry change has no evidence of its
-/// own for a retry to answer from. `remote select` answers a first call
-/// that committed from the checkpointed row of its own operation. An
-/// import, a selection and a clearing have no operation: the accepted
-/// record names none, the key journal gains no row, and once the key an
-/// import registered is removed, nothing the index holds names it. A
-/// retry is left with the registry as it is now.
+/// The evidence a retry is answered from. An import, a selection and a
+/// clearing are each recorded against the operation their accepted
+/// record names, in the transaction that makes the change: a call whose
+/// result was lost has left the row. The key journal gains no row. Once
+/// the key an import registered is removed, the record of the import is
+/// what still names it.
 #[test]
-fn a_lost_registry_change_leaves_no_evidence_of_its_own_to_answer_a_retry_from() {
+fn a_registry_change_is_recorded_against_its_operation_by_the_transaction_that_makes_it() {
     let mut world = KeyWorld::new();
     let work = world.register("work", "Work laptop");
     let (private, public) = world.key_files("imported");
@@ -826,36 +838,64 @@ fn a_lost_registry_change_leaves_no_evidence_of_its_own_to_answer_a_retry_from()
     let imported = imported_key.to_string();
     lose_the_result(&mut world, REQUEST_2, select(work));
     lose_the_result(&mut world, REQUEST_3, clear());
-    lose_the_result(&mut world, REQUEST_4, select(work));
+    // A change that changes nothing is recorded as that.
+    lose_the_result(&mut world, REQUEST_4, clear());
 
+    let mut operations = Vec::new();
     for request in [REQUEST_1, REQUEST_2, REQUEST_3, REQUEST_4] {
         let record = world.record(request).expect("a record");
         assert_eq!(record.state, RequestState::Accepted, "{}", record.command);
-        // No operation of its own, in any journal.
-        assert!(record.operations.is_empty(), "{}", record.command);
         assert_eq!(record.result, None, "{}", record.command);
+        assert_operation(&world, request, true);
+        operations.push(record.operations[0].operation_id.to_string());
     }
+    assert_eq!(
+        changes(&world),
+        [
+            (
+                operations[0].clone(),
+                "import".to_owned(),
+                Some(imported.clone()),
+                true
+            ),
+            (
+                operations[1].clone(),
+                "select".to_owned(),
+                Some(work.to_string()),
+                true
+            ),
+            (operations[2].clone(), "clear".to_owned(), None, true),
+            (operations[3].clone(), "clear".to_owned(), None, false),
+        ]
+    );
+    // The key journal is of generations and deletions alone.
     assert_eq!(world.key_operations(), 0);
-    // The key the import registered is named by its registration alone:
-    // no record, journal or other table holds its ID.
-    assert_eq!(tables_holding(&world, &imported), ["shared_ssh_keys"]);
+    assert_eq!(
+        tables_holding(&world, &imported),
+        ["key_registry_changes", "shared_ssh_keys"]
+    );
     world.service.unregister_shared_key(imported_key).unwrap();
-    assert_eq!(tables_holding(&world, &imported), [""; 0]);
-    // A selection is one column of the registration, and a clearing
-    // leaves nothing: neither says which request made it.
-    assert_eq!(world.selected(), Some(work));
+    assert_eq!(tables_holding(&world, &imported), ["key_registry_changes"]);
 }
 
-/// What `request show` gives for a request that has no operation: an
-/// empty list, which its schema allows.
+/// What `request show` gives of a change to the key registry: the one
+/// operation its change is recorded against, of the key journal's
+/// family, and for a removal, which has no operation, an empty list,
+/// which its schema allows.
 #[test]
-fn a_registry_change_is_shown_with_no_operations() {
+fn a_registry_change_is_shown_with_its_operation_and_a_removal_with_none() {
     let mut world = KeyWorld::new();
     let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
     assert_success(&world.execute(REQUEST_1, select(work)));
     lose_the_result(&mut world, REQUEST_2, clear());
+    assert_success(&world.execute(REQUEST_3, remove(other)));
 
-    for (request, state) in [(REQUEST_1, "finished"), (REQUEST_2, "accepted")] {
+    for (request, state, operations) in [
+        (REQUEST_1, "finished", 1),
+        (REQUEST_2, "accepted", 1),
+        (REQUEST_3, "finished", 0),
+    ] {
         let shown = world
             .service
             .show_request(manyhands::repository::RequestId::parse(request).unwrap());
@@ -864,11 +904,18 @@ fn a_registry_change_is_shown_with_no_operations() {
         crate::support::schema::check_published("request.schema.json", &value["data"]).unwrap();
         assert_eq!(value["code"], "ok", "{request}");
         assert_eq!(value["data"]["state"], state, "{request}");
-        assert_eq!(
-            value["data"]["operations"],
-            serde_json::json!([]),
-            "{request}"
-        );
+        let shown = value["data"]["operations"].as_array().unwrap();
+        assert_eq!(shown.len(), operations, "{request}");
+        for operation in shown {
+            assert_eq!(operation["family"], "key_material", "{request}");
+            assert_eq!(
+                operation["operation_id"],
+                world.record(request).unwrap().operations[0]
+                    .operation_id
+                    .to_string(),
+                "{request}"
+            );
+        }
         assert_eq!(value["scope"]["repository"], serde_json::Value::Null);
     }
 }
@@ -1019,3 +1066,355 @@ pub(crate) const CONFORMANCE: [Row; 4] = [
         Ok(())
     }),
 ];
+
+/// Everything the index holds but the request tables, which a retry that
+/// finishes its record changes: every other table, with every row.
+fn all_but_the_requests(world: &KeyWorld) -> Vec<(String, Vec<String>)> {
+    let connection = items::index(world.data.path());
+    let tables: Vec<String> = connection
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+                AND name NOT IN ('request_records', 'request_operations')
+              ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((0..columns)
+                        .map(|column| format!("{:?}", row.get_ref(column).unwrap()))
+                        .collect::<Vec<_>>()
+                        .join("|"))
+                })
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            (table, rows)
+        })
+        .collect()
+}
+
+/// Sends a request again whose first call made its change and lost its
+/// result, and asserts that it is answered as that call would have been
+/// and that the retry wrote nothing but its own record: the key registry
+/// and everything else the index holds are as they were before it.
+fn answered_from_its_evidence(
+    world: &KeyWorld,
+    request_id: &str,
+    request: impl Fn() -> Mutation,
+    data: &KeyMutationDto,
+) -> Envelope<MutationDataDto> {
+    let command = request().command();
+    let before = all_but_the_requests(world);
+    let retry = world.execute(request_id, request());
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None),
+        "{command}"
+    );
+    assert_eq!(key_data(&retry), data, "{command}");
+    assert_eq!(all_but_the_requests(world), before, "{command}");
+    let record = world.record(request_id).expect("a record");
+    assert_eq!(record.state, RequestState::Finished, "{command}");
+    // And from then on it is replayed.
+    assert_eq!(world.execute(request_id, request()), retry, "{command}");
+    assert_eq!(all_but_the_requests(world), before, "{command}");
+    retry
+}
+
+/// An import registered a key and its result was lost. Someone removes
+/// the key. The same request is answered with the key it registered: the
+/// source is not registered a second time, under another ID.
+#[test]
+fn an_import_whose_result_was_lost_is_answered_with_its_key_though_the_key_was_removed() {
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    let import_it = || import("Imported", &private, Some(&public));
+    lose_the_result(&mut world, REQUEST_1, import_it());
+    let [(first, false)] = world.keys()[..] else {
+        panic!("one key: {:?}", world.keys());
+    };
+    world.service.unregister_shared_key(first).unwrap();
+    assert!(world.keys().is_empty());
+
+    let retry = answered_from_its_evidence(
+        &world,
+        REQUEST_1,
+        import_it,
+        &imported(&first.to_string(), "Imported"),
+    );
+    assert_eq!(key_data(&retry).id, Some(first.to_string()));
+    // No second key.
+    assert!(world.keys().is_empty());
+    mutation::assert_request_stores_exclude(world.data.path(), &[PATH_SENTINEL]);
+}
+
+/// A selection was made and its result lost. Whatever was selected since,
+/// by anyone, the same request is answered as its first call would have
+/// been and selects nothing: not when another key is selected now, and
+/// not when the first was selected again.
+#[test]
+fn a_selection_whose_result_was_lost_is_answered_and_not_made_again() {
+    // Changed and put back.
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
+    lose_the_result(&mut world, REQUEST_1, select(work));
+    world.service.select_shared_key(other).unwrap();
+    world.service.select_shared_key(work).unwrap();
+    answered_from_its_evidence(
+        &world,
+        REQUEST_1,
+        || select(work),
+        &read(work, "Work laptop"),
+    );
+    assert_eq!(world.selected(), Some(work));
+
+    // Changed: the later choice stands.
+    world.service.clear_shared_key_selection().unwrap();
+    lose_the_result(&mut world, REQUEST_2, select(work));
+    world.service.select_shared_key(other).unwrap();
+    answered_from_its_evidence(
+        &world,
+        REQUEST_2,
+        || select(work),
+        &read(work, "Work laptop"),
+    );
+    assert_eq!(world.selected(), Some(other));
+
+    // Removed: the key the request selected is not registered any more.
+    world.service.clear_shared_key_selection().unwrap();
+    lose_the_result(&mut world, REQUEST_3, select(work));
+    world.service.clear_shared_key_selection().unwrap();
+    world.service.unregister_shared_key(work).unwrap();
+    answered_from_its_evidence(
+        &world,
+        REQUEST_3,
+        || select(work),
+        &read(work, "Work laptop"),
+    );
+    assert_eq!(world.keys(), [(other, false)]);
+}
+
+/// The same for a clearing: a key that was selected again since, the same
+/// one or another, stays selected.
+#[test]
+fn a_clearing_whose_result_was_lost_is_answered_and_not_made_again() {
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
+
+    // Put back: the key that was selected is selected again.
+    world.service.select_shared_key(work).unwrap();
+    lose_the_result(&mut world, REQUEST_1, clear());
+    assert_eq!(world.selected(), None);
+    world.service.select_shared_key(work).unwrap();
+    answered_from_its_evidence(&world, REQUEST_1, clear, &named(None));
+    assert_eq!(world.selected(), Some(work));
+
+    // Changed: another key is selected.
+    lose_the_result(&mut world, REQUEST_2, clear());
+    assert_eq!(world.selected(), None);
+    world.service.select_shared_key(other).unwrap();
+    answered_from_its_evidence(&world, REQUEST_2, clear, &named(None));
+    assert_eq!(world.selected(), Some(other));
+}
+
+/// A request that found its setting already as it asks changed nothing,
+/// and that is its answer for good: a no-op naming the key, also once the
+/// key is gone.
+#[test]
+fn a_registry_change_that_changed_nothing_is_answered_as_a_no_op_whatever_changed_since() {
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files("imported");
+    let import_it = || import("Renamed", &private, Some(&public));
+    assert_success(&world.execute(REQUEST_1, import("Imported", &private, Some(&public))));
+    let first = world.keys()[0].0;
+    lose_the_result(&mut world, REQUEST_2, import_it());
+    world.service.unregister_shared_key(first).unwrap();
+
+    let before = all_but_the_requests(&world);
+    let retry = world.execute(REQUEST_2, import_it());
+    assert_noop(&retry);
+    assert_eq!(key_data(&retry), &imported(&first.to_string(), "Imported"));
+    assert_eq!(all_but_the_requests(&world), before);
+    assert!(world.keys().is_empty());
+    assert_eq!(world.execute(REQUEST_2, import_it()), retry);
+}
+
+/// The look a retry takes at its setting and the change it then makes
+/// are one transaction. A change someone else makes after the retry has
+/// read its record, and before its domain call, is seen by that call: the
+/// request is an external change, and the later choice is not overwritten.
+#[test]
+fn a_change_made_between_a_retry_s_look_and_its_change_is_not_overwritten() {
+    for clearing in [false, true] {
+        let mut world = KeyWorld::with_service(|data| {
+            FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+        });
+        let work = world.register("work", "Work laptop");
+        let other = world.register("other", "Other");
+        let third = world.register("third", "Third");
+        if clearing {
+            world.service.select_shared_key(third).unwrap();
+        }
+        let request = move || if clearing { clear() } else { select(work) };
+        let unchanged = clearing.then_some(third);
+        let died = world.execute(REQUEST_1, request());
+        assert_eq!(died.code, ResultCode::InternalError, "{clearing}");
+        assert_eq!(world.selected(), unchanged, "{clearing}");
+        world.reopen();
+
+        // After the retry has entered its record, and before its change.
+        let data = world.data.path().to_owned();
+        world.service.set_request_hook_for_testing(move || {
+            manyhands::repository::RepositoryService::open_at(&data)
+                .unwrap()
+                .select_shared_key(other)
+                .unwrap();
+        });
+        let retry = world.execute(REQUEST_1, request());
+        assert_eq!(world.selected(), Some(other), "{clearing}");
+        assert_refused_as_late(&world, REQUEST_1, request, &retry);
+        assert_eq!(world.selected(), Some(other), "{clearing}");
+    }
+}
+
+/// What a recorded registry change keeps: the operation, what was done,
+/// the key's ID and the label and fingerprint its result gives. Nothing
+/// of where the key's files are, of what they hold, or of a passphrase.
+#[test]
+fn nothing_of_a_recorded_registry_change_holds_the_key_its_passphrase_or_where_it_is() {
+    let sentinels = [PATH_SENTINEL, KEY_SENTINEL, mutation::PASSPHRASE];
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    std::fs::write(&private, format!("{KEY_SENTINEL}\n")).unwrap();
+    // A generated key, protected by the passphrase, selected and cleared
+    // beside the imported one.
+    let generated = world.execute(
+        REQUEST_1,
+        world.generate("Generated", Some(mutation::PASSPHRASE)),
+    );
+    assert_eq!(generated.outcome, Outcome::Success);
+    let generated = SharedKeyId::parse(key_data(&generated).id.as_deref().unwrap()).unwrap();
+    const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+    const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+    const REQUEST_6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX6";
+    const REQUEST_7: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX7";
+
+    let scanned = |world: &KeyWorld, request_id: &str, request: Mutation| {
+        let envelope = world.execute(request_id, request);
+        assert_eq!(
+            golden::find_sentinel(&serde_json::to_value(&envelope).unwrap(), &sentinels),
+            None
+        );
+        let record = world.record(request_id);
+        let record = format!("{record:?}");
+        for sentinel in sentinels {
+            assert!(!record.contains(sentinel), "the record holds {sentinel}");
+        }
+        assert_eq!(
+            mutation::find_stored_sentinel(world.data.path(), &sentinels),
+            None
+        );
+        assert_eq!(tables_holding(world, PATH_SENTINEL), ["shared_ssh_keys"]);
+        for sentinel in [KEY_SENTINEL, mutation::PASSPHRASE] {
+            assert_eq!(tables_holding(world, sentinel), [""; 0], "{sentinel}");
+        }
+        envelope
+    };
+
+    let import_it = || import("Imported", &private, Some(&public));
+    let registered = scanned(&world, REQUEST_2, import_it());
+    assert_success_with_operation(&registered);
+    let id = SharedKeyId::parse(key_data(&registered).id.as_deref().unwrap()).unwrap();
+    assert_success_with_operation(&scanned(&world, REQUEST_3, select(id)));
+    assert_success_with_operation(&scanned(&world, REQUEST_4, select(generated)));
+    assert_success_with_operation(&scanned(&world, REQUEST_5, clear()));
+    // A no-op is recorded as well.
+    scanned(&world, REQUEST_6, clear());
+    // And a retry that answers from the table.
+    lose_the_result(&mut world, REQUEST_7, select(id));
+    scanned(&world, REQUEST_7, select(id));
+    assert_eq!(
+        changes(&world)
+            .into_iter()
+            .map(|(_, action, key, changed)| (action, key, changed))
+            .collect::<Vec<_>>(),
+        [
+            ("import".to_owned(), Some(id.to_string()), true),
+            ("select".to_owned(), Some(id.to_string()), true),
+            ("select".to_owned(), Some(generated.to_string()), true),
+            ("clear".to_owned(), None, true),
+            ("clear".to_owned(), None, false),
+            ("select".to_owned(), Some(id.to_string()), true),
+        ]
+    );
+
+    // The scan reads the table: a label is the one text of the caller's
+    // it keeps, and one planted there is found. The import's result is
+    // lost, so that no finished record holds the label before it.
+    const LABEL_SENTINEL: &str = "SENTINEL-LABEL-2b7d";
+    let (other, _) = world.key_files("other");
+    const REQUEST_8: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
+    lose_the_result(&mut world, REQUEST_8, import(LABEL_SENTINEL, &other, None));
+    assert_eq!(
+        mutation::find_stored_sentinel(world.data.path(), &[LABEL_SENTINEL])
+            .map(|found| (found.table, found.column)),
+        Some(("key_registry_changes", "label".to_owned()))
+    );
+}
+
+/// A successful registry change, which names its operation.
+fn assert_success_with_operation(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(envelope.operation_id.is_some(), "{}", envelope.command);
+}
+
+/// A recorded registry change is finished the moment it is written:
+/// nothing is left of it to take up. A resume of its operation is the
+/// no-op a resume of any operation that has ended is, and records nothing.
+#[test]
+fn a_resume_of_a_recorded_registry_change_is_a_no_op() {
+    let world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let selected = world.execute(REQUEST_1, select(work));
+    assert_eq!(selected.outcome, Outcome::Success);
+    let operation_id = selected.operation_id.clone().expect("an operation ID");
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().operations[0]
+            .operation_id
+            .to_string(),
+        operation_id
+    );
+    let before = all_but_the_requests(&world);
+
+    let resumed = world.execute(
+        REQUEST_2,
+        Mutation::OperationResume(manyhands::repository::OperationResumeInput {
+            root: world.home.path().to_owned(),
+            operation_id: manyhands::repository::OperationId::parse(&operation_id).unwrap(),
+        }),
+    );
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert!(recovery_actions(&resumed).is_empty());
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(all_but_the_requests(&world), before);
+    assert_eq!(world.selected(), Some(work));
+}

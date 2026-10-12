@@ -18,10 +18,11 @@ pub use storage::KeyStore;
 
 #[cfg(test)]
 pub(super) use generation::failure_code as stored_failure_code;
+pub(crate) use registry::observed_setting;
 pub(super) use registry::{
     StoredSharedKeysError, bounded_public_key_contents, completed_generation,
     lookup_material_operation, migrate_material_schema, openssh_public_key, public_key_fingerprint,
-    stored_shared_key_registrations,
+    recorded_registry_change, stored_shared_key_registrations,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -115,6 +116,70 @@ pub enum SharedKeySelectionOutcome {
     Selected(SharedKeyRegistration),
     Cleared,
     AlreadyCleared,
+}
+
+/// What a recorded change to the key registry was asked to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyRegistryAction {
+    Import,
+    Select,
+    Clear,
+}
+
+/// A setting of the key registry that a change is made to, and that a
+/// request observes before it is accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyRegistrySetting {
+    /// Which key is selected, or that none is.
+    Selection,
+    /// Which key is registered for a private key file, or that none is.
+    Source,
+}
+
+/// What a change to the key registry is made under, for a caller that
+/// may make it again: the mutation boundary, on a retry of a request.
+pub(crate) struct KeyRegistryMark {
+    /// The operation the change is recorded against, in the transaction
+    /// that makes it. A change already recorded against it is not made
+    /// again: the call is answered with what the record holds.
+    pub(crate) operation_id: OperationId,
+    /// The setting as the request observed it before it was accepted;
+    /// see `observed_setting`. When it is given, it is compared with the
+    /// setting in the transaction that would change it, and a setting
+    /// that is neither this nor already as asked is not changed. `None`
+    /// makes the change whatever the setting is.
+    pub(crate) expected: Option<super::ExpectedPathObservation>,
+}
+
+/// A change to the key registry as it was recorded against its
+/// operation, in the transaction that made it: what a retry is answered
+/// with, whatever has been done to the key or to the selection since.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyRegistryChange {
+    pub(crate) action: KeyRegistryAction,
+    /// The key that was registered or selected. `None` for a clearing.
+    pub(crate) key_id: Option<SharedKeyId>,
+    /// The label and the public key fingerprint of that key's
+    /// registration as they were then: what the result gave of it.
+    pub(crate) label: Option<String>,
+    pub(crate) public_key_fingerprint: Option<String>,
+    /// Whether anything changed. `false` for a change that found the
+    /// registry already as it was asked to be.
+    pub(crate) changed: bool,
+}
+
+/// What a change made under a `KeyRegistryMark` came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MarkedRegistryChange {
+    /// The change as it is recorded against the operation: made by this
+    /// call, or by an earlier one under the same operation.
+    Recorded(KeyRegistryChange),
+    /// The setting is neither as the mark expects it nor as the change
+    /// asks: someone changed it since. Nothing was changed or recorded.
+    Moved,
+    /// The key a selection names is not registered. Nothing was changed
+    /// or recorded.
+    NotRegistered,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

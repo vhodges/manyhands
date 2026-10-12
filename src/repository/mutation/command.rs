@@ -66,10 +66,13 @@ impl Command {
     }
 
     /// Whether a request of the command has an operation: a domain
-    /// operation under an operation ID, with a row in a journal. A change
-    /// to the key registry is one transaction with neither. A record of
-    /// the command holds an operation exactly when this says so, and one
-    /// that does not is not a record any call of this build wrote.
+    /// operation under an operation ID, with a row in a journal. An
+    /// import, a selection and a clearing of a key each have one, of the
+    /// key journal's family: the change is one transaction, and is
+    /// recorded against the ID in it. A removal of a key is one
+    /// transaction with neither. A record of the command holds an
+    /// operation exactly when this says so, and one that does not is not
+    /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
             Self::DocumentCreate
@@ -83,6 +86,9 @@ impl Command {
             | Self::IndexRefresh
             | Self::IndexRebuild
             | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
             | Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -94,7 +100,9 @@ impl Command {
             // hand-off is done.
             | Self::ItemSync
             | Self::RepoSync => true,
-            Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
+            // Never made twice, and so recorded against nothing: a key's
+            // ID is not registered again.
+            Self::KeyRemove => false,
             // The operation an abandon names is another request's, and
             // is its target. The abandon itself is one transaction, with
             // no operation ID and no row of its own.
@@ -407,18 +415,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_single_transaction_has_no_operation() {
+    fn only_a_single_transaction_that_is_never_made_twice_has_no_operation() {
         for command in Command::ALL {
-            // A change to the key registry, and an abandon, which closes
-            // another request's operation and has none of its own.
-            let single_transaction = matches!(
-                command,
-                Command::KeyImport
-                    | Command::KeySelect
-                    | Command::KeyClear
-                    | Command::KeyRemove
-                    | Command::OperationAbandon
-            );
+            // The removal of a key, which is never made twice, and an
+            // abandon, which closes another request's operation and has
+            // none of its own. An import, a selection and a clearing of
+            // a key are one transaction each as well, and are recorded
+            // against an operation in it.
+            let single_transaction =
+                matches!(command, Command::KeyRemove | Command::OperationAbandon);
             // A resume takes up another request's operation, and has
             // none of its own either.
             let names_another_s = command == Command::OperationResume;

@@ -258,3 +258,59 @@ fn a_retried_key_generation_creates_a_new_key_and_leaves_the_earlier_file() {
     assert_eq!(world.private_key_files(), files);
     assert_eq!(std::fs::read(&earlier_file).unwrap(), earlier_bytes);
 }
+
+/// The table that answers a retried registry change is in the database
+/// that holds the request records and the key registry itself: they are
+/// lost together, and never one without the others. With the database
+/// gone the retried import is a new request, and what it finds is a
+/// registry that holds no key. It registers its source once, under a new
+/// ID: the key its first call registered went with the registry, and is
+/// not named again. That is the limit that remains, and it leaves one
+/// registration of the source, never two.
+#[test]
+fn a_retried_import_after_the_cache_is_lost_registers_its_source_once_under_a_new_id() {
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files("imported");
+    let import = || {
+        Mutation::KeyImport(manyhands::repository::KeyImportInput {
+            label: "Imported".to_owned(),
+            private_key_path: private.clone(),
+            public_key_path: Some(public.clone()),
+        })
+    };
+    world.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    assert_eq!(
+        world.execute(REQUEST_1, import()).code,
+        ResultCode::InternalError
+    );
+    let [(first, false)] = world.keys()[..] else {
+        panic!("one key: {:?}", world.keys());
+    };
+
+    world.lose_cache();
+    assert!(world.keys().is_empty());
+    assert_eq!(world.request_rows(), 0);
+    let changes = |world: &KeyWorld| -> i64 {
+        items::index(world.data.path())
+            .query_row("SELECT COUNT(*) FROM key_registry_changes", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(changes(&world), 0);
+
+    let retry = world.execute(REQUEST_1, import());
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    let [(second, false)] = world.keys()[..] else {
+        panic!("one key: {:?}", world.keys());
+    };
+    assert_ne!(second, first);
+    assert_eq!(key_data(&retry).id, Some(second.to_string()));
+    assert_eq!(changes(&world), 1);
+    // And that answer is then the request's.
+    assert_eq!(world.execute(REQUEST_1, import()), retry);
+    assert_eq!(world.keys(), [(second, false)]);
+}

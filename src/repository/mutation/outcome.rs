@@ -14,12 +14,15 @@ use crate::results::{
 use super::{
     super::{
         EnableRepositoryOutcome, GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationId,
-        PublicationRemoteOutcome, PublishPendingReason, RefreshOutcome, RegisterSharedKeyOutcome,
-        RemoteOutcome, RemoveRegistrationOutcome, RepositoryErrorKind, RepositoryOperation,
-        RepositoryService, SaveOutcome, SharedKeySelectionOutcome, SynchronizationError,
-        SynchronizationOutcome, SynchronizationResult, UnregisterSharedKeyOutcome,
+        PublicationRemoteOutcome, PublishPendingReason, RefreshOutcome, RemoteOutcome,
+        RemoveRegistrationOutcome, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+        SaveOutcome, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+        UnregisterSharedKeyOutcome,
         bridges::abandon::stale_heartbeat,
-        keys::{DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, KeyMaterialErrorKind},
+        keys::{
+            DeleteGeneratedKeyOutcome, GenerateSharedKeyOutcome, KeyMaterialErrorKind,
+            KeyRegistryChange, MarkedRegistryChange,
+        },
         leases_are_free, recovery,
         transport::SshTransportErrorKind,
     },
@@ -255,28 +258,26 @@ pub(crate) fn generate_key_outcome_code(outcome: &GenerateSharedKeyOutcome) -> R
     }
 }
 
-/// The code of what `register_shared_key` returns. A source that is
-/// already registered is the request's end state, whichever request
-/// registered it.
-pub(crate) fn register_key_outcome_code(outcome: &RegisterSharedKeyOutcome) -> ResultCode {
-    match outcome {
-        RegisterSharedKeyOutcome::Registered(_) => ResultCode::Ok,
-        RegisterSharedKeyOutcome::SourceAlreadyRegistered { existing: _ } => {
-            ResultCode::AlreadyApplied
-        }
+/// The code of a change to the key registry as it is recorded against
+/// its operation: `ok` for one that changed the registry, and a no-op for
+/// one that found it already as asked, whichever request made it so.
+pub(crate) fn key_registry_change_code(change: &KeyRegistryChange) -> ResultCode {
+    if change.changed {
+        ResultCode::Ok
+    } else {
+        ResultCode::AlreadyApplied
     }
 }
 
-/// The code of what `select_shared_key` and `clear_shared_key_selection`
-/// return. A selection reads as `ok` whether or not the key was selected
-/// before: `key select` reports a key that already was as a no-op from
-/// what it read of the registry.
-pub(crate) fn key_selection_outcome_code(outcome: &SharedKeySelectionOutcome) -> ResultCode {
-    match outcome {
-        SharedKeySelectionOutcome::Selected(_) | SharedKeySelectionOutcome::Cleared => {
-            ResultCode::Ok
-        }
-        SharedKeySelectionOutcome::AlreadyCleared => ResultCode::AlreadyApplied,
+/// The code of what a change to the key registry made under a mark
+/// returns. A setting that has moved since the request observed it is
+/// someone else's change, and a key that is not registered is the input's
+/// fault as it is before the request is accepted.
+pub(crate) fn marked_registry_change_code(made: &MarkedRegistryChange) -> ResultCode {
+    match made {
+        MarkedRegistryChange::Recorded(change) => key_registry_change_code(change),
+        MarkedRegistryChange::Moved => ResultCode::ExternalChange,
+        MarkedRegistryChange::NotRegistered => ResultCode::KeyNotFound,
     }
 }
 

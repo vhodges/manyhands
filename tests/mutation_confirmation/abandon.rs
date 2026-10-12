@@ -800,6 +800,93 @@ fn a_remote_or_a_key_operation_is_refused_with_nothing_changed() {
     assert_another_operation_succeeds(&world, "the refused abandons");
 }
 
+/// A recorded change to the key registry is an operation of the key
+/// journal's family that was finished in the transaction that wrote it.
+/// It is never pending: no list of operations holds it and `operation
+/// show` does not find it, so nothing offers its resume or its abandon.
+/// An abandon given its ID is refused as one of a key operation is, with
+/// nothing changed.
+#[test]
+fn an_abandon_of_a_recorded_key_registry_change_is_refused_with_nothing_changed() {
+    let world = World::new();
+    let home = tempfile::tempdir().unwrap();
+    let source = home.path().canonicalize().unwrap().join("work");
+    std::fs::write(&source, "not a key\n").unwrap();
+    let imported = world.execute(
+        REQUEST_1,
+        Mutation::KeyImport(manyhands::repository::KeyImportInput {
+            label: "Work laptop".to_owned(),
+            private_key_path: source,
+            public_key_path: None,
+        }),
+    );
+    assert_eq!(imported.code, ResultCode::Ok, "{}", imported.message);
+    let key = match &imported.data {
+        Some(MutationDataDto::Key(key)) => {
+            manyhands::repository::SharedKeyId::parse(key.id.as_deref().unwrap()).unwrap()
+        }
+        other => panic!("not a key: {other:?}"),
+    };
+    let selected = world.execute(
+        REQUEST_2,
+        Mutation::KeySelect(manyhands::repository::KeySelectInput { id: key }),
+    );
+    assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+    let cleared = world.execute(
+        REQUEST_3,
+        Mutation::KeyClear(manyhands::repository::KeyClearInput {}),
+    );
+    assert_eq!(cleared.code, ResultCode::Ok, "{}", cleared.message);
+    let before = (Everything::of(&world), journal(world.data.path()));
+
+    for (request, envelope) in [
+        (REQUEST_1, &imported),
+        (REQUEST_2, &selected),
+        (REQUEST_3, &cleared),
+    ] {
+        let what = &envelope.command;
+        let operation_id = world.record(request).unwrap().operations[0].operation_id;
+        assert_eq!(
+            envelope.operation_id,
+            Some(operation_id.to_string()),
+            "{what}"
+        );
+        // Never pending, so never listed, and not an operation a read
+        // shows.
+        let repository = world.resolved();
+        assert!(
+            world
+                .service
+                .list_operations(&repository)
+                .unwrap()
+                .items
+                .is_empty(),
+            "{what}"
+        );
+        assert_eq!(
+            world
+                .service
+                .show_operation(&repository, operation_id)
+                .unwrap_err()
+                .code(),
+            ResultCode::OperationNotFound,
+            "{what}"
+        );
+
+        let mutation = abandon(&world.root, &operation_id.to_string());
+        let refused = prepare_with(&world.service, &mutation);
+        assert_eq!(refused.code, ResultCode::InvalidInput, "{what}");
+        assert_eq!(refused.outcome, Outcome::Error, "{what}");
+        assert_eq!(refused.data, None, "{what}");
+        assert!(refused.recovery.is_empty(), "{what}");
+        // And with no preview there is no confirmation to run it with.
+        let unconfirmed = world.execute(REQUEST_4, mutation);
+        assert_eq!(unconfirmed.code, ResultCode::ConfirmationRequired, "{what}");
+        assert!(world.record(REQUEST_4).is_none(), "{what}");
+    }
+    assert_eq!(before, (Everything::of(&world), journal(world.data.path())));
+}
+
 // ---------------------------------------------------------------------
 // The abandoned operation and the requests around it
 // ---------------------------------------------------------------------

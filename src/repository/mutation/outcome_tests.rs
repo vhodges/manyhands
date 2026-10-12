@@ -4,7 +4,7 @@ use crate::{
         IndexPending, OperationId, PrivateKeySourceState, PublicKeyMetadataState, RemoteChange,
         RepositoryError, RepositoryOperation, RepositorySnapshot, SharedKeyId, SharedKeyOwnership,
         SharedKeyRegistration, SnapshotConfiguration, SynchronizationTarget,
-        keys::{KeyMaterialAction, KeyMaterialPhase, KeyMaterialRecovery},
+        keys::{KeyMaterialAction, KeyMaterialPhase, KeyMaterialRecovery, KeyRegistryAction},
         transport::{HostKeyIdentity, SshDirection, SshTransportError},
     },
     results::{CheckpointEffect, DiscoveryEffect, FailureClass, WriteEffect},
@@ -821,18 +821,11 @@ fn synchronization_results(result: &SynchronizationResult) -> usize {
     }
 }
 
-fn register_key_outcomes(outcome: &RegisterSharedKeyOutcome) -> usize {
-    match outcome {
-        RegisterSharedKeyOutcome::Registered(_)
-        | RegisterSharedKeyOutcome::SourceAlreadyRegistered { .. } => 2,
-    }
-}
-
-fn key_selection_outcomes(outcome: &SharedKeySelectionOutcome) -> usize {
-    match outcome {
-        SharedKeySelectionOutcome::Selected(_)
-        | SharedKeySelectionOutcome::Cleared
-        | SharedKeySelectionOutcome::AlreadyCleared => 3,
+fn marked_registry_changes(made: &MarkedRegistryChange) -> usize {
+    match made {
+        MarkedRegistryChange::Recorded(_)
+        | MarkedRegistryChange::Moved
+        | MarkedRegistryChange::NotRegistered => 3,
     }
 }
 
@@ -1106,38 +1099,45 @@ fn every_domain_outcome_has_its_code() {
         synchronization_result_code,
     );
 
+    // A recorded change is `ok` or a no-op by whether it changed
+    // anything, whatever it was asked to do.
+    let recorded = |action, key_id, changed| {
+        MarkedRegistryChange::Recorded(KeyRegistryChange {
+            action,
+            key_id,
+            label: None,
+            public_key_fingerprint: None,
+            changed,
+        })
+    };
+    for (action, key_id) in [
+        (KeyRegistryAction::Import, Some(SharedKeyId::new())),
+        (KeyRegistryAction::Select, Some(SharedKeyId::new())),
+        (KeyRegistryAction::Clear, None),
+    ] {
+        assert_eq!(
+            marked_registry_change_code(&recorded(action, key_id, true)),
+            Code::Ok,
+            "{action:?}"
+        );
+        assert_eq!(
+            marked_registry_change_code(&recorded(action, key_id, false)),
+            Code::AlreadyApplied,
+            "{action:?}"
+        );
+    }
     assert_outcomes(
-        "RegisterSharedKeyOutcome",
+        "MarkedRegistryChange",
         vec![
             (
-                RegisterSharedKeyOutcome::Registered(registration()),
+                recorded(KeyRegistryAction::Select, Some(SharedKeyId::new()), true),
                 Code::Ok,
             ),
-            (
-                RegisterSharedKeyOutcome::SourceAlreadyRegistered {
-                    existing: SharedKeyId::new(),
-                },
-                Code::AlreadyApplied,
-            ),
+            (MarkedRegistryChange::Moved, Code::ExternalChange),
+            (MarkedRegistryChange::NotRegistered, Code::KeyNotFound),
         ],
-        register_key_outcomes,
-        register_key_outcome_code,
-    );
-    assert_outcomes(
-        "SharedKeySelectionOutcome",
-        vec![
-            (
-                SharedKeySelectionOutcome::Selected(registration()),
-                Code::Ok,
-            ),
-            (SharedKeySelectionOutcome::Cleared, Code::Ok),
-            (
-                SharedKeySelectionOutcome::AlreadyCleared,
-                Code::AlreadyApplied,
-            ),
-        ],
-        key_selection_outcomes,
-        key_selection_outcome_code,
+        marked_registry_changes,
+        marked_registry_change_code,
     );
     assert_outcomes(
         "UnregisterSharedKeyOutcome",

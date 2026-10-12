@@ -221,6 +221,19 @@ impl RepositoryService {
 }
 
 impl RepositoryService {
+    /// The change to the key registry recorded against `operation_id`;
+    /// see `keys::recorded_registry_change`.
+    pub(crate) fn key_registry_change(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<keys::KeyRegistryChange>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            keys::recorded_registry_change(connection, operation_id)
+        })
+    }
+}
+
+impl RepositoryService {
     /// What a synchronization recorded of its push; see
     /// `remote::state::lookup_push`.
     pub(crate) fn stored_push(
