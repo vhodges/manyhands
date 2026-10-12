@@ -39,6 +39,8 @@ pub const KEY_DELETION_SCHEMA: &str = "key_deletion_preview.schema.json";
 
 pub const OPERATION_ABANDON_SCHEMA: &str = "operation_abandon_preview.schema.json";
 
+pub const IDENTITY_PREVIEW_SCHEMA: &str = "identity_preview.schema.json";
+
 /// The published schema of the preview `command` gives.
 pub fn preview_schema(command: &str) -> &'static str {
     match command {
@@ -46,6 +48,7 @@ pub fn preview_schema(command: &str) -> &'static str {
         "repo remove" => REPOSITORY_REMOVAL_SCHEMA,
         "key delete" => KEY_DELETION_SCHEMA,
         "operation abandon" => OPERATION_ABANDON_SCHEMA,
+        "repo identity-set" => IDENTITY_PREVIEW_SCHEMA,
         "repo create" | "repo enable" => PREVIEW_SCHEMA,
         // `prepare` gives no preview of any other command.
         other => panic!("{other}: no preview schema"),

@@ -8,5 +8,8 @@
 
 mod support;
 
+#[path = "mutation_bridges/conformance.rs"]
+mod conformance;
+
 #[path = "mutation_bridges/identity.rs"]
 mod identity;

@@ -64,6 +64,7 @@ use bind::{
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repo::RepoBinding,
+    repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
     resume::OperationResumeBinding,
     sync::SyncBinding,
@@ -79,6 +80,7 @@ pub use bind::{
     },
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repo::{RepoCreateInput, RepoEnableInput},
+    repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
     resume::OperationResumeInput,
     sync::{ItemSyncInput, RepoSyncInput},
@@ -87,12 +89,13 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, DocumentMutationDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
-    KeyMutationDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
-    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto,
-    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    SynchronizationMutationDto, TicketMutationDto,
+    CancelDto, DocumentMutationDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
+    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
+    PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
+    RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -401,6 +404,7 @@ pub enum Mutation {
     ItemSync(ItemSyncInput),
     RepoSync(RepoSyncInput),
     OperationResume(OperationResumeInput),
+    RepoIdentitySet(RepoIdentitySetInput),
 }
 
 impl Mutation {
@@ -435,6 +439,7 @@ impl Mutation {
             Self::ItemSync(_) => Command::ItemSync,
             Self::RepoSync(_) => Command::RepoSync,
             Self::OperationResume(_) => Command::OperationResume,
+            Self::RepoIdentitySet(_) => Command::RepoIdentitySet,
         }
     }
 
@@ -450,6 +455,9 @@ impl Mutation {
             Self::KeyDelete(input) => Some(Box::new(KeyDeleteBinding::from(input.clone()))),
             Self::OperationAbandon(input) => {
                 Some(Box::new(OperationAbandonBinding::from(input.clone())))
+            }
+            Self::RepoIdentitySet(input) => {
+                Some(Box::new(RepoIdentityBinding::from(input.clone())))
             }
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
@@ -498,6 +506,7 @@ impl Mutation {
             Self::ItemSync(input) => Box::new(SyncBinding::from(input)),
             Self::RepoSync(input) => Box::new(SyncBinding::from(input)),
             Self::OperationResume(input) => Box::new(OperationResumeBinding::from(input)),
+            Self::RepoIdentitySet(input) => Box::new(RepoIdentityBinding::from(input)),
         }
     }
 }

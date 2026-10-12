@@ -349,3 +349,836 @@ mod domain {
         assert!(matches!(outcome, SetLocalIdentityOutcome::Changed(_)));
     }
 }
+
+mod boundary {
+    use manyhands::{
+        repository::{
+            IdentityPreviewDto, IdentitySource, InitialsSource, LocalIdentityDto, Mutation,
+            MutationDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, RepoIdentitySetInput,
+            RequestState, TicketSaveInput,
+        },
+        results::{Effects, Envelope, Outcome, ResultCode},
+    };
+
+    use super::{
+        super::support::{
+            confirmation::{Desk, IDENTITY_PREVIEW_SCHEMA, START},
+            golden::{self, ContractCase},
+            items::TICKET_A,
+            mutation::{
+                self, REQUEST_1, REQUEST_2, REQUEST_3, World, execute_with, identity_data,
+                recovery_actions,
+            },
+        },
+        *,
+    };
+
+    const IDENTITY_SCHEMA: &str = "identity_mutation.schema.json";
+
+    const NAME: &str = "Ada Example";
+    const EMAIL: &str = "ada@example.invalid";
+
+    fn input(root: &Path, initials: InitialsChange) -> RepoIdentitySetInput {
+        RepoIdentitySetInput {
+            root: root.to_owned(),
+            name: NAME.to_owned(),
+            email: EMAIL.to_owned(),
+            initials,
+        }
+    }
+
+    /// The request the scenarios make: a name and an email, with nothing
+    /// said of initials.
+    fn set(root: &Path) -> Mutation {
+        Mutation::RepoIdentitySet(input(root, InitialsChange::Unchanged))
+    }
+
+    fn set_with(root: &Path, initials: InitialsChange) -> Mutation {
+        Mutation::RepoIdentitySet(input(root, initials))
+    }
+
+    fn details(preview: &PreviewDto) -> &IdentityPreviewDto {
+        match &preview.details {
+            PreviewDetailsDto::Identity(details) => details,
+            other => panic!("not a preview of an identity: {other:?}"),
+        }
+    }
+
+    /// Changes one value of the repository's own configuration by hand,
+    /// as `git config` would.
+    fn by_hand(root: &Path, key: &str, value: &str) {
+        git2::Config::open(&root.join(".git/config"))
+            .unwrap()
+            .set_str(key, value)
+            .unwrap();
+    }
+
+    /// A request that set the identity: a success with no effect, whose
+    /// data is what the repository's own configuration now holds.
+    fn assert_set(envelope: &Envelope<MutationDataDto>, initials: Option<&str>) {
+        assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+        assert_eq!(envelope.outcome, Outcome::Success);
+        assert_eq!(envelope.effects, Effects::not_requested());
+        assert_eq!(envelope.operation_id, None, "the command has no operation");
+        assert!(envelope.recovery.is_empty());
+        let data = identity_data(envelope);
+        assert_eq!(
+            (
+                data.name.as_deref(),
+                data.email.as_deref(),
+                data.initials.as_deref()
+            ),
+            (Some(NAME), Some(EMAIL), initials)
+        );
+    }
+
+    /// Runs in a process of its own: the identity it is shown comes from
+    /// outside the repository.
+    #[test]
+    fn a_preview_shows_what_will_be_written_what_is_there_and_where_the_identity_comes_from() {
+        let Some(home) = git_home::own(
+            "identity::boundary::a_preview_shows_what_will_be_written_what_is_there_and_where_the_identity_comes_from",
+        ) else {
+            return;
+        };
+        fs::write(
+            home.global_file(),
+            "[user]\n\tname = Global Person\n\temail = global@example.invalid\n",
+        )
+        .unwrap();
+        fs::write(home.xdg_file(), "[manyhands]\n\tinitials = xd\n").unwrap();
+        fs::write(home.system_file(), "[user]\n\tname = System Person\n").unwrap();
+        let outside = home.files();
+        let (_fixture, root) = anonymous();
+        let desk = Desk::new();
+        let before = local_file(&root);
+        let request = || set_with(&root, InitialsChange::Set("AE".to_owned()));
+
+        let (confirmation, preview) = desk.preview(&request());
+
+        assert_eq!(preview.command, "repo identity-set");
+        assert_eq!(preview.scope.repository.as_deref(), root.to_str());
+        assert_eq!(
+            preview
+                .effects
+                .iter()
+                .map(|entry| entry.effect)
+                .collect::<Vec<_>>(),
+            [PreviewEffect::IdentityWritten]
+        );
+        let shown = details(&preview);
+        assert_eq!(shown.root, root.to_str().unwrap());
+        // What will be written, the initials in lower case.
+        assert_eq!(
+            (
+                shown.name.as_str(),
+                shown.email.as_str(),
+                shown.initials.as_deref()
+            ),
+            (NAME, EMAIL, Some("ae"))
+        );
+        // What the repository's own configuration holds: nothing.
+        assert_eq!(
+            shown.current,
+            LocalIdentityDto {
+                name: None,
+                email: None,
+                initials: None
+            }
+        );
+        // The identity a commit would carry now, and where it is from.
+        assert_eq!(shown.effective.source, IdentitySource::Global);
+        assert_eq!(shown.effective.name.as_deref(), Some("Global Person"));
+        assert_eq!(
+            shown.effective.email.as_deref(),
+            Some("global@example.invalid")
+        );
+        // Initials set outside the repository are not this repository's.
+        assert_eq!(shown.effective.initials.as_deref(), Some("gp"));
+        assert_eq!(shown.effective.initials_source, InitialsSource::Derived);
+        // A preview writes its confirmation and nothing else.
+        assert_eq!(local_file(&root), before);
+        assert_eq!(home.files(), outside);
+        assert_eq!(desk.request_rows(), 0);
+        assert_eq!(desk.confirmation_rows(), 1);
+
+        let done = desk.execute(REQUEST_1, &confirmation, request());
+
+        assert_set(&done, Some("ae"));
+        assert_eq!(local(&root), held(NAME, EMAIL, Some("ae")));
+        assert_eq!(
+            home.files(),
+            outside,
+            "configuration outside the repository"
+        );
+        let record = desk.record(REQUEST_1).unwrap();
+        assert_eq!(record.state, RequestState::Finished);
+        assert!(record.operations.is_empty());
+        assert_eq!(record.expected_digest, None);
+        // The repository is as little enabled as it was.
+        assert!(!desk.registered(&root));
+        assert!(!root.join(".manyhands").exists());
+        assert_eq!(desk.pending_journal_rows(), 0);
+    }
+
+    #[test]
+    fn what_the_repository_already_holds_is_a_no_op_and_gets_no_confirmation() {
+        git_home::isolated();
+        let plain = Plain::new();
+        by_hand(&plain.root, "user.name", NAME);
+        by_hand(&plain.root, "user.email", EMAIL);
+        let desk = Desk::new();
+        let before = local_file(&plain.root);
+
+        for request in [
+            set(&plain.root),
+            // Initials that are not there are cleared already.
+            set_with(&plain.root, InitialsChange::Clear),
+        ] {
+            let prepared = desk.prepare(&request);
+            assert_eq!(prepared.code, ResultCode::AlreadyApplied);
+            assert_eq!(prepared.outcome, Outcome::Noop);
+            assert!(prepared.data.is_none());
+            assert!(prepared.recovery.is_empty());
+        }
+        assert_eq!(desk.confirmation_rows(), 0);
+        assert_eq!(local_file(&plain.root), before);
+    }
+
+    #[test]
+    fn initials_are_set_cleared_and_left_alone_through_the_boundary() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let run = |request_id: &str, initials: InitialsChange| {
+            let (confirmation, preview) = desk.preview(&set_with(&plain.root, initials.clone()));
+            let shown = details(&preview).initials.clone();
+            let done = desk.execute(request_id, &confirmation, set_with(&plain.root, initials));
+            (shown, done)
+        };
+
+        let (shown, done) = run(REQUEST_1, InitialsChange::Set("Qa7".to_owned()));
+        assert_eq!(shown.as_deref(), Some("qa7"));
+        assert_set(&done, Some("qa7"));
+        assert_eq!(
+            plain.local_config("manyhands.initials").as_deref(),
+            Some("qa7")
+        );
+
+        // Nothing said of them, with the identity set already: they are
+        // what the configuration holds, and the request is a no-op.
+        let unchanged = desk.prepare(&set(&plain.root));
+        assert_eq!(unchanged.code, ResultCode::AlreadyApplied);
+        assert_eq!(
+            plain.local_config("manyhands.initials").as_deref(),
+            Some("qa7")
+        );
+
+        let (shown, done) = run(REQUEST_2, InitialsChange::Clear);
+        assert_eq!(shown, None);
+        assert_set(&done, None);
+        assert_eq!(plain.local_config("manyhands.initials"), None);
+        assert_eq!(plain.local_config("user.name").as_deref(), Some(NAME));
+    }
+
+    #[test]
+    fn initials_the_request_does_not_name_are_shown_and_kept() {
+        git_home::isolated();
+        let plain = Plain::new();
+        by_hand(&plain.root, "manyhands.initials", "zz");
+        let desk = Desk::new();
+
+        let (confirmation, preview) = desk.preview(&set(&plain.root));
+
+        let shown = details(&preview);
+        assert_eq!(shown.initials.as_deref(), Some("zz"));
+        assert_eq!(
+            shown.current,
+            LocalIdentityDto {
+                name: Some("Manyhands Test".to_owned()),
+                email: Some("manyhands-test@example.invalid".to_owned()),
+                initials: Some("zz".to_owned()),
+            }
+        );
+        assert_eq!(shown.effective.source, IdentitySource::Repository);
+        assert_eq!(shown.effective.initials_source, InitialsSource::Repository);
+        let done = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        assert_set(&done, Some("zz"));
+        assert_eq!(local(&plain.root), held(NAME, EMAIL, Some("zz")));
+    }
+
+    #[test]
+    fn an_identity_that_cannot_be_written_is_invalid_input() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let before = local_file(&plain.root);
+        let request = |name: &str, email: &str, initials: InitialsChange| {
+            Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                root: plain.root.clone(),
+                name: name.to_owned(),
+                email: email.to_owned(),
+                initials,
+            })
+        };
+        for (what, request) in [
+            (
+                "an empty name",
+                request("", EMAIL, InitialsChange::Unchanged),
+            ),
+            (
+                "a NUL in the name",
+                request("Ada\0Example", EMAIL, InitialsChange::Unchanged),
+            ),
+            (
+                "a NUL in the email",
+                request(NAME, "ada\0@example.invalid", InitialsChange::Unchanged),
+            ),
+            (
+                "an email without @",
+                request(NAME, "ada.example.invalid", InitialsChange::Unchanged),
+            ),
+            (
+                "an empty email",
+                request(NAME, "", InitialsChange::Unchanged),
+            ),
+            (
+                "initials that are too long",
+                request(NAME, EMAIL, InitialsChange::Set("abcd".to_owned())),
+            ),
+            (
+                "initials that are not ASCII",
+                request(NAME, EMAIL, InitialsChange::Set("éa".to_owned())),
+            ),
+        ] {
+            let prepared = desk.prepare(&request);
+            assert_eq!(prepared.code, ResultCode::InvalidInput, "{what}");
+            assert_eq!(prepared.outcome, Outcome::Error, "{what}");
+            assert!(prepared.data.is_none(), "{what}");
+        }
+        assert_eq!(desk.confirmation_rows(), 0);
+        assert_eq!(local_file(&plain.root), before);
+    }
+
+    #[test]
+    fn a_root_that_is_no_repository_s_own_is_refused_as_what_it_is() {
+        git_home::isolated();
+        let desk = Desk::new();
+        let code = |root: &Path| desk.prepare(&set(root)).code;
+
+        let bare = support::bare_repository();
+        assert_eq!(code(&bare.root), ResultCode::BareRepository);
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(code(directory.path()), ResultCode::NotRepository);
+        assert_eq!(
+            code(&directory.path().join("missing")),
+            ResultCode::InvalidPath
+        );
+        let plain = Plain::new();
+        let outside = tempfile::tempdir().unwrap();
+        let linked = outside.path().join("linked");
+        plain
+            .fixture
+            .repository
+            .worktree("linked", &linked, None)
+            .unwrap();
+        assert_eq!(code(&linked), ResultCode::InvalidPath);
+        assert_eq!(desk.confirmation_rows(), 0);
+
+        // An execute of one presents no confirmation that could be its
+        // own, and is refused for that before its root is looked at.
+        let unconfirmed = execute_with(&desk.service, REQUEST_1, set(&bare.root));
+        assert_eq!(unconfirmed.code, ResultCode::ConfirmationRequired);
+        desk.assert_nothing_left(REQUEST_1);
+    }
+
+    #[test]
+    fn a_failure_after_the_first_key_leaves_the_file_as_it_was_and_nothing_of_the_request() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let mut desk = Desk::new();
+        let request = || set_with(&plain.root, InitialsChange::Set("ae".to_owned()));
+        let (confirmation, _) = desk.preview(&request());
+        let before = local_file(&plain.root);
+        desk.fail_once_at(FailurePoint::AfterLocalIdentityName);
+
+        let failed = desk.execute(REQUEST_1, &confirmation, request());
+
+        assert_eq!(failed.code, ResultCode::InternalError);
+        assert_eq!(failed.outcome, Outcome::Error);
+        assert_eq!(failed.effects, Effects::not_requested());
+        assert!(failed.data.is_none());
+        assert!(failed.recovery.is_empty(), "{:?}", failed.recovery);
+        assert_eq!(local_file(&plain.root), before, "restored byte for byte");
+        desk.assert_nothing_left(REQUEST_1);
+
+        // The confirmation was released with the record: the request,
+        // sent again, is a new one and writes.
+        let done = desk.execute(REQUEST_1, &confirmation, request());
+        assert_set(&done, Some("ae"));
+    }
+
+    #[test]
+    fn a_local_value_changed_after_the_preview_is_an_external_change() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (stale, _) = desk.preview(&set(&plain.root));
+        by_hand(&plain.root, "user.email", "later@example.invalid");
+        let before = local_file(&plain.root);
+
+        let changed = desk.execute(REQUEST_1, &stale, set(&plain.root));
+
+        assert_eq!(changed.code, ResultCode::ExternalChange);
+        assert_eq!(changed.outcome, Outcome::Blocked);
+        assert_eq!(recovery_actions(&changed), ["request.prepare"]);
+        assert!(changed.data.is_none());
+        assert_eq!(local_file(&plain.root), before);
+        desk.assert_nothing_left(REQUEST_1);
+
+        // Initials count as much as the name and the email.
+        by_hand(&plain.root, "user.email", "manyhands-test@example.invalid");
+        by_hand(&plain.root, "manyhands.initials", "zz");
+        let initials = desk.execute(REQUEST_1, &stale, set(&plain.root));
+        assert_eq!(initials.code, ResultCode::ExternalChange);
+        desk.assert_nothing_left(REQUEST_1);
+
+        // A new preview shows what is there now, and its request writes.
+        let (fresh, preview) = desk.preview(&set(&plain.root));
+        assert_eq!(details(&preview).current.initials.as_deref(), Some("zz"));
+        assert_set(
+            &desk.execute(REQUEST_1, &fresh, set(&plain.root)),
+            Some("zz"),
+        );
+    }
+
+    /// The binding's own check on re-entry: the request was accepted,
+    /// and died before it wrote.
+    #[test]
+    fn a_retry_that_finds_another_identity_than_the_one_previewed_is_an_external_change() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let mut desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        desk.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+        let died = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        assert_eq!(died.code, ResultCode::InternalError);
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Accepted)
+        );
+        // Someone sets another identity before the retry.
+        by_hand(&plain.root, "user.name", "Later Person");
+        let before = local_file(&plain.root);
+        desk.reopen();
+
+        let retry = execute_with(&desk.service, REQUEST_1, set(&plain.root));
+
+        assert_eq!(retry.code, ResultCode::ExternalChange);
+        assert_eq!(retry.outcome, Outcome::Blocked);
+        assert_eq!(recovery_actions(&retry), ["request.prepare"]);
+        assert_eq!(local_file(&plain.root), before, "the later identity stands");
+        desk.assert_nothing_left(REQUEST_1);
+        // Sent once more with the consent it had, it is a new request,
+        // and is refused for the same reason.
+        let again = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        assert_eq!(again.code, ResultCode::ExternalChange);
+        assert_eq!(local_file(&plain.root), before);
+        desk.assert_nothing_left(REQUEST_1);
+    }
+
+    #[test]
+    fn an_identity_changed_between_the_observation_and_the_write_is_not_written_over() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let root = plain.root.clone();
+        // Runs once the request is accepted, before its domain call.
+        desk.service
+            .set_request_hook_for_testing(move || by_hand(&root, "user.name", "Later Person"));
+
+        let changed = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+
+        assert_eq!(changed.code, ResultCode::ExternalChange);
+        assert_eq!(recovery_actions(&changed), ["request.prepare"]);
+        assert_eq!(
+            plain.local_config("user.name").as_deref(),
+            Some("Later Person")
+        );
+        assert_eq!(
+            plain.local_config("user.email").as_deref(),
+            Some("manyhands-test@example.invalid")
+        );
+        desk.assert_nothing_left(REQUEST_1);
+    }
+
+    #[test]
+    fn a_repository_another_operation_holds_is_busy_and_is_left_as_it_is() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let before = local_file(&plain.root);
+        let held = RepositoryService::hold_lease_for_testing(
+            &plain.root,
+            desk.data.path(),
+            manyhands::repository::LeaseKind::Repository,
+        )
+        .unwrap();
+
+        let busy = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+
+        assert_eq!(busy.code, ResultCode::Busy);
+        assert_eq!(busy.outcome, Outcome::Error);
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        assert_eq!(local_file(&plain.root), before);
+        desk.assert_nothing_left(REQUEST_1);
+        // Once the repository is let go, the same request writes.
+        drop(held);
+        assert_set(
+            &desk.execute(REQUEST_1, &confirmation, set(&plain.root)),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_request_whose_result_was_lost_after_it_wrote_is_a_no_op_on_retry() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let mut desk = Desk::new();
+        let request = || set_with(&plain.root, InitialsChange::Set("ae".to_owned()));
+        let (confirmation, _) = desk.preview(&request());
+        desk.fail_once_at(FailurePoint::BeforeRequestSettlement);
+        let lost = desk.execute(REQUEST_1, &confirmation, request());
+        assert_eq!(lost.code, ResultCode::InternalError);
+        // The identity is written, and the record does not say so.
+        assert_eq!(local(&plain.root), held(NAME, EMAIL, Some("ae")));
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Accepted)
+        );
+        let written = local_file(&plain.root);
+        desk.reopen();
+
+        let retry = execute_with(&desk.service, REQUEST_1, request());
+
+        assert_eq!(retry.code, ResultCode::AlreadyApplied, "{}", retry.message);
+        assert_eq!(retry.outcome, Outcome::Noop);
+        assert_eq!(retry.effects, Effects::not_requested());
+        assert!(retry.recovery.is_empty());
+        let data = identity_data(&retry);
+        assert_eq!(
+            (
+                data.name.as_deref(),
+                data.email.as_deref(),
+                data.initials.as_deref()
+            ),
+            (Some(NAME), Some(EMAIL), Some("ae"))
+        );
+        assert_eq!(local_file(&plain.root), written, "nothing is written twice");
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Finished)
+        );
+        // And that is the request's result from then on.
+        let replay = execute_with(&desk.service, REQUEST_1, request());
+        assert_eq!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&retry).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_request_that_died_before_it_wrote_is_completed_by_its_retry_however_old() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let mut desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        desk.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+        let died = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        // What a call that died returns is no result of the request.
+        assert_eq!(died.code, ResultCode::InternalError);
+        assert_eq!(
+            plain.local_config("user.name").as_deref(),
+            Some("Manyhands Test")
+        );
+        // Long after the confirmation would have expired for a new
+        // request: it is this request's.
+        desk.clock.set(START + 24 * 60 * 60);
+        desk.reopen();
+
+        let retry = execute_with(&desk.service, REQUEST_1, set(&plain.root));
+
+        assert_set(&retry, None);
+        assert_eq!(local(&plain.root), held(NAME, EMAIL, None));
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Finished)
+        );
+    }
+
+    #[test]
+    fn a_retry_that_fails_keeps_its_record_and_is_what_goes_on() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let mut desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        desk.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+        desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        let before = local_file(&plain.root);
+        desk.fail_once_at(FailurePoint::AfterLocalIdentityName);
+
+        let failed = execute_with(&desk.service, REQUEST_1, set(&plain.root));
+
+        assert_eq!(failed.code, ResultCode::InternalError);
+        assert_eq!(failed.outcome, Outcome::Error);
+        assert_eq!(recovery_actions(&failed), ["request.retry"]);
+        assert_eq!(local_file(&plain.root), before, "restored byte for byte");
+        assert_eq!(
+            desk.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Accepted),
+            "a retry does not give its record up"
+        );
+        desk.reopen();
+        assert_set(
+            &execute_with(&desk.service, REQUEST_1, set(&plain.root)),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_finished_request_is_replayed_and_a_changed_input_is_a_mismatch() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let done = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        assert_set(&done, None);
+        // The identity changes afterwards: a replay neither looks nor
+        // writes.
+        by_hand(&plain.root, "user.name", "Later Person");
+        let later = local_file(&plain.root);
+        let record = desk.record(REQUEST_1);
+
+        let replay = execute_with(&desk.service, REQUEST_1, set(&plain.root));
+
+        assert_eq!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&done).unwrap()
+        );
+        assert_eq!(local_file(&plain.root), later);
+        for changed in [
+            Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                name: "Ada Other".to_owned(),
+                ..input(&plain.root, InitialsChange::Unchanged)
+            }),
+            Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                email: "other@example.invalid".to_owned(),
+                ..input(&plain.root, InitialsChange::Unchanged)
+            }),
+            // Initials that are cleared are not initials left alone.
+            set_with(&plain.root, InitialsChange::Clear),
+            set_with(&plain.root, InitialsChange::Set("ae".to_owned())),
+        ] {
+            let mismatch = desk.execute(REQUEST_1, &confirmation, changed);
+            assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+            assert_eq!(mismatch.outcome, Outcome::Error);
+        }
+        assert_eq!(desk.record(REQUEST_1), record);
+        assert_eq!(local_file(&plain.root), later);
+        assert_eq!(desk.request_rows(), 1);
+    }
+
+    #[test]
+    fn a_save_that_stopped_for_an_identity_succeeds_once_one_is_set() {
+        git_home::isolated();
+        let world = World::new();
+        let mut own = git2::Config::open(&world.root.join(".git/config")).unwrap();
+        own.remove("user.name").unwrap();
+        own.remove("user.email").unwrap();
+        drop(own);
+        let save = |world: &World| {
+            Mutation::TicketSave(TicketSaveInput {
+                draft: World::draft(mutation::TITLE, mutation::BODY),
+                ..world.save_input(TICKET_A, &world.token(TICKET_A))
+            })
+        };
+
+        let stopped = world.execute(REQUEST_1, save(&world));
+
+        assert_eq!(stopped.code, ResultCode::IdentityRequired);
+        assert_eq!(recovery_actions(&stopped), ["repo.identity_set"]);
+        assert_eq!(
+            stopped.recovery[0].arguments.get("root"),
+            Some(&serde_json::Value::from(world.root.to_str().unwrap()))
+        );
+        assert_eq!(world.branch_commits(TICKET_A), 0);
+
+        // The action the result offers, on a repository that is enabled.
+        let preview = world.service.prepare(&set(&world.root));
+        assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+        let preview = preview.data.unwrap();
+        assert_eq!(details(&preview).effective.source, IdentitySource::None);
+        let done = mutation::execute_confirmed(
+            &world.service,
+            REQUEST_2,
+            &preview.confirmation_id,
+            set(&world.root),
+        );
+        assert_set(&done, None);
+
+        let saved = world.execute(REQUEST_3, save(&world));
+
+        assert_eq!(saved.outcome, Outcome::Success, "{}", saved.message);
+        assert_eq!(world.branch_commits(TICKET_A), 1);
+        let repository = git2::Repository::open(&world.root).unwrap();
+        let commit = repository
+            .find_commit(world.branch_tip(TICKET_A).unwrap())
+            .unwrap();
+        assert_eq!(commit.author().name(), Some(NAME));
+        assert_eq!(commit.author().email(), Some(EMAIL));
+        let identity = world
+            .service
+            .repository_identity(&world.resolved())
+            .unwrap();
+        assert_eq!(identity.source, IdentitySource::Repository);
+        assert_eq!(identity.initials.as_deref(), Some("ae"));
+        assert_eq!(identity.initials_source, InitialsSource::Derived);
+    }
+
+    /// Runs in a process of its own: it plants a credential outside the
+    /// repository as well as in it.
+    #[test]
+    fn no_credential_of_any_configuration_reaches_an_envelope_or_a_record() {
+        let Some(home) = git_home::own(
+            "identity::boundary::no_credential_of_any_configuration_reaches_an_envelope_or_a_record",
+        ) else {
+            return;
+        };
+        fs::write(
+            home.global_file(),
+            format!(
+                "[user]\n\tname = Global Person\n\temail = global@example.invalid\n\
+                 [credential]\n\thelper = {GLOBAL_SENTINEL}\n"
+            ),
+        )
+        .unwrap();
+        let (_fixture, root) = anonymous();
+        let mut source = local_file(&root);
+        source.extend_from_slice(
+            format!(
+                "[remote \"origin\"]\n\turl = https://user:{LOCAL_SENTINEL}@example.invalid/x.git\n"
+            )
+            .as_bytes(),
+        );
+        fs::write(root.join(".git/config"), &source).unwrap();
+        let sentinels = [LOCAL_SENTINEL, GLOBAL_SENTINEL];
+        let scan = |envelope: serde_json::Value| {
+            assert_eq!(golden::find_sentinel(&envelope, &sentinels), None);
+        };
+        let mut desk = Desk::new();
+
+        let preview = desk.prepare(&set(&root));
+        let confirmation = preview.data.as_ref().unwrap().confirmation_id.clone();
+        scan(serde_json::to_value(&preview).unwrap());
+        // A call that fails reads the file whole, to put it back.
+        desk.fail_once_at(FailurePoint::AfterLocalIdentityName);
+        let failed = desk.execute(REQUEST_1, &confirmation, set(&root));
+        assert_eq!(failed.code, ResultCode::InternalError);
+        assert_eq!(local_file(&root), source);
+        scan(serde_json::to_value(&failed).unwrap());
+        let done = desk.execute(REQUEST_1, &confirmation, set(&root));
+        assert_set(&done, None);
+        scan(serde_json::to_value(&done).unwrap());
+        scan(serde_json::to_value(execute_with(&desk.service, REQUEST_1, set(&root))).unwrap());
+        scan(serde_json::to_value(desk.prepare(&set(&root))).unwrap());
+        scan(
+            serde_json::to_value(
+                desk.service
+                    .show_request(manyhands::repository::RequestId::parse(REQUEST_1).unwrap()),
+            )
+            .unwrap(),
+        );
+
+        mutation::assert_request_stores_exclude(desk.data.path(), &sentinels);
+        // The scan can fail: both credentials are in files the command
+        // read, and the stores are where it keeps what it may keep.
+        assert!(String::from_utf8_lossy(&local_file(&root)).contains(LOCAL_SENTINEL));
+        assert!(
+            String::from_utf8_lossy(&fs::read(home.global_file()).unwrap())
+                .contains(GLOBAL_SENTINEL)
+        );
+        assert!(mutation::find_stored_sentinel(desk.data.path(), &[NAME]).is_some());
+    }
+
+    /// Checks an envelope of `repo identity-set`, or of its preview,
+    /// against its fixture. What differs from run to run is replaced.
+    fn assert_golden<T: serde::Serialize>(
+        name: &str,
+        root: &Path,
+        data_schema: &str,
+        envelope: &Envelope<T>,
+    ) {
+        let value = serde_json::to_value(envelope).unwrap();
+        let mut placeholders = vec![(root.to_str().unwrap(), "<root>")];
+        if let Some(confirmation) = value
+            .pointer("/data/confirmation_id")
+            .and_then(|found| found.as_str())
+        {
+            placeholders.push((confirmation, "<confirmation>"));
+        }
+        mutation::assert_contract(
+            &ContractCase {
+                name,
+                data_schema: (!value["data"].is_null()).then_some(data_schema),
+                placeholders: &placeholders,
+                sentinels: &[],
+            },
+            envelope,
+        );
+    }
+
+    #[test]
+    fn a_repo_identity_set_and_its_preview_match_their_schemas_and_goldens() {
+        git_home::isolated();
+        let plain = Plain::new();
+        by_hand(&plain.root, "manyhands.initials", "mt");
+        // The clock stands still, so the preview's expiry is fixed.
+        let desk = Desk::new();
+        let request = || set_with(&plain.root, InitialsChange::Set("AE".to_owned()));
+
+        let stale = desk.service.prepare(&request());
+        assert_eq!(stale.outcome, Outcome::Success);
+        assert_golden(
+            "repo_identity_set_preview",
+            &plain.root,
+            IDENTITY_PREVIEW_SCHEMA,
+            &stale,
+        );
+        let stale = stale.data.unwrap().confirmation_id;
+        by_hand(&plain.root, "user.email", "later@example.invalid");
+        let changed = desk.execute(REQUEST_1, &stale, request());
+        assert_eq!(changed.code, ResultCode::ExternalChange);
+        assert_golden(
+            "repo_identity_set_external_change",
+            &plain.root,
+            IDENTITY_SCHEMA,
+            &changed,
+        );
+        by_hand(&plain.root, "user.email", "manyhands-test@example.invalid");
+
+        let done = desk.execute(REQUEST_1, &stale, request());
+        assert_set(&done, Some("ae"));
+        assert_golden("repo_identity_set", &plain.root, IDENTITY_SCHEMA, &done);
+
+        let noop = desk.service.prepare(&request());
+        assert_eq!(noop.outcome, Outcome::Noop);
+        assert_golden(
+            "repo_identity_set_preview_noop",
+            &plain.root,
+            IDENTITY_PREVIEW_SCHEMA,
+            &noop,
+        );
+    }
+}

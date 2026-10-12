@@ -14,9 +14,9 @@ use std::{
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
-        DocumentMutationDto, DocumentSaveInput, KeyGenerateInput, KeyMutationDto, Mutation,
-        MutationCall, MutationDataDto, NoProgress, OperationFamily, OperationId,
-        OperationMutationDto, ProgressEvent, ProgressSink, RegisterSharedKeyOutcome,
+        DocumentMutationDto, DocumentSaveInput, IdentityMutationDto, KeyGenerateInput,
+        KeyMutationDto, Mutation, MutationCall, MutationDataDto, NoProgress, OperationFamily,
+        OperationId, OperationMutationDto, ProgressEvent, ProgressSink, RegisterSharedKeyOutcome,
         RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto, RepositoryService,
         RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership, TicketCreateInput,
         TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
@@ -220,6 +220,10 @@ pub const CASES: &[&str] = &[
     "repo_enable_preview",
     "repo_enable_preview_noop",
     "repo_enable_registration_pending",
+    "repo_identity_set",
+    "repo_identity_set_external_change",
+    "repo_identity_set_preview",
+    "repo_identity_set_preview_noop",
     "repo_remove",
     "repo_remove_preview",
     "repo_remove_preview_noop",
@@ -728,6 +732,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Identity(_) => panic!("an identity's data"),
     }
 }
 
@@ -740,6 +745,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Identity(_) => panic!("an identity's data"),
     }
 }
 
@@ -856,6 +862,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Identity(_) => panic!("an identity's data"),
     }
 }
 
@@ -868,6 +875,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Identity(_) => panic!("an identity's data"),
     }
 }
 
@@ -878,6 +886,20 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Operation(_) => panic!("an operation's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Identity(_) => panic!("an identity's data"),
+    }
+}
+
+/// What a `repo identity-set` reported about the identity.
+pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationDto {
+    match envelope.data.as_ref().expect("identity data") {
+        MutationDataDto::Identity(data) => data,
+        MutationDataDto::Document(_) => panic!("a document's data"),
+        MutationDataDto::Ticket(_) => panic!("a ticket's data"),
+        MutationDataDto::Remote(_) => panic!("a remote's data"),
+        MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }

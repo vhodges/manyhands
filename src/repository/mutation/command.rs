@@ -56,6 +56,7 @@ commands! {
     ItemSync => "item sync",
     RepoSync => "repo sync",
     OperationResume => "operation resume",
+    RepoIdentitySet => "repo identity-set",
 }
 
 impl Command {
@@ -111,6 +112,11 @@ impl Command {
             // its own ID, in its own journal, and the resume's record
             // holds none.
             Self::OperationResume => false,
+            // A few keys of Git configuration, written under the
+            // repository lease and put back if one of them fails: no
+            // operation ID and no row. What shows the work to be done
+            // is the configuration itself.
+            Self::RepoIdentitySet => false,
         }
     }
 
@@ -144,7 +150,8 @@ impl Command {
             | Self::OperationAbandon
             | Self::ItemSync
             | Self::RepoSync
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            | Self::RepoIdentitySet => false,
         }
     }
 
@@ -177,7 +184,8 @@ impl Command {
             | Self::OperationAbandon
             | Self::ItemSync
             | Self::RepoSync
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            | Self::RepoIdentitySet => false,
         }
     }
 
@@ -209,7 +217,8 @@ impl Command {
             | Self::OperationAbandon
             | Self::ItemSync
             | Self::RepoSync
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            | Self::RepoIdentitySet => false,
         }
     }
 
@@ -243,7 +252,8 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
-            | Self::OperationAbandon => false,
+            | Self::OperationAbandon
+            | Self::RepoIdentitySet => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -285,7 +295,8 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
-            | Self::OperationAbandon => false,
+            | Self::OperationAbandon
+            | Self::RepoIdentitySet => false,
         }
     }
 
@@ -316,7 +327,8 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
-            | Self::OperationAbandon => ProgressStage::Writing,
+            | Self::OperationAbandon
+            | Self::RepoIdentitySet => ProgressStage::Writing,
         }
     }
 
@@ -332,7 +344,8 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
-            | Self::OperationAbandon => true,
+            | Self::OperationAbandon
+            | Self::RepoIdentitySet => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -390,6 +403,7 @@ mod tests {
         assert_eq!(Command::ItemSync.name(), "item sync");
         assert_eq!(Command::RepoSync.name(), "repo sync");
         assert_eq!(Command::OperationResume.name(), "operation resume");
+        assert_eq!(Command::RepoIdentitySet.name(), "repo identity-set");
     }
 
     #[test]
@@ -442,6 +456,7 @@ mod tests {
                         | Command::RepoRemove
                         | Command::KeyDelete
                         | Command::OperationAbandon
+                        | Command::RepoIdentitySet
                 ),
                 "{command:?}"
             );
@@ -449,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_single_transaction_that_is_never_made_twice_has_no_operation() {
+    fn only_a_command_whose_work_no_journal_records_has_no_operation() {
         for command in Command::ALL {
             // The removal of a key, which is never made twice, and an
             // abandon, which closes another request's operation and has
@@ -461,9 +476,12 @@ mod tests {
             // A resume takes up another request's operation, and has
             // none of its own either.
             let names_another_s = command == Command::OperationResume;
+            // An identity is Git configuration, written under the
+            // repository lease with no row.
+            let unjournaled = command == Command::RepoIdentitySet;
             assert_eq!(
                 command.has_operation(),
-                !single_transaction && !names_another_s,
+                !single_transaction && !names_another_s && !unjournaled,
                 "{command:?}"
             );
         }

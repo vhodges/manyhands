@@ -37,6 +37,7 @@ pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod remote;
 pub(crate) mod repo;
+pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
 pub(crate) mod resume;
 pub(crate) mod save;
@@ -939,6 +940,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // this is not reached, and nothing is claimed. What the
         // operation it names did is that operation's request's to say.
         Some(Command::OperationResume) => Recorded::nothing(),
+        // An identity has no operation either: this is not reached, and
+        // nothing is claimed. A call that could not put the
+        // configuration file back says so in its own answer.
+        Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

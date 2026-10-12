@@ -7,7 +7,7 @@ use serde::{Serialize, Serializer};
 
 use super::command::Command;
 use crate::{
-    repository::{OperationAction, OperationFamily},
+    repository::{IdentityDto, OperationAction, OperationFamily},
     results::{Effects, Outcome, ResultCode, Scope, contract_enum},
 };
 
@@ -191,6 +191,42 @@ pub enum PreviewDetailsDto {
     RepositoryRemoval(RepositoryRemovalPreviewDto),
     KeyDeletion(KeyDeletionPreviewDto),
     OperationAbandon(OperationAbandonPreviewDto),
+    Identity(IdentityPreviewDto),
+}
+
+/// What a repository's own Git configuration holds of an identity. A
+/// value held at any other level of configuration is not here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LocalIdentityDto {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    /// `manyhands.initials`, as it is written: it need not be initials a
+    /// short code can be composed with.
+    pub initials: Option<String>,
+}
+
+/// What a preview of `repo identity-set` shows: what the repository's
+/// own Git configuration will hold, what it holds now, and the identity
+/// a commit would carry now. No other configuration is written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct IdentityPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// The name and the email that will be written.
+    pub name: String,
+    pub email: String,
+    /// The initials the repository's own configuration will hold: the
+    /// ones the request sets, in lower case, or the ones it holds now
+    /// when the request says nothing of them. Null when it will hold
+    /// none: the request clears them, or says nothing and none are set.
+    pub initials: Option<String>,
+    /// What the repository's own configuration holds now.
+    pub current: LocalIdentityDto,
+    /// The identity a commit would carry now, with the level of
+    /// configuration it comes from, and the initials a short code would
+    /// be composed with. The command changes it only through the
+    /// repository's own configuration.
+    pub effective: IdentityDto,
 }
 
 /// What a preview of `operation abandon` shows: the pending operation
@@ -321,6 +357,36 @@ pub enum MutationDataDto {
     Key(KeyMutationDto),
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
+    Identity(IdentityMutationDto),
+}
+
+/// What `repo identity-set` reports: the identity the repository's own
+/// Git configuration holds once the request is done, whether the request
+/// wrote it or found it there. Every effect of the command is
+/// `not_requested`: this, with the outcome, is what says what it did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct IdentityMutationDto {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    /// `manyhands.initials`. Null when the configuration holds none.
+    pub initials: Option<String>,
+}
+
+impl IdentityMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        Some(Self {
+            name: text("name")?,
+            email: text("email")?,
+            initials: text("initials")?,
+        })
+    }
 }
 
 /// What a synchronization that stopped for its host reports: the host
@@ -650,7 +716,8 @@ impl MutationDataDto {
             | Self::Ticket(_)
             | Self::Remote(_)
             | Self::Key(_)
-            | Self::Operation(_) => None,
+            | Self::Operation(_)
+            | Self::Identity(_) => None,
         }
     }
 
@@ -675,6 +742,9 @@ impl MutationDataDto {
             | Command::KeyDelete => KeyMutationDto::from_stored(stored).map(Self::Key),
             Command::OperationAbandon => {
                 OperationMutationDto::from_stored(stored).map(Self::Operation)
+            }
+            Command::RepoIdentitySet => {
+                IdentityMutationDto::from_stored(stored).map(Self::Identity)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for.

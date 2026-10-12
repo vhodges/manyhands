@@ -13,7 +13,7 @@
 //!    one, as `not_confirmable`; either way no record is left.
 //!
 //! A row is a fixture and the four requests the rules make of it. The
-//! rows are spread over three test targets, because the fixtures are:
+//! rows are spread over four test targets, because the fixtures are:
 //! `HOMES` says which target holds the row of each command, and `run`,
 //! which each of those targets calls with its rows, fails for a bound
 //! command that has no home, for a command of the target that has no
@@ -21,9 +21,9 @@
 //! be driven through is an `Expect::Exempt` in its row, with the reason,
 //! and is printed when the table runs.
 //!
-//! Nothing here names a type of the library: one of the three targets
+//! Nothing here names a type of the library: one of the four targets
 //! compiles the library as a module of its own, so its types are not
-//! those of the other two. A row gives its envelopes as the JSON they
+//! those of the others. A row gives its envelopes as the JSON they
 //! serialize to.
 #![allow(dead_code)]
 
@@ -39,12 +39,15 @@ pub enum Home {
     Confirmation,
     /// `tests/mutation_remote`: a command that needs a server.
     Remote,
+    /// `tests/mutation_bridges`: a bridge, whose tests keep to a Git
+    /// home of their own.
+    Bridges,
 }
 
 /// Where the row of every bound command is. `run` fails when this is
 /// not exactly the bound commands, so a command that is built and has
-/// no home here fails all three targets.
-pub const HOMES: [(&str, Home); 24] = [
+/// no home here fails all four targets.
+pub const HOMES: [(&str, Home); 25] = [
     ("document create", Home::Replay),
     ("document save", Home::Replay),
     ("document move", Home::Replay),
@@ -69,6 +72,7 @@ pub const HOMES: [(&str, Home); 24] = [
     ("operation abandon", Home::Confirmation),
     ("item sync", Home::Remote),
     ("repo sync", Home::Remote),
+    ("repo identity-set", Home::Bridges),
 ];
 
 /// The request IDs the rules use. No fixture uses them.
