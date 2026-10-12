@@ -83,12 +83,50 @@ pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
 /// index hand-off, which is the one effect either has: a remote is no
 /// canonical content and no commit. An operation that changed the remote
 /// and ended ran its hand-off, and one that says its hand-off is pending
-/// still owes it. One that found nothing to change asked for none.
-fn hand_off(outcome: &RemoteOutcome) -> DiscoveryEffect {
+/// still owes it.
+///
+/// One that found nothing to change asked for none, unless it took up a
+/// row that was pending: the domain runs the hand-off such a row owes
+/// before it reports no change, so the hand-off ran. `taken_up` says the
+/// row was pending before the call.
+fn hand_off(outcome: &RemoteOutcome, taken_up: bool) -> DiscoveryEffect {
     match outcome {
         RemoteOutcome::Changed => DiscoveryEffect::Current,
+        RemoteOutcome::NoChange if taken_up => DiscoveryEffect::Current,
         RemoteOutcome::NoChange => DiscoveryEffect::NotRequested,
         RemoteOutcome::IndexPending { authoritative: _ } => DiscoveryEffect::Pending,
+    }
+}
+
+/// Whether the request's operation has a pending row, read before the
+/// domain call of a request that is entered again: what that call takes
+/// up. A row that cannot be read is not taken to be pending, and the
+/// result then says no more than it did.
+fn taken_up(service: &RepositoryService, accepted: &Accepted) -> bool {
+    match accepted.journal_row(service) {
+        Some(JournalRow::Pending(_)) => true,
+        Some(
+            JournalRow::Absent
+            | JournalRow::Final {
+                kind: _,
+                owes_work: _,
+                checkpointed: _,
+            },
+        )
+        | None => false,
+    }
+}
+
+/// What a call that stopped with an error says of the index hand-off.
+/// `changed` is whether the remote was added or removed with the
+/// operation not ended: the hand-off is then owed, and the result says
+/// so, as it does for any change whose hand-off has not run. A call that
+/// stopped with nothing changed asked for none.
+fn owed_hand_off(changed: bool) -> DiscoveryEffect {
+    if changed {
+        DiscoveryEffect::Pending
+    } else {
+        DiscoveryEffect::NotRequested
     }
 }
 
@@ -171,7 +209,7 @@ impl RemoteAddBinding {
 
     /// The one domain call, under the recorded operation ID, and what it
     /// came to.
-    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+    fn call(&self, service: &RepositoryService, accepted: &Accepted, taken_up: bool) -> Ran {
         let result = service.add_remote(AddRemoteRequest {
             root: accepted.root(),
             name: self.name.clone(),
@@ -181,7 +219,7 @@ impl RemoteAddBinding {
         match result {
             Ok(outcome) => {
                 let code = outcome::remote_outcome_code(&outcome);
-                let discovery = hand_off(&outcome);
+                let discovery = hand_off(&outcome, taken_up);
                 let (added, standing) = match outcome {
                     RemoteOutcome::Changed => (true, Standing::Final),
                     RemoteOutcome::NoChange => (false, Standing::Final),
@@ -203,8 +241,9 @@ impl RemoteAddBinding {
                 // location.
                 let code = outcome::repository_error_code(error.kind);
                 let journal = accepted.journal_row(service);
+                let changed = changed_and_unfinished(journal.as_ref());
                 Ran {
-                    answer: self.answer(code, changed_and_unfinished(journal.as_ref())),
+                    answer: self.ended_answer(code, changed, owed_hand_off(changed)),
                     standing: Standing::Stopped { journal },
                 }
             }
@@ -269,7 +308,7 @@ impl Binding for RemoteAddBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, false)
     }
 
     /// A row that has completed is answered here, with no domain call,
@@ -362,7 +401,7 @@ impl Binding for RemoteAddBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, taken_up(call.service, accepted))
     }
 }
 
@@ -1167,7 +1206,7 @@ impl RemoteRemoveBinding {
 
     /// The one domain call, under the recorded operation ID, and what it
     /// came to.
-    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+    fn call(&self, service: &RepositoryService, accepted: &Accepted, taken_up: bool) -> Ran {
         let root = accepted.root();
         let result = service.remove_remote(RemoveRemoteRequest {
             root: root.clone(),
@@ -1177,7 +1216,7 @@ impl RemoteRemoveBinding {
         match result {
             Ok(outcome) => {
                 let code = outcome::remote_outcome_code(&outcome);
-                let discovery = hand_off(&outcome);
+                let discovery = hand_off(&outcome, taken_up);
                 let (removed, standing) = match outcome {
                     RemoteOutcome::Changed => (true, Standing::Final),
                     RemoteOutcome::NoChange => (false, Standing::Final),
@@ -1199,8 +1238,9 @@ impl RemoteRemoveBinding {
                 // location.
                 let code = outcome::repository_error_code(error.kind);
                 let journal = accepted.journal_row(service);
+                let removed = self.removed_and_unfinished(&root, journal.as_ref());
                 Ran {
-                    answer: self.answer(code, self.removed_and_unfinished(&root, journal.as_ref())),
+                    answer: self.ended_answer(code, removed, owed_hand_off(removed)),
                     standing: Standing::Stopped { journal },
                 }
             }
@@ -1339,7 +1379,7 @@ impl Binding for RemoteRemoveBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, false)
     }
 
     /// In order:
@@ -1373,7 +1413,7 @@ impl Binding for RemoteRemoveBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call.service, accepted, taken_up(call.service, accepted))
     }
 }
 

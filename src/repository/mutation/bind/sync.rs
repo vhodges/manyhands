@@ -862,16 +862,28 @@ impl SyncBinding {
 /// remote current and be finished as a no-op, for a request that
 /// published. The same request is answered from the row.
 fn kept_for_its_result(ran: Ran) -> Ran {
-    let Ran { answer, standing } = ran;
+    let Ran {
+        mut answer,
+        standing,
+    } = ran;
     let standing = match standing {
         Standing::Stopped {
             journal:
                 Some(JournalRow::Final {
                     kind: FinalKind::Completed,
-                    owes_work: _,
+                    owes_work,
                     checkpointed: _,
                 }),
-        } => Standing::Unconfirmed,
+        } => {
+            // What the call saw of the publication says the hand-off is
+            // pending, which is all a call that stopped can know. The
+            // row knows more: completed and owing no work, its hand-off
+            // ran.
+            if !owes_work && answer.effects.discovery == DiscoveryEffect::Pending {
+                answer.effects.discovery = DiscoveryEffect::Current;
+            }
+            Standing::Unconfirmed
+        }
         Standing::Stopped {
             journal:
                 Some(

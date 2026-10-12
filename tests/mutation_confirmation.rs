@@ -2792,6 +2792,26 @@ fn assert_noop(envelope: &Envelope<MutationDataDto>) {
     assert!(envelope.recovery.is_empty());
 }
 
+/// A no-op by what the row says, reached under a row that was pending:
+/// the hand-off that row owed ran, and the result says so.
+fn assert_noop_whose_hand_off_ran(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        envelope.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        envelope.message
+    );
+    assert_eq!(envelope.outcome, Outcome::Noop);
+    assert_eq!(
+        envelope.effects,
+        Effects {
+            discovery: DiscoveryEffect::Current,
+            ..Effects::not_requested()
+        }
+    );
+    assert!(envelope.recovery.is_empty());
+}
+
 // ---------------------------------------------------------------------
 // `remote remove`
 // ---------------------------------------------------------------------
@@ -3039,7 +3059,14 @@ fn a_removal_interrupted_after_the_remote_is_deleted_is_partial_and_its_retry_co
 
     assert_eq!(partial.code, ResultCode::InternalError);
     assert_eq!(partial.outcome, Outcome::Partial);
-    assert_eq!(partial.effects, Effects::not_requested());
+    // The remote is gone and the index hand-off is owed.
+    assert_eq!(
+        partial.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
     assert_eq!(
         mutation::recovery_before_own_abandon(&partial),
         ["request.retry"]
@@ -3944,7 +3971,7 @@ fn a_removal_whose_step_never_reached_the_journal_is_completed_without_observing
     home.clock.set(START + 3600);
     let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
 
-    assert_noop(&answered);
+    assert_noop_whose_hand_off_ran(&answered);
     assert_eq!(home.remote_url("backup"), None);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);
@@ -4394,7 +4421,14 @@ fn a_removal_that_fails_before_its_step_is_recorded_is_partial_and_its_retry_is_
 
     assert_eq!(partial.code, ResultCode::InternalError);
     assert_eq!(partial.outcome, Outcome::Partial);
-    assert_eq!(partial.effects, Effects::not_requested());
+    // The remote is gone and the index hand-off is owed.
+    assert_eq!(
+        partial.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
     assert_eq!(
         mutation::recovery_before_own_abandon(&partial),
         ["request.retry"]
@@ -4422,7 +4456,7 @@ fn a_removal_that_fails_before_its_step_is_recorded_is_partial_and_its_retry_is_
     );
     let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
 
-    assert_noop(&answered);
+    assert_noop_whose_hand_off_ran(&answered);
     assert_eq!(partial.operation_id, answered.operation_id);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);

@@ -278,8 +278,10 @@ fn a_remote_added_whose_index_hand_off_failed_is_partial_and_finished_by_its_ret
     assert_eq!(world.pending_journal_rows(), 0);
 }
 
+/// The remote was added and the call stopped before its index hand-off:
+/// the hand-off is owed, and the result says so.
 #[test]
-fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
+fn a_failure_after_the_remote_was_added_is_partial_and_says_its_hand_off_is_pending() {
     let world = World::with_service(|data| {
         FailOnce::at(FailurePoint::AfterRemoteMutation).open_service(data)
     });
@@ -292,7 +294,7 @@ fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
             Some(FailureClass::Incomplete)
         )
     );
-    assert_names_origin(&stopped, DiscoveryEffect::NotRequested);
+    assert_names_origin(&stopped, DiscoveryEffect::Pending);
     assert_eq!(
         crate::support::mutation::recovery_before_own_abandon(&stopped),
         ["request.retry"]
@@ -324,6 +326,50 @@ fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
     );
     assert_eq!(retry.operation_id, stopped.operation_id);
     assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// A call that added the remote and died before it recorded that leaves
+/// its row pending with no step. The retry finds the remote in place and
+/// nothing to say it is its own: a no-op. It ran the hand-off the row
+/// owed all the same, and says so.
+#[test]
+fn an_add_retried_under_a_pending_row_that_changes_nothing_says_its_hand_off_ran() {
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::AfterRemoteMutation).open_service(data)
+    });
+    let stopped = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(stopped.code, ResultCode::InternalError);
+    // As a process killed between Git's write and the step would leave
+    // the row.
+    assert_eq!(
+        crate::support::items::index(world.data.path())
+            .execute(
+                "UPDATE operation_records SET completed_step = NULL
+                  WHERE completed_step = 'remote_changed'",
+                [],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    let retry = execute(&world, REQUEST_1, add(&world, "origin", &location(SECRET)));
+    assert_eq!(
+        (retry.outcome, retry.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied)
+    );
+    assert_names_origin(&retry, DiscoveryEffect::Current);
+    assert_eq!(retry.operation_id, stopped.operation_id);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+    // An add that finds the remote in place with no row of its own asked
+    // for no hand-off, as before.
+    let again = execute(&world, REQUEST_2, add(&world, "origin", &location(SECRET)));
+    assert_eq!(again.code, ResultCode::AlreadyApplied);
+    assert_names_origin(&again, DiscoveryEffect::NotRequested);
 }
 
 /// The row of an `add_remote` that ran to its end has no checkpoint step.

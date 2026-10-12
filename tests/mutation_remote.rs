@@ -2087,8 +2087,8 @@ fn a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over(
 
     // The first call comes back fenced: it pushes nothing and settles
     // nothing. What it reports is the operation as its row then stands,
-    // which the retry has finished: the commit is published, and the
-    // call that lost the operation does not know the index is current.
+    // which the retry has finished: the commit is published, and the row,
+    // completed and owing no work, shows that its index hand-off ran.
     // Its error is no result of an operation that has completed, so the
     // same request is what it offers first: the record answers it.
     hold.release()?;
@@ -2096,7 +2096,7 @@ fn a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over(
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Partial);
     assert_eq!(fenced.operation_id, retried.operation_id);
-    assert_eq!(fenced.effects, published_and_cancelled(local));
+    assert_eq!(fenced.effects, published(local));
     assert_eq!(
         actions(&fenced),
         [
