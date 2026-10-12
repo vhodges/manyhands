@@ -2070,7 +2070,7 @@ fn a_retry_after_lost_output_and_the_deletion_of_the_context_branch() {
         let token = world.token(TICKET_A);
         let lost = world.execute(REQUEST_1, world.save(TICKET_A, &token));
         assert_output_lost(&world, REQUEST_1, &lost);
-        let first_commit = world.branch_tip(TICKET_A).unwrap();
+        assert!(world.branch_tip(TICKET_A).is_some(), "{what}");
 
         let repository = git2::Repository::open(&world.root).unwrap();
         if whole {
@@ -2099,7 +2099,10 @@ fn a_retry_after_lost_output_and_the_deletion_of_the_context_branch() {
         if whole {
             // The save, called again, makes the context from primary,
             // finds the file as the request expected it, and writes and
-            // commits: the commit is new and is the request's.
+            // commits: the commit is made again and is the request's. It
+            // is not compared with the first: the same tree, parent,
+            // author and message committed within the same second have
+            // the same ID.
             assert_eq!(
                 (retry.outcome, retry.code),
                 (Outcome::Success, ResultCode::Ok),
@@ -2107,7 +2110,6 @@ fn a_retry_after_lost_output_and_the_deletion_of_the_context_branch() {
             );
             assert_eq!(world.branch_commits(TICKET_A), 1, "{what}");
             let tip = world.branch_tip(TICKET_A).unwrap();
-            assert_ne!(tip, first_commit, "{what}");
             assert_eq!(retry.effects.commit_oid, Some(tip.to_string()), "{what}");
             assert!(world.worktree_source(TICKET_A).contains(TITLE), "{what}");
             let record = world.record(REQUEST_1).expect("a record");
