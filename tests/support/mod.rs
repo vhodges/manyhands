@@ -22,6 +22,7 @@ use rusqlite::{Connection, params};
 pub mod confirmation;
 pub mod conformance;
 pub mod credentials;
+pub mod git_home;
 pub mod golden;
 pub mod items;
 pub mod mutation;

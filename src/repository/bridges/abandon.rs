@@ -222,7 +222,9 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::ListRemotes
         | RepositoryOperation::RepositorySnapshot
         | RepositoryOperation::Read
-        | RepositoryOperation::AbandonOperation => Writes::Nothing,
+        | RepositoryOperation::AbandonOperation
+        // An identity is Git configuration too, and is set under no row.
+        | RepositoryOperation::SetLocalIdentity => Writes::Nothing,
     }
 }
 

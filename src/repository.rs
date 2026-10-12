@@ -44,6 +44,9 @@ pub use bridges::abandon::{
     AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationRemains,
     PendingStanding,
 };
+pub use bridges::identity::{
+    InitialsChange, LocalIdentity, SetLocalIdentityOutcome, SetLocalIdentityRequest,
+};
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
     cache_read_guard, cache_write_guard, leases_are_free, repository_lease,
@@ -866,6 +869,10 @@ pub enum FailurePoint {
     /// held by another writer past the wait would have it fail. Nothing
     /// is compared, changed or recorded.
     BeforeKeyRegistryChange,
+    /// `set_local_identity`, after the name is written to the
+    /// repository's own configuration and before the email is: the call
+    /// fails there, and puts the configuration file back as it was.
+    AfterLocalIdentityName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -895,6 +902,7 @@ pub enum RepositoryOperation {
     RepositorySnapshot,
     Read,
     AbandonOperation,
+    SetLocalIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
