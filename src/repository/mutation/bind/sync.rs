@@ -52,8 +52,8 @@ use super::{
         outcome,
         progress::{ProgressStage, Subject},
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing, item_scope, refused, resolve_root,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Ran, Standing, item_scope, refused, resolve_root,
 };
 
 /// The input of `item sync`: the item whose editing branch is
@@ -1007,6 +1007,10 @@ impl Binding for SyncBinding {
             }),
             None => Ok(Entered::Unfinished),
         }
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {

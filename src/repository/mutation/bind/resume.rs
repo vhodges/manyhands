@@ -53,8 +53,8 @@ use super::{
         progress::{ProgressStage, Subject},
         records,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing, sync,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Ran, Standing, sync,
 };
 
 /// The input of `operation resume`: the root of the repository, and the
@@ -904,6 +904,10 @@ impl Binding for OperationResumeBinding {
                 standing: Standing::NotRun { journal: NO_ROW },
             }),
         }
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {

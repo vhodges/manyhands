@@ -34,8 +34,8 @@ use super::{
         outcome::{self, SaveReport},
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    resolve_root, save,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Ran, resolve_root, save,
 };
 
 /// Where documents are, below a context's root.
@@ -920,6 +920,10 @@ impl Binding for DocumentBinding {
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {

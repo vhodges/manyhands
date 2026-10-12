@@ -33,8 +33,8 @@ use super::{
         outcome::SaveReport,
         records::RequestRecord,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing, resolve_root, save,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Ran, Standing, resolve_root, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -894,6 +894,10 @@ impl Binding for TicketBinding {
         }
     }
 
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
+    }
+
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
         match entered.authoring() {
             Ok(before) => save::rerun(self, call.service, accepted, before),
@@ -1261,6 +1265,10 @@ impl Binding for SlugAssignBinding {
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {

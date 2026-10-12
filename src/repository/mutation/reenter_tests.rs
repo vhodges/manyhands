@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::{
     super::{
         Mutation, TicketCreateInput, TicketSaveInput,
-        bind::{CallContext, Entered, Place, Prepared},
+        bind::{CallContext, Confirmed, Entered, Place, Prepared},
         command::Command,
         evidence::Position,
         identity::IntentDigestBuilder,
@@ -64,6 +64,10 @@ impl Binding for NeverCheckpoints {
         _journal: JournalRow,
     ) -> Result<Entered, Ran> {
         unreachable!("the decision is made before the evidence is read")
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, _call: &CallContext<'_>, _accepted: &Accepted, _entered: &Entered) -> Ran {

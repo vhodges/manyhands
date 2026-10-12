@@ -28,8 +28,8 @@ use super::{
         identity::{IntentDigestBuilder, ScopeKey},
         outcome,
     },
-    Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    Standing, resolve_root,
+    Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
+    Prepared, Ran, Standing, resolve_root,
 };
 
 /// The input of `index refresh`: the repository to observe again.
@@ -269,6 +269,10 @@ impl Binding for IndexBinding {
                 standing: Standing::NotRun { journal },
             }),
         }
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {

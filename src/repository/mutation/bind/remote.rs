@@ -357,6 +357,10 @@ impl Binding for RemoteAddBinding {
         }
     }
 
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
+    }
+
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
         self.call(call.service, accepted)
     }
@@ -613,6 +617,10 @@ impl Binding for RemoteSelectBinding {
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {

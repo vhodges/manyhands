@@ -439,6 +439,10 @@ impl Binding for KeyRegistryBinding {
         }
     }
 
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
+    }
+
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
         self.call(call.service, accepted)
     }
@@ -844,6 +848,10 @@ impl Binding for KeyGenerateBinding {
                 standing: Standing::NotRun { journal },
             }),
         }
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {

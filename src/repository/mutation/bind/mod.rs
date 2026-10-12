@@ -712,9 +712,11 @@ pub(crate) trait Binding {
     /// binding answers `Some(self)`, and its re-entry is then made by
     /// `confirm::reenter` from its probes and by nothing else. `None`
     /// for every other binding.
-    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
-        None
-    }
+    ///
+    /// There is no default: a binding of a command that needs
+    /// confirmation which did not say so would be refused on every
+    /// re-entry, and that would be seen only by a test that re-enters.
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed>;
 
     /// Re-entry, the domain call: made with the recorded operation ID and
     /// the recorded expectation, which is the only way the work is
