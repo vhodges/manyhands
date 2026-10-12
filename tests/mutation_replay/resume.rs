@@ -148,6 +148,11 @@ fn a_resume_runs_the_hand_off_a_save_owes_and_the_save_s_request_is_then_finishe
         }
     );
     assert_eq!(world.pending_journal_rows(), 0);
+    // The save's record is still its own to finish, and was entered
+    // when its operation was taken up: a call of the save that was
+    // still running would settle nothing.
+    let owner = world.record(REQUEST_1).expect("the save's record");
+    assert_eq!((owner.state, owner.attempt), (RequestState::Accepted, 2));
 
     // The save's own request, sent again, is finished from what its
     // operation did: nothing is written or committed a second time.
