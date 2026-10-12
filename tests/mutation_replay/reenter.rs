@@ -1220,9 +1220,20 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
                 assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
                 assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
             }
-            "busy" => {
-                assert_eq!(envelope["outcome"], "error", "{what}");
+            // Busy before anything was written: nothing to report.
+            "busy" if envelope["outcome"] == "error" => {
                 assert!(envelope["effects"]["commit_oid"].is_null(), "{what}");
+            }
+            // Busy after the commit, at the index hand-off, while the
+            // other process held the repository (seen on Windows): the
+            // commit is reported and the request is to be sent again.
+            "busy" => {
+                succeeded += 1;
+                assert_eq!(envelope["outcome"], "partial", "{what}");
+                assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
+                assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
+                assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
+                assert_eq!(envelope["recovery"][0]["action"], "request.retry", "{what}");
             }
             other => panic!("neither a result nor busy: {other}: {what}"),
         }
