@@ -561,7 +561,7 @@ fn the_table_covers_every_command_the_boundary_binds() {
 /// four sequences instead. The table's columns are an item's: its
 /// editing branch, the commits on it, its context's files and its token.
 /// None of these commands has an item.
-const ELSEWHERE: [(&str, &str); 17] = [
+const ELSEWHERE: [(&str, &str); 18] = [
     (
         "remote add",
         "commits nothing and writes no canonical file: `remotes`",
@@ -644,5 +644,11 @@ const ELSEWHERE: [(&str, &str); 17] = [
         "publishes the primary branch to a remote and writes no canonical file, with no item, \
          context or token; its operation is in the remote journal and its sequences need a \
          server: the test target `mutation_remote`",
+    ),
+    (
+        "operation resume",
+        "takes up another request's operation and has none of its own, and writes no \
+         canonical file, with no item, context or token: `resume`, and for a synchronization \
+         the test target `mutation_remote`",
     ),
 ];

@@ -2323,6 +2323,53 @@ pub(in super::super) fn lookup_fenced(
         .unwrap_or(false))
 }
 
+/// What the remote operation `operation_id` of the registration at
+/// `root_path` synchronizes: the target a call that takes it up again
+/// is made with. The outer `None` is no row; the inner one a row that
+/// is no synchronization's: a poll, a promotion or a closure, which
+/// nothing takes up again under its ID.
+///
+/// As `lookup_operation`, this reads the row's own columns and nothing
+/// else. Whether the row can be taken up is the domain's to decide, when
+/// it is called with the target: it validates the whole row then.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_synchronization_target(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<Option<SynchronizationTarget>>, ReadError> {
+    let row: Option<(String, Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT operation.action, operation.kind, operation.item_id
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((action, kind, item_id)) = row else {
+        return Ok(None);
+    };
+    let unreadable = || ReadError::new(ResultCode::InternalError);
+    Ok(Some(match action.as_str() {
+        "synchronize_primary" => Some(SynchronizationTarget::Primary),
+        "synchronize_context" => {
+            let kind = match kind.as_deref() {
+                Some("document") => AuthoringKind::Document,
+                Some("ticket") => AuthoringKind::Ticket,
+                Some(_) | None => return Err(unreadable()),
+            };
+            let item_id = item_id
+                .and_then(|item_id| item_id.parse().ok())
+                .ok_or_else(unreadable)?;
+            Some(SynchronizationTarget::Context { kind, item_id })
+        }
+        "poll" | "promote" | "close" => None,
+        _ => return Err(unreadable()),
+    }))
+}
+
 /// The columns `lookup_push` reads: the checkpoint, the commit the push
 /// was of, and the kind and the commit of the outcome.
 type PushColumns = (

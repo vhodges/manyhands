@@ -477,6 +477,46 @@ struct Configured {
     publishes: bool,
 }
 
+/// Takes up the synchronization of `target` that `accepted` names, for
+/// a request that did not begin it: `operation resume`. `accepted` is
+/// that request with the operation's ID and journal in place of its
+/// own, and `subject` the request as its events name it.
+///
+/// It is the call a re-entry of the synchronization's own request
+/// makes, with the same settings: the operation is taken up with
+/// `restart`, which asks the remote what it holds before it pushes
+/// anything, and nothing is merged. What the result says of a push is
+/// that operation's own evidence, as it is for its own request.
+pub(crate) fn resumed(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    target: SynchronizationTarget,
+    subject: Subject,
+) -> Ran {
+    SyncBinding {
+        root: accepted.root(),
+        target,
+    }
+    .call(call, accepted, subject, true)
+}
+
+/// The position on its branch of a synchronization of `target` in the
+/// repository at `root`: what a request that takes it up is accepted
+/// with, so that a result of it that names a commit is given again only
+/// while that branch still holds the commit.
+pub(crate) fn resumed_position(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    target: SynchronizationTarget,
+) -> Result<Position, Answer> {
+    let binding = SyncBinding {
+        root: root.to_owned(),
+        target,
+    };
+    let configured = binding.configured(service)?;
+    binding.position(&configured)
+}
+
 impl SyncBinding {
     /// Resolves the request's root and reads the repository's
     /// configuration.

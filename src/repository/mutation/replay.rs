@@ -82,11 +82,12 @@ impl RepositoryService {
         // its caller to look at the repository: an operation that was
         // stopped or fenced with its push not confirmed. That is as
         // true of the result given again as of the result first given,
-        // so the action is made again from the code. No other finished
-        // result of a synchronization has an action, and no other
+        // so the action is made again from the code. So it is for the
+        // result of a resume that took a synchronization up. No other
+        // finished result of either has an action, and no other
         // command's is given one here.
         let envelope = match Command::parse(&envelope.command) {
-            Some(command) if command.stops_at_safe_points() => {
+            Some(command) if command.finishes_as_a_synchronization() => {
                 let recovery = outcome::recovery(
                     envelope.code,
                     command,

@@ -55,6 +55,7 @@ commands! {
     OperationAbandon => "operation abandon",
     ItemSync => "item sync",
     RepoSync => "repo sync",
+    OperationResume => "operation resume",
 }
 
 impl Command {
@@ -98,6 +99,10 @@ impl Command {
             // is its target. The abandon itself is one transaction, with
             // no operation ID and no row of its own.
             Self::OperationAbandon => false,
+            // So is the operation a resume names: it is taken up under
+            // its own ID, in its own journal, and the resume's record
+            // holds none.
+            Self::OperationResume => false,
         }
     }
 
@@ -129,7 +134,8 @@ impl Command {
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
-            | Self::RepoSync => false,
+            | Self::RepoSync
+            | Self::OperationResume => false,
         }
     }
 
@@ -160,7 +166,8 @@ impl Command {
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
-            | Self::RepoSync => false,
+            | Self::RepoSync
+            | Self::OperationResume => false,
         }
     }
 
@@ -195,6 +202,48 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete
             | Self::OperationAbandon => false,
+            // A resume has no operation. One that takes up another
+            // request's synchronization honors its own call's token at
+            // that operation's safe points and reports their stages, but
+            // nothing is held for it between calls: the reservation is
+            // the operation's, and the request that began it holds that.
+            // So `request cancel` asks nothing of a resume, and a resume
+            // that stopped is not offered again by the rule for a
+            // synchronization.
+            Self::OperationResume => false,
+        }
+    }
+
+    /// Whether a finished result of the command can be that of a
+    /// synchronization: one that was stopped or fenced with its push not
+    /// confirmed tells its caller to look at the repository, and says
+    /// so again each time it is given again. A synchronization's own
+    /// result is one, and so is that of a resume that took one up. The
+    /// finished results of every other command offer nothing.
+    pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
+        match self {
+            Self::ItemSync | Self::RepoSync | Self::OperationResume => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete
+            | Self::OperationAbandon => false,
         }
     }
 
@@ -204,6 +253,9 @@ impl Command {
         match self {
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
             Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            // What a resume does first is look at the operation it
+            // names. What it then does is that operation's to say.
+            Self::OperationResume => ProgressStage::Observing,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -255,7 +307,10 @@ impl Command {
             | Self::KeyClear
             | Self::KeyRemove
             | Self::ItemSync
-            | Self::RepoSync => false,
+            | Self::RepoSync
+            // A resume does only what an operation already owes and
+            // was consented to when it began.
+            | Self::OperationResume => false,
         }
     }
 }
@@ -292,6 +347,7 @@ mod tests {
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
         assert_eq!(Command::ItemSync.name(), "item sync");
         assert_eq!(Command::RepoSync.name(), "repo sync");
+        assert_eq!(Command::OperationResume.name(), "operation resume");
     }
 
     #[test]
@@ -312,6 +368,23 @@ mod tests {
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
         assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
         assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);
+        assert_eq!(Command::OperationResume.stage(), ProgressStage::Observing);
+    }
+
+    #[test]
+    fn only_a_synchronization_and_a_resume_can_finish_as_a_synchronization() {
+        for command in Command::ALL {
+            assert_eq!(
+                command.finishes_as_a_synchronization(),
+                command.stops_at_safe_points() || command == Command::OperationResume,
+                "{command:?}"
+            );
+        }
+        // A resume is no synchronization for anything else.
+        assert!(!Command::OperationResume.stops_at_safe_points());
+        assert!(!Command::OperationResume.needs_confirmation());
+        assert!(!Command::OperationResume.restores_index());
+        assert!(!Command::OperationResume.creates_its_repository());
     }
 
     #[test]
@@ -346,7 +419,14 @@ mod tests {
                     | Command::KeyRemove
                     | Command::OperationAbandon
             );
-            assert_eq!(command.has_operation(), !single_transaction, "{command:?}");
+            // A resume takes up another request's operation, and has
+            // none of its own either.
+            let names_another_s = command == Command::OperationResume;
+            assert_eq!(
+                command.has_operation(),
+                !single_transaction && !names_another_s,
+                "{command:?}"
+            );
         }
     }
 

@@ -34,6 +34,7 @@ pub(crate) mod key;
 pub(crate) mod remote;
 pub(crate) mod repo;
 pub(crate) mod repo_remove;
+pub(crate) mod resume;
 pub(crate) mod save;
 pub(crate) mod sync;
 pub(crate) mod ticket;
@@ -761,6 +762,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::ItemSync | Command::RepoSync) => {
             Recorded::of(sync::recorded_effects(service, &accepted))
         }
+        // A resume has no operation, so none is ever found to have run:
+        // this is not reached, and nothing is claimed. What the
+        // operation it names did is that operation's request's to say.
+        Some(Command::OperationResume) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

@@ -74,6 +74,10 @@ contract_enum!(
     /// asked what it now holds, and `indexing` once that is known.
     /// `stopping` is a cancellation the request has seen and is about to
     /// honor.
+    ///
+    /// A resume reports `observing` before it looks at the operation it
+    /// names, then `indexing` before a hand-off it runs, or the stages
+    /// of a synchronization it takes up.
     ProgressStage {
         Accepted => "accepted",
         Observing => "observing",

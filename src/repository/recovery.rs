@@ -482,6 +482,19 @@ fn is_checkpoint_step(step: &str) -> bool {
     )
 }
 
+/// Whether `step`, the last step a local row recorded, says the
+/// operation's own work is done and recorded: a checkpoint step, or the
+/// step of a remote that was added or removed, which commits nothing.
+fn is_authoritative_step(step: &str) -> bool {
+    is_checkpoint_step(step) || step == "remote_changed"
+}
+
+/// The states of a pending row whose operation has handed off to
+/// indexing: the state the hand-off begins in, the state of a call that
+/// has claimed it, and the two a hand-off that did not bring the index
+/// up to date leaves.
+const HAND_OFF_STATES: [&str; 4] = ["authoritative_observed", INDEXING_STATE, "failed", "retry"];
+
 /// Closes the row of a call that was rejected and left nothing behind. The row
 /// no longer blocks the repository, and a repeat of its ID begins again.
 ///
@@ -788,6 +801,27 @@ impl LocalRow {
     /// its work is committed; see `is_checkpoint_step`.
     pub(super) fn is_checkpointed(&self) -> bool {
         self.step.as_deref().is_some_and(is_checkpoint_step)
+    }
+
+    /// Whether all the row still owes is its index hand-off: it is
+    /// pending, the last step it recorded says its operation's own work
+    /// is done, and its state is one a row has only once the operation
+    /// has handed off to indexing.
+    ///
+    /// Both are asked. The step alone is not enough: an enablement or a
+    /// selection of the publication remote records its commit before it
+    /// brings the registration up to it, so a row that holds the step and
+    /// has not handed off can owe more than the hand-off. Nor is the
+    /// state: a refresh that failed is in one of these states with no
+    /// work of its own recorded.
+    ///
+    /// Such a row is completed by a refresh under its ID, which is what
+    /// `operation resume` runs. A refresh completes any pending row it is
+    /// given, so whoever would resume a row asks this first.
+    pub(super) fn owes_only_its_hand_off(&self) -> bool {
+        self.standing() == LocalStanding::Pending
+            && self.step.as_deref().is_some_and(is_authoritative_step)
+            && HAND_OFF_STATES.contains(&self.state.as_str())
     }
 
     /// The operation the row is of. `None` for an action this build
@@ -1469,6 +1503,67 @@ mod abandoned_row_tests {
         // An error is not recorded on a row that completed, as before.
         advance_after_observation(&connection, 1, "error", None, None).unwrap();
         assert_eq!(row(&connection).0, "completed");
+    }
+
+    #[test]
+    fn a_row_owes_only_its_hand_off_once_its_work_is_recorded_and_it_has_handed_off() {
+        let owes = |action: &str, state: &str, step: Option<&str>| {
+            lookup_row(&journal(action, state, step, 7)).owes_only_its_hand_off()
+        };
+        // Each step that records an operation's own work as done, in
+        // each state a row has once it has handed off to indexing.
+        for step in [
+            "authoring_checkpoint_observed",
+            "authoritative_observed",
+            "initialization_committed",
+            "publication_committed",
+            "remote_changed",
+        ] {
+            for state in ["authoritative_observed", "indexing", "failed", "retry"] {
+                assert!(owes("save_ticket", state, Some(step)), "{step} in {state}");
+            }
+            // The step is recorded and the hand-off has not begun: an
+            // enablement or a selection can still owe its registration.
+            // `authoritative_observed` is the one step the hand-off
+            // itself records, on a row that had recorded none.
+            assert_eq!(
+                owes("save_ticket", step, Some(step)),
+                step == "authoritative_observed",
+                "{step}"
+            );
+            // Nothing is owed by a row that has ended.
+            assert!(!owes("save_ticket", "completed", Some(step)), "{step}");
+        }
+        // A step that precedes the operation's work, or none: the write
+        // may not have happened, whatever state the row is in.
+        for step in [
+            None,
+            Some("worktree_observed"),
+            Some("authoring_destination_observed"),
+            Some("document_destination_observed"),
+            Some("document_move_observed"),
+            Some("repository_initialized"),
+            Some("configuration_written"),
+        ] {
+            for state in [
+                "created",
+                "worktree_observed",
+                "authoritative_observed",
+                "indexing",
+                "failed",
+                "retry",
+            ] {
+                assert!(!owes("save_ticket", state, step), "{step:?} in {state}");
+            }
+        }
+        // A refresh that failed has no work of its own recorded, and a
+        // rebuild's states are not a hand-off's.
+        assert!(!owes("refresh", "failed", None));
+        assert!(!owes("rebuild", "observed", None));
+        assert!(!owes("rebuild", "error", None));
+        // An abandoned row and a rejected one have ended.
+        assert!(!lookup_row(&abandoned_journal()).owes_only_its_hand_off());
+        assert!(!owes("save_ticket", "completed", Some("rejected")));
     }
 
     #[test]

@@ -676,7 +676,9 @@ impl MutationDataDto {
             Command::OperationAbandon => {
                 OperationMutationDto::from_stored(stored).map(Self::Operation)
             }
-            Command::ItemSync | Command::RepoSync => {
+            // A resume reports data only of a synchronization it took
+            // up: the host that synchronization stopped for.
+            Command::ItemSync | Command::RepoSync | Command::OperationResume => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
             // These report no data, so a record of one stores none.

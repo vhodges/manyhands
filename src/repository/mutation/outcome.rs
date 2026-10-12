@@ -527,6 +527,15 @@ const ROOT_ARGUMENT: &str = "root";
 /// The argument of `request.retry`.
 const REQUEST_ARGUMENT: &str = "request_id";
 
+/// The action that names the request that began an operation: what a
+/// resume offers for work that needs that request's input.
+pub(crate) fn original_request(request_id: String) -> RecoveryAction {
+    RecoveryAction::new(
+        RecoveryActionKind::RequestRetry,
+        [(REQUEST_ARGUMENT, request_id.into())],
+    )
+}
+
 /// What a client does about a code that stopped a request. Every code is
 /// named: one added later does not compile until its action is decided.
 ///
@@ -654,6 +663,14 @@ pub(crate) fn recovery(
         // The commit exists and the registry write failed: the same
         // request completes the registration.
         ResultCode::RegistrationPending => retry_request(),
+        // What a resume is answered with when the operation it names
+        // needs the input of the request that began it, or is no
+        // journal's. The resume sent again is refused the same way, so
+        // it is never offered, whatever became of its record. The
+        // request that is to be sent is another one, which this
+        // function is not told of: the binding names it, when a record
+        // holds it; see `original_request`.
+        ResultCode::OriginalRequestRequired | ResultCode::OperationNotFound => Vec::new(),
         // Decided: these have no action of their own. They are the codes
         // a bound command, or the boundary itself, ends with: a write of
         // a ticket or a document, a remote added or selected, an index
@@ -729,10 +746,8 @@ pub(crate) fn recovery(
         | ResultCode::PathNotFound
         | ResultCode::PublicKeyUnavailable
         | ResultCode::AuthorityNotFound
-        | ResultCode::OperationNotFound
         | ResultCode::RequestNotFound
         | ResultCode::NotRepairable
-        | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
         | ResultCode::HostMismatch => {
             if retry {

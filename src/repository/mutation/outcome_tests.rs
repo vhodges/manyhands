@@ -1410,6 +1410,71 @@ fn a_request_with_no_usable_consent_is_offered_a_new_preview() {
     }
 }
 
+/// A resume that cannot go on without the input of the request that
+/// began the operation is never offered itself again: it would be
+/// refused the same way. What it offers is that request, which only its
+/// binding can name.
+#[test]
+fn a_resume_is_never_offered_again_for_what_only_the_original_request_can_do() {
+    for retry in [false, true] {
+        assert!(
+            actions_of(
+                Command::OperationResume,
+                ResultCode::OriginalRequestRequired,
+                retry
+            )
+            .is_empty()
+        );
+        // An ID no journal holds is not found the next time either.
+        assert!(
+            actions_of(
+                Command::OperationResume,
+                ResultCode::OperationNotFound,
+                retry
+            )
+            .is_empty()
+        );
+    }
+    let original = original_request("01ARZ3NDEKTSV4RRFFQ69G5FX1".to_owned());
+    assert_eq!(original.action, RecoveryActionKind::RequestRetry);
+    assert_eq!(original.operation_id, None);
+    assert_eq!(
+        original
+            .arguments
+            .get("request_id")
+            .and_then(|id| id.as_str()),
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FX1")
+    );
+    assert_eq!(original.arguments.len(), 1);
+
+    // A resume whose hand-off another call is running is sent again, and
+    // one that found something to look at says so.
+    assert_eq!(
+        actions_of(Command::OperationResume, ResultCode::Busy, false),
+        ["request.retry"]
+    );
+    assert_eq!(
+        actions_of(
+            Command::OperationResume,
+            ResultCode::RecoveryRequired,
+            false
+        ),
+        ["repo.inspect"]
+    );
+    // It is not a synchronization: no reservation is held for it, and
+    // nothing is offered for it by that rule.
+    for code in [
+        ResultCode::UnlockRequired,
+        ResultCode::MergeRequired,
+        ResultCode::PushRejected,
+    ] {
+        assert!(
+            actions_of(Command::OperationResume, code, false).is_empty(),
+            "{code:?}"
+        );
+    }
+}
+
 /// What was previewed is no longer there. A confirmed command whose
 /// request left nothing is offered a new preview. One whose record was
 /// left accepted has its own operation pending, which refuses every

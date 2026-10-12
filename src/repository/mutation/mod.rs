@@ -65,6 +65,7 @@ use bind::{
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repo::RepoBinding,
     repo_remove::RepoRemoveBinding,
+    resume::OperationResumeBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
@@ -79,6 +80,7 @@ pub use bind::{
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_remove::RepoRemoveInput,
+    resume::OperationResumeInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
@@ -385,6 +387,7 @@ pub enum Mutation {
     OperationAbandon(OperationAbandonInput),
     ItemSync(ItemSyncInput),
     RepoSync(RepoSyncInput),
+    OperationResume(OperationResumeInput),
 }
 
 impl Mutation {
@@ -418,6 +421,7 @@ impl Mutation {
             Self::OperationAbandon(_) => Command::OperationAbandon,
             Self::ItemSync(_) => Command::ItemSync,
             Self::RepoSync(_) => Command::RepoSync,
+            Self::OperationResume(_) => Command::OperationResume,
         }
     }
 
@@ -450,7 +454,8 @@ impl Mutation {
             | Self::KeyClear(_)
             | Self::KeyRemove(_)
             | Self::ItemSync(_)
-            | Self::RepoSync(_) => None,
+            | Self::RepoSync(_)
+            | Self::OperationResume(_) => None,
         }
     }
 
@@ -479,6 +484,7 @@ impl Mutation {
             Self::OperationAbandon(input) => Box::new(OperationAbandonBinding::from(input)),
             Self::ItemSync(input) => Box::new(SyncBinding::from(input)),
             Self::RepoSync(input) => Box::new(SyncBinding::from(input)),
+            Self::OperationResume(input) => Box::new(OperationResumeBinding::from(input)),
         }
     }
 }
