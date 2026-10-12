@@ -34,7 +34,7 @@ use super::{
         records::RequestRecord,
     },
     Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
-    resolve_root, save,
+    Standing, resolve_root, save,
 };
 
 /// The key of the initials a user set for this repository, in its local
@@ -83,6 +83,9 @@ pub(crate) struct TicketBinding {
     /// code options of the domain call, and the targets nothing holds.
     options: TicketWriteOptions,
     unresolved: Vec<String>,
+    /// The rejection the relationship check gave a request that is
+    /// entered again. `reenter` decides whether it stands.
+    rejected: Option<Answer>,
 }
 
 impl From<TicketCreateInput> for TicketBinding {
@@ -112,6 +115,7 @@ impl From<TicketCreateInput> for TicketBinding {
             observation: None,
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
+            rejected: None,
         }
     }
 }
@@ -139,6 +143,7 @@ impl From<TicketSaveInput> for TicketBinding {
             observation: Some(observation),
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
+            rejected: None,
         }
     }
 }
@@ -246,7 +251,8 @@ fn ticket_scope(id: &str, repository: Option<String>, position: Option<&Position
 enum Checking {
     /// A request no record holds: a rejection or a failed read answers it.
     NewRequest,
-    /// An accepted request entered again.
+    /// An accepted request entered again: a rejection is kept, and a
+    /// failed read is passed over.
     Reentry,
 }
 
@@ -372,9 +378,11 @@ impl TicketBinding {
     /// already are.
     ///
     /// A request that is re-entered was checked when it was accepted, and
-    /// its own first attempt may have written since. Its relationships are
-    /// read again only to say which targets nothing holds: neither a
-    /// rejection nor a failure to read stops it.
+    /// another request may have written a relationship since that closes
+    /// a cycle with this one's. Its relationships are checked again, and
+    /// a rejection is kept in `rejected` for `reenter` to decide on,
+    /// which knows whether the request's own commit is already there. A
+    /// failure to read does not stop it.
     fn check_relationships(
         &mut self,
         service: &RepositoryService,
@@ -424,7 +432,13 @@ impl TicketBinding {
                         return Err(Answer::stopped(rejection.code)
                             .with_data(self.data(None, rejection.ids)));
                     }
-                    (Some(_), Checking::Reentry) | (None, _) => {}
+                    (Some(rejection), Checking::Reentry) => {
+                        self.rejected = Some(
+                            Answer::stopped(rejection.code)
+                                .with_data(self.data(None, rejection.ids)),
+                        );
+                    }
+                    (None, _) => {}
                 }
                 self.unresolved = check
                     .unresolved
@@ -673,7 +687,8 @@ impl save::Save for TicketBinding {
     }
 
     /// Sets the domain call's options for a request that is entered
-    /// again, as `prepare` set them, and makes none of its checks.
+    /// again, as `prepare` set them. Of its checks only the one of the
+    /// relationships is made, and its rejection answers nothing here.
     ///
     /// A create passes a short code if and only if its first attempt did,
     /// which every create through the boundary does. The domain adopts the
@@ -801,10 +816,11 @@ impl Binding for TicketBinding {
             parent,
             initials,
             observation,
-            // Worked out by `prepare` from the input and the repository:
-            // no part of what the caller asked for.
+            // Worked out by `prepare` or on re-entry from the input and
+            // the repository: no part of what the caller asked for.
             options: _,
             unresolved: _,
+            rejected: _,
         } = self;
         let listed: Vec<&str> = match deps {
             RelationshipWrite::Set(deps) => deps.iter().map(String::as_str).collect(),
@@ -861,7 +877,21 @@ impl Binding for TicketBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
+        let before = save::reenter(self, call.service, accepted, journal)?;
+        // A relationship the check rejects now is one the request has not
+        // committed: the rejection stands, as on a first call, and the
+        // domain, which checks no cycle, is not called. Only a commit of
+        // the request's own already holds what it asks for, and the
+        // check's answer is then about a state the request itself made.
+        match self.rejected.take() {
+            Some(answer) if before.own().is_none() => Err(Ran {
+                answer,
+                standing: Standing::NotRun {
+                    journal: before.journal,
+                },
+            }),
+            Some(_) | None => Ok(Entered::Authoring(before)),
+        }
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {

@@ -5,8 +5,8 @@
 use manyhands::{
     canonical::short_code,
     repository::{
-        FailurePoint, Mutation, MutationDataDto, RequestState, TicketSaveInput,
-        request_store::JournalRow,
+        FailurePoint, Mutation, MutationDataDto, RelationshipWrite, RequestState,
+        TicketCreateInput, TicketSaveInput, request_store::JournalRow,
     },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, FailureClass, Outcome, ResultCode,
@@ -2284,4 +2284,190 @@ fn identical_content_committed_and_undone_by_someone_else_does_not_stop_a_reques
     assert_ne!(retry.effects.commit_oid, Some(look_alike));
     assert_ne!(retry.effects.commit_oid, Some(undone.to_string()));
     assert_eq!(retry.operation_id, Some(operation_id));
+}
+
+/// A request ID for the fourth request of a scenario.
+const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+
+/// Asserts that `envelope` is the rejection of a relationship cycle
+/// through `TICKET_A` and `TICKET_NEW`, with nothing done.
+fn assert_cycle_rejected(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        (envelope.outcome, envelope.code, envelope.failure_class()),
+        (
+            Outcome::Error,
+            ResultCode::RelationshipCycle,
+            Some(FailureClass::Input)
+        )
+    );
+    assert_eq!(envelope.effects, Effects::not_requested());
+    let mut members = [TICKET_A, TICKET_NEW];
+    members.sort_unstable();
+    assert_eq!(ticket_data(envelope).rejected, members);
+    assert!(recovery_actions(envelope).is_empty());
+}
+
+#[test]
+fn a_save_that_never_ran_is_rejected_for_a_cycle_another_request_closed_meanwhile() {
+    let mut world = World::new();
+    let created = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(created.code, ResultCode::Ok);
+
+    // A save of A that depends on the new ticket is accepted, and its
+    // process dies before the domain call: no journal row exists.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let depending = || {
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &token)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending());
+    assert_eq!(died.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation_id = record.operations[0].operation_id.to_string();
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+
+    // Another request saves the new ticket depending on A. Nothing of
+    // the first request is written, so no cycle is there to refuse.
+    let other = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_A.to_owned()]),
+            ..world.save_input(TICKET_NEW, &world.token(TICKET_NEW))
+        }),
+    );
+    assert_eq!(
+        (other.outcome, other.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commits = world.branch_commits(TICKET_NEW);
+
+    // The first request again would now close the cycle: it is rejected
+    // as a first call of it would be, and nothing is left of it.
+    let retry = world.execute(REQUEST_1, depending());
+    assert_cycle_rejected(&retry);
+    world.assert_nothing_exists(REQUEST_1, TICKET_A);
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+    assert!(!world.primary_source(TICKET_A).contains("deps:"));
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+
+    // The repository still works: another request saves A.
+    let fresh = world.execute(REQUEST_4, world.save(TICKET_A, &world.token(TICKET_A)));
+    assert_eq!(
+        (fresh.outcome, fresh.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(!world.worktree_source(TICKET_A).contains("deps:"));
+}
+
+#[test]
+fn a_create_that_never_ran_is_rejected_for_a_cycle_another_request_closed_meanwhile() {
+    let mut world = World::new();
+
+    // A create that depends on A is accepted, and its process dies before
+    // the domain call: no journal row exists.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let depending = || {
+        Mutation::TicketCreate(TicketCreateInput {
+            deps: vec![TICKET_A.to_owned()],
+            ..world.create_input(TICKET_NEW)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending());
+    assert_eq!(died.code, ResultCode::InternalError);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!(record.state, RequestState::Accepted);
+    let operation_id = record.operations[0].operation_id.to_string();
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+
+    // Another request saves A depending on the ticket that is not there
+    // yet: an unknown target is accepted.
+    let other = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &world.token(TICKET_A))
+        }),
+    );
+    assert_eq!(
+        (other.outcome, other.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+
+    // The create again would now close the cycle: it is rejected as a
+    // first call of it would be, and nothing is left of it.
+    let retry = world.execute(REQUEST_1, depending());
+    assert_cycle_rejected(&retry);
+    world.assert_nothing_exists(REQUEST_1, TICKET_NEW);
+    assert_eq!(world.journal_row(&operation_id), JournalRow::Absent);
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+
+    // The repository still works: another request creates the ticket
+    // with no relationship.
+    let fresh = world.execute(REQUEST_4, world.create(TICKET_NEW));
+    assert_eq!(
+        (fresh.outcome, fresh.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(!world.worktree_source(TICKET_NEW).contains("deps:"));
+}
+
+#[test]
+fn a_save_that_committed_is_finished_whatever_the_relationship_check_says_now() {
+    let mut world = World::new();
+    let created = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(created.code, ResultCode::Ok);
+
+    // A save of A that depends on the new ticket commits, and its process
+    // dies before its result is recorded.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let depending = |world: &World| {
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &token)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let commit = world.branch_tip(TICKET_A).expect("the save's commit");
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    // Someone commits the other edge by hand, and the index reads it: the
+    // check now finds a cycle in what the request asks for.
+    world.commit_in_context(
+        TICKET_NEW,
+        &crate::support::items::ticket_path(TICKET_NEW),
+        &world.worktree_source(TICKET_NEW).replacen(
+            "\n---\n",
+            &format!("\ndeps:\n  - {TICKET_A}\n---\n"),
+            1,
+        ),
+    );
+    crate::support::items::refresh_completely(&world.service, &world.root);
+    let refused = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            draft: World::draft("Another title", "Another body.\n"),
+            ..world.save_input(TICKET_A, &world.token(TICKET_A))
+        }),
+    );
+    assert_eq!(refused.code, ResultCode::RelationshipCycle);
+
+    // The request's own commit already holds the relationship: it is
+    // answered with what it did.
+    world.reopen();
+    let retry = world.execute(REQUEST_1, depending(&world));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit.to_string()));
 }
