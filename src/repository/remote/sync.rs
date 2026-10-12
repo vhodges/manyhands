@@ -6526,6 +6526,16 @@ impl RepositoryService {
                     // merges does not begin: it is refused here, before
                     // either is recorded.
                     if settings.refuse_divergence {
+                        // The push endpoint advertises a descendant of
+                        // the commit this operation set out to push: it
+                        // holds that commit, and the push put it there.
+                        if let (
+                            PublicationIntent::Legacy(pushed),
+                            Some(PushIntentRelation::Ahead),
+                        ) = (intent, relation)
+                        {
+                            observer.verified(pushed, true);
+                        }
                         return Err(SynchronizationError::MergeRequired {
                             target: request.target.clone(),
                         });

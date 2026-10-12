@@ -193,6 +193,22 @@ const CASES: &[ssh_harness::Case] = &[
         a_row_cancelled_as_its_push_returns_says_the_push_returned,
     ),
     (
+        "a_cancellation_with_the_remote_unreachable_frees_the_repository_and_confirms_nothing",
+        a_cancellation_with_the_remote_unreachable_frees_the_repository_and_confirms_nothing,
+    ),
+    (
+        "with_a_separate_push_url_a_fetch_is_not_asking_the_remote",
+        with_a_separate_push_url_a_fetch_is_not_asking_the_remote,
+    ),
+    (
+        "a_first_call_cancelled_before_its_push_claims_nothing_from_the_fetch_side",
+        a_first_call_cancelled_before_its_push_claims_nothing_from_the_fetch_side,
+    ),
+    (
+        "a_cancellation_asked_before_a_crash_during_the_fetch_still_stops_the_push",
+        a_cancellation_asked_before_a_crash_during_the_fetch_still_stops_the_push,
+    ),
+    (
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
@@ -2409,11 +2425,7 @@ fn assert_final(
         "item sync" => item_sync(w),
         _ => repo_sync(w),
     };
-    // A finished record stores no action: the replay is the result
-    // without what it offered.
-    let mut expected = result.clone();
-    expected.recovery.clear();
-    assert_eq!(execute(w, id, mutation), expected);
+    assert_eq!(&execute(w, id, mutation), result);
     assert_eq!(connections(w), opened);
     // Asking it to stop asks nothing.
     let asked = w
@@ -2423,7 +2435,9 @@ fn assert_final(
         .ok_or(FixtureError)?;
     assert_eq!(asked.state, RequestState::Finished);
     assert!(!asked.requested);
-    assert!(!asked.acknowledged);
+    // Acknowledged is said of a request that ended cancelled, and of
+    // no other.
+    assert_eq!(asked.acknowledged, result.code == ResultCode::Cancelled);
     Ok(())
 }
 
@@ -2618,4 +2632,252 @@ fn a_row_cancelled_as_its_push_returns_says_the_push_returned() -> Result<(), Fi
     ))?;
     assert_eq!(checkpoint, "push_returned");
     Ok(())
+}
+
+// A cancellation of an operation whose push is unaccounted for.
+
+/// The final answer of a request that was stopped, or fenced, with a
+/// push intended and nothing known of it: not confirmed, which is
+/// neither published nor not published. It offers a look at the
+/// repository and not the same request, and replays as it is.
+fn assert_not_confirmed(
+    w: &World,
+    id: &str,
+    answer: &Envelope<MutationDataDto>,
+) -> Result<(), FixtureError> {
+    assert_eq!(answer.code, ResultCode::RecoveryRequired);
+    assert_eq!(answer.outcome, Outcome::Blocked);
+    assert_eq!(
+        answer.effects,
+        Effects {
+            publication: PublicationEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
+    assert_eq!(actions(answer), [RecoveryActionKind::RepoInspect]);
+    assert_final(w, id, answer)
+}
+
+/// The network drops during the push, and the user cancels offline.
+/// The remote cannot be asked what it holds, so nothing is said of the
+/// push either way; but the cancellation is honored, the reservation is
+/// let go, and the repository can be worked in again.
+fn a_cancellation_with_the_remote_unreachable_frees_the_repository_and_confirms_nothing()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "lost-output")?;
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    let lost = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(lost.code, ResultCode::TransportUnavailable);
+    // From here on the server cannot be reached at all.
+    w.server.disconnect_at(FixtureBoundary::Handshake);
+    assert!(reserved(&w));
+    assert_eq!(
+        execute(&w, REQUEST_2, create_other(&w)).code,
+        ResultCode::RecoveryRequired
+    );
+
+    let asked = w
+        .service
+        .cancel_request(request(REQUEST_1))
+        .data
+        .ok_or(FixtureError)?;
+    assert!(asked.requested);
+    let ended = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(ended.operation_id, lost.operation_id);
+    assert!(!reserved(&w));
+    assert_not_confirmed(&w, REQUEST_1, &ended)?;
+    assert!(!record(&w, REQUEST_1).ok_or(FixtureError)?.cancel_requested);
+    // The repository is free, offline.
+    assert_eq!(
+        execute(&w, REQUEST_2, create_other(&w)).outcome,
+        Outcome::Success
+    );
+    Ok(())
+}
+
+/// Gives the publication remote a push URL of its own: a second server
+/// whose primary branch stands where the first's does, trusted for
+/// pushing.
+fn separate_push_endpoint(w: &mut World) -> Result<SshRemoteFixture, FixtureError> {
+    let destination = SshRemoteFixture::start()?;
+    destination.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &w.server.allowed_client_public_key(),
+    ))?);
+    w.probes.push(destination.url().into_bytes());
+    ssh_privacy::save(&w.probes)?;
+    {
+        let bare = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+        let source = w.server.repository_path().to_str().ok_or(FixtureError)?;
+        fixed(fixed(bare.remote_anonymous(source))?.fetch(
+            &["+refs/heads/main:refs/heads/main"],
+            None,
+            None,
+        ))?;
+    }
+    fixed(
+        w.repo()?
+            .remote_set_pushurl("origin", Some(&destination.url())),
+    )?;
+    fixed(w.service.verify_ssh_transport(
+        VerifySshTransportRequest {
+            root: w.root.clone(),
+            direction: SshDirection::Push,
+            approval: Some(HostApproval {
+                authority: SshAuthority {
+                    host: "127.0.0.1".into(),
+                    port: destination.address().port(),
+                },
+                expected: None,
+                presented: destination.host_identity(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    Ok(destination)
+}
+
+fn pushed_to(server: &SshRemoteFixture) -> Result<git2::Oid, FixtureError> {
+    fixed(
+        fixed(git2::Repository::open_bare(server.repository_path()))?
+            .refname_to_id("refs/heads/main"),
+    )
+}
+
+/// The remote is fetched from one place and pushed to another. A push
+/// is taken by the push endpoint and its result lost; then the push
+/// endpoint cannot be reached while the fetch endpoint can. Fetching is
+/// not asking the remote that was pushed to: the cancelled request does
+/// not say that nothing was published.
+fn with_a_separate_push_url_a_fetch_is_not_asking_the_remote() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    let destination = separate_push_endpoint(&mut w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "lost-output")?;
+    destination.disconnect_at(FixtureBoundary::AfterReceivePack);
+    let lost = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(lost.code, ResultCode::TransportUnavailable);
+    // The push endpoint holds the commit, by this request's push. The
+    // fetch endpoint never will.
+    assert_eq!(pushed_to(&destination)?, local);
+    assert_ne!(pushed_to(&w.server)?, local);
+    destination.disconnect_at(FixtureBoundary::Handshake);
+
+    assert!(
+        w.service
+            .cancel_request(request(REQUEST_1))
+            .data
+            .ok_or(FixtureError)?
+            .requested
+    );
+    let ended = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(ended.operation_id, lost.operation_id);
+    assert!(!reserved(&w));
+    assert_not_confirmed(&w, REQUEST_1, &ended)
+}
+
+/// The reverse. The fetch endpoint already holds the commit and the
+/// push endpoint does not; a first call is cancelled before it pushes.
+/// It pushed nothing, and what the fetch side holds is no push of its.
+fn a_first_call_cancelled_before_its_push_claims_nothing_from_the_fetch_side()
+-> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    let destination = separate_push_endpoint(&mut w)?;
+    let behind = pushed_to(&destination)?;
+    let repo = w.repo()?;
+    let local = advance(&repo, "refs/heads/main", "local-advance")?;
+    // The commit reaches the fetch endpoint some other way.
+    push_peer(&repo, &w.server, "refs/heads/main")?;
+    assert_eq!(pushed_to(&w.server)?, local);
+
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: ProgressStage::Pushing,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let cancelled = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(
+        cancelled.effects,
+        Effects {
+            publication: PublicationEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
+    assert_eq!(pushed_to(&destination)?, behind);
+    assert_final(&w, REQUEST_1, &cancelled)
+}
+
+/// A cancellation is asked of a request whose push is intended and was
+/// not taken. The request's next call dies during its fetch, before it
+/// has asked the remote anything. The cancellation is still there for
+/// the call after that, which pushes nothing.
+fn a_cancellation_asked_before_a_crash_during_the_fetch_still_stops_the_push()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    advance(&w.repo()?, "refs/heads/main", "rejected-local")?;
+    w.server.reject_primary_updates(true)?;
+    let rejected = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(rejected.code, ResultCode::PushRejected);
+    w.server.reject_primary_updates(false)?;
+    let pushes = accepted(&w.server);
+    assert!(
+        w.service
+            .cancel_request(request(REQUEST_1))
+            .data
+            .ok_or(FixtureError)?
+            .requested
+    );
+
+    // The next call dies inside its first transport call, as a process
+    // that is killed does: nothing after that point runs.
+    {
+        let dying = fixed(RepositoryService::open_at(&w.data()))?;
+        let root = w.root.clone();
+        let hook = repository::transport::operation_tests::install_hook(|point| {
+            if point == repository::transport::operation_tests::Checkpoint::Prepared {
+                panic!("the process dies during its fetch");
+            }
+        });
+        let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dying.execute(
+                MutationCall {
+                    request_id: request(REQUEST_1),
+                    confirmation: None,
+                    mutation: Mutation::RepoSync(RepoSyncInput { root }),
+                },
+                &mut SessionCredentials::new(Provider),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            )
+        }));
+        drop(hook);
+        assert!(died.is_err());
+    }
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    let ended = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
+    assert_eq!(ended.code, ResultCode::Cancelled);
+    assert_eq!(ended.effects.publication, PublicationEffect::Pending);
+    assert!(!reserved(&w));
+    assert_final(&w, REQUEST_1, &ended)
 }

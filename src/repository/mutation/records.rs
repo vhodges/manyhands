@@ -863,6 +863,22 @@ impl RepositoryService {
         })
     }
 
+    /// Whether the record's cancellation flag is set. Nothing is
+    /// changed: a cancellation that is held, and not yet passed on,
+    /// stays where a later call finds it.
+    pub(super) fn cancellation_requested(&self, request_id: RequestId) -> Result<bool, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT cancel_requested FROM request_records WHERE request_ulid = ?1",
+                    [request_id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(false))
+        })
+    }
+
     /// Whether the record's cancellation flag is set, and clears it: the
     /// caller is the request's own call, at a safe point, and passes the
     /// cancellation on to its operation. Nothing is written for a flag

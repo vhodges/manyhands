@@ -665,35 +665,6 @@ impl RepositoryService {
         })
     }
 
-    /// Takes back a cancellation asked of a synchronization that has
-    /// recorded its intent to push and not what became of the push, and
-    /// says whether there was one. A restart acknowledges a requested
-    /// cancellation before it does anything else, and for such an
-    /// operation that would end it without the remote having been asked
-    /// whether it took the push. The caller asks for the cancellation
-    /// again once the restart has asked the remote.
-    pub(crate) fn defer_synchronization_cancellation(
-        &self,
-        root: &Path,
-        operation_id: OperationId,
-    ) -> Result<bool, RepositoryError> {
-        state::with_transaction(self, root, |tx, id| {
-            let Some(record) = state::read_operation(tx, id, operation_id)? else {
-                return Ok(false);
-            };
-            if !(is_sync(&record.target)
-                && active(record.phase)
-                && record.cancel_requested
-                && record.authority.is_none()
-                && record.sync_evidence.push_oid.is_some())
-            {
-                return Ok(false);
-            }
-            tx.execute("UPDATE remote_operation_records SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
-            Ok(true)
-        })
-    }
-
     /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
     /// these non-transfer boundaries. Returns only after the durable transition.
     pub fn remote_safe_point(

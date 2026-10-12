@@ -11,7 +11,7 @@ use super::{
     bind::{self, Accepted, Answer},
     command::Command,
     dto::{MutationDataDto, RequestState},
-    evidence,
+    evidence, outcome,
     records::RequestRecord,
     reply::Reply,
 };
@@ -77,6 +77,27 @@ impl RepositoryService {
         let envelope = match accepted.operation() {
             Some(operation) => envelope.with_operation_id(operation.operation_id.to_string()),
             None => envelope,
+        };
+        // A finished result of a synchronization can be one that tells
+        // its caller to look at the repository: an operation that was
+        // stopped or fenced with its push not confirmed. That is as
+        // true of the result given again as of the result first given,
+        // so the action is made again from the code. No other finished
+        // result of a synchronization has an action, and no other
+        // command's is given one here.
+        let envelope = match Command::parse(&envelope.command) {
+            Some(command) if command.stops_at_safe_points() => {
+                let recovery = outcome::recovery(
+                    envelope.code,
+                    command,
+                    envelope.scope.repository.as_deref(),
+                    Some(accepted.request_id),
+                    accepted.operation().map(|operation| operation.operation_id),
+                    false,
+                );
+                envelope.with_recovery(recovery)
+            }
+            Some(_) | None => envelope,
         };
         match data {
             Some(data) => envelope.with_data(data),
