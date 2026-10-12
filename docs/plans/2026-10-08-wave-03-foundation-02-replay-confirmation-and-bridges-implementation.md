@@ -1014,8 +1014,20 @@ passed and none failed in 29 libtest targets, and every SSH-harness target
 passed. The design was brought up to date with what those tasks built in
 this pass: the commands and their results, confirmation, progress,
 cancellation, abandoning and resuming, the known limits recorded along the
-way, and the questions still open for the product owner. The independent
-review of the whole Part B range is recorded separately.
+way, and the questions still open for the product owner.
+
+Three independent reviews of the whole Part B range (`4c54d99..6e867a6`)
+found no Critical issue. Nine of their findings went to one fix round
+(`81a1b3f..2d8e8d9`): seven were fixed, `abandon_operation` stays public
+because integration tests call it, and one is open for the product owner
+(a create on a Git repository that was never enabled offers `index.rebuild`,
+which registers the repository and leaves the create with the same answer).
+A scoped re-review of the fix round found no Critical issue. The full gate
+passed at `2d8e8d9`: formatting and clippy were clean, 1878 tests passed and
+none failed in 29 libtest targets, and the six SSH-harness targets passed
+(66, 25, 15, 63, 31 and 105 cases). The structural findings are carried to
+the start of Part C. No workflow was dispatched; `journal_rejection` is in
+the native test list and has not yet run on Windows or macOS.
 
 # Part C: Bridges
 
