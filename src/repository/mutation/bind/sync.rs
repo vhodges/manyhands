@@ -467,7 +467,49 @@ fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
     ))
 }
 
+/// What a synchronization reads of its repository before it is
+/// accepted.
+struct Configured {
+    /// The repository's root, as it is registered.
+    root: PathBuf,
+    primary_branch: String,
+    /// Whether the repository has a publication remote.
+    publishes: bool,
+}
+
 impl SyncBinding {
+    /// Resolves the request's root and reads the repository's
+    /// configuration.
+    fn configured(&self, service: &RepositoryService) -> Result<Configured, Answer> {
+        let repository = resolve_root(service, &self.root)?;
+        let root = repository.root();
+        let configuration =
+            match read_configuration_for(root, RepositoryOperation::RepositorySnapshot)
+                .map_err(refused)?
+            {
+                ConfigurationInspection::Valid(configuration) => configuration,
+                ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
+                    return Err(Answer::stopped(ResultCode::InvalidConfiguration));
+                }
+            };
+        Ok(Configured {
+            root: root.to_owned(),
+            publishes: configuration.publication_remote.is_some(),
+            primary_branch: configuration.primary_branch,
+        })
+    }
+
+    /// The request's position on the branch it synchronizes.
+    fn position(&self, configured: &Configured) -> Result<Position, Answer> {
+        let Configured {
+            root,
+            primary_branch,
+            publishes: _,
+        } = configured;
+        Position::of(root, &self.branch_ref(root, primary_branch))
+            .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))
+    }
+
     /// The branch the request synchronizes, as a full reference name:
     /// the item's editing branch, or `primary`.
     fn branch_ref(&self, root: &std::path::Path, primary: &str) -> String {
@@ -511,13 +553,22 @@ impl SyncBinding {
     /// the row is cancelled. Should asking fail,
     /// nothing is acknowledged, the flag stands for the next call, and
     /// the error is what is reported.
-    fn call(&self, call: &CallContext<'_>, accepted: &Accepted, restart: bool) -> Ran {
+    ///
+    /// `subject` is the request the call's events are of: the
+    /// synchronization's own, or the resume that takes it up.
+    fn call(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        subject: Subject,
+        restart: bool,
+    ) -> Ran {
         let service = call.service;
         let root = accepted.root();
         let mut watch = Watch {
             call,
             accepted,
-            subject: Subject::of(self, accepted),
+            subject,
             unsettled: push_is_unsettled(service, accepted),
             asked_at: None,
             pushed: false,
@@ -805,22 +856,11 @@ impl Binding for SyncBinding {
     /// no request of the boundary's. Everything else is the domain's to
     /// check, before it reserves.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        let repository = resolve_root(call.service, &self.root)?;
-        let root = repository.root();
-        let configuration =
-            match read_configuration_for(root, RepositoryOperation::RepositorySnapshot)
-                .map_err(refused)?
-            {
-                ConfigurationInspection::Valid(configuration) => configuration,
-                ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
-                    return Err(Answer::stopped(ResultCode::InvalidConfiguration));
-                }
-            };
-        if configuration.publication_remote.is_none() {
+        let configured = self.configured(call.service)?;
+        if !configured.publishes {
             return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
         }
-        let position = Position::of(root, &self.branch_ref(root, &configuration.primary_branch))
-            .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
+        let position = self.position(&configured)?;
         Ok(Prepared {
             family: Some(OperationFamily::Remote),
             position,
@@ -830,7 +870,7 @@ impl Binding for SyncBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call, accepted, false)
+        self.call(call, accepted, Subject::of(self, accepted), false)
     }
 
     /// Nothing is read here and nothing is answered: whatever the row
@@ -857,6 +897,6 @@ impl Binding for SyncBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call, accepted, true)
+        self.call(call, accepted, Subject::of(self, accepted), true)
     }
 }
