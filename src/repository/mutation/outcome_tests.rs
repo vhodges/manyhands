@@ -1325,7 +1325,9 @@ fn a_selection_whose_registration_is_pending_reports_its_commit_and_is_owed() {
 
 /// `index.rebuild` takes the root of the repository to rebuild. A result
 /// that names no repository, as one of a key command is, has none to
-/// give, so it offers no such action.
+/// give, so it offers no such action. When its record was left accepted
+/// the same request is what goes on, and that is offered: nothing else
+/// tells the caller that the request is still held.
 #[test]
 fn a_result_that_names_no_repository_offers_no_rebuild() {
     let request_id = RequestId::new();
@@ -1334,18 +1336,19 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
         ResultCode::RepositoryNotRegistered,
     ] {
         for retry in [false, true] {
-            assert!(
-                recovery(
-                    code,
-                    Command::KeySelect,
-                    None,
-                    Some(request_id),
-                    None,
-                    retry
-                )
-                .is_empty(),
-                "{code:?}, retry {retry}"
-            );
+            let offered: Vec<&str> = recovery(
+                code,
+                Command::KeySelect,
+                None,
+                Some(request_id),
+                None,
+                retry,
+            )
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect();
+            let expected: &[&str] = if retry { &["request.retry"] } else { &[] };
+            assert_eq!(offered, expected, "{code:?}, retry {retry}");
         }
         let offered = recovery(
             code,

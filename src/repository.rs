@@ -861,6 +861,11 @@ pub enum FailurePoint {
     /// the index being held or unreadable for a moment would have it
     /// fail.
     BeforeRequestRelationshipCheck,
+    /// A change to the key registry made under an operation, before its
+    /// transaction is begun: the call fails there, as the index being
+    /// held by another writer past the wait would have it fail. Nothing
+    /// is compared, changed or recorded.
+    BeforeKeyRegistryChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

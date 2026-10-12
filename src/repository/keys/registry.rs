@@ -109,6 +109,7 @@ impl RepositoryService {
         request: RegisterSharedKeyRequest,
     ) -> Result<MarkedRegistryChange, RepositoryError> {
         let operation = RepositoryOperation::RegisterSharedKey;
+        self.registry_change_begins(operation)?;
         self.register_key(Some(mark), request)?
             .marked(operation, self.registry_data_directory())
     }
@@ -246,6 +247,23 @@ impl RepositoryService {
         })
     }
 
+    /// Where a test has a change made under a mark fail before its
+    /// transaction is begun: the registry is unavailable to it.
+    fn registry_change_begins(
+        &self,
+        operation: RepositoryOperation,
+    ) -> Result<(), RepositoryError> {
+        let data_directory = self.registry_data_directory();
+        if self.should_inject(
+            super::super::FailurePoint::BeforeKeyRegistryChange,
+            operation,
+            data_directory,
+        )? {
+            return Err(shared_key_registry_unavailable(operation, data_directory));
+        }
+        Ok(())
+    }
+
     /// Records `change` against the operation of `mark`, in the
     /// transaction that made the change, and returns it. Nothing is
     /// recorded of a change made under no mark.
@@ -376,6 +394,7 @@ impl RepositoryService {
         id: SharedKeyId,
     ) -> Result<MarkedRegistryChange, RepositoryError> {
         let operation = RepositoryOperation::SelectSharedKey;
+        self.registry_change_begins(operation)?;
         self.select_key(Some(mark), id)?
             .marked(operation, self.registry_data_directory())
     }
@@ -488,6 +507,7 @@ impl RepositoryService {
         mark: &KeyRegistryMark,
     ) -> Result<MarkedRegistryChange, RepositoryError> {
         let operation = RepositoryOperation::ClearSharedKeySelection;
+        self.registry_change_begins(operation)?;
         self.clear_selection(Some(mark))?
             .marked(operation, self.registry_data_directory())
     }

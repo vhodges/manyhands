@@ -1475,6 +1475,103 @@ fn a_record_accepted_before_these_commands_had_an_operation_is_still_entered() {
     );
 }
 
+/// A retry that fails with nothing recorded keeps its record: the
+/// expectation the request was accepted with is what guards the request
+/// when it is sent again. A selection, or a clearing, died before its
+/// step; someone else selected another key; the retry could not reach the
+/// registry. Sent once more, the request is an external change, and the
+/// later choice stands.
+#[test]
+fn a_retry_that_fails_with_nothing_recorded_keeps_its_record_and_its_expectation() {
+    for clearing in [false, true] {
+        let mut world = KeyWorld::with_service(|data| {
+            FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+        });
+        let work = world.register("work", "Work laptop");
+        let other = world.register("other", "Other");
+        let third = world.register("third", "Third");
+        if clearing {
+            world.service.select_shared_key(third).unwrap();
+        }
+        let request = move || if clearing { clear() } else { select(work) };
+        let died = world.execute(REQUEST_1, request());
+        assert_eq!(died.code, ResultCode::InternalError, "{clearing}");
+        let accepted = world.record(REQUEST_1).expect("a record");
+        world.reopen();
+        world.service.select_shared_key(other).unwrap();
+
+        // The retry cannot reach the registry.
+        world.fail_once_at(FailurePoint::BeforeKeyRegistryChange);
+        let failed = world.execute(REQUEST_1, request());
+        assert_eq!(
+            (failed.outcome, failed.code),
+            (Outcome::Blocked, ResultCode::IndexUnavailable),
+            "{clearing}"
+        );
+        assert_eq!(recovery_actions(&failed), ["request.retry"], "{clearing}");
+        assert_eq!(world.selected(), Some(other), "{clearing}");
+        let kept = world.record(REQUEST_1).expect("the record is kept");
+        assert_eq!(kept.state, RequestState::Accepted, "{clearing}");
+        assert_eq!(kept.attempt, 2, "{clearing}");
+        assert_eq!(kept.expected_digest, accepted.expected_digest);
+        assert!(kept.expected_digest.is_some(), "{clearing}");
+        assert_eq!(kept.operations, accepted.operations, "{clearing}");
+
+        world.reopen();
+        let retry = world.execute(REQUEST_1, request());
+        assert_refused_as_late(&world, REQUEST_1, request, &retry);
+        assert_eq!(world.selected(), Some(other), "{clearing}");
+    }
+}
+
+/// The same while the request's first call is still on its way: a retry
+/// that enters beside it and fails does not delete the record under it.
+/// The first call registers its key under the record's operation, so the
+/// request sent again, after the key was removed, is answered with that
+/// key and registers no second one.
+#[test]
+fn a_retry_that_fails_beside_a_first_call_in_flight_does_not_orphan_its_change() {
+    let mut world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    let import_it = {
+        let (private, public) = (private.clone(), public.clone());
+        move || import("Imported", &private, Some(&public))
+    };
+    // Between the first call's acceptance and its domain call.
+    let data = world.data.path().to_owned();
+    let beside = import_it.clone();
+    world.service.set_request_hook_for_testing(move || {
+        let failed = execute_with(
+            &FailOnce::at(FailurePoint::BeforeKeyRegistryChange).open_service(&data),
+            REQUEST_1,
+            beside(),
+        );
+        assert_eq!(failed.code, ResultCode::IndexUnavailable);
+        assert_eq!(recovery_actions(&failed), ["request.retry"]);
+    });
+    let first = world.execute(REQUEST_1, import_it());
+    // The first call made its change. Its record was entered by the
+    // retry, so it settled nothing.
+    assert_eq!(first.code, ResultCode::Ok);
+    let [(key, false)] = world.keys()[..] else {
+        panic!("one key: {:?}", world.keys());
+    };
+    let record = world.record(REQUEST_1).expect("the record is kept");
+    assert_eq!(record.state, RequestState::Accepted);
+    assert_eq!(record.attempt, 2);
+    assert_operation(&world, REQUEST_1, true);
+
+    world.service.unregister_shared_key(key).unwrap();
+    world.reopen();
+    answered_from_its_evidence(
+        &world,
+        REQUEST_1,
+        import_it,
+        &imported(&key.to_string(), "Imported"),
+    );
+    assert!(world.keys().is_empty());
+}
+
 /// A record an earlier build finished for one of these commands holds no
 /// operation either. It is replayed as any finished record is: its stored
 /// result, with nothing run and nothing changed.

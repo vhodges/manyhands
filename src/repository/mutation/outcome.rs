@@ -726,8 +726,13 @@ fn recovery(
         // that names no repository, as that of a key command on an index
         // that cannot be read is, has no root to give: an action without
         // its argument could not be carried out, so none is offered.
+        // When the record of such a request was left accepted, the same
+        // request is what goes on, as for every code with no action of
+        // its own: a key registry change that could not reach the
+        // registry on its retry keeps its record, and says so.
         ResultCode::RepositoryNotRegistered | ResultCode::IndexUnavailable => match root {
             Some(_) => vec![at_root(RecoveryActionKind::IndexRebuild)],
+            None if retry => retry_request(),
             None => Vec::new(),
         },
         // An external change is not answered by the same request: it is

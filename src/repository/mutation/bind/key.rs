@@ -323,8 +323,22 @@ impl KeyRegistryBinding {
             Ok(MarkedRegistryChange::NotRegistered) | Err(_) => {
                 let journal = accepted.journal_row(service);
                 let standing = match journal {
-                    // Nothing is recorded: nothing was done, and nothing
-                    // is in flight.
+                    // Nothing is recorded, on a call that entered a
+                    // record another call accepted. The record is what
+                    // holds the setting the request observed and the
+                    // operation its change is recorded against. Were it
+                    // released, the request sent again would be a new
+                    // one: it would observe the setting as it is by then
+                    // and put its choice over a later one, and a first
+                    // call still on its way would record its change
+                    // under an operation no record names. The record is
+                    // kept, whatever the failure: the same request is
+                    // its way out.
+                    Some(JournalRow::Absent) if accepted.attempt > 1 => Standing::Unconfirmed,
+                    // Nothing is recorded, on the call that accepted the
+                    // request: nothing was done, and nothing is in
+                    // flight. Its release is conditional on its attempt,
+                    // and changes nothing once another call has entered.
                     Some(JournalRow::Absent | JournalRow::Pending(_)) | None => {
                         Standing::Stopped { journal }
                     }
