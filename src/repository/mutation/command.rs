@@ -114,6 +114,40 @@ impl Command {
         }
     }
 
+    /// Whether an accepted record of the command may hold no operation
+    /// although the command has one: a build from before an import, a
+    /// selection and a clearing of a key were recorded against an
+    /// operation accepted them with none. Such a record is entered as
+    /// that build entered it, with no operation, and is not refused for
+    /// being from before. `false` for a command that has always had an
+    /// operation, and for one that has none.
+    pub(crate) const fn was_accepted_without_operation(self) -> bool {
+        match self {
+            Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete
+            | Self::OperationAbandon
+            | Self::ItemSync
+            | Self::RepoSync
+            | Self::OperationResume => false,
+        }
+    }
+
     /// Whether the command is how the index comes back. When the index is
     /// unavailable and no request record can be read, the boundary brings
     /// the index back for such a command, and for no other, before it
@@ -432,6 +466,26 @@ mod tests {
                 !single_transaction && !names_another_s,
                 "{command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn only_the_recorded_key_registry_changes_were_once_accepted_without_an_operation() {
+        for command in Command::ALL {
+            let recorded_change = matches!(
+                command,
+                Command::KeyImport | Command::KeySelect | Command::KeyClear
+            );
+            assert_eq!(
+                command.was_accepted_without_operation(),
+                recorded_change,
+                "{command:?}"
+            );
+            // Only a command that has an operation now can have lacked it.
+            if command.was_accepted_without_operation() {
+                assert!(command.has_operation(), "{command:?}");
+                assert!(!command.needs_confirmation(), "{command:?}");
+            }
         }
     }
 

@@ -419,10 +419,18 @@ impl Accepted {
     /// that lost its operation would otherwise be entered again under an
     /// operation ID that is not its own. A record of a command this build
     /// does not bind is read as one of a command that has an operation.
+    ///
+    /// The one record without its operation that is entered is of a
+    /// command an earlier build accepted with none; see
+    /// `Command::was_accepted_without_operation`. It is entered as a
+    /// request with no operation.
     pub(crate) fn of_record(record: &RequestRecord, attempt: u64) -> Option<Self> {
         let operation = record.operations.first();
-        let has_operation = Command::parse(&record.command).is_none_or(Command::has_operation);
-        if operation.is_some() != has_operation {
+        let command = Command::parse(&record.command);
+        let has_operation = command.is_none_or(Command::has_operation);
+        let from_before =
+            operation.is_none() && command.is_some_and(Command::was_accepted_without_operation);
+        if operation.is_some() != has_operation && !from_before {
             return None;
         }
         Some(Self {

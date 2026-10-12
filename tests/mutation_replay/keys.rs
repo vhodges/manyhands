@@ -1418,3 +1418,59 @@ fn a_resume_of_a_recorded_registry_change_is_a_no_op() {
     assert_eq!(all_but_the_requests(&world), before);
     assert_eq!(world.selected(), Some(work));
 }
+
+/// A record an earlier build accepted for one of these commands holds no
+/// operation: that build gave them none. It is entered as it was then,
+/// and its change is made: the request is not refused for good because
+/// its record is from before.
+#[test]
+fn a_record_accepted_before_these_commands_had_an_operation_is_still_entered() {
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+    });
+    let work = world.register("work", "Work laptop");
+    let died = world.execute(REQUEST_1, select(work));
+    assert_eq!(died.code, ResultCode::InternalError);
+    // What that build left: the record, and no operation of it.
+    let removed = items::index(world.data.path())
+        .execute("DELETE FROM request_operations", [])
+        .unwrap();
+    assert_eq!(removed, 1);
+    assert!(world.record(REQUEST_1).unwrap().operations.is_empty());
+    world.reopen();
+
+    let retry = world.execute(REQUEST_1, select(work));
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (Outcome::Success, ResultCode::Ok, None)
+    );
+    assert_eq!(key_data(&retry), &read(work, "Work laptop"));
+    assert_eq!(retry.operation_id, None);
+    assert_eq!(world.selected(), Some(work));
+    let record = world.record(REQUEST_1).expect("a record");
+    assert_eq!(record.state, RequestState::Finished);
+    assert_eq!(world.execute(REQUEST_1, select(work)), retry);
+
+    // A removal's record never held one, and one of a command that has
+    // always had an operation is still not entered without it.
+    world.fail_once_at(FailurePoint::BeforeRequestDomainCall);
+    let died = world.execute(
+        REQUEST_2,
+        world.generate("Generated", Some(mutation::PASSPHRASE)),
+    );
+    assert_eq!(died.code, ResultCode::InternalError);
+    items::index(world.data.path())
+        .execute("DELETE FROM request_operations", [])
+        .unwrap();
+    world.reopen();
+    let refused = world.execute(
+        REQUEST_2,
+        world.generate("Generated", Some(mutation::PASSPHRASE)),
+    );
+    assert_eq!(refused.code, ResultCode::InternalError);
+    assert_eq!(world.keys(), [(work, true)]);
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+}
