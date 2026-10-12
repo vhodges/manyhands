@@ -7,9 +7,9 @@ use manyhands::{
         AuthoringKind, CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput,
         IndexRefreshInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyImportInput,
         KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, OperationAbandonInput,
-        OperationId, RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
-        RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepoSyncInput, SharedKeyId,
-        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        OperationId, OperationResumeInput, RelationshipWrite, RemoteAddInput, RemoteRemoveInput,
+        RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepoSyncInput,
+        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -1135,6 +1135,60 @@ fn an_operation_abandon_and_its_preview_match_their_schemas_and_goldens() {
         OPERATION_ABANDON_SCHEMA,
         &SENTINELS,
         &unknown,
+    );
+}
+
+/// A resume reports no data: its target is the operation, which its
+/// request names, and what it did is in its effects. The envelope of
+/// one that took up a synchronization names a commit and can name a
+/// host, and is checked against the schemas by the test target
+/// `mutation_remote`.
+#[test]
+fn an_operation_resume_matches_the_envelope_schema_and_its_goldens() {
+    let resume = |world: &World, operation_id: &str| {
+        Mutation::OperationResume(OperationResumeInput {
+            root: world.root.clone(),
+            operation_id: OperationId::parse(operation_id).unwrap(),
+        })
+    };
+    // A save whose index hand-off is owed: the resume runs it.
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let token = world.token(TICKET_A);
+    let owed = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    let operation_id = owed.operation_id.expect("the save's operation");
+    let resumed = world.execute(REQUEST_2, resume(&world, &operation_id));
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_contract("operation_resume", &world, &resumed);
+
+    // The operation has ended: nothing is owed.
+    let finished = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(finished.outcome, Outcome::Success);
+    let noop = world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX3", resume(&world, &operation_id));
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_contract("operation_resume_noop", &world, &noop);
+
+    let unknown = world.execute(
+        "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+        resume(&world, "01ARZ3NDEKTSV4RRFFQ69G5FZZ"),
+    );
+    assert_eq!(unknown.code, ResultCode::OperationNotFound);
+    assert_contract("operation_resume_not_found", &world, &unknown);
+
+    // A save that stopped before its write: only its own request goes
+    // on, and the result names it.
+    let world =
+        World::with_service(|data| FailOnce::at(FailurePoint::BeforeItemWrite).open_service(data));
+    let token = world.token(TICKET_A);
+    let interrupted = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    let operation_id = interrupted.operation_id.expect("the save's operation");
+    let refused = world.execute(REQUEST_2, resume(&world, &operation_id));
+    assert_eq!(refused.code, ResultCode::OriginalRequestRequired);
+    assert_contract(
+        "operation_resume_original_request_required",
+        &world,
+        &refused,
     );
 }
 
