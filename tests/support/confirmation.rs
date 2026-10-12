@@ -715,3 +715,49 @@ impl Keyring {
         );
     }
 }
+
+/// A repository that is not enabled, a service with nothing registered
+/// and a clock that stands still, so that a preview's expiry is fixed.
+pub struct Unregistered {
+    pub fixture: TestRepository,
+    pub root: PathBuf,
+    pub data: tempfile::TempDir,
+    pub service: RepositoryService,
+}
+
+impl Unregistered {
+    pub fn new() -> Self {
+        let fixture = born_repository();
+        let root = fixture.root.canonicalize().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = Self::open(data.path(), None);
+        Self {
+            fixture,
+            root,
+            data,
+            service,
+        }
+    }
+
+    pub fn open(data: &Path, point: Option<FailurePoint>) -> RepositoryService {
+        let clock = mutation::TestClock::at(super::operations::STORED_AT);
+        match point {
+            Some(point) => super::FailOnce::at(point).open_service(data),
+            None => RepositoryService::open_at(data).unwrap(),
+        }
+        .with_clock_for_testing(clock)
+    }
+
+    pub fn fail_once_at(&mut self, point: FailurePoint) {
+        self.service = Self::open(self.data.path(), Some(point));
+    }
+
+    pub fn enable(&self) -> Mutation {
+        Mutation::RepoEnable(RepoEnableInput {
+            root: self.root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: None,
+            slug_prefix: Some("mh".to_owned()),
+        })
+    }
+}

@@ -8,8 +8,8 @@ use manyhands::{
         IndexRefreshInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyImportInput,
         KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, OperationAbandonInput,
         OperationId, OperationResumeInput, RelationshipWrite, RemoteAddInput, RemoteRemoveInput,
-        RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepoSyncInput,
-        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        RemoteSelectInput, RepoCreateInput, RepoRemoveInput, RepoSyncInput, SharedKeyId,
+        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -18,6 +18,7 @@ mod support;
 
 use support::{
     FailOnce,
+    confirmation::Unregistered,
     golden::ContractCase,
     items::TICKET_A,
     mutation::{
@@ -762,55 +763,6 @@ fn an_interrupted_key_generate_matches_its_schema_and_goldens() {
 }
 
 const PREVIEW_SCHEMA: &str = "preview.schema.json";
-
-/// A repository that is not enabled, a service with nothing registered
-/// and a clock that stands still, so that a preview's expiry is fixed.
-struct Unregistered {
-    fixture: support::TestRepository,
-    root: std::path::PathBuf,
-    data: tempfile::TempDir,
-    service: manyhands::repository::RepositoryService,
-}
-
-impl Unregistered {
-    fn new() -> Self {
-        let fixture = support::born_repository();
-        let root = fixture.root.canonicalize().unwrap();
-        let data = tempfile::tempdir().unwrap();
-        let service = Self::open(data.path(), None);
-        Self {
-            fixture,
-            root,
-            data,
-            service,
-        }
-    }
-
-    fn open(
-        data: &std::path::Path,
-        point: Option<FailurePoint>,
-    ) -> manyhands::repository::RepositoryService {
-        let clock = mutation::TestClock::at(support::operations::STORED_AT);
-        match point {
-            Some(point) => FailOnce::at(point).open_service(data),
-            None => manyhands::repository::RepositoryService::open_at(data).unwrap(),
-        }
-        .with_clock_for_testing(clock)
-    }
-
-    fn fail_once_at(&mut self, point: FailurePoint) {
-        self.service = Self::open(self.data.path(), Some(point));
-    }
-
-    fn enable(&self) -> Mutation {
-        Mutation::RepoEnable(RepoEnableInput {
-            root: self.root.clone(),
-            primary_branch: "main".to_owned(),
-            identity: None,
-            slug_prefix: Some("mh".to_owned()),
-        })
-    }
-}
 
 /// Checks an envelope of a repository command, or of its preview,
 /// against its fixture. What differs from run to run is replaced: the
