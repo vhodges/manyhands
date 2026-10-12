@@ -1,9 +1,9 @@
 //! `remote add`, `remote select` and `remote remove`.
 //!
 //! `remote add` changes the repository's own Git configuration. A remote
-//! is no canonical content and no commit, so no effect shows it: every
-//! effect is `not_requested`, `data` names the remote, and the outcome
-//! says whether anything changed. The remote's location can hold a
+//! is no canonical content and no commit, so no effect shows it: the one
+//! effect a result has is its index hand-off, `data` names the remote,
+//! and the outcome says whether anything changed. The remote's location can hold a
 //! credential. It is fed to the request's digest and given to the domain
 //! operation, and is otherwise only ever written redacted.
 //!
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     canonical,
-    results::{Effects, ResultCode, Scope, redact_url},
+    results::{DiscoveryEffect, Effects, ResultCode, Scope, redact_url},
 };
 
 use super::{
@@ -76,6 +76,19 @@ pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
             },
         )
         | None => false,
+    }
+}
+
+/// What an `add_remote` or a `remove_remote` that returned says of its
+/// index hand-off, which is the one effect either has: a remote is no
+/// canonical content and no commit. An operation that changed the remote
+/// and ended ran its hand-off, and one that says its hand-off is pending
+/// still owes it. One that found nothing to change asked for none.
+fn hand_off(outcome: &RemoteOutcome) -> DiscoveryEffect {
+    match outcome {
+        RemoteOutcome::Changed => DiscoveryEffect::Current,
+        RemoteOutcome::NoChange => DiscoveryEffect::NotRequested,
+        RemoteOutcome::IndexPending { authoritative: _ } => DiscoveryEffect::Pending,
     }
 }
 
@@ -144,6 +157,18 @@ impl RemoteAddBinding {
         }
     }
 
+    /// The answer of an operation that returned or is known to have
+    /// ended, with what became of its index hand-off.
+    fn ended_answer(&self, code: ResultCode, changed: bool, discovery: DiscoveryEffect) -> Answer {
+        Answer {
+            effects: Effects {
+                discovery,
+                ..Effects::not_requested()
+            },
+            ..self.answer(code, changed)
+        }
+    }
+
     /// The one domain call, under the recorded operation ID, and what it
     /// came to.
     fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
@@ -156,6 +181,7 @@ impl RemoteAddBinding {
         match result {
             Ok(outcome) => {
                 let code = outcome::remote_outcome_code(&outcome);
+                let discovery = hand_off(&outcome);
                 let (added, standing) = match outcome {
                     RemoteOutcome::Changed => (true, Standing::Final),
                     RemoteOutcome::NoChange => (false, Standing::Final),
@@ -168,7 +194,7 @@ impl RemoteAddBinding {
                     ),
                 };
                 Ran {
-                    answer: self.answer(code, added),
+                    answer: self.ended_answer(code, added, discovery),
                     standing,
                 }
             }
@@ -292,8 +318,9 @@ impl Binding for RemoteAddBinding {
                     Err(error) => return Err(unread(Answer::of_read(&error), journal)),
                 };
                 if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+                    // The row owes nothing: its hand-off ran.
                     return Err(Ran {
-                        answer: self.answer(ResultCode::Ok, true),
+                        answer: self.ended_answer(ResultCode::Ok, true, DiscoveryEffect::Current),
                         standing: Standing::Final,
                     });
                 }
@@ -728,6 +755,18 @@ impl RemoteRemoveBinding {
         }
     }
 
+    /// The answer of an operation that returned or is known to have
+    /// ended, with what became of its index hand-off.
+    fn ended_answer(&self, code: ResultCode, changed: bool, discovery: DiscoveryEffect) -> Answer {
+        Answer {
+            effects: Effects {
+                discovery,
+                ..Effects::not_requested()
+            },
+            ..self.answer(code, changed)
+        }
+    }
+
     /// A name that cannot be a remote's is refused before anything is
     /// read: the domain operation would report it as a Git failure.
     fn validate(&self) -> Result<(), Answer> {
@@ -1072,6 +1111,7 @@ impl RemoteRemoveBinding {
         match result {
             Ok(outcome) => {
                 let code = outcome::remote_outcome_code(&outcome);
+                let discovery = hand_off(&outcome);
                 let (removed, standing) = match outcome {
                     RemoteOutcome::Changed => (true, Standing::Final),
                     RemoteOutcome::NoChange => (false, Standing::Final),
@@ -1084,7 +1124,7 @@ impl RemoteRemoveBinding {
                     ),
                 };
                 Ran {
-                    answer: self.answer(code, removed),
+                    answer: self.ended_answer(code, removed, discovery),
                     standing,
                 }
             }
@@ -1130,8 +1170,9 @@ impl RemoteRemoveBinding {
             Err(error) => return unread(Answer::of_read(&error), journal),
         };
         if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+            // The row owes nothing: its hand-off ran.
             return Ran {
-                answer: self.answer(ResultCode::Ok, true),
+                answer: self.ended_answer(ResultCode::Ok, true, DiscoveryEffect::Current),
                 standing: Standing::Final,
             };
         }

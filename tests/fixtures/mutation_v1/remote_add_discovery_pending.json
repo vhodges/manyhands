@@ -9,7 +9,7 @@
     "checkpoint": "not_requested",
     "cleanup": "not_requested",
     "commit_oid": null,
-    "discovery": "not_requested",
+    "discovery": "pending",
     "integration": "not_requested",
     "publication": "not_requested",
     "write": "not_requested"

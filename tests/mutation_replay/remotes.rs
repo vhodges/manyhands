@@ -74,7 +74,10 @@ fn execute(world: &World, request_id: &str, mutation: Mutation) -> Envelope<Muta
     envelope
 }
 
-fn assert_names_origin(envelope: &Envelope<MutationDataDto>) {
+/// Asserts that `envelope` names the remote `origin` and that the
+/// index hand-off, the one effect an added remote has, is `discovery`:
+/// a remote is no canonical content and no commit.
+fn assert_names_origin(envelope: &Envelope<MutationDataDto>, discovery: DiscoveryEffect) {
     assert_eq!(
         remote_data(envelope),
         &RemoteMutationDto {
@@ -91,8 +94,13 @@ fn assert_names_origin(envelope: &Envelope<MutationDataDto>) {
         ),
         (&None, &None, &None)
     );
-    // A remote is no canonical content and no commit.
-    assert_eq!(envelope.effects, Effects::not_requested());
+    assert_eq!(
+        envelope.effects,
+        Effects {
+            discovery,
+            ..Effects::not_requested()
+        }
+    );
 }
 
 #[test]
@@ -103,7 +111,7 @@ fn a_remote_is_added_and_the_same_again_is_a_no_op() {
         (added.outcome, added.code, added.failure_class()),
         (Outcome::Success, ResultCode::Ok, None)
     );
-    assert_names_origin(&added);
+    assert_names_origin(&added, DiscoveryEffect::Current);
     assert!(added.recovery.is_empty());
     // Git holds the location as it was given: the scans above are of
     // stores that could have held it.
@@ -145,7 +153,7 @@ fn a_remote_is_added_and_the_same_again_is_a_no_op() {
         (again.outcome, again.code, again.failure_class()),
         (Outcome::Noop, ResultCode::AlreadyApplied, None)
     );
-    assert_names_origin(&again);
+    assert_names_origin(&again, DiscoveryEffect::NotRequested);
     assert_eq!(
         world.record(REQUEST_2).unwrap().state,
         RequestState::Finished
@@ -242,7 +250,7 @@ fn a_remote_added_whose_index_hand_off_failed_is_partial_and_finished_by_its_ret
             Some(FailureClass::Incomplete)
         )
     );
-    assert_names_origin(&pending);
+    assert_names_origin(&pending, DiscoveryEffect::Pending);
     assert_eq!(
         crate::support::mutation::recovery_before_own_abandon(&pending),
         ["operation.resume"]
@@ -260,7 +268,7 @@ fn a_remote_added_whose_index_hand_off_failed_is_partial_and_finished_by_its_ret
         (retry.outcome, retry.code),
         (Outcome::Success, ResultCode::Ok)
     );
-    assert_names_origin(&retry);
+    assert_names_origin(&retry, DiscoveryEffect::Current);
     assert_eq!(retry.operation_id, pending.operation_id);
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
@@ -283,7 +291,7 @@ fn a_failure_after_the_remote_was_added_is_partial_though_no_effect_shows_it() {
             Some(FailureClass::Incomplete)
         )
     );
-    assert_names_origin(&stopped);
+    assert_names_origin(&stopped, DiscoveryEffect::NotRequested);
     assert_eq!(
         crate::support::mutation::recovery_before_own_abandon(&stopped),
         ["request.retry"]
@@ -347,7 +355,7 @@ fn a_completed_add_whose_result_was_lost_is_answered_from_its_row_and_not_run_ag
         (retry.outcome, retry.code, retry.failure_class()),
         (Outcome::Success, ResultCode::Ok, None)
     );
-    assert_names_origin(&retry);
+    assert_names_origin(&retry, DiscoveryEffect::Current);
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(operation_rows(&world), rows);
     let finished = world.record(REQUEST_1).expect("a record");
@@ -960,7 +968,7 @@ fn a_completed_row_of_an_add_that_found_the_remote_in_place_is_a_no_op() {
         (retry.outcome, retry.code),
         (Outcome::Noop, ResultCode::AlreadyApplied)
     );
-    assert_names_origin(&retry);
+    assert_names_origin(&retry, DiscoveryEffect::NotRequested);
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(operation_rows(&world), rows);
     assert_eq!(
@@ -992,7 +1000,7 @@ fn a_completed_row_of_an_add_whose_remote_is_absent_is_run() {
         (retry.outcome, retry.code),
         (Outcome::Success, ResultCode::Ok)
     );
-    assert_names_origin(&retry);
+    assert_names_origin(&retry, DiscoveryEffect::Current);
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(remote_url(&world, "origin"), Some(location(SECRET)));
     assert_eq!(

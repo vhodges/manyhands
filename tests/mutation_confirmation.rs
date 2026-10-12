@@ -3179,6 +3179,21 @@ fn assert_done(envelope: &Envelope<MutationDataDto>) {
     assert!(envelope.recovery.is_empty());
 }
 
+/// A remote that was removed: a success whose one effect is the index
+/// brought up to date with the repository's remotes.
+fn assert_removed(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+    assert_eq!(envelope.outcome, Outcome::Success);
+    assert_eq!(
+        envelope.effects,
+        Effects {
+            discovery: DiscoveryEffect::Current,
+            ..Effects::not_requested()
+        }
+    );
+    assert!(envelope.recovery.is_empty());
+}
+
 /// The same for a request whose end state held already.
 fn assert_noop(envelope: &Envelope<MutationDataDto>) {
     assert_eq!(
@@ -3271,7 +3286,7 @@ fn a_preview_of_remote_remove_lists_what_git_removes_with_the_remote() {
 
     let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
 
-    assert_done(&removed);
+    assert_removed(&removed);
     let repository = home.git();
     assert!(repository.find_remote("backup").is_err());
     assert!(
@@ -3377,7 +3392,7 @@ fn selecting_the_remote_between_preview_and_confirmation_is_external_change() {
 }
 
 #[test]
-fn a_confirmed_remote_removal_shows_no_effect_and_is_replayed_and_not_reused() {
+fn a_confirmed_remote_removal_shows_only_its_hand_off_and_is_replayed_and_not_reused() {
     let home = Home::new();
     home.add_remote("backup", BACKUP);
     home.add_remote("other", "git@example.invalid:team/other.git");
@@ -3394,7 +3409,7 @@ fn a_confirmed_remote_removal_shows_no_effect_and_is_replayed_and_not_reused() {
 
     let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
 
-    assert_done(&removed);
+    assert_removed(&removed);
     let data = mutation::remote_data(&removed);
     assert_eq!(data.name.as_deref(), Some("backup"));
     assert_eq!(data.location, None);
@@ -3455,7 +3470,7 @@ fn a_removal_interrupted_after_the_remote_is_deleted_is_partial_and_its_retry_co
         .unwrap();
     let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
 
-    assert_done(&finished);
+    assert_removed(&finished);
     assert_eq!(partial.operation_id, finished.operation_id);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     assert_eq!(home.world.pending_journal_rows(), 0);
@@ -3463,6 +3478,36 @@ fn a_removal_interrupted_after_the_remote_is_deleted_is_partial_and_its_retry_co
         home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")),
         finished
     );
+}
+
+/// The removal is made and its index hand-off fails: the result says the
+/// hand-off is owed, and the same request finishes it.
+#[test]
+fn a_removal_whose_index_hand_off_failed_says_the_hand_off_is_pending() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+
+    let pending = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+
+    assert_eq!(pending.code, ResultCode::DiscoveryPending);
+    assert_eq!(pending.outcome, Outcome::Partial);
+    assert_eq!(
+        pending.effects,
+        Effects {
+            discovery: DiscoveryEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
+    assert_eq!(home.remote_url("backup"), None);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+
+    home.reopen();
+    let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
+    assert_removed(&finished);
+    assert_eq!(pending.operation_id, finished.operation_id);
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
 }
 
 /// The removal completes and its result is lost. Whatever has been done
@@ -3485,7 +3530,7 @@ fn a_remote_removal_whose_result_was_lost_is_answered_with_its_result() {
     home.add_remote("backup", "git@example.invalid:team/another.git");
     let answered = home.retry(REQUEST_1, home.remove_remote("backup"));
 
-    assert_done(&answered);
+    assert_removed(&answered);
     assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
     // Nothing ran: the remote added since is there.
     assert!(home.remote_url("backup").is_some());
@@ -3527,7 +3572,7 @@ fn a_retry_of_a_remote_removal_before_any_effect_runs_when_nothing_has_changed()
 
     let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
 
-    assert_done(&finished);
+    assert_removed(&finished);
     assert_eq!(home.remote_url("backup"), None);
 }
 
@@ -3572,7 +3617,7 @@ fn a_lost_refusal_of_a_remote_removal_is_answered_with_what_is_true() {
 
     home.select(REQUEST_2, None);
     let removed = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
-    assert_done(&removed);
+    assert_removed(&removed);
     assert_eq!(home.remote_url("backup"), None);
 }
 
@@ -3614,7 +3659,7 @@ fn nothing_of_a_remote_removal_holds_the_remote_s_password() {
 
     home.reopen();
     let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
-    assert_done(&finished);
+    assert_removed(&finished);
     scan(&home, "the retry", serde_json::to_value(&finished).unwrap());
 }
 
@@ -4687,7 +4732,7 @@ fn a_removal_takes_the_remote_s_own_references_and_upstreams_and_nothing_else() 
         ]
     );
 
-    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
+    assert_removed(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
 
     expected.remove("refs/remotes/backup/main");
     assert_eq!(references(home.root()), expected);
@@ -4744,7 +4789,7 @@ fn a_remote_added_again_under_an_interrupted_removal_is_not_removed_by_the_retry
     let mut config = home.git().config().unwrap();
     config.remove("remote.backup.url").unwrap();
     config.remove("remote.backup.fetch").unwrap();
-    assert_done(&home.retry(REQUEST_1, home.remove_remote("backup")));
+    assert_removed(&home.retry(REQUEST_1, home.remove_remote("backup")));
     assert_eq!(references(home.root()), before);
     assert_eq!(home.world.pending_journal_rows(), 0);
 }
@@ -5089,7 +5134,7 @@ fn a_sibling_whose_removal_takes_nothing_of_the_other_remote_is_removed() {
     let mut refs = references(home.root());
 
     let (confirmation, _) = home.preview(&home.remove_remote("origin.bak"));
-    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("origin.bak")));
+    assert_removed(&home.execute(REQUEST_1, &confirmation, home.remove_remote("origin.bak")));
 
     refs.remove("refs/remotes/origin.bak/main");
     assert_eq!(references(home.root()), refs);
@@ -5153,7 +5198,7 @@ fn a_remote_under_another_s_name_whose_references_are_its_alone_is_removed() {
         let mut refs = references(home.root());
 
         let (confirmation, _) = home.preview(&home.remove_remote("team/fork"));
-        assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team/fork")));
+        assert_removed(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team/fork")));
 
         refs.remove("refs/remotes/team/fork/main");
         assert_eq!(references(home.root()), refs, "{team:?}");
@@ -5251,7 +5296,7 @@ fn a_sibling_remote_with_nothing_to_lose_is_still_part_of_what_was_observed() {
     assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
     // A new preview is given, and the removal leaves the sibling whole.
     let (confirmation, _) = home.preview(&home.remove_remote("team"));
-    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team")));
+    assert_removed(&home.execute(REQUEST_1, &confirmation, home.remove_remote("team")));
     assert_eq!(sibling_entries(&home, "team/fork"), config);
     assert_eq!(home.remote_url("team/fork").as_deref(), Some(SIBLING));
 }
@@ -5316,7 +5361,7 @@ fn a_negative_refspec_does_not_refuse_a_removal_by_itself() {
             PreviewEffect::RemoteTrackingRefsRemoved,
         ]
     );
-    assert_done(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
+    assert_removed(&home.execute(REQUEST_1, &confirmation, home.remove_remote("backup")));
 
     expected.remove("refs/remotes/backup/topic");
     assert_eq!(references(home.root()), expected);
