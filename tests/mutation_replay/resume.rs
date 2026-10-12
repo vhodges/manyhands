@@ -1086,3 +1086,45 @@ fn a_resume_of_a_pending_key_operation_no_request_holds_names_no_request() {
     );
     assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
 }
+
+/// A save that committed and owes its index hand-off stands in the way
+/// of every other request on the repository. A request it refuses is
+/// offered the resume of that operation, which finishes it, before the
+/// abandon, which gives it up; and it is not offered the save's own
+/// request, which is another caller's to send.
+#[test]
+fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_first() {
+    let (world, _token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+
+    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (blocked.outcome, blocked.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired)
+    );
+    assert_eq!(
+        recovery_actions(&blocked),
+        ["operation.resume", "repo.inspect", "operation.abandon"]
+    );
+    for action in [&blocked.recovery[0], &blocked.recovery[2]] {
+        assert_eq!(action.operation_id.as_deref(), Some(operation_id.as_str()));
+    }
+    assert!(world.record(REQUEST_2).is_none());
+
+    // The offered resume, taken, runs the hand-off.
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(resumed.effects, current());
+    assert_eq!(world.pending_journal_rows(), 0);
+
+    // And the request that was refused then succeeds.
+    let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (created.outcome, created.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(created.recovery.is_empty());
+}

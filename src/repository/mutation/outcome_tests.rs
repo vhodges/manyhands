@@ -1755,7 +1755,7 @@ fn offered(
 ) -> Vec<(&'static str, Option<String>)> {
     let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
     let own = recovery(code, command, root, None, None, retry);
-    offering_abandon(own, code, root, &pending, None)
+    offering_abandon(own, code, root, &pending, &[], None)
         .into_iter()
         .map(|action| {
             if action.action == RecoveryActionKind::OperationAbandon {
@@ -1796,6 +1796,82 @@ fn a_pending_local_operation_is_offered_to_be_abandoned_after_the_repository_is_
             &[PENDING]
         ),
         [("repo.inspect", None), abandon]
+    );
+}
+
+#[test]
+fn another_request_s_operation_a_resume_would_take_up_is_offered_its_resume_before_its_abandon() {
+    let other = "01ARZ3NDEKTSV4RRFFQ69G5FZ7";
+    let pending = vec![PENDING.to_owned(), other.to_owned()];
+    let names = |actions: Vec<RecoveryAction>| -> Vec<(&'static str, Option<String>)> {
+        actions
+            .into_iter()
+            .map(|action| (action.action.as_str(), action.operation_id))
+            .collect()
+    };
+    let refused = || {
+        recovery(
+            ResultCode::RecoveryRequired,
+            Command::TicketSave,
+            Some(ROOT),
+            None,
+            None,
+            false,
+        )
+    };
+    // Only the one a resume would take up is offered its resume, and the
+    // way on comes before the look at the repository.
+    let offered = offering_abandon(
+        refused(),
+        ResultCode::RecoveryRequired,
+        Some(ROOT),
+        &pending,
+        &[other.to_owned()],
+        None,
+    );
+    assert_eq!(
+        names(offered.clone()),
+        [
+            ("operation.resume", Some(other.to_owned())),
+            ("repo.inspect", None),
+            ("operation.abandon", Some(PENDING.to_owned())),
+            ("operation.abandon", Some(other.to_owned())),
+        ]
+    );
+    // Offering again adds nothing.
+    assert_eq!(
+        offering_abandon(
+            offered.clone(),
+            ResultCode::RecoveryRequired,
+            Some(ROOT),
+            &pending,
+            &[other.to_owned()],
+            None,
+        ),
+        offered
+    );
+    // A result that offers only its own operation's abandon offers no
+    // resume of another's.
+    let own = recovery(
+        ResultCode::Busy,
+        Command::IndexRefresh,
+        Some(ROOT),
+        None,
+        None,
+        true,
+    );
+    let offered = offering_abandon(
+        own,
+        ResultCode::Busy,
+        Some(ROOT),
+        &pending,
+        &[other.to_owned()],
+        Some(PENDING),
+    );
+    assert!(
+        names(offered)
+            .iter()
+            .all(|(action, _)| *action != "operation.resume")
     );
 }
 
@@ -1883,6 +1959,7 @@ fn each_pending_operation_is_offered_once() {
         ResultCode::RecoveryRequired,
         Some(ROOT),
         &pending,
+        &[],
         None,
     );
     let twice = offering_abandon(
@@ -1890,6 +1967,7 @@ fn each_pending_operation_is_offered_once() {
         ResultCode::RecoveryRequired,
         Some(ROOT),
         &pending,
+        &[],
         Some(PENDING),
     );
     assert_eq!(once, twice);
@@ -1907,7 +1985,7 @@ fn offered_with_own(code: ResultCode, command: Command, pending: &[&str]) -> Vec
     let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
     let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
     let own = recovery(code, command, Some(ROOT), Some(request_id), None, true);
-    offering_abandon(own, code, Some(ROOT), &pending, Some(PENDING))
+    offering_abandon(own, code, Some(ROOT), &pending, &[], Some(PENDING))
         .into_iter()
         .map(|action| {
             if action.action == RecoveryActionKind::OperationAbandon {
@@ -1993,6 +2071,7 @@ fn an_own_operation_that_is_not_to_be_abandoned_is_not_offered() {
             ResultCode::RecoveryRequired,
             None,
             &[PENDING.to_owned()],
+            &[],
             Some(PENDING)
         )
         .is_empty()

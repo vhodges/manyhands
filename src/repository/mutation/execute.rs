@@ -125,6 +125,10 @@ impl RepositoryService {
     /// looked at without waiting and let go at once. The look is taken
     /// last, and only when there is something to offer.
     ///
+    /// An operation offered so that is another request's is asked, with
+    /// the question a resume itself asks, whether a resume would take
+    /// it up: where it would, the resume is offered before the abandon.
+    ///
     /// A journal that cannot be read adds nothing: the envelope keeps
     /// what it has.
     pub(super) fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
@@ -179,11 +183,26 @@ impl RepositoryService {
         if !leases_are_free(data_directory, Path::new(&root)) {
             return envelope;
         }
+        // Asked only under the rule that offers another's operation.
+        let resumable: Vec<String> = if inspects {
+            pending
+                .iter()
+                .filter(|pending| envelope.operation_id.as_ref() != Some(*pending))
+                .filter(|pending| {
+                    OperationId::parse(pending)
+                        .is_ok_and(|operation_id| resume::takes_up(self, &root, operation_id))
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         envelope.recovery = outcome::offering_abandon(
             std::mem::take(&mut envelope.recovery),
             envelope.code,
             Some(&root),
             &pending,
+            &resumable,
             own.as_deref(),
         );
         envelope

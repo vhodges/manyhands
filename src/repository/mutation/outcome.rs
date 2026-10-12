@@ -849,6 +849,12 @@ pub(crate) fn with_host_action(
 ///    operation is pending as well. That is harmless, since the pending
 ///    operation does refuse the repository's other operations, and the
 ///    preview of the abandon says what it is.
+///
+///    An operation among them that is in `resumable` is offered its
+///    resume as well, before `repo.inspect`: the way on comes before
+///    the way out, as it does for a request's own operation. The
+///    request that began such an operation is not offered: it is
+///    another caller's to send.
 /// 2. **The request's own.** A result that left the request's record
 ///    accepted with the request's own local operation pending is offered
 ///    the abandon of that operation, whatever its code, with
@@ -861,7 +867,9 @@ pub(crate) fn with_host_action(
 /// `pending` is the operation IDs of the repository's pending local rows
 /// that nothing is seen against abandoning, oldest first: a row a call
 /// is at work under, or one the remote or key journal also holds, is
-/// not in it, and so is not offered under either rule.
+/// not in it, and so is not offered under either rule. `resumable` is
+/// those of them that are not the request's own and that a resume would
+/// take up as things are; see `resume::takes_up`.
 ///
 /// Nothing is added to a result that names no repository, since the
 /// action takes its root. The action follows `repo.inspect` and never
@@ -872,6 +880,7 @@ pub(crate) fn offering_abandon(
     code: ResultCode,
     root: Option<&str>,
     pending: &[String],
+    resumable: &[String],
     own: Option<&str>,
 ) -> Vec<RecoveryAction> {
     let Some(root) = root else {
@@ -896,6 +905,24 @@ pub(crate) fn offering_abandon(
             [(ROOT_ARGUMENT, root.into())],
         ));
     }
+    let resumes: Vec<RecoveryAction> = offered
+        .iter()
+        .filter(|operation_id| resumable.iter().any(|resumable| resumable == *operation_id))
+        .filter(|operation_id| {
+            !recovery.iter().any(|action| {
+                action.action == RecoveryActionKind::OperationResume
+                    && action.operation_id.as_deref() == Some(**operation_id)
+            })
+        })
+        .map(|operation_id| {
+            RecoveryAction::for_operation(RecoveryActionKind::OperationResume, *operation_id, [])
+        })
+        .collect();
+    let inspect = recovery
+        .iter()
+        .position(|action| action.action == RecoveryActionKind::RepoInspect)
+        .unwrap_or(recovery.len());
+    recovery.splice(inspect..inspect, resumes);
     for operation_id in offered {
         let already = recovery.iter().any(|action| {
             action.action == RecoveryActionKind::OperationAbandon
