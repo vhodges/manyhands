@@ -20,6 +20,7 @@ use manyhands::{
 
 use crate::support::{
     FailOnce,
+    conformance::{Ask, Row},
     items::{self, TICKET_A},
     mutation::{self, KeyWorld, REQUEST_1, REQUEST_2, REQUEST_3, TITLE, World, recovery_actions},
     operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
@@ -1128,3 +1129,26 @@ fn a_request_refused_for_a_hand_off_another_request_owes_is_offered_its_resume_f
     );
     assert!(created.recovery.is_empty());
 }
+
+/// The row of `operation resume` in the conformance table: the resume
+/// of the hand-off a save owes.
+pub(crate) const CONFORMANCE: [Row; 1] = [Row::new(
+    "operation resume",
+    false,
+    "operation_not_found",
+    |rule| {
+        let (world, _token, owed) = save_owing_its_hand_off();
+        let operation_id = operation_of(&owed);
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => resume(&world, &operation_id),
+                // Another operation, and one no journal holds.
+                Ask::Changed | Ask::Refused => resume(&world, UNKNOWN),
+            },
+            rule,
+        );
+        Ok(())
+    },
+)];

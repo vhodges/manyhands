@@ -16,6 +16,7 @@ use manyhands::{
 
 use crate::support::{
     FailOnce,
+    conformance::{Ask, Row, Subject},
     items::{self, TICKET_A},
     mutation::{
         self, BODY, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_NEW, TITLE, World,
@@ -908,4 +909,44 @@ fn a_rebuild_of_a_database_whose_corruption_opening_it_does_not_meet_is_index_un
     remove_index(&world);
     let rebuilt = world.execute(REQUEST_1, rebuild(&world));
     assert_current(&world, "index rebuild", &rebuilt);
+}
+
+/// The rows of `index refresh` and `index rebuild` in the conformance
+/// table. Neither has an input but its repository, so the changed
+/// request is the other command under the same ID, and the one that is
+/// refused names a directory that is no repository.
+pub(crate) const CONFORMANCE: [Row; 2] = [
+    Row::new("index refresh", false, "not_repository", |rule| {
+        conforming(refresh_at, rebuild_at, rule);
+        Ok(())
+    }),
+    Row::new("index rebuild", false, "not_repository", |rule| {
+        conforming(rebuild_at, refresh_at, rule);
+        Ok(())
+    }),
+];
+
+type At = fn(std::path::PathBuf) -> Mutation;
+
+fn refresh_at(root: std::path::PathBuf) -> Mutation {
+    Mutation::IndexRefresh(IndexRefreshInput { root })
+}
+
+fn rebuild_at(root: std::path::PathBuf) -> Mutation {
+    Mutation::IndexRebuild(IndexRebuildInput { root })
+}
+
+fn conforming(request: At, other: At, rule: &mut dyn FnMut(&Subject<'_>)) {
+    let world = World::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    mutation::drive_plain(
+        &world.service,
+        world.data.path(),
+        &|ask| match ask {
+            Ask::Same | Ask::Unconsented => request(world.root.clone()),
+            Ask::Changed => other(world.root.clone()),
+            Ask::Refused => request(elsewhere.path().to_owned()),
+        },
+        rule,
+    );
 }

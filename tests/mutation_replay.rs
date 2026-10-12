@@ -2211,6 +2211,9 @@ mod key_generation;
 #[path = "mutation_replay/resume.rs"]
 mod resume;
 
+#[path = "mutation_replay/conformance.rs"]
+mod conformance;
+
 /// The process `support::hold_lease_in_child` starts: it holds the lease
 /// it is told to until it is released.
 #[test]

@@ -1268,3 +1268,108 @@ impl World {
             .unwrap();
     }
 }
+
+// What the conformance table needs of a fixture of these targets; see
+// `support::conformance`.
+
+use super::conformance::{Ask, NO_SUCH_CONFIRMATION, Recorded, Subject};
+
+fn rendered(envelope: &Envelope<MutationDataDto>) -> Vec<u8> {
+    serde_json::to_vec(envelope).unwrap()
+}
+
+/// Gives `rule` the fixture whose service is `service`, over the data
+/// directory `data`, and whose requests `call` makes.
+fn drive(
+    service: &RepositoryService,
+    data: &Path,
+    call: &dyn Fn(&str, Ask) -> Envelope<MutationDataDto>,
+    rule: &mut dyn FnMut(&Subject<'_>),
+) {
+    rule(&Subject {
+        call: &|request_id, ask| rendered(&call(request_id, ask)),
+        record: &|request_id| {
+            service
+                .request_record(RequestId::parse(request_id).unwrap())
+                .unwrap()
+                .map(|record| Recorded {
+                    finished: record.state == manyhands::repository::RequestState::Finished,
+                    image: format!("{record:?}"),
+                })
+        },
+        request_rows: &|| {
+            items::index(data)
+                .query_row("SELECT COUNT(*) FROM request_records", [], |row| row.get(0))
+                .unwrap()
+        },
+    });
+}
+
+/// Drives a rule of the conformance table through a command that needs
+/// no confirmation. `request` gives the request for `Ask::Same`,
+/// `Ask::Changed` and `Ask::Refused`; the request with the wrong consent
+/// is `Ask::Same` presenting a confirmation no preview gave.
+pub fn drive_plain(
+    service: &RepositoryService,
+    data: &Path,
+    request: &dyn Fn(Ask) -> Mutation,
+    rule: &mut dyn FnMut(&Subject<'_>),
+) {
+    drive(
+        service,
+        data,
+        &|request_id, ask| match ask {
+            Ask::Same | Ask::Changed | Ask::Refused => {
+                execute_with(service, request_id, request(ask))
+            }
+            Ask::Unconsented => execute_confirmed(
+                service,
+                request_id,
+                NO_SUCH_CONFIRMATION,
+                request(Ask::Same),
+            ),
+        },
+        rule,
+    );
+}
+
+/// Drives a rule of the conformance table through a command that needs
+/// confirmation. `request` gives the request for `Ask::Same` and
+/// `Ask::Changed`. Both present the confirmation of one preview of
+/// `Ask::Same`, made when the first of them is asked for. The request
+/// that is refused is `Ask::Same` presenting a confirmation no preview
+/// gave, and the one with the wrong consent presents none.
+pub fn drive_confirmed(
+    service: &RepositoryService,
+    data: &Path,
+    request: &dyn Fn(Ask) -> Mutation,
+    rule: &mut dyn FnMut(&Subject<'_>),
+) {
+    let confirmation = std::cell::OnceCell::new();
+    let previewed = || -> &String {
+        confirmation.get_or_init(|| {
+            let preview = service.prepare(&request(Ask::Same));
+            preview
+                .data
+                .unwrap_or_else(|| panic!("no preview: {}", preview.message))
+                .confirmation_id
+        })
+    };
+    drive(
+        service,
+        data,
+        &|request_id, ask| match ask {
+            Ask::Same | Ask::Changed => {
+                execute_confirmed(service, request_id, previewed(), request(ask))
+            }
+            Ask::Refused => execute_confirmed(
+                service,
+                request_id,
+                NO_SUCH_CONFIRMATION,
+                request(Ask::Same),
+            ),
+            Ask::Unconsented => execute_with(service, request_id, request(Ask::Same)),
+        },
+        rule,
+    );
+}

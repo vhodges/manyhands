@@ -18,7 +18,9 @@ use manyhands::{
 };
 
 use crate::support::{
-    FailOnce, golden,
+    FailOnce,
+    conformance::{Ask, Expect, Row, Subject},
+    golden,
     items::{self, TICKET_A},
     mutation::{
         self, KeyWorld, PUBLIC_KEY_FINGERPRINT, REQUEST_1, REQUEST_2, REQUEST_3, World,
@@ -764,3 +766,85 @@ fn nothing_of_a_selection_a_clearing_or_a_removal_holds_the_key_or_where_it_is()
             .contains(KEY_SENTINEL)
     );
 }
+
+/// A world with two registered keys, `work` and `other`, and `rule`
+/// driven through the requests `request` gives of them.
+fn conforming(
+    request: fn(Ask, SharedKeyId, SharedKeyId) -> Mutation,
+    rule: &mut dyn FnMut(&Subject<'_>),
+) {
+    let world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
+    mutation::drive_plain(
+        &world.service,
+        world.data.path(),
+        &|ask| request(ask, work, other),
+        rule,
+    );
+}
+
+/// The rows of the four changes to the key registry in the conformance
+/// table.
+pub(crate) const CONFORMANCE: [Row; 4] = [
+    Row::new("key import", false, "invalid_input", |rule| {
+        let world = KeyWorld::new();
+        let (private, public) = world.key_files(PATH_SENTINEL);
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => import("Work laptop", &private, Some(&public)),
+                Ask::Changed => import("Renamed", &private, Some(&public)),
+                // No label.
+                Ask::Refused => import("  ", &private, Some(&public)),
+            },
+            rule,
+        );
+        mutation::assert_request_stores_exclude(world.data.path(), &[PATH_SENTINEL]);
+        Ok(())
+    }),
+    Row::new("key select", false, "key_not_found", |rule| {
+        conforming(
+            |ask, work, other| match ask {
+                Ask::Same | Ask::Unconsented => select(work),
+                Ask::Changed => select(other),
+                Ask::Refused => select(SharedKeyId::new()),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+    Row {
+        // `key clear` has no input and no state it is refused for: with
+        // nothing selected it is a no-op, which is a finished request.
+        // The only request of it that is refused is one that presents a
+        // confirmation, which the consent rule drives.
+        refusal: Expect::Exempt(
+            "the command has no input, and no state of the registry refuses it: a clearing \
+             with nothing selected is a no-op and is recorded as one",
+        ),
+        ..Row::new("key clear", false, "", |rule| {
+            conforming(
+                |ask, work, _| match ask {
+                    Ask::Same | Ask::Unconsented | Ask::Refused => clear(),
+                    // The command has no input: another command.
+                    Ask::Changed => select(work),
+                },
+                rule,
+            );
+            Ok(())
+        })
+    },
+    Row::new("key remove", false, "key_not_found", |rule| {
+        conforming(
+            |ask, work, other| match ask {
+                Ask::Same | Ask::Unconsented => remove(work),
+                Ask::Changed => remove(other),
+                Ask::Refused => remove(SharedKeyId::new()),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+];

@@ -20,6 +20,7 @@ use manyhands::{
 
 use crate::support::{
     FailOnce,
+    conformance::{Ask, Row},
     mutation::{
         self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, REQUEST_1, REQUEST_2, generate_in,
         key_data, recovery_actions,
@@ -847,3 +848,21 @@ fn a_retry_with_another_key_store_is_refused_and_creates_nothing() {
     assert_eq!(assert_generated(&world, &retry).to_string(), reserved);
     assert_eq!(world.key_operations(), 1);
 }
+
+/// The row of `key generate` in the conformance table.
+pub(crate) const CONFORMANCE: [Row; 1] =
+    [Row::new("key generate", false, "invalid_input", |rule| {
+        let world = KeyWorld::new();
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => world.generate(LABEL, Some(PASSPHRASE)),
+                Ask::Changed => world.generate("Another label", Some(PASSPHRASE)),
+                // No label.
+                Ask::Refused => world.generate("  ", Some(PASSPHRASE)),
+            },
+            rule,
+        );
+        Ok(())
+    })];

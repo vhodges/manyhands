@@ -19,6 +19,7 @@ use manyhands::{
 
 use crate::support::{
     FailOnce,
+    conformance::{Ask, Row},
     items::{self, TICKET_A},
     mutation::{self, REQUEST_1, REQUEST_2, REQUEST_3, World, recovery_actions, remote_data},
 };
@@ -1390,3 +1391,38 @@ fn a_selection_whose_hand_off_is_owed_without_its_commit_step_offers_the_request
         RequestState::Finished
     );
 }
+
+/// The rows of `remote add` and `remote select` in the conformance
+/// table.
+pub(crate) const CONFORMANCE: [Row; 2] = [
+    Row::new("remote add", false, "invalid_remote", |rule| {
+        let world = World::new();
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => add(&world, "origin", &location(SECRET)),
+                Ask::Changed => add(&world, "origin", &location(OTHER_SECRET)),
+                Ask::Refused => add(&world, "bad name", &location(SECRET)),
+            },
+            rule,
+        );
+        mutation::assert_request_stores_exclude(world.data.path(), &[SECRET, OTHER_SECRET]);
+        Ok(())
+    }),
+    Row::new("remote select", false, "invalid_remote", |rule| {
+        let world = world_with_origin(plain);
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => select(&world, Some("origin")),
+                Ask::Changed => select(&world, None),
+                // No such remote.
+                Ask::Refused => select(&world, Some("absent")),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+];

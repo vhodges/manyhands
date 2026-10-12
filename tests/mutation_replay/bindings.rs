@@ -14,9 +14,10 @@ use manyhands::{
 
 use crate::support::{
     FailOnce,
+    conformance::{Ask, Row, Subject},
     items::{self, TICKET_A},
     mutation::{
-        BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
+        self, BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
         REQUEST_1, REQUEST_2, TICKET_NEW, TITLE, World, recovery_actions,
     },
 };
@@ -535,120 +536,63 @@ fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
     }
 }
 
-/// Every case saves the sentinel title or body, or moves or marks an item
-/// the fixture wrote; the world's own scan, when it is dropped, is what
-/// shows that no request store kept any of it.
-#[test]
-fn the_table_covers_every_command_the_boundary_binds() {
-    let mut covered: Vec<&str> = CASES
-        .iter()
-        .map(|case| case.command)
-        .chain(ELSEWHERE.iter().map(|(command, _)| *command))
-        .collect();
-    covered.sort_unstable();
-    let mut bound = manyhands::repository::request_store::bound_commands();
-    bound.sort_unstable();
-    // Each bound command once: in the table, or with where it is driven
-    // instead and why.
-    assert_eq!(covered, bound);
-    for (command, reason) in ELSEWHERE {
-        assert!(!reason.is_empty(), "{command}");
-    }
+/// The table's cases as rows of the conformance table, each from the
+/// fixture as it is. Every case saves the sentinel title or body, or
+/// moves or marks an item the fixture wrote; the world's own scan, when
+/// it is dropped, is what shows that no request store kept any of it.
+fn conforming<const CASE: usize>(rule: &mut dyn FnMut(&Subject<'_>)) -> Result<(), String> {
+    let run = Run {
+        case: &CASES[CASE],
+        seeded: false,
+    };
+    let (world, tokens) = run.world();
+    mutation::drive_plain(
+        &world.service,
+        world.data.path(),
+        &|ask| {
+            let input = match ask {
+                Ask::Same | Ask::Unconsented => Input::Same,
+                Ask::Changed => Input::Changed,
+                Ask::Refused => Input::Rejected,
+            };
+            (run.request)(&world, &tokens, input)
+        },
+        rule,
+    );
+    Ok(())
 }
 
-/// The bound commands this table does not drive, each with the reason
-/// and the module of this test target that drives it through the same
-/// four sequences instead. The table's columns are an item's: its
-/// editing branch, the commits on it, its context's files and its token.
-/// None of these commands has an item.
-const ELSEWHERE: [(&str, &str); 18] = [
-    (
-        "remote add",
-        "commits nothing and writes no canonical file: `remotes`",
+/// The rows of the six authoring writes, in the order of `CASES`.
+pub(crate) const CONFORMANCE: [Row; 6] = [
+    Row::new("document create", false, "occupied_path", conforming::<0>),
+    Row::new("document save", false, "external_change", conforming::<1>),
+    Row::new("document move", false, "external_change", conforming::<2>),
+    Row::new(
+        "ticket slug-assign",
+        false,
+        "external_change",
+        conforming::<3>,
     ),
-    (
-        "remote select",
-        "an authoring write of the configuration file on primary, with no item, context or \
-         token: `remotes`",
+    Row::new(
+        "ticket create",
+        false,
+        "relationship_cycle",
+        conforming::<4>,
     ),
-    (
-        "remote remove",
-        "needs a confirmation, commits nothing and writes no canonical file: the test target \
-         `mutation_confirmation`",
-    ),
-    (
-        "index refresh",
-        "commits nothing and writes no canonical file: `index`",
-    ),
-    (
-        "index rebuild",
-        "commits nothing and writes no canonical file: `index`",
-    ),
-    (
-        "key generate",
-        "writes a key pair into the user's key store and registers it, in no repository; its \
-         operation is in the key journal: `keys`",
-    ),
-    (
-        "key import",
-        "a change to the key registry, in no repository and with no operation: `keys`",
-    ),
-    (
-        "key select",
-        "a change to the key registry, in no repository and with no operation: `keys`",
-    ),
-    (
-        "key clear",
-        "a change to the key registry, in no repository and with no operation: `keys`",
-    ),
-    (
-        "key remove",
-        "a change to the key registry, in no repository and with no operation: `keys`",
-    ),
-    (
-        "key delete",
-        "needs a confirmation, and deletes a key's files from the user's key store, in no \
-         repository; its operation is in the key journal: the test target \
-         `mutation_confirmation`",
-    ),
-    (
-        "repo create",
-        "needs a confirmation, and makes the repository it works in, so there is no item, \
-         context or token: the test target `mutation_confirmation`",
-    ),
-    (
-        "repo remove",
-        "needs a confirmation, and removes the registration its request is scoped by, with no \
-         item, context or token: the test target `mutation_confirmation`",
-    ),
-    (
-        "operation abandon",
-        "needs a confirmation, closes another request's operation and has none of its own, \
-         and touches no file, with no item, context or token: the test target \
-         `mutation_confirmation`",
-    ),
-    (
-        "repo enable",
-        "needs a confirmation, and commits the configuration file of a repository that is \
-         not yet registered, with no item, context or token: the test target \
-         `mutation_confirmation`",
-    ),
-    (
-        "item sync",
-        "publishes an item's branch to a remote and writes no canonical file; its operation \
-         is in the remote journal and its sequences need a server: the test target \
-         `mutation_remote`",
-    ),
-    (
-        "repo sync",
-        "publishes the primary branch to a remote and writes no canonical file, with no item, \
-         context or token; its operation is in the remote journal and its sequences need a \
-         server: the test target `mutation_remote`",
-    ),
-    (
-        "operation resume",
-        "takes up another request's operation and has none of its own, and writes no \
-         canonical file, with no item, context or token: `resume`, and for a synchronization \
-         the test target `mutation_remote`",
-    ),
+    Row::new("ticket save", false, "external_change", conforming::<5>),
 ];
+
+/// The rows above are of the cases they name, and are refused with the
+/// code the case is.
+#[test]
+fn the_rows_of_the_conformance_table_are_this_table_s_cases() {
+    for (row, case) in CONFORMANCE.iter().zip(&CASES) {
+        assert_eq!(row.command, case.command);
+        assert_eq!(
+            row.refused_with,
+            case.rejection.as_str(),
+            "{}",
+            case.command
+        );
+    }
+}
