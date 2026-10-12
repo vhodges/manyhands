@@ -5483,3 +5483,6 @@ fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
 /// clear.
 #[path = "mutation_confirmation/abandon.rs"]
 mod abandon;
+
+#[path = "mutation_confirmation/conformance.rs"]
+mod conformance;

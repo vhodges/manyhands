@@ -62,8 +62,8 @@ fn stranded_save_child() {
 
 /// A save of the open ticket whose process was killed after it wrote the
 /// ticket's file. Its record is accepted and its operation pending.
-struct Stranded {
-    world: World,
+pub(super) struct Stranded {
+    pub(super) world: World,
     /// The token the killed save was made with.
     token: String,
     /// The operation the killed save left pending.
@@ -71,7 +71,7 @@ struct Stranded {
 }
 
 impl Stranded {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut world = World::new();
         let token = world.token(TICKET_A);
         let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -102,7 +102,7 @@ impl Stranded {
         }
     }
 
-    fn abandon(&self) -> Mutation {
+    pub(super) fn abandon(&self) -> Mutation {
         abandon(&self.world.root, &self.operation_id)
     }
 
@@ -235,7 +235,7 @@ fn assert_another_operation_succeeds(world: &World, what: &str) {
     assert_eq!(other.outcome, Outcome::Success, "{what}");
 }
 
-fn abandon(root: &Path, operation_id: &str) -> Mutation {
+pub(super) fn abandon(root: &Path, operation_id: &str) -> Mutation {
     Mutation::OperationAbandon(OperationAbandonInput {
         root: root.to_owned(),
         operation_id: OperationId::parse(operation_id).unwrap(),
