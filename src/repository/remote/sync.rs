@@ -302,6 +302,11 @@ pub enum SafePointRequest {
     /// point it has reached then honors it: the operation ends
     /// cancelled, with what it had done kept.
     Cancel,
+    /// Go no further in this call, and leave the operation as it is:
+    /// the call ends with `RecoveryRequired`, nothing is asked of the
+    /// operation, and a later call under its ID takes it up. For an
+    /// observer that cannot tell whether to go on.
+    Stop,
 }
 
 /// What `synchronize_remote_observed` tells of the safe points a
@@ -4042,8 +4047,12 @@ impl RepositoryService {
         // goes: it is recorded, and the safe point below honors it. It
         // is recorded only for the executor that still owns the
         // operation, so one that was fenced cannot stop its successor.
-        if observer.safe_point(point) == SafePointRequest::Cancel {
-            self.request_synchronization_cancellation(root, owner)?;
+        match observer.safe_point(point) {
+            SafePointRequest::Continue => {}
+            SafePointRequest::Cancel => {
+                self.request_synchronization_cancellation(root, owner)?;
+            }
+            SafePointRequest::Stop => return Err(SynchronizationError::RecoveryRequired),
         }
         decision(self.remote_safe_point(root, owner, point)?)
     }

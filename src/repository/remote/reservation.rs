@@ -658,6 +658,11 @@ impl RepositoryService {
         root: &Path,
         owner: &RemoteReservation,
     ) -> Result<(), RepositoryError> {
+        self.check_failure(
+            crate::repository::FailurePoint::BeforeSynchronizationCancellation,
+            RepositoryOperation::RepositorySnapshot,
+            root,
+        )?;
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;

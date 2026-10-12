@@ -1506,6 +1506,47 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
     assert!(actions_of(Command::TicketSave, ResultCode::ExternalChange, true).is_empty());
 }
 
+/// A finished synchronization is given its action again when it is
+/// replayed, made from its code with nothing held. None of the codes a
+/// finished synchronization can hold may offer the same request there:
+/// a finished request returns its result, and sending it again does
+/// nothing else.
+///
+/// The codes are those the binding finishes a record with: a published
+/// or already current result, a cancelled operation, an operation that
+/// was fenced, and one that ended with its push not confirmed. A code
+/// that offers the same request whatever is held, as `busy` and the
+/// transient ones do, is never among them: such a result leaves its
+/// record accepted or deletes it.
+#[test]
+fn no_finished_synchronization_offers_the_same_request_when_it_is_replayed() {
+    const FINISHED: [ResultCode; 5] = [
+        ResultCode::Ok,
+        ResultCode::AlreadyApplied,
+        ResultCode::Cancelled,
+        ResultCode::ExternalChange,
+        ResultCode::RecoveryRequired,
+    ];
+    for command in [Command::ItemSync, Command::RepoSync] {
+        for code in FINISHED {
+            assert!(
+                !actions_of(command, code, false).contains(&"request.retry"),
+                "{command:?} {code:?}"
+            );
+        }
+        // And the rule is not empty: these would offer it.
+        for code in [
+            ResultCode::Busy,
+            ResultCode::PollYielding,
+            ResultCode::RemoteUnavailable,
+            ResultCode::TransportUnavailable,
+        ] {
+            assert!(!FINISHED.contains(&code));
+            assert!(actions_of(command, code, false).contains(&"request.retry"));
+        }
+    }
+}
+
 /// A poll that is giving way and a remote or a network that could not be
 /// reached pass by themselves: the same request is the one to send,
 /// whether or not anything of it was recorded.

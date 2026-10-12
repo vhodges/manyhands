@@ -867,6 +867,16 @@ impl RepositoryService {
     /// changed: a cancellation that is held, and not yet passed on,
     /// stays where a later call finds it.
     pub(super) fn cancellation_requested(&self, request_id: RequestId) -> Result<bool, ReadError> {
+        if self
+            .should_inject(
+                FailurePoint::BeforeRequestCancellationRead,
+                RepositoryOperation::Read,
+                Path::new(""),
+            )
+            .unwrap_or(false)
+        {
+            return Err(ReadError::new(ResultCode::IndexUnavailable));
+        }
         self.read_session(RepositoryOperation::Read, |connection| {
             Ok(connection
                 .query_row(
@@ -886,16 +896,7 @@ impl RepositoryService {
     /// asked to stop.
     pub(super) fn take_cancellation(&self, request_id: RequestId) -> Result<bool, ReadError> {
         let id = request_id.to_string();
-        let asked = self.read_session(RepositoryOperation::Read, |connection| {
-            Ok(connection
-                .query_row(
-                    "SELECT cancel_requested FROM request_records WHERE request_ulid = ?1",
-                    [&id],
-                    |row| row.get::<_, bool>(0),
-                )
-                .optional()?
-                .unwrap_or(false))
-        })?;
+        let asked = self.cancellation_requested(request_id)?;
         if !asked {
             return Ok(false);
         }

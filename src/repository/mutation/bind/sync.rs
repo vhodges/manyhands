@@ -179,6 +179,27 @@ fn recorded_publication(service: &RepositoryService, accepted: &Accepted) -> Opt
     )
 }
 
+/// Whether nothing after `point` can be stopped before the push is
+/// made: every safe point up to and including the one before the push.
+fn precedes_the_push(point: RemoteOperationSafePoint) -> bool {
+    match point {
+        RemoteOperationSafePoint::BeforeFetch
+        | RemoteOperationSafePoint::AfterFetch
+        | RemoteOperationSafePoint::BeforeLocalUpdate
+        | RemoteOperationSafePoint::AfterLocalUpdate
+        | RemoteOperationSafePoint::BeforePush
+        | RemoteOperationSafePoint::BeforeTransport
+        | RemoteOperationSafePoint::AfterAdvertisement
+        | RemoteOperationSafePoint::BetweenObservations
+        | RemoteOperationSafePoint::BeforeBatchCommit
+        | RemoteOperationSafePoint::AfterBatchCommit
+        | RemoteOperationSafePoint::BeforeLocalMutation
+        | RemoteOperationSafePoint::BeforeDiscovery => true,
+        RemoteOperationSafePoint::AfterPushReturn
+        | RemoteOperationSafePoint::AfterPushVerification => false,
+    }
+}
+
 /// Whether the request's operation has recorded its intent to push and
 /// not what became of the push. Such an operation is not ended as
 /// having published nothing until the push endpoint has been asked. A
@@ -263,8 +284,13 @@ pub(crate) fn fenced_answer(
 /// intended and nothing known of it is not stopped before the call has
 /// asked the push endpoint what it holds: its cancellation is passed on
 /// at the safe point before the push is made again, or a later one.
-/// Until then the request's flag is not read and stays set, so that a
-/// call that dies on the way leaves it for the next.
+///
+/// The request's flag is read and never cleared here. It is cleared
+/// once the operation's row says it was cancelled, so that a call that
+/// dies, or cannot record the cancellation on the operation, or has
+/// lost the operation to another call, leaves the flag for whoever
+/// comes next. A flag that cannot be read is not guessed at: before the
+/// push the call stops where it is, with the operation as it was.
 struct Watch<'a> {
     call: &'a CallContext<'a>,
     accepted: &'a Accepted,
@@ -272,10 +298,10 @@ struct Watch<'a> {
     /// The operation began this call with a push intended and nothing
     /// known of it.
     unsettled: bool,
-    /// A cancellation was passed on at the safe point before the push,
-    /// which follows the push endpoint's own word that it does not hold
-    /// the commit: nothing was published.
-    stopped_before_the_push: bool,
+    /// The safe point this call asked for a cancellation at. Asking is
+    /// not stopping: the operation stopped there only if the call then
+    /// ended interrupted with its row cancelled.
+    asked_at: Option<RemoteOperationSafePoint>,
     /// This call saw its own push return: the remote took it.
     pushed: bool,
     /// What the domain said of the commit, from what the push endpoint
@@ -286,23 +312,23 @@ struct Watch<'a> {
 impl Watch<'_> {
     /// What is known of the publication: what the push endpoint showed
     /// this call, what the call saw of its own push, or what the
-    /// operation's row says. Nothing is claimed of a journal that
-    /// cannot be read.
-    fn publication(&self) -> Publication {
+    /// operation's row says. `None` when the journal has to be read and
+    /// cannot be: nothing is claimed, and nothing is denied, on that.
+    fn publication(&self) -> Option<Publication> {
         if let Some(verified) = self.verified {
-            return verified;
+            return Some(verified);
         }
-        if self.pushed
-            && let Some(stored) = self
+        if self.pushed {
+            let stored = self
                 .call
                 .service
                 .stored_push(&self.accepted.scope, self.accepted.operation_id)
-                .ok()
-                .flatten()
-        {
-            return Publication::Published(stored.commit);
+                .ok()?;
+            if let Some(stored) = stored {
+                return Some(Publication::Published(stored.commit));
+            }
         }
-        recorded_publication(self.call.service, self.accepted).unwrap_or(Publication::Unknown)
+        recorded_publication(self.call.service, self.accepted)
     }
 
     /// Whether a cancellation is asked for and has not been passed on:
@@ -328,8 +354,10 @@ impl SynchronizationObserver for Watch<'_> {
         // push has returned or the remote has been asked nothing is,
         // and nothing is read.
         let effects = |watch: &Self| {
+            // An event is no answer: one that cannot read what was
+            // published says that nothing is known to be.
             effects_so_far(if watch.pushed || watch.verified.is_some() {
-                watch.publication()
+                watch.publication().unwrap_or(Publication::Unknown)
             } else {
                 Publication::Unknown
             })
@@ -359,22 +387,28 @@ impl SynchronizationObserver for Watch<'_> {
         }
         // The call's own token, and what `request cancel` asked of the
         // request from elsewhere, before or after the reservation
-        // existed. The flag is cleared here, as it is passed on, and
-        // nowhere sooner. A record that cannot be read asks nothing.
-        let asked = session.cancelled()
-            || self
-                .call
-                .service
-                .take_cancellation(self.accepted.request_id)
-                .unwrap_or(false);
-        if asked {
-            if point == RemoteOperationSafePoint::BeforePush {
-                self.stopped_before_the_push = true;
-            }
-            session.report(&self.subject.event(ProgressStage::Stopping, effects(self)));
-            SafePointRequest::Cancel
+        // existed. The flag is read and left set.
+        let asked = if session.cancelled() {
+            Ok(true)
         } else {
-            SafePointRequest::Continue
+            self.call
+                .service
+                .cancellation_requested(self.accepted.request_id)
+        };
+        match asked {
+            Ok(true) => {
+                self.asked_at = Some(point);
+                session.report(&self.subject.event(ProgressStage::Stopping, effects(self)));
+                SafePointRequest::Cancel
+            }
+            Ok(false) => SafePointRequest::Continue,
+            // Whether the request was asked to stop cannot be told.
+            // Before the push that is not taken for "no": the call
+            // stops, and the operation is left for a call that can
+            // tell. Once the push has returned the answer says
+            // published either way, and the call goes on.
+            Err(_) if precedes_the_push(point) => SafePointRequest::Stop,
+            Err(_) => SafePointRequest::Continue,
         }
     }
 
@@ -472,8 +506,9 @@ impl SyncBinding {
     /// same, so that it always frees the repository, with no network if
     /// need be: the operation is asked to stop, one more call under its
     /// ID acknowledges that, which reserves nothing and opens no
-    /// connection, and the request's flag is cleared. What the request
-    /// is then answered with is `stopped`'s to say. Should asking fail,
+    /// connection. What the request is then answered with is
+    /// `stopped`'s to say, which also clears the request's flag once
+    /// the row is cancelled. Should asking fail,
     /// nothing is acknowledged, the flag stands for the next call, and
     /// the error is what is reported.
     fn call(&self, call: &CallContext<'_>, accepted: &Accepted, restart: bool) -> Ran {
@@ -484,7 +519,7 @@ impl SyncBinding {
             accepted,
             subject: Subject::of(self, accepted),
             unsettled: push_is_unsettled(service, accepted),
-            stopped_before_the_push: false,
+            asked_at: None,
             pushed: false,
             verified: None,
         };
@@ -531,9 +566,6 @@ impl SyncBinding {
                 &mut watch,
             )
         {
-            // Honored: the flag has done its work. A failure to clear it
-            // leaves a flag on a record that is finished below.
-            let _ = service.take_cancellation(accepted.request_id);
             return self.stopped(service, accepted, &watch, &acknowledged);
         }
         self.stopped(service, accepted, &watch, &error)
@@ -630,14 +662,39 @@ impl SyncBinding {
             )
             | None => false,
         };
-        let publication = watch.publication();
+        if cancelled {
+            // The cancellation is acknowledged: the request's flag has
+            // done its work, and only now is it cleared. A failure to
+            // clear it leaves a flag on a record that is finished below,
+            // where nothing reads it.
+            let _ = service.take_cancellation(accepted.request_id);
+        }
+        // What the remote holds has to be read to be said. A journal
+        // that cannot be read gives no answer to store: the record is
+        // left as it is, and the next call of the request, which finds
+        // the row as it stands, answers.
+        let Some(publication) = watch.publication() else {
+            return Ran {
+                answer: Answer {
+                    effects: effects_so_far(Publication::Unknown),
+                    ..Answer::stopped(outcome::synchronization_error_code(error))
+                },
+                standing: Standing::Stopped { journal: None },
+            };
+        };
+        // The operation stopped at the safe point before the push, which
+        // follows the push endpoint's own word that it does not hold the
+        // commit: this call asked there, and ended interrupted.
+        let stopped_before_the_push = cancelled
+            && watch.asked_at == Some(RemoteOperationSafePoint::BeforePush)
+            && matches!(error, SynchronizationError::Interrupted);
         // Cancelled with a push intended, nothing known of it, and the
         // push endpoint not asked by the call that stopped it: the
         // operation is over and the repository free, and the answer
         // says of the push only that it is not confirmed.
         if cancelled
             && watch.unsettled
-            && !watch.stopped_before_the_push
+            && !stopped_before_the_push
             && publication == Publication::Unknown
         {
             return Ran {
@@ -677,8 +734,16 @@ impl SyncBinding {
 /// What the repository shows of an unfinished synchronization, for a
 /// call that is refused under its request ID: the push the remote is
 /// known to hold.
+///
+/// This is the answer to another request, and stores nothing. With a
+/// journal that cannot be read it says the publication is pending,
+/// which is what "not confirmed" is written as: neither published nor
+/// not.
 pub(crate) fn recorded_effects(service: &RepositoryService, accepted: &Accepted) -> Effects {
-    effects_so_far(recorded_publication(service, accepted).unwrap_or(Publication::Unknown))
+    effects_so_far(match recorded_publication(service, accepted) {
+        Some(publication) => publication,
+        None => Publication::Unknown,
+    })
 }
 
 impl Binding for SyncBinding {

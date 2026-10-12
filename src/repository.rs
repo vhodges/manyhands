@@ -844,6 +844,14 @@ pub enum FailurePoint {
     /// and before the request's record is written. The transaction fails
     /// there, so neither is written.
     AfterConfirmationAcceptance,
+    /// The mutation boundary, where a running request reads whether it
+    /// was asked to stop: the read fails there, as the index being held
+    /// or unreadable for a moment would have it fail.
+    BeforeRequestCancellationRead,
+    /// A synchronization, where it records on its own operation a
+    /// cancellation its observer asked for: the write fails there, and
+    /// nothing is recorded.
+    BeforeSynchronizationCancellation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

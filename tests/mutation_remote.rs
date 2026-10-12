@@ -209,6 +209,14 @@ const CASES: &[ssh_harness::Case] = &[
         a_cancellation_asked_before_a_crash_during_the_fetch_still_stops_the_push,
     ),
     (
+        "a_request_that_cannot_read_whether_it_was_cancelled_stops_and_does_not_push",
+        a_request_that_cannot_read_whether_it_was_cancelled_stops_and_does_not_push,
+    ),
+    (
+        "a_cancellation_that_could_not_be_recorded_on_the_operation_stops_the_next_call",
+        a_cancellation_that_could_not_be_recorded_on_the_operation_stops_the_next_call,
+    ),
+    (
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
@@ -2879,5 +2887,110 @@ fn a_cancellation_asked_before_a_crash_during_the_fetch_still_stops_the_push()
     assert_eq!(ended.code, ResultCode::Cancelled);
     assert_eq!(ended.effects.publication, PublicationEffect::Pending);
     assert!(!reserved(&w));
+    assert_final(&w, REQUEST_1, &ended)
+}
+
+// The request's flag: read without clearing, and never guessed.
+
+/// A request that cannot tell whether it was asked to stop does not go
+/// on to push, and is not ended as cancelled either: nobody may have
+/// cancelled it. It stops where it is, with its operation as it was,
+/// and the same request goes on once the read works.
+fn a_request_that_cannot_read_whether_it_was_cancelled_stops_and_does_not_push()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let opened = connections(&w);
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestCancellationRead,
+    ))?;
+    let stopped = call(
+        &w,
+        &failing,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.outcome, Outcome::Blocked);
+    assert_eq!(stopped.effects.commit_oid, None);
+    let operation = OperationId::parse(stopped.operation_id.as_deref().ok_or(FixtureError)?)
+        .map_err(|_| FixtureError)?;
+    // The operation was not cancelled: it holds the reservation as it
+    // did, and the request's record is open.
+    assert_ne!(phase(&w, operation)?, "cancelled");
+    assert!(reserved(&w));
+    let stored = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Accepted);
+    assert!(!stored.cancel_requested);
+    assert!(actions(&stopped).contains(&RecoveryActionKind::RequestRetry));
+
+    // The same request goes on.
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(finished.effects, published(local));
+    assert_eq!(finished.operation_id, stopped.operation_id);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+/// The request's flag is seen, and recording the cancellation on the
+/// operation then fails. The flag was not cleared by being seen: the
+/// next call of the request sees it again, and stops without pushing.
+fn a_cancellation_that_could_not_be_recorded_on_the_operation_stops_the_next_call()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let pushes = accepted(&w.server);
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeSynchronizationCancellation,
+    ))?;
+    // Asked to stop once it is accepted, before it has reserved.
+    let elsewhere = fixed(RepositoryService::open_at(&w.data()))?;
+    failing.set_request_hook_for_testing(move || {
+        assert!(
+            elsewhere
+                .cancel_request(request(REQUEST_1))
+                .data
+                .unwrap()
+                .requested
+        );
+    });
+    let failed = call(
+        &w,
+        &failing,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    // The write failed: nothing was acknowledged, and nothing pushed.
+    assert!(failed.code.failure_class().is_some());
+    assert_ne!(failed.code, ResultCode::Cancelled);
+    assert_eq!(accepted(&w.server), pushes);
+    let stored = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Accepted);
+    assert!(stored.cancel_requested);
+
+    let ended = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
+    assert_eq!(ended.code, ResultCode::Cancelled);
+    assert_eq!(ended.operation_id, failed.operation_id);
+    assert!(!reserved(&w));
+    let stored = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Finished);
+    // Cleared once the operation was cancelled.
+    assert!(!stored.cancel_requested);
     assert_final(&w, REQUEST_1, &ended)
 }
