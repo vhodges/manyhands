@@ -54,7 +54,12 @@ impl<T> Step<T> {
                 outcome,
                 recorded: _,
             } => Ok(outcome),
-            Self::Unmade(_) => Err(invalid_shared_key_metadata(operation, data_directory)),
+            // Only a mark keeps a change from being made.
+            Self::Unmade(
+                MarkedRegistryChange::Recorded(_)
+                | MarkedRegistryChange::Moved
+                | MarkedRegistryChange::NotRegistered,
+            ) => Err(invalid_shared_key_metadata(operation, data_directory)),
         }
     }
 
