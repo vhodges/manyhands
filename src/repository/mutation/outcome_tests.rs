@@ -2185,3 +2185,70 @@ fn a_cancellation_is_not_offered_for_a_reservation_that_is_not_the_request_s_own
     let offered = service.offering(envelope, CallKind::Execute);
     assert!(offered.recovery.is_empty(), "{:?}", offered.recovery);
 }
+
+/// A result whose record could not be settled offers the same request,
+/// first and once, with what its code offers kept as it was: for every
+/// command and code, whether or not the answer offers nothing of its
+/// own. A result with no request has none to send again.
+#[test]
+fn a_result_whose_record_could_not_be_settled_offers_the_same_request_first() {
+    let request_id = RequestId::new();
+    let offer = |command, code, request_id, unsettled, offers_nothing| {
+        super::offered(
+            &Named {
+                code,
+                command,
+                root: Some("/repository"),
+                request_id,
+                operation_id: None,
+                retry: false,
+                unsettled,
+            },
+            Vec::new(),
+            offers_nothing,
+            None,
+        )
+    };
+    for command in Command::ALL {
+        for code in ResultCode::ALL {
+            for offers_nothing in [false, true] {
+                let settled = offer(command, code, Some(request_id), false, offers_nothing);
+                let unsettled = offer(command, code, Some(request_id), true, offers_nothing);
+                let what = format!("{command:?} {code:?} {offers_nothing}");
+                assert_eq!(
+                    unsettled[0].action,
+                    RecoveryActionKind::RequestRetry,
+                    "{what}"
+                );
+                assert_eq!(
+                    unsettled[0].arguments.get("request_id"),
+                    Some(&serde_json::Value::String(request_id.to_string())),
+                    "{what}"
+                );
+                assert_eq!(
+                    unsettled
+                        .iter()
+                        .filter(|action| action.action == RecoveryActionKind::RequestRetry)
+                        .count(),
+                    1,
+                    "{what}"
+                );
+                // What the result offered anyway is all still there.
+                let rest: Vec<_> = unsettled
+                    .iter()
+                    .filter(|action| action.action != RecoveryActionKind::RequestRetry)
+                    .collect();
+                let before: Vec<_> = settled
+                    .iter()
+                    .filter(|action| action.action != RecoveryActionKind::RequestRetry)
+                    .collect();
+                assert_eq!(rest, before, "{what}");
+                assert_eq!(
+                    offer(command, code, None, true, offers_nothing),
+                    offer(command, code, None, false, offers_nothing),
+                    "{what}"
+                );
+            }
+        }
+    }
+}

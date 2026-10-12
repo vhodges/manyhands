@@ -13,7 +13,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     evidence, outcome,
     records::RequestRecord,
-    reply::Reply,
+    reply::{Kept, Reply},
 };
 
 impl RepositoryService {
@@ -96,6 +96,7 @@ impl RepositoryService {
                         request_id: Some(accepted.request_id),
                         operation_id: accepted.operation().map(|operation| operation.operation_id),
                         retry: false,
+                        unsettled: false,
                     },
                     Vec::new(),
                     false,
@@ -140,7 +141,7 @@ impl RepositoryService {
                 ..Answer::stopped(ResultCode::RequestMismatch)
             },
             None,
-            false,
+            Kept::No,
         )
     }
 }

@@ -2621,3 +2621,206 @@ fn a_save_in_flight_that_committed_is_finished_though_its_check_now_finds_a_cycl
     assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
     assert_eq!(retry.effects.commit_oid, Some(commit));
 }
+
+/// Asserts that `envelope` tells its caller to send the request again,
+/// first of whatever else it offers, and that the record is still
+/// accepted.
+fn assert_told_to_send_again(world: &World, envelope: &Envelope<MutationDataDto>, what: &str) {
+    assert_eq!(
+        recovery_actions(envelope).first(),
+        Some(&"request.retry"),
+        "{what}"
+    );
+    assert_eq!(
+        envelope.recovery[0].arguments["request_id"], REQUEST_1,
+        "{what}"
+    );
+    assert_eq!(
+        recovery_actions(envelope)
+            .iter()
+            .filter(|action| **action == "request.retry")
+            .count(),
+        1,
+        "{what}"
+    );
+    assert_eq!(
+        world.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted),
+        "{what}"
+    );
+}
+
+/// A result that could not be stored is not reported as final. The save
+/// committed and its record could not be finished: the envelope says
+/// what was done, unchanged, and that the request is to be sent again,
+/// which finishes the record with the same commit.
+#[test]
+fn a_result_that_could_not_be_stored_tells_its_caller_to_send_the_request_again() {
+    let world = failing_at(FailurePoint::BeforeRequestSettlementWrite);
+    let token = world.token(TICKET_A);
+    let first = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+    assert_eq!(first.effects.write, WriteEffect::Written);
+    assert_eq!(first.effects.checkpoint, CheckpointEffect::Committed);
+    assert_told_to_send_again(&world, &first, "the first call");
+
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit));
+    assert!(retry.recovery.is_empty());
+}
+
+/// The same for a record that could not be deleted. A re-entry was
+/// refused for a cycle with nothing in flight, which frees the request
+/// ID; its record stayed. The envelope keeps its code and its data, and
+/// offers the same request, which is refused again and then leaves
+/// nothing.
+#[test]
+fn a_refusal_whose_record_could_not_be_deleted_tells_its_caller_to_send_the_request_again() {
+    let mut world = World::new();
+    let created = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(created.code, ResultCode::Ok);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let depending = |world: &World| {
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &token)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let other = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_A.to_owned()]),
+            ..world.save_input(TICKET_NEW, &world.token(TICKET_NEW))
+        }),
+    );
+    assert_eq!(other.code, ResultCode::Ok);
+
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestSettlementWrite).open_service(world.data.path());
+    let refused = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Error, ResultCode::RelationshipCycle)
+    );
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert_eq!(ticket_data(&refused).rejected.len(), 2);
+    assert_told_to_send_again(&world, &refused, "the refusal");
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+
+    // The same request: refused as before, and its record goes.
+    let again = world.execute(REQUEST_1, depending(&world));
+    assert_cycle_rejected(&again);
+    world.assert_nothing_exists(REQUEST_1, TICKET_A);
+}
+
+/// A call whose record another call of the request has entered since
+/// settles nothing. Where that other call has not settled it either, the
+/// record stays accepted, and the first call says so.
+#[test]
+fn a_call_whose_record_was_entered_again_and_left_accepted_tells_its_caller_to_send_it_again() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let (first, go) = first_call_held_before_the_domain(&world, &token);
+
+    // A second call enters the record and dies before its domain call.
+    let second = mutation::execute_with(
+        &FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path()),
+        REQUEST_1,
+        world.save(TICKET_A, &token),
+    );
+    assert_eq!(second.code, ResultCode::InternalError);
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 2);
+
+    // The first call does its work. Its attempt is no longer the
+    // record's, so it finishes nothing.
+    go.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+    assert_told_to_send_again(&world, &first, "the first call");
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 2);
+
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit));
+}
+
+/// A call whose record another call finished meanwhile has nothing to
+/// send again for: the record is finished, and the same request gives
+/// its stored result.
+#[test]
+fn a_call_whose_record_another_call_finished_is_not_told_to_send_it_again() {
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let (first, go) = first_call_held_before_the_domain(&world, &token);
+    let second = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &second, 1, "the second call");
+    go.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_no_op_without_a_commit(&first, "the first call");
+    assert!(first.recovery.is_empty());
+}
+
+/// A resume that takes an operation up raises the attempt of the request
+/// that owns it, so that a call of that request still running settles
+/// nothing. Where the resume did not finish the record either, the
+/// owner's call says that its request is to be sent again.
+#[test]
+fn a_call_of_a_request_whose_attempt_a_resume_raised_tells_its_caller_to_send_it_again() {
+    use manyhands::repository::{OperationId, OperationResumeInput};
+
+    // The save committed and its hand-off failed: its row is pending.
+    let world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
+    let token = world.token(TICKET_A);
+    let owed = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(owed.code, ResultCode::DiscoveryPending);
+    let commit = owed.effects.commit_oid.clone().expect("a commit");
+    let operation = owed.operation_id.clone().expect("an operation");
+
+    // The owner's request is entered again and held before its domain
+    // call.
+    let (first, go) = first_call_held_before_the_domain(&world, &token);
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 2);
+
+    // A resume takes the operation up, and its hand-off fails too: the
+    // owner's attempt is raised, and its record is left accepted.
+    let resuming =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let resume = Mutation::OperationResume(OperationResumeInput {
+        root: world.root.clone(),
+        operation_id: OperationId::parse(&operation).unwrap(),
+    });
+    let resume = mutation::execute_with(&resuming, REQUEST_2, resume);
+    assert_eq!(resume.code, ResultCode::InternalError);
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
+
+    // The owner's call then completes the hand-off, and cannot finish
+    // its record.
+    go.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+    assert_told_to_send_again(&world, &first, "the owner's call");
+    assert_eq!(world.record(REQUEST_1).unwrap().attempt, 3);
+
+    let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit));
+}

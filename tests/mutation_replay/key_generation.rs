@@ -37,15 +37,24 @@ fn assert_of_the_application(envelope: &Envelope<MutationDataDto>) {
     assert_eq!(envelope.scope, Scope::default());
 }
 
-/// Asserts that the request generated the one registered key, and
-/// returns the key's ID.
+/// Asserts that the request generated the one registered key and offers
+/// nothing, and returns the key's ID.
 fn assert_generated(world: &KeyWorld, envelope: &Envelope<MutationDataDto>) -> SharedKeyId {
+    assert!(envelope.recovery.is_empty());
+    assert_names_the_generated_key(world, envelope)
+}
+
+/// Asserts that the result is of the one registered key, generated,
+/// whatever it offers, and returns the key's ID.
+fn assert_names_the_generated_key(
+    world: &KeyWorld,
+    envelope: &Envelope<MutationDataDto>,
+) -> SharedKeyId {
     assert_eq!(
         (envelope.outcome, envelope.code, envelope.failure_class()),
         (Outcome::Success, ResultCode::Ok, None)
     );
     assert_of_the_application(envelope);
-    assert!(envelope.recovery.is_empty());
     let keys = world.service.list_shared_keys().unwrap();
     let [key] = &keys[..] else {
         panic!("one registered key: {keys:?}");
@@ -746,7 +755,11 @@ fn a_call_that_fails_beside_a_generation_that_has_not_begun_does_not_release_its
     });
 
     let first = world.execute(REQUEST_1, world.generate(LABEL, None));
-    let id = assert_generated(&world, &first);
+    let id = assert_names_the_generated_key(&world, &first);
+    // The first call generated the key and could not finish its record,
+    // which the second call had entered and left accepted: its result is
+    // not the request's last word, and says so.
+    assert_eq!(recovery_actions(&first), ["request.retry"]);
     let beside = beside.lock().unwrap().take().expect("the second call ran");
     assert_eq!(
         (beside.outcome, beside.code),

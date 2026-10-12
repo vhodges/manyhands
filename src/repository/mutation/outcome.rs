@@ -563,6 +563,11 @@ pub(crate) struct Named<'a> {
     pub(crate) operation_id: Option<OperationId>,
     /// Whether the request's record was left accepted.
     pub(crate) retry: bool,
+    /// Whether the call meant to finish or delete the request's record
+    /// and the record is still accepted: the write failed, or the
+    /// record was no longer this call's to settle. The result is then
+    /// not the request's last word, whatever its code.
+    pub(crate) unsettled: bool,
 }
 
 /// The actions a result offers, from its answer. This and
@@ -579,7 +584,11 @@ pub(crate) struct Named<'a> {
 ///    takes: a read suggests its action with the root it knows, and one
 ///    that failed before it knew any names none. Then the actions are
 ///    the code's own, made with this result's root; see `recovery`.
-/// 3. A host that is not trusted is offered its approval first; see
+/// 3. A result whose record could not be settled offers the same
+///    request, first, with whatever the rules above gave it: the record
+///    is still accepted, and sending the request again is what finishes
+///    it. Nothing else of the result is changed for that.
+/// 4. A host that is not trusted is offered its approval first; see
 ///    `with_host_action`. `authority` is the host as the result's data
 ///    names it.
 pub(crate) fn offered(
@@ -591,7 +600,7 @@ pub(crate) fn offered(
     let rootless = suggested
         .iter()
         .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
-    let actions = if offers_nothing {
+    let mut actions = if offers_nothing {
         Vec::new()
     } else if suggested.is_empty() || rootless {
         recovery(
@@ -605,6 +614,14 @@ pub(crate) fn offered(
     } else {
         suggested
     };
+    if named.unsettled
+        && let Some(request_id) = named.request_id
+        && !actions
+            .iter()
+            .any(|action| action.action == RecoveryActionKind::RequestRetry)
+    {
+        actions.insert(0, same_request(request_id));
+    }
     with_host_action(actions, named.code, named.root, authority)
 }
 

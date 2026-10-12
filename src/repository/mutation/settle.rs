@@ -10,10 +10,10 @@ use super::{
         recovery::{FinalKind, JournalRow},
     },
     bind::{Accepted, Answer, Ran, Standing},
-    dto::MutationDataDto,
+    dto::{MutationDataDto, RequestState},
     identity::RequestId,
     records::RequestResult,
-    reply::Reply,
+    reply::{Kept, Reply},
 };
 
 /// What a call does to its record once its domain call has returned.
@@ -85,12 +85,40 @@ impl RepositoryService {
     ) -> Envelope<MutationDataDto> {
         let Ran { answer, standing } = ran;
         let settlement = Settlement::of(&standing);
-        // 14C: a finish or a delete that did not apply leaves the record
-        // accepted, and the envelope below still says there is nothing
-        // to retry. The envelope is to be built with `retry` set when
-        // `_applied` is false.
-        let _applied = self.settle(accepted, settlement, &answer);
-        reply.envelope(answer, Some(accepted), settlement == Settlement::Leave)
+        let applied = self.settle(accepted, settlement, &answer);
+        // A finish or a delete that did not apply: the write failed, or
+        // the record was no longer this call's, because another call of
+        // the request entered it or a resume took its operation up. The
+        // envelope is still what this call found or did. It is not the
+        // request's last word while the record is accepted, and says so
+        // by offering the same request.
+        let kept = match settlement {
+            Settlement::Leave => Kept::Accepted,
+            Settlement::Finish | Settlement::Delete => {
+                if !applied && self.still_accepted(accepted.request_id) {
+                    Kept::Unsettled
+                } else {
+                    Kept::No
+                }
+            }
+        };
+        reply.envelope(answer, Some(accepted), kept)
+    }
+
+    /// Whether the request's record is accepted now, after a settlement
+    /// of it that did not apply. Another call may have finished or
+    /// deleted it meanwhile: there is then nothing left to send the
+    /// request again for. A record that cannot be read is taken to be
+    /// accepted, as it was when this call last knew.
+    fn still_accepted(&self, request_id: RequestId) -> bool {
+        match self.request_record(request_id) {
+            Ok(Some(record)) => match record.state {
+                RequestState::Accepted => true,
+                RequestState::Finished => false,
+            },
+            Ok(None) => false,
+            Err(_) => true,
+        }
     }
 
     /// Stores `answer` as the result of the request `request_id` and

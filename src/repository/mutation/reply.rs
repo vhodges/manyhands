@@ -71,6 +71,23 @@ impl RequestIdentity {
     }
 }
 
+/// What became of the request's record in the call an envelope is of,
+/// for what the envelope offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kept {
+    /// The call leaves no record accepted: none was made, or it was
+    /// finished or deleted, by this call or by another.
+    No,
+    /// The record was left accepted, as the call's standing asks: the
+    /// same request continues the work.
+    Accepted,
+    /// The call meant to finish or delete the record, that did not
+    /// apply, and the record is still accepted. The result is what the
+    /// call found or did, and is not the request's last word: the same
+    /// request is to be sent again.
+    Unsettled,
+}
+
 /// What the envelope of one call is built with.
 pub(super) struct Reply<'a> {
     pub(super) binding: &'a dyn Binding,
@@ -84,13 +101,14 @@ impl Reply<'_> {
     }
 
     /// The envelope of an answer. The outcome is derived from the code and
-    /// the effects; `retry` says the record was left accepted, so the same
-    /// request finishes the work.
+    /// the effects; `kept` says what became of the record, which decides
+    /// whether the same request is offered. It changes neither the code
+    /// nor the effects.
     pub(super) fn envelope(
         &self,
         answer: Answer,
         accepted: Option<&Accepted>,
-        retry: bool,
+        kept: Kept,
     ) -> Envelope<MutationDataDto> {
         let Answer {
             code,
@@ -112,7 +130,8 @@ impl Reply<'_> {
                 root: scope.repository.as_deref(),
                 request_id: Some(self.identity.request_id),
                 operation_id: operation.map(|operation| operation.operation_id),
-                retry,
+                retry: kept == Kept::Accepted,
+                unsettled: kept == Kept::Unsettled,
             },
             recovery,
             offers_nothing,
@@ -141,10 +160,10 @@ impl Reply<'_> {
 
     /// A request that stopped before it was accepted, having done nothing.
     pub(super) fn stopped(&self, code: ResultCode) -> Envelope<MutationDataDto> {
-        self.envelope(Answer::stopped(code), None, false)
+        self.envelope(Answer::stopped(code), None, Kept::No)
     }
 
     pub(super) fn read_failure(&self, error: &ReadError) -> Envelope<MutationDataDto> {
-        self.envelope(Answer::of_read(error), None, false)
+        self.envelope(Answer::of_read(error), None, Kept::No)
     }
 }

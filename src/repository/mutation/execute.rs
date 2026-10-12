@@ -23,7 +23,7 @@ use super::{
     outcome,
     progress::{CallSession, ProgressStage, Session, Subject},
     records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
-    reply::{Reply, RequestIdentity},
+    reply::{Kept, Reply, RequestIdentity},
 };
 
 impl RepositoryService {
@@ -205,7 +205,9 @@ impl RepositoryService {
         let call = self.call_context(consent.given(), session);
         let prepared = match binding.prepare(&call) {
             Ok(prepared) => prepared,
-            Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
+            Err(answer) => {
+                return Some(Reply { binding, identity }.envelope(answer, None, Kept::No));
+            }
         };
         // No confirmation was looked for, because the request's root has
         // no scope key. The binding's check of the root refuses such a
@@ -315,7 +317,7 @@ impl RepositoryService {
     ) -> Envelope<MutationDataDto> {
         let died = |point| {
             self.dies_at(point, accepted)
-                .then(|| reply.envelope(Answer::stopped(ResultCode::InternalError), None, false))
+                .then(|| reply.envelope(Answer::stopped(ResultCode::InternalError), None, Kept::No))
         };
         if let Some(envelope) = died(FailurePoint::BeforeRequestDomainCall) {
             return envelope;

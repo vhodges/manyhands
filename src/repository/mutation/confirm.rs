@@ -105,6 +105,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
             request_id: None,
             operation_id: None,
             retry: false,
+            unsettled: false,
         },
         Vec::new(),
         offers_nothing,

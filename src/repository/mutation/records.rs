@@ -848,10 +848,26 @@ impl RepositoryService {
         attempt: u64,
         result: &RequestResult,
     ) -> Result<bool, ReadError> {
+        self.settlement_write_fails()?;
         let now = self.record_time();
         self.write_records(|transaction| {
             finish_request(transaction, request_id, attempt, result, now)
         })
+    }
+
+    /// Whether a test has this settlement fail before it writes.
+    fn settlement_write_fails(&self) -> Result<(), ReadError> {
+        if self
+            .should_inject(
+                FailurePoint::BeforeRequestSettlementWrite,
+                RepositoryOperation::Read,
+                Path::new(""),
+            )
+            .unwrap_or(false)
+        {
+            return Err(ReadError::new(ResultCode::IndexUnavailable));
+        }
+        Ok(())
     }
 
     /// Deletes the record, if it is still `accepted` with `attempt`, and
@@ -859,6 +875,7 @@ impl RepositoryService {
     /// Returns whether it was; the request ID is then free again.
     #[doc(hidden)]
     pub fn delete_request(&self, request_id: RequestId, attempt: u64) -> Result<bool, ReadError> {
+        self.settlement_write_fails()?;
         self.write_records(|transaction| delete_request(transaction, request_id, attempt))
     }
 
