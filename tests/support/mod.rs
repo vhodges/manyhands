@@ -19,6 +19,7 @@ use manyhands::{
 };
 use rusqlite::{Connection, params};
 
+pub mod confirmation;
 pub mod conformance;
 pub mod credentials;
 pub mod golden;
