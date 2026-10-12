@@ -77,10 +77,10 @@ pub use remote::{
     RemotePollingConfiguration, RemotePollingValueError, RemotePublicationEvidence,
     RemoteRefClassification, RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError,
     RemoteRefTarget, RemoteReservation, RemoteReservationOutcome, RemoteSafePointOutcome,
-    RemoteSnapshot, ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
+    RemoteSnapshot, ResolveSynchronizationOutcome, ResolveSynchronizationRequest, SafePointRequest,
     SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
-    SynchronizationOutcome, SynchronizationResult, SynchronizationStage, SynchronizationTarget,
-    SynchronizeRemoteRequest,
+    SynchronizationObserver, SynchronizationOutcome, SynchronizationResult,
+    SynchronizationSettings, SynchronizationStage, SynchronizationTarget, SynchronizeRemoteRequest,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";

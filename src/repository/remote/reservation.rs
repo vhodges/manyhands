@@ -633,6 +633,21 @@ impl RepositoryService {
         })
     }
 
+    /// The cancellation an executor asks of its own operation: recorded
+    /// as `cancel_remote_operation` records one, and only while `owner`
+    /// still owns the operation. The next safe point honors it.
+    pub(crate) fn request_synchronization_cancellation(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
     /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
     /// these non-transfer boundaries. Returns only after the durable transition.
     pub fn remote_safe_point(

@@ -293,6 +293,50 @@ pub enum SynchronizationResult {
     Complete(SynchronizationOutcome),
     IndexPending(IndexPending<SynchronizationOutcome>),
 }
+/// What the observer of a synchronization asks of it at a safe point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SafePointRequest {
+    Continue,
+    /// Stop here. The synchronization requests its own cancellation, as
+    /// `cancel_remote_operation` does for it from outside, and the safe
+    /// point it has reached then honors it: the operation ends
+    /// cancelled, with what it had done kept.
+    Cancel,
+}
+
+/// What `synchronize_remote_observed` tells of the safe points a
+/// synchronization reaches, and asks at each whether to go on.
+///
+/// It is called on the thread that runs the synchronization, once at
+/// each safe point and before the synchronization's own check of it.
+/// `BeforeLocalUpdate` and `AfterLocalUpdate` are reached while the
+/// repository's lease is held: an observer must not call an operation
+/// of the repository from here.
+pub trait SynchronizationObserver {
+    fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest;
+}
+
+/// The observer of a synchronization nothing observes.
+struct Unobserved;
+
+impl SynchronizationObserver for Unobserved {
+    fn safe_point(&mut self, _: RemoteOperationSafePoint) -> SafePointRequest {
+        SafePointRequest::Continue
+    }
+}
+
+/// How `synchronize_remote_observed` is to synchronize.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SynchronizationSettings {
+    /// Never merge. A target whose local and remote history have
+    /// diverged is `MergeRequired`, before anything of a merge is
+    /// prepared: no integration window, no candidate and no conflict is
+    /// left. A synchronization that already holds a merge of its own,
+    /// begun without this setting, is `RecoveryRequired` and is not
+    /// continued.
+    pub refuse_divergence: bool,
+}
+
 #[derive(Debug)]
 pub enum SynchronizationError {
     Repository(RepositoryError),
@@ -3981,9 +4025,17 @@ impl RepositoryService {
         root: &Path,
         owner: &RemoteReservation,
         point: RemoteOperationSafePoint,
+        observer: &mut dyn SynchronizationObserver,
     ) -> Result<(), SynchronizationError> {
         #[cfg(test)]
         super::observation_tests::checkpoint(point);
+        // The observer's request goes the way a request from outside
+        // goes: it is recorded, and the safe point below honors it. It
+        // is recorded only for the executor that still owns the
+        // operation, so one that was fenced cannot stop its successor.
+        if observer.safe_point(point) == SafePointRequest::Cancel {
+            self.request_synchronization_cancellation(root, owner)?;
+        }
         decision(self.remote_safe_point(root, owner, point)?)
     }
     fn inspect_synchronization_local(
@@ -5873,8 +5925,27 @@ impl RepositoryService {
     /// observed, and an authoritative replay performs only its index handoff.
     pub fn synchronize_remote<P: SessionCredentialProvider>(
         &self,
+        request: SynchronizeRemoteRequest,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        self.synchronize_remote_observed(
+            request,
+            session,
+            SynchronizationSettings::default(),
+            &mut Unobserved,
+        )
+    }
+
+    /// `synchronize_remote`, telling `observer` of each safe point it
+    /// reaches and synchronizing as `settings` says. With the default
+    /// settings and an observer that always continues it is
+    /// `synchronize_remote`.
+    pub fn synchronize_remote_observed<P: SessionCredentialProvider>(
+        &self,
         mut request: SynchronizeRemoteRequest,
         session: &mut SessionCredentials<P>,
+        settings: SynchronizationSettings,
+        observer: &mut dyn SynchronizationObserver,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let (_, root) =
             canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
@@ -5952,6 +6023,11 @@ impl RepositoryService {
                         .is_some())
             })?;
             if has_child {
+                // The operation holds a merge of its own, which a caller
+                // that never merges did not begin and does not continue.
+                if settings.refuse_divergence {
+                    return Err(SynchronizationError::RecoveryRequired);
+                }
                 let owner = match self.restart_remote_synchronization(
                     &root,
                     request.operation_id,
@@ -6211,7 +6287,12 @@ impl RepositoryService {
                 &evidence,
             )?)?;
         }
-        self.synchronization_point(&root, &owner, RemoteOperationSafePoint::BeforeFetch)?;
+        self.synchronization_point(
+            &root,
+            &owner,
+            RemoteOperationSafePoint::BeforeFetch,
+            observer,
+        )?;
         let transport_request = |direction| VerifySshTransportRequest {
             root: root.clone(),
             direction,
@@ -6290,7 +6371,12 @@ impl RepositoryService {
             &observations,
             time::OffsetDateTime::now_utc().unix_timestamp().max(0),
         )?)?;
-        self.synchronization_point(&root, &owner, RemoteOperationSafePoint::AfterFetch)?;
+        self.synchronization_point(
+            &root,
+            &owner,
+            RemoteOperationSafePoint::AfterFetch,
+            observer,
+        )?;
         if changed {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -6470,6 +6556,7 @@ impl RepositoryService {
                         &configuration,
                         &target,
                         authority,
+                        observer,
                     );
                 }
                 PublicationIntent::Verified(_) | PublicationIntent::Attempt(_) => {
@@ -6508,6 +6595,12 @@ impl RepositoryService {
                         || state::integration_step_in_window(tx, record.id, window.number, 1)?
                             .is_some()))
             })?;
+        // Refused before anything of a merge is recorded or prepared.
+        if divergence && settings.refuse_divergence {
+            return Err(SynchronizationError::MergeRequired {
+                target: request.target.clone(),
+            });
+        }
         if divergence || ordered_continuation {
             let local =
                 self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
@@ -6631,6 +6724,7 @@ impl RepositoryService {
                         &root,
                         &owner,
                         RemoteOperationSafePoint::BeforeLocalUpdate,
+                        observer,
                     )?;
                     // Reopen at the actual mutation boundary after durable intent.
                     let fresh = local_target(&root, &config.primary_branch, &request.target)?;
@@ -6653,6 +6747,7 @@ impl RepositoryService {
                         &root,
                         &owner,
                         RemoteOperationSafePoint::AfterLocalUpdate,
+                        observer,
                     )?;
                 }
             }
@@ -6694,6 +6789,7 @@ impl RepositoryService {
                 &repository,
                 candidate,
                 push,
+                observer,
             )?;
             return self.finish_synchronization_publication(
                 &request,
@@ -6702,6 +6798,7 @@ impl RepositoryService {
                 &configuration,
                 &target,
                 authority,
+                observer,
             );
         }
         evidence.push_oid = Some(candidate);
@@ -6741,7 +6838,12 @@ impl RepositoryService {
                     &evidence,
                 )?)?;
             }
-            self.synchronization_point(&root, &owner, RemoteOperationSafePoint::BeforePush)?;
+            self.synchronization_point(
+                &root,
+                &owner,
+                RemoteOperationSafePoint::BeforePush,
+                observer,
+            )?;
             if self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?
                 != candidate
             {
@@ -6762,7 +6864,12 @@ impl RepositoryService {
                 Checkpoint::PushReturned,
                 &evidence,
             )?)?;
-            self.synchronization_point(&root, &owner, RemoteOperationSafePoint::AfterPushReturn)?;
+            self.synchronization_point(
+                &root,
+                &owner,
+                RemoteOperationSafePoint::AfterPushReturn,
+                observer,
+            )?;
             let verified = self
                 .with_synchronization_remote(
                     transport_request(SshDirection::Push),
@@ -6801,10 +6908,12 @@ impl RepositoryService {
             &configuration,
             &target,
             authority,
+            observer,
         )
     }
 
     /// Classify a verified publication and hand off to index-only discovery.
+    #[allow(clippy::too_many_arguments)]
     fn finish_synchronization_publication(
         &self,
         request: &SynchronizeRemoteRequest,
@@ -6813,9 +6922,15 @@ impl RepositoryService {
         configuration: &super::observation::ObservationConfiguration,
         target: &RemoteOperationTarget,
         authority: Authority,
+        observer: &mut dyn SynchronizationObserver,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let root = &request.root;
-        self.synchronization_point(root, owner, RemoteOperationSafePoint::AfterPushVerification)?;
+        self.synchronization_point(
+            root,
+            owner,
+            RemoteOperationSafePoint::AfterPushVerification,
+            observer,
+        )?;
         if !self.synchronization_configuration_matches(root, plan, configuration)? {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -6845,6 +6960,7 @@ impl RepositoryService {
         repository: &git2::Repository,
         candidate: git2::Oid,
         push: Option<git2::Oid>,
+        observer: &mut dyn SynchronizationObserver,
     ) -> Result<Authority, SynchronizationError> {
         let root = &request.root;
         let primary_branch = plan
@@ -6873,7 +6989,7 @@ impl RepositoryService {
             return Err(SynchronizationError::PushRejected);
         }
         decision(self.prepare_synchronization_publication(root, owner, candidate, push, false)?)?;
-        self.synchronization_point(root, owner, RemoteOperationSafePoint::BeforePush)?;
+        self.synchronization_point(root, owner, RemoteOperationSafePoint::BeforePush, observer)?;
         if self.inspect_synchronization_local(root, primary_branch, &request.target)? != candidate {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -6897,7 +7013,12 @@ impl RepositoryService {
             state::PublicationPhase::Returned,
             None,
         )?)?;
-        self.synchronization_point(root, owner, RemoteOperationSafePoint::AfterPushReturn)?;
+        self.synchronization_point(
+            root,
+            owner,
+            RemoteOperationSafePoint::AfterPushReturn,
+            observer,
+        )?;
         let verified = self
             .with_synchronization_remote(transport, session, owner, plan, configuration, |r| {
                 r.fresh_advertisement()

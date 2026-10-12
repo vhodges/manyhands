@@ -9,9 +9,10 @@ pub use merge::{
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
 pub use sync::{
-    EphemeralSynchronizationConflictSides, PublishPendingReason, SynchronizationConflictInspection,
-    SynchronizationConflictPath, SynchronizationError, SynchronizationOutcome,
-    SynchronizationResult, SynchronizationStage,
+    EphemeralSynchronizationConflictSides, PublishPendingReason, SafePointRequest,
+    SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
+    SynchronizationObserver, SynchronizationOutcome, SynchronizationResult,
+    SynchronizationSettings, SynchronizationStage,
 };
 #[cfg(test)]
 pub(crate) mod observation_tests;
