@@ -1008,6 +1008,15 @@ Full gate. Independent review of the Part B range with the Review Focus
 list. Record results and rulings. Every existing mutation the design binds
 is now reachable through the boundary; the bridges are not.
 
+**Outcome (2026-10-12).** Tasks 8 to 14 and 12A are complete at `6e867a6`.
+The full gate passed there: formatting and clippy were clean, 1868 tests
+passed and none failed in 29 libtest targets, and every SSH-harness target
+passed. The design was brought up to date with what those tasks built in
+this pass: the commands and their results, confirmation, progress,
+cancellation, abandoning and resuming, the known limits recorded along the
+way, and the questions still open for the product owner. The independent
+review of the whole Part B range is recorded separately.
+
 # Part C: Bridges
 
 ## Task 15: Local Identity
