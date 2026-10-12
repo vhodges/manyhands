@@ -4,7 +4,7 @@
 mod tests;
 use std::{path::Path, sync::Arc};
 
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{
     RemoteOperationAction, RemoteOperationPhase, RemoteOperationPriority, RemoteOperationSafePoint,
@@ -550,13 +550,30 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
-            let local_id: bool = tx
+            // The last step of the local row under the ID, when there is
+            // one.
+            let local: Option<Option<String>> = tx
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+                    "SELECT completed_step FROM operation_records WHERE operation_ulid=?1 ORDER BY id LIMIT 1",
                     [operation_id.to_string()],
                     |row| row.get(0),
                 )
+                .optional()
                 .map_err(|_| state::recovery_required())?;
+            // An ID whose local operation was abandoned is closed for
+            // good: nothing is reserved or replayed under it, so no
+            // remote work is begun whose index hand-off, a local row
+            // under the same ID, would then be refused.
+            if local
+                .as_ref()
+                .is_some_and(|step| crate::repository::recovery::is_abandoned_step(step.as_deref()))
+            {
+                return Err(crate::repository::recovery::abandoned(
+                    RepositoryOperation::RepositorySnapshot,
+                    root,
+                ));
+            }
+            let local_id = local.is_some();
             let other_root: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",params![operation_id.to_string(), repository_id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
             if is_sync(target) && other_root {
                 return Err(mismatch());
