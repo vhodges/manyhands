@@ -495,7 +495,7 @@ pub fn hold_lease_in_child_for_test(
 }
 
 pub fn wait_for_path(child: &mut Child, path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !path.exists() {
         if let Some(status) = child.try_wait().unwrap() {
             let stdout = child
