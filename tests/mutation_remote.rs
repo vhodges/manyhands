@@ -269,6 +269,26 @@ const CASES: &[ssh_harness::Case] = &[
         a_resume_stopped_by_its_token_whose_answer_was_lost_is_told_it_was_cancelled,
     ),
     (
+        "a_cancellation_asked_of_the_request_that_owns_it_stops_a_resume_before_it_pushes",
+        a_cancellation_asked_of_the_request_that_owns_it_stops_a_resume_before_it_pushes,
+    ),
+    (
+        "a_cancellation_asked_of_the_owning_request_while_a_resume_runs_stops_it_before_it_pushes",
+        a_cancellation_asked_of_the_owning_request_while_a_resume_runs_stops_it_before_it_pushes,
+    ),
+    (
+        "a_resume_that_cannot_read_whether_the_owning_request_was_cancelled_stops_and_does_not_push",
+        a_resume_that_cannot_read_whether_the_owning_request_was_cancelled_stops_and_does_not_push,
+    ),
+    (
+        "a_call_of_the_owning_request_fenced_by_a_resume_that_published_settles_nothing",
+        a_call_of_the_owning_request_fenced_by_a_resume_that_published_settles_nothing,
+    ),
+    (
+        "a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_nothing",
+        a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_nothing,
+    ),
+    (
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
@@ -3816,4 +3836,250 @@ fn a_resume_stopped_by_its_token_whose_answer_was_lost_is_told_it_was_cancelled(
     );
     assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), found);
     Ok(())
+}
+
+// A resume and the request that owns the operation it takes up.
+
+/// A synchronization of the primary branch whose push the server
+/// rejected: it holds the reservation with a push intended and not
+/// accepted, and its record is accepted. The server takes pushes again.
+fn rejected_push(w: &World, id: &str) -> Result<Envelope<MutationDataDto>, FixtureError> {
+    advance(&w.repo()?, "refs/heads/main", "rejected-local")?;
+    w.server.reject_primary_updates(true)?;
+    let rejected = execute(w, id, repo_sync(w));
+    assert_eq!(rejected.code, ResultCode::PushRejected);
+    w.server.reject_primary_updates(false)?;
+    assert!(reserved(w));
+    Ok(rejected)
+}
+
+/// Asserts that a resume ended the operation cancelled before any push,
+/// and that the request that owns the operation is then told so, with
+/// its flag cleared, and replays that answer.
+fn assert_cancelled_before_a_push(
+    w: &World,
+    old: git2::Oid,
+    pushes: usize,
+    owner: &Envelope<MutationDataDto>,
+    resumed: &Envelope<MutationDataDto>,
+) -> Result<(), FixtureError> {
+    let operation = owner.operation_id.clone().ok_or(FixtureError)?;
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
+    assert_eq!(resumed.command, "operation resume");
+    assert_eq!(resumed.code, ResultCode::Cancelled);
+    assert_eq!(resumed.outcome, Outcome::Cancelled);
+    assert_eq!(resumed.effects.publication, PublicationEffect::Pending);
+    assert_eq!(resumed.effects.commit_oid, None);
+    assert!(!reserved(w));
+    assert_eq!(
+        phase(w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert_eq!(
+        record(w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    // The call that ended the operation is the one that asked the push
+    // endpoint what it holds, so its answer is the owner's too: the
+    // owner's record is finished with it. Its flag has done its work.
+    let stored = record(w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Finished);
+    assert!(!stored.cancel_requested);
+    let opened = connections(w);
+
+    let ended = execute(w, REQUEST_1, repo_sync(w));
+    assert_eq!(ended.code, ResultCode::Cancelled);
+    assert_eq!(ended.effects.publication, PublicationEffect::Pending);
+    assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert_eq!(ended.effects, resumed.effects);
+    assert_eq!(ended.command, "repo sync");
+    assert_eq!(ended.operation_id, owner.operation_id);
+    assert_eq!(connections(w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_final(w, REQUEST_1, &ended)
+}
+
+/// The review's C1. The cancellation of a request lives on its record
+/// once its operation intends a push. A resume of that operation reads
+/// it there, and does not push.
+fn a_cancellation_asked_of_the_request_that_owns_it_stops_a_resume_before_it_pushes()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let rejected = rejected_push(&w, REQUEST_1)?;
+    let operation = rejected.operation_id.clone().ok_or(FixtureError)?;
+    let pushes = accepted(&w.server);
+    assert!(
+        w.service
+            .cancel_request(request(REQUEST_1))
+            .data
+            .ok_or(FixtureError)?
+            .requested
+    );
+    assert!(record(&w, REQUEST_1).ok_or(FixtureError)?.cancel_requested);
+
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_cancelled_before_a_push(&w, old, pushes, &rejected, &resumed)
+}
+
+/// The same, asked once the resume is accepted and before it reaches a
+/// safe point: the flag is read at each one, not once.
+fn a_cancellation_asked_of_the_owning_request_while_a_resume_runs_stops_it_before_it_pushes()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let rejected = rejected_push(&w, REQUEST_1)?;
+    let operation = rejected.operation_id.clone().ok_or(FixtureError)?;
+    let pushes = accepted(&w.server);
+    let elsewhere = fixed(RepositoryService::open_at(&w.data()))?;
+    w.service.set_request_hook_for_testing(move || {
+        assert!(
+            elsewhere
+                .cancel_request(request(REQUEST_1))
+                .data
+                .unwrap()
+                .requested
+        );
+    });
+
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_cancelled_before_a_push(&w, old, pushes, &rejected, &resumed)
+}
+
+/// Whether the owning request was asked to stop cannot be read: before
+/// the push that is not taken for "no".
+fn a_resume_that_cannot_read_whether_the_owning_request_was_cancelled_stops_and_does_not_push()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let rejected = rejected_push(&w, REQUEST_1)?;
+    let operation = rejected.operation_id.clone().ok_or(FixtureError)?;
+    let pushes = accepted(&w.server);
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestCancellationRead,
+    ))?;
+    let stopped = call(
+        &w,
+        &failing,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.effects.commit_oid, None);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
+    assert_ne!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert!(reserved(&w));
+    assert_no_record_of(&w, REQUEST_2, &stopped);
+    Ok(())
+}
+
+/// A resume from another thread's service, as `execute_elsewhere`.
+fn the_operation_of(w: &World, id: &str) -> Result<String, FixtureError> {
+    Ok(record(w, id)
+        .ok_or(FixtureError)?
+        .operations
+        .first()
+        .ok_or(FixtureError)?
+        .operation_id
+        .to_string())
+}
+
+/// The review's M3. A call of the owning request that is still inside
+/// its transport when a resume takes the operation over comes back
+/// fenced. It settles nothing: the record stays the request's own, and
+/// the request, sent again, is answered from what the operation came
+/// to, with its commit, and not as a new request.
+fn a_call_of_the_owning_request_fenced_by_a_resume_that_published_settles_nothing()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let hold = w.server.hold_advertisement()?;
+    let first = execute_elsewhere(&w, REQUEST_1)?;
+    hold.wait_until_held()?;
+    let operation = the_operation_of(&w, REQUEST_1)?;
+    assert_eq!(record(&w, REQUEST_1).ok_or(FixtureError)?.attempt, 1);
+
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_eq!(resumed.effects, published(local));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    // The takeover is recorded on the owner's record: the call that was
+    // running under it is no longer the one that may settle it. The
+    // resume's own outcome, which is final for the operation, has.
+    let taken = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!((taken.state, taken.attempt), (RequestState::Finished, 2));
+
+    hold.release()?;
+    let fenced = joined(&w, first)?;
+    assert_eq!(fenced.code, ResultCode::RecoveryRequired);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(record(&w, REQUEST_1), Some(taken));
+
+    let opened = connections(&w);
+    let own = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(own.outcome, Outcome::Success);
+    assert_eq!(own.code, ResultCode::Ok);
+    assert_eq!(own.effects, published(local));
+    assert_eq!(own.operation_id.as_deref(), Some(&*operation));
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_final(&w, REQUEST_1, &own)
+}
+
+fn a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_nothing()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let old = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let pushes = accepted(&w.server);
+    let hold = w.server.hold_advertisement()?;
+    let first = execute_elsewhere(&w, REQUEST_1)?;
+    hold.wait_until_held()?;
+    let operation = the_operation_of(&w, REQUEST_1)?;
+
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: ProgressStage::Fetching,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let cancelled = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    let taken = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!((taken.state, taken.attempt), (RequestState::Finished, 2));
+
+    hold.release()?;
+    let fenced = joined(&w, first)?;
+    assert!(fenced.code.failure_class().is_some());
+    assert_eq!(record(&w, REQUEST_1), Some(taken));
+
+    let own = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(own.code, ResultCode::Cancelled);
+    assert_eq!(own.operation_id.as_deref(), Some(&*operation));
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
+    assert_final(&w, REQUEST_1, &own)
 }

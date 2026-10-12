@@ -26,7 +26,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::results::{
-    DiscoveryEffect, Effects, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
+    DiscoveryEffect, Effects, Outcome, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
 };
 
 use super::{
@@ -39,10 +39,10 @@ use super::{
         },
         command::Command,
         evidence::Position,
-        identity::{IntentDigestBuilder, ScopeKey},
+        identity::{IntentDigestBuilder, RequestId, ScopeKey},
         outcome,
         progress::{ProgressStage, Subject},
-        records,
+        records::{self, RequestResult},
     },
     Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
     Standing, sync,
@@ -103,6 +103,18 @@ impl From<OperationResumeInput> for OperationResumeBinding {
 
 /// The request's own journal row: it has no operation, so none.
 const NO_ROW: JournalRow = JournalRow::Absent;
+
+/// The request whose unfinished record holds the operation a resume
+/// takes up.
+#[derive(Clone, Copy)]
+struct Owner {
+    request: RequestId,
+    /// The attempt this call raised the owner's record to when it took
+    /// the operation over: the one its record is settled at. `None`
+    /// for a call that took nothing over, or whose owner's record was
+    /// settled meanwhile.
+    attempt: Option<u64>,
+}
 
 /// How the operation a resume names stands, for someone who would take
 /// it up.
@@ -377,12 +389,111 @@ impl OperationResumeBinding {
         })
     }
 
+    /// The request whose unfinished record holds the operation, in the
+    /// journal `family`: the one that owns it. `None` when no such
+    /// record does.
+    ///
+    /// With `takes_over`, the owner's record is also entered, as that
+    /// request's own next call would enter it: its attempt is raised.
+    /// A call of the owner that is still running, and that loses the
+    /// operation to this one, then settles nothing when it comes back:
+    /// it would otherwise finish or delete the owner's record from a
+    /// row this call has since changed. The record is left for the
+    /// owner's next call, which answers from what the operation came
+    /// to.
+    ///
+    /// `Err` when the records cannot be read or written: nothing is
+    /// taken up on that.
+    fn owner(
+        &self,
+        service: &RepositoryService,
+        scope: &ScopeKey,
+        family: OperationFamily,
+        takes_over: bool,
+    ) -> Result<Option<Owner>, Answer> {
+        let operation_id = self.operation_id;
+        let holder = service
+            .read_session(RepositoryOperation::Read, |connection| {
+                Ok(records::operation_holder(
+                    connection,
+                    family,
+                    scope.as_str(),
+                    operation_id,
+                )?)
+            })
+            .map_err(|error| Answer::of_read(&error))?;
+        let Some(holder) = holder else {
+            return Ok(None);
+        };
+        let request =
+            RequestId::parse(&holder).map_err(|_| Answer::stopped(ResultCode::InternalError))?;
+        let attempt = if takes_over {
+            // `None` when the record was finished or deleted meanwhile:
+            // there is then nothing for a stale call to settle.
+            service
+                .enter_request(request)
+                .map_err(|error| Answer::of_read(&error))?
+        } else {
+            None
+        };
+        Ok(Some(Owner { request, attempt }))
+    }
+
+    /// Finishes the owner's record with `answer`, the final answer of
+    /// the synchronization this call took from it.
+    ///
+    /// The answer is the operation's, made by the synchronization's own
+    /// binding from what this call saw: whether the push endpoint was
+    /// asked before the operation was stopped is known to this call and
+    /// to no later one. So it is the owner's answer as much as the
+    /// resume's, and the owner's request, sent again, is given it.
+    /// The record is changed only at the attempt this call raised it
+    /// to. A write that fails leaves it accepted, and the owner's next
+    /// call answers from the operation's row.
+    fn settle_owner(service: &RepositoryService, owner: Owner, answer: &Answer) {
+        let Owner {
+            request,
+            attempt: Some(attempt),
+        } = owner
+        else {
+            return;
+        };
+        let data = match &answer.data {
+            Some(data) => match serde_json::to_value(data) {
+                Ok(data) => Some(data),
+                Err(_) => return,
+            },
+            None => None,
+        };
+        let _ = service.finish_request(
+            request,
+            attempt,
+            &RequestResult {
+                outcome: Outcome::of_mutation(
+                    answer.code == ResultCode::Cancelled,
+                    answer.code,
+                    &answer.effects,
+                    answer.local_change,
+                ),
+                code: answer.code,
+                effects: answer.effects.clone(),
+                data,
+            },
+        );
+    }
+
     /// The index hand-off of a local operation: a refresh under the
     /// operation's ID, which claims the row, observes the repository and
     /// completes the row. The caller has just read that the hand-off is
     /// all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
+        if let Err(answer) = self.owner(service, &accepted.scope, OperationFamily::Local, true) {
+            return Ran {
+                answer,
+                standing: Standing::Stopped { journal: None },
+            };
+        }
         call.session.report(
             &Subject::of(self, accepted).event(ProgressStage::Indexing, Effects::not_requested()),
         );
@@ -431,12 +542,32 @@ impl OperationResumeBinding {
     /// operation has made final is stored, and anything else leaves no
     /// record of the resume, since the operation's own request is what
     /// holds whatever is still in flight.
+    ///
+    /// `takes_over` says the operation has not ended: this call takes
+    /// it from whoever was running it.
     fn synchronize(
         &self,
         call: &CallContext<'_>,
         accepted: &Accepted,
         target: SynchronizationTarget,
+        takes_over: bool,
     ) -> Ran {
+        let owner = match self.owner(
+            call.service,
+            &accepted.scope,
+            OperationFamily::Remote,
+            takes_over,
+        ) {
+            Ok(owner) => owner,
+            // Nothing is known of whose the operation is, or of whether
+            // that request was asked to stop: nothing is called.
+            Err(answer) => {
+                return Ran {
+                    answer,
+                    standing: Standing::Stopped { journal: None },
+                };
+            }
+        };
         // The request as the synchronization's binding is to see it:
         // with the operation it takes up in place of none.
         let operation = Accepted {
@@ -448,12 +579,17 @@ impl OperationResumeBinding {
             position: accepted.position.clone(),
             expected: None,
         };
-        let Ran { answer, standing } =
-            sync::resumed(call, &operation, target, Subject::of(self, accepted));
+        let Ran { answer, standing } = sync::resumed(
+            call,
+            &operation,
+            target,
+            Subject::of(self, accepted),
+            owner.map(|owner| owner.request),
+        );
         let gone = Standing::Stopped {
             journal: Some(NO_ROW),
         };
-        match standing {
+        let ran = match standing {
             Standing::Final => Ran {
                 answer,
                 standing: Standing::Final,
@@ -511,7 +647,11 @@ impl OperationResumeBinding {
                 answer,
                 standing: Standing::Stopped { journal: None },
             },
+        };
+        if let (Standing::Final, Some(owner)) = (&ran.standing, owner) {
+            Self::settle_owner(call.service, owner, &ran.answer);
         }
+        ran
     }
 
     /// The one call of the request: the operation is read again, and
@@ -529,7 +669,7 @@ impl OperationResumeBinding {
         };
         match found {
             Named::HandOff => self.hand_off(call, accepted),
-            Named::Synchronization(target) => self.synchronize(call, accepted, target),
+            Named::Synchronization(target) => self.synchronize(call, accepted, target, true),
             // A synchronization that has ended, met by a request whose
             // earlier call may be what ended it: the domain is asked
             // what the operation came to, which it answers from the row
@@ -541,7 +681,7 @@ impl OperationResumeBinding {
             }
             | Named::LeftToInspect {
                 synchronization: Some(target),
-            } if self.entered_again => self.synchronize(call, accepted, target),
+            } if self.entered_again => self.synchronize(call, accepted, target, false),
             Named::NotFound
             | Named::Abandoned
             | Named::Ended { synchronization: _ }

@@ -36,11 +36,11 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, RemoteOperationSafePoint,
-            RepositoryOperation, RepositoryService, SafePointRequest, SynchronizationError,
-            SynchronizationObserver, SynchronizationOutcome, SynchronizationResult,
-            SynchronizationSettings, SynchronizationTarget, SynchronizeRemoteRequest,
-            authoring_kind_segment, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, OperationFamily, ReadError,
+            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
+            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
+            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
+            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
             recovery::{FinalKind, JournalRow},
             transport::SshTransportErrorKind,
         },
@@ -48,7 +48,7 @@ use super::{
         context::context_names,
         dto::{MutationDataDto, SynchronizationMutationDto},
         evidence::Position,
-        identity::IntentDigestBuilder,
+        identity::{IntentDigestBuilder, RequestId},
         outcome,
         progress::{ProgressStage, Subject},
     },
@@ -291,10 +291,20 @@ pub(crate) fn fenced_answer(
 /// lost the operation to another call, leaves the flag for whoever
 /// comes next. A flag that cannot be read is not guessed at: before the
 /// push the call stops where it is, with the operation as it was.
+///
+/// The flag is that of the request that owns the operation, which is
+/// the request the call is of, except for a resume: `request cancel`
+/// is asked of the request that began the operation, and a resume that
+/// takes the operation up answers to it exactly as that request's own
+/// next call would.
 struct Watch<'a> {
     call: &'a CallContext<'a>,
     accepted: &'a Accepted,
     subject: Subject,
+    /// The request whose record holds the operation, and so the flag
+    /// `request cancel` sets. `None` when no unfinished record holds
+    /// it: there is then no flag, and only the call's token stops it.
+    owner: Option<RequestId>,
     /// The operation began this call with a push intended and nothing
     /// known of it.
     unsettled: bool,
@@ -335,12 +345,16 @@ impl Watch<'_> {
     /// the call's token, or the request's flag, which is left as it is.
     /// A flag that cannot be read is not taken to be set.
     fn cancellation_is_pending(&self) -> bool {
-        self.call.session.cancelled()
-            || self
-                .call
-                .service
-                .cancellation_requested(self.accepted.request_id)
-                .unwrap_or(false)
+        self.call.session.cancelled() || self.asked_of_the_owner().unwrap_or(false)
+    }
+
+    /// Whether the request that owns the operation has been asked to
+    /// stop. The flag is read and left set.
+    fn asked_of_the_owner(&self) -> Result<bool, ReadError> {
+        match self.owner {
+            Some(owner) => self.call.service.cancellation_requested(owner),
+            None => Ok(false),
+        }
     }
 }
 
@@ -391,9 +405,7 @@ impl SynchronizationObserver for Watch<'_> {
         let asked = if session.cancelled() {
             Ok(true)
         } else {
-            self.call
-                .service
-                .cancellation_requested(self.accepted.request_id)
+            self.asked_of_the_owner()
         };
         match asked {
             Ok(true) => {
@@ -487,17 +499,23 @@ struct Configured {
 /// `restart`, which asks the remote what it holds before it pushes
 /// anything, and nothing is merged. What the result says of a push is
 /// that operation's own evidence, as it is for its own request.
+///
+/// `owner` is the request whose unfinished record holds the operation,
+/// when one does. A cancellation asked of it stops this call as it
+/// would stop that request's own, and is cleared on its record once
+/// the operation's row says it was cancelled.
 pub(crate) fn resumed(
     call: &CallContext<'_>,
     accepted: &Accepted,
     target: SynchronizationTarget,
     subject: Subject,
+    owner: Option<RequestId>,
 ) -> Ran {
     SyncBinding {
         root: accepted.root(),
         target,
     }
-    .call(call, accepted, subject, true)
+    .call(call, accepted, subject, owner, true)
 }
 
 /// The position on its branch of a synchronization of `target` in the
@@ -595,12 +613,15 @@ impl SyncBinding {
     /// the error is what is reported.
     ///
     /// `subject` is the request the call's events are of: the
-    /// synchronization's own, or the resume that takes it up.
+    /// synchronization's own, or the resume that takes it up. `owner`
+    /// is the request whose record holds the operation, whose flag a
+    /// cancellation is read from.
     fn call(
         &self,
         call: &CallContext<'_>,
         accepted: &Accepted,
         subject: Subject,
+        owner: Option<RequestId>,
         restart: bool,
     ) -> Ran {
         let service = call.service;
@@ -609,6 +630,7 @@ impl SyncBinding {
             call,
             accepted,
             subject,
+            owner,
             unsettled: push_is_unsettled(service, accepted),
             asked_at: None,
             pushed: false,
@@ -758,7 +780,9 @@ impl SyncBinding {
             // done its work, and only now is it cleared. A failure to
             // clear it leaves a flag on a record that is finished below,
             // where nothing reads it.
-            let _ = service.take_cancellation(accepted.request_id);
+            if let Some(owner) = watch.owner {
+                let _ = service.take_cancellation(owner);
+            }
         }
         // What the remote holds has to be read to be said. A journal
         // that cannot be read gives no answer to store: the record is
@@ -910,7 +934,13 @@ impl Binding for SyncBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call, accepted, Subject::of(self, accepted), false)
+        self.call(
+            call,
+            accepted,
+            Subject::of(self, accepted),
+            Some(accepted.request_id),
+            false,
+        )
     }
 
     /// Nothing is read here and nothing is answered: whatever the row
@@ -937,6 +967,12 @@ impl Binding for SyncBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call, accepted, Subject::of(self, accepted), true)
+        self.call(
+            call,
+            accepted,
+            Subject::of(self, accepted),
+            Some(accepted.request_id),
+            true,
+        )
     }
 }
