@@ -26,7 +26,7 @@ use super::{
             RemoteChange, RemoteOutcome, RemoveRemoteRequest, RepositoryError, RepositoryErrorKind,
             RepositoryOperation, RepositoryService, SetPublicationRemoteRequest, owned_file_bytes,
             read_configuration_for,
-            recovery::{FinalKind, JournalRow, PendingOperation},
+            recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
             remote::state::PollingPolicy,
         },
         command::Command,
@@ -52,17 +52,16 @@ pub struct RemoteAddInput {
     pub url: String,
 }
 
-/// The step `add_remote` and `remove_remote` record once the
-/// repository's configuration has the remote, or no longer has it.
-const REMOTE_CHANGED_STEP: &str = "remote_changed";
-
 /// Whether the row of an `add_remote` or a `remove_remote` says that
 /// the remote was added or removed and the operation has not ended: a
 /// change that no effect shows, with work remaining.
 pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
     match journal {
         Some(JournalRow::Pending(PendingOperation::Local { state: _, step })) => {
-            step.as_deref() == Some(REMOTE_CHANGED_STEP)
+            // The step `add_remote` and `remove_remote` record once the
+            // repository's configuration has the remote, or no longer
+            // has it.
+            step.is_some_and(|step| step.is(LocalStep::RemoteChanged))
         }
         Some(
             JournalRow::Absent
@@ -317,7 +316,7 @@ impl Binding for RemoteAddBinding {
                     Ok(step) => step,
                     Err(error) => return Err(unread(Answer::of_read(&error), journal)),
                 };
-                if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+                if step.is_some_and(|step| step.is(LocalStep::RemoteChanged)) {
                     // The row owes nothing: its hand-off ran.
                     return Err(Ran {
                         answer: self.ended_answer(ResultCode::Ok, true, DiscoveryEffect::Current),
@@ -1169,7 +1168,7 @@ impl RemoteRemoveBinding {
             Ok(step) => step,
             Err(error) => return unread(Answer::of_read(&error), journal),
         };
-        if step.as_deref() == Some(REMOTE_CHANGED_STEP) {
+        if step.is_some_and(|step| step.is(LocalStep::RemoteChanged)) {
             // The row owes nothing: its hand-off ran.
             return Ran {
                 answer: self.ended_answer(ResultCode::Ok, true, DiscoveryEffect::Current),
@@ -1296,7 +1295,7 @@ impl Binding for RemoteRemoveBinding {
         };
         let step = match &journal {
             JournalRow::Absent => None,
-            JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.clone(),
+            JournalRow::Pending(PendingOperation::Local { state: _, step }) => *step,
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,

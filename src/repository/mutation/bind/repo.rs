@@ -47,7 +47,7 @@ use super::{
             OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             WorktreeState, canonical_configuration, canonical_repository_root, checked_out_branch,
             read_configuration_for,
-            recovery::{FinalKind, JournalRow, PendingOperation},
+            recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
             resolve_identity, validate_identity, worktree_state,
         },
         command::Command,
@@ -158,8 +158,8 @@ impl From<RepoEnableInput> for RepoBinding {
 /// configuration file: enablement records the first once the file is
 /// written and the second once it is committed, and records neither on a
 /// repository it found enabled.
-const CONFIGURATION_WRITTEN_STEP: &str = "configuration_written";
-const INITIALIZATION_COMMITTED_STEP: &str = "initialization_committed";
+const CONFIGURATION_WRITTEN_STEP: LocalStep = LocalStep::ConfigurationWritten;
+const INITIALIZATION_COMMITTED_STEP: LocalStep = LocalStep::InitializationCommitted;
 
 /// Where HEAD is, as far as enablement asks.
 enum Head {
@@ -318,10 +318,9 @@ fn own_commit(
     accepted: &Accepted,
     written: Option<&str>,
 ) -> Result<Option<git2::Oid>, ()> {
-    let wrote = matches!(
-        accepted.recorded_local_step(service)?.as_deref(),
-        Some(CONFIGURATION_WRITTEN_STEP | INITIALIZATION_COMMITTED_STEP)
-    );
+    let wrote = accepted.recorded_local_step(service)?.is_some_and(|step| {
+        step.is(CONFIGURATION_WRITTEN_STEP) || step.is(INITIALIZATION_COMMITTED_STEP)
+    });
     if !wrote {
         return Ok(None);
     }
@@ -1105,7 +1104,7 @@ impl Binding for RepoBinding {
         let previewed = call.previewed();
         let step = match &journal {
             JournalRow::Absent => None,
-            JournalRow::Pending(PendingOperation::Local { state: _, step }) => step.clone(),
+            JournalRow::Pending(PendingOperation::Local { state: _, step }) => *step,
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,
@@ -1141,7 +1140,7 @@ impl Binding for RepoBinding {
         // refused for an identity that has changed since. A row that
         // holds the step before it may or may not have committed, and is
         // still compared.
-        if step.as_deref() == Some(INITIALIZATION_COMMITTED_STEP) {
+        if step.is_some_and(|step| step.is(INITIALIZATION_COMMITTED_STEP)) {
             // Not used by what is left to do; given as before when it
             // can be read.
             let effective = self.effective_identity_at(&root).ok().flatten();

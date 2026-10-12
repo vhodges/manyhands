@@ -13,7 +13,7 @@ use manyhands::{
         keys::KeyMaterialPhase,
         request_store::{
             ConfirmationRecord, DigestSalt, FieldValue, FinalKind, InsertRequestOutcome,
-            IntentDigest, JournalRow, NewConfirmation, NewRequest, PendingOperation,
+            IntentDigest, JournalRow, NewConfirmation, NewRequest, PendingOperation, RecordedStep,
             RequestOperation, RequestRecord, RequestResult, ScopeKey,
         },
     },
@@ -1331,7 +1331,7 @@ fn the_privacy_scan_finds_a_sentinel_in_every_request_store() {
 fn pending_local(state: &str, step: Option<&str>) -> JournalRow {
     JournalRow::Pending(PendingOperation::Local {
         state: state.to_owned(),
-        step: step.map(str::to_owned),
+        step: step.map(RecordedStep::of),
     })
 }
 

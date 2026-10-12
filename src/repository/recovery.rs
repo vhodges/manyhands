@@ -15,7 +15,7 @@ pub(super) struct RecoveryRecord {
     pub(super) is_new: bool,
     pub(super) is_pending: bool,
     #[allow(dead_code)]
-    pub(super) completed_step: Option<&'static str>,
+    pub(super) completed_step: Option<LocalStep>,
 }
 
 #[derive(Clone, Copy)]
@@ -327,8 +327,8 @@ fn begin_or_reconcile(
     }
     // An abandoned operation is neither replayed as completed nor begun
     // again: its ID is spent. Nothing has been written at this point.
-    if let Some((_, _, _, _, _, Some(step))) = &existing
-        && step == ABANDONED_STEP
+    if let Some((_, _, _, _, _, step)) = &existing
+        && listed(step.as_deref()) == Some(LocalStep::Abandoned)
     {
         return Err(abandoned(operation, root));
     }
@@ -384,15 +384,15 @@ fn begin_or_reconcile(
                 is_pending: true,
                 completed_step: existing
                     .as_ref()
-                    .and_then(|(_, _, _, _, _, completed_step)| completed_step.as_deref())
-                    .and_then(authoring_observation_step),
+                    .and_then(|(_, _, _, _, _, completed_step)| listed(completed_step.as_deref()))
+                    .and_then(LocalStep::continued),
             });
         }
         return Err(recovery_required(operation, root));
     }
     if let Some((id, _, _, _, _, completed_step)) = existing {
         // A refresh may borrow any operation ID; it must not erase the marker.
-        if completed_step.as_deref() == Some(REJECTED_STEP) && action != "refresh" {
+        if listed(completed_step.as_deref()) == Some(LocalStep::Rejected) && action != "refresh" {
             // The earlier call left nothing behind, so this one begins again.
             // Its row was kept so that the ID stays bound to its target.
             transaction
@@ -414,9 +414,7 @@ fn begin_or_reconcile(
             id,
             is_new: false,
             is_pending: false,
-            completed_step: completed_step
-                .as_deref()
-                .and_then(authoring_observation_step),
+            completed_step: listed(completed_step.as_deref()).and_then(LocalStep::continued),
         });
     }
     let repository_id: Option<i64> = transaction
@@ -444,18 +442,206 @@ fn begin_or_reconcile(
     })
 }
 
-fn authoring_observation_step(step: &str) -> Option<&'static str> {
-    match step {
-        "authoring_destination_observed" => Some("authoring_destination_observed"),
-        "document_destination_observed" => Some("document_destination_observed"),
-        "document_move_observed" => Some("document_move_observed"),
-        "authoring_checkpoint_observed" => Some("authoring_checkpoint_observed"),
-        "authoritative_observed" => Some("authoritative_observed"),
-        "remote_changed" => Some("remote_changed"),
-        "publication_committed" => Some("publication_committed"),
-        "initialization_committed" => Some("initialization_committed"),
-        _ => None,
+/// A step of the local journal: a name an operation records on its row,
+/// in the column `completed_step`, once that much of its work is done.
+/// These are all the names a build writes there. Each is stored as
+/// `as_str` gives it and read back with `parse`, so the name is spelled
+/// in one place.
+///
+/// The journal keeps the column as free text. A row may so hold a name
+/// that has the form of one and is none of these; see `RecordedStep`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalStep {
+    /// The branch of an authoring context was created or found.
+    BranchObserved,
+    /// The worktree of an authoring context was created or found.
+    WorktreeObserved,
+    /// An authoring write reached its destination file.
+    AuthoringDestinationObserved,
+    /// A document write reached its destination file.
+    DocumentDestinationObserved,
+    /// A document move removed its source file.
+    DocumentMoveObserved,
+    /// An authoring operation passed its checkpoint, whether the
+    /// checkpoint committed or found nothing to commit.
+    AuthoringCheckpointObserved,
+    /// The operation's work is observed in the authoritative branch and
+    /// its index hand-off has begun.
+    AuthoritativeObserved,
+    /// A remote was added or removed.
+    RemoteChanged,
+    /// The publication remote was written to the configuration file.
+    PublicationConfigurationWritten,
+    /// The publication remote's configuration was committed.
+    PublicationCommitted,
+    /// A new repository was initialized.
+    RepositoryInitialized,
+    /// The Manyhands configuration file was written.
+    ConfigurationWritten,
+    /// The Manyhands configuration was committed.
+    InitializationCommitted,
+    /// A rebuild or refresh was left to be run again.
+    Retry,
+    /// A rebuild failed.
+    Error,
+    /// The row completed having recorded no step of its own.
+    Completed,
+    /// The row of a call that was rejected and left nothing behind. A
+    /// repeat of its ID begins again.
+    Rejected,
+    /// The row was closed by `abandon_operation`. Its ID is never begun
+    /// again and never replayed.
+    Abandoned,
+}
+
+impl LocalStep {
+    /// Every step, in the order of the declaration.
+    pub const ALL: [Self; 18] = [
+        Self::BranchObserved,
+        Self::WorktreeObserved,
+        Self::AuthoringDestinationObserved,
+        Self::DocumentDestinationObserved,
+        Self::DocumentMoveObserved,
+        Self::AuthoringCheckpointObserved,
+        Self::AuthoritativeObserved,
+        Self::RemoteChanged,
+        Self::PublicationConfigurationWritten,
+        Self::PublicationCommitted,
+        Self::RepositoryInitialized,
+        Self::ConfigurationWritten,
+        Self::InitializationCommitted,
+        Self::Retry,
+        Self::Error,
+        Self::Completed,
+        Self::Rejected,
+        Self::Abandoned,
+    ];
+
+    /// The name as the journal stores it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BranchObserved => "branch_observed",
+            Self::WorktreeObserved => "worktree_observed",
+            Self::AuthoringDestinationObserved => "authoring_destination_observed",
+            Self::DocumentDestinationObserved => "document_destination_observed",
+            Self::DocumentMoveObserved => "document_move_observed",
+            Self::AuthoringCheckpointObserved => "authoring_checkpoint_observed",
+            Self::AuthoritativeObserved => "authoritative_observed",
+            Self::RemoteChanged => "remote_changed",
+            Self::PublicationConfigurationWritten => "publication_configuration_written",
+            Self::PublicationCommitted => "publication_committed",
+            Self::RepositoryInitialized => "repository_initialized",
+            Self::ConfigurationWritten => "configuration_written",
+            Self::InitializationCommitted => "initialization_committed",
+            Self::Retry => "retry",
+            Self::Error => "error",
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::Abandoned => "abandoned",
+        }
     }
+
+    /// The step stored as `stored`. `None` for any other text.
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|step| step.as_str() == stored)
+    }
+
+    /// Whether the step is at or past the point where the operation's
+    /// work is committed.
+    pub const fn is_checkpoint(self) -> bool {
+        match self {
+            Self::AuthoringCheckpointObserved
+            | Self::AuthoritativeObserved
+            | Self::InitializationCommitted
+            | Self::PublicationCommitted => true,
+            Self::BranchObserved
+            | Self::WorktreeObserved
+            | Self::AuthoringDestinationObserved
+            | Self::DocumentDestinationObserved
+            | Self::DocumentMoveObserved
+            | Self::RemoteChanged
+            | Self::PublicationConfigurationWritten
+            | Self::RepositoryInitialized
+            | Self::ConfigurationWritten
+            | Self::Retry
+            | Self::Error
+            | Self::Completed
+            | Self::Rejected
+            | Self::Abandoned => false,
+        }
+    }
+
+    /// Whether the step says the operation's own work is done and
+    /// recorded: a checkpoint step, or the step of a remote that was
+    /// added or removed, which commits nothing.
+    fn is_authoritative(self) -> bool {
+        self.is_checkpoint() || self == Self::RemoteChanged
+    }
+
+    /// The step as a call under the same ID is told it when the call
+    /// finds the row: the steps a domain call continues from. `None` for
+    /// a step no call reads back.
+    const fn continued(self) -> Option<Self> {
+        match self {
+            Self::AuthoringDestinationObserved
+            | Self::DocumentDestinationObserved
+            | Self::DocumentMoveObserved
+            | Self::AuthoringCheckpointObserved
+            | Self::AuthoritativeObserved
+            | Self::RemoteChanged
+            | Self::PublicationCommitted
+            | Self::InitializationCommitted => Some(self),
+            Self::BranchObserved
+            | Self::WorktreeObserved
+            | Self::PublicationConfigurationWritten
+            | Self::RepositoryInitialized
+            | Self::ConfigurationWritten
+            | Self::Retry
+            | Self::Error
+            | Self::Completed
+            | Self::Rejected
+            | Self::Abandoned => None,
+        }
+    }
+}
+
+/// The last step a local row holds, as a reader of the journal is given
+/// it. The column is free text, so a row can hold a name that has the
+/// form of a step and is none this build writes; such a row has
+/// recorded a step, and nothing more is known of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordedStep {
+    /// One of the steps this build writes.
+    Listed(LocalStep),
+    /// A name with the form of a step that is none of `LocalStep`.
+    Unlisted,
+}
+
+impl RecordedStep {
+    /// The step stored as `stored`, which has the form of a stored name.
+    pub fn of(stored: &str) -> Self {
+        LocalStep::parse(stored).map_or(Self::Unlisted, Self::Listed)
+    }
+
+    /// Whether the row's last step is `step`.
+    pub fn is(self, step: LocalStep) -> bool {
+        self == Self::Listed(step)
+    }
+
+    /// Whether the step is at or past the point where the operation's
+    /// work is committed; see `LocalStep::is_checkpoint`.
+    pub const fn is_checkpoint(self) -> bool {
+        match self {
+            Self::Listed(step) => step.is_checkpoint(),
+            Self::Unlisted => false,
+        }
+    }
+}
+
+/// The step `stored`, a value of the column `completed_step`, when it is
+/// one this build writes.
+fn listed(stored: Option<&str>) -> Option<LocalStep> {
+    stored.and_then(LocalStep::parse)
 }
 
 fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
@@ -464,30 +650,6 @@ fn same_lifecycle_action(existing: &str, requested: &str) -> bool {
 
 /// The state of a row whose index hand-off a call has claimed.
 const INDEXING_STATE: &str = "indexing";
-const REJECTED_STEP: &str = "rejected";
-/// The step of a row that `abandon_operation` closed. Such a row is
-/// `completed`, so it blocks nothing, and is told apart from a row that
-/// ran to its end and from one that was rejected: its ID is never begun
-/// again and never replayed.
-const ABANDONED_STEP: &str = "abandoned";
-/// Whether `step`, the last step a local row recorded, is at or past the
-/// point where the operation's work is committed.
-fn is_checkpoint_step(step: &str) -> bool {
-    matches!(
-        step,
-        "authoring_checkpoint_observed"
-            | "authoritative_observed"
-            | "initialization_committed"
-            | "publication_committed"
-    )
-}
-
-/// Whether `step`, the last step a local row recorded, says the
-/// operation's own work is done and recorded: a checkpoint step, or the
-/// step of a remote that was added or removed, which commits nothing.
-fn is_authoritative_step(step: &str) -> bool {
-    is_checkpoint_step(step) || step == "remote_changed"
-}
 
 /// The states of a pending row whose operation has handed off to
 /// indexing: the state the hand-off begins in, the state of a call that
@@ -510,7 +672,7 @@ pub(super) fn discard_operation(
                 "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
                   WHERE id = ?1 AND {NOT_ABANDONED}"
             ),
-            params![record_id, REJECTED_STEP, now()],
+            params![record_id, LocalStep::Rejected.as_str(), now()],
         )
         .map_err(RepositoryError::sqlite)?;
     if discarded == 0 {
@@ -523,7 +685,7 @@ pub(super) fn discard_operation(
 /// row was closed as abandoned. Whoever reads a row's state for itself
 /// asks this before it takes `completed` to mean that the work was done.
 pub(super) fn is_abandoned_step(step: Option<&str>) -> bool {
-    step == Some(ABANDONED_STEP)
+    listed(step) == Some(LocalStep::Abandoned)
 }
 
 /// What every statement that changes a row by its ID holds of the row: it
@@ -544,7 +706,7 @@ fn refuse_abandoned(connection: &Connection, record_id: i64) -> Result<(), Repos
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM operation_records
               WHERE id = ?1 AND state = 'completed' AND completed_step = ?2)",
-            params![record_id, ABANDONED_STEP],
+            params![record_id, LocalStep::Abandoned.as_str()],
             |row| row.get(0),
         )
         .map_err(RepositoryError::sqlite)?;
@@ -590,9 +752,8 @@ pub enum JournalRow {
     ///
     /// `checkpointed` says whether the row records that the operation
     /// passed the point where its work is committed. For a local
-    /// operation that is one of the steps `authoring_checkpoint_observed`,
-    /// `authoritative_observed`, `initialization_committed` and
-    /// `publication_committed`. An authoring operation records its
+    /// operation that is one of the steps `LocalStep::is_checkpoint`
+    /// names. An authoring operation records its
     /// checkpoint step whether the checkpoint committed or found nothing
     /// to commit, so the step does not say a commit was made; its absence
     /// says none was: the operation stopped before its checkpoint, for
@@ -610,10 +771,13 @@ pub enum JournalRow {
 /// Where an operation that has not ended stands, in its journal's terms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingOperation {
-    /// The local journal has no enumeration of its states: `state` and
-    /// `step` are its own names, in lower_snake_case, as it stores them.
-    /// `step` is the last step the operation recorded as done.
-    Local { state: String, step: Option<String> },
+    /// The local journal has no enumeration of its states: `state` is
+    /// its own name, in lower_snake_case, as it stores it. `step` is the
+    /// last step the operation recorded as done.
+    Local {
+        state: String,
+        step: Option<RecordedStep>,
+    },
     /// Never `Completed` or `Cancelled`, which are final. `Interrupted`
     /// and `Failed` are pending: the operation stopped with work that a
     /// call under its ID takes up again, a merge conflict among it.
@@ -701,16 +865,18 @@ pub(super) fn lookup_operation(
     if !is_stored_name(&state) || step.as_deref().is_some_and(|step| !is_stored_name(step)) {
         return Err(ReadError::new(ResultCode::InternalError));
     }
+    let step = step.as_deref().map(RecordedStep::of);
     Ok(if state != "completed" {
         JournalRow::Pending(PendingOperation::Local { state, step })
-    } else if matches!(step.as_deref(), Some(REJECTED_STEP | ABANDONED_STEP)) {
+    } else if step.is_some_and(|step| step.is(LocalStep::Rejected) || step.is(LocalStep::Abandoned))
+    {
         JournalRow::Absent
     } else {
         // A local operation that completed owes nothing more.
         JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work: false,
-            checkpointed: step.as_deref().is_some_and(is_checkpoint_step),
+            checkpointed: step.is_some_and(RecordedStep::is_checkpoint),
         }
     })
 }
@@ -731,7 +897,7 @@ pub(super) fn completed_step(
     connection: &Connection,
     root_path: &str,
     operation_id: OperationId,
-) -> Result<Option<String>, ReadError> {
+) -> Result<Option<RecordedStep>, ReadError> {
     let step: Option<Option<String>> = connection
         .query_row(
             "SELECT completed_step FROM operation_records
@@ -742,10 +908,14 @@ pub(super) fn completed_step(
         .optional()?;
     match step.flatten() {
         Some(step) if !is_stored_name(&step) => Err(ReadError::new(ResultCode::InternalError)),
-        Some(step) if step == "completed" || step == REJECTED_STEP || step == ABANDONED_STEP => {
-            Ok(None)
+        Some(step) => {
+            let step = RecordedStep::of(&step);
+            let closes_only = step.is(LocalStep::Completed)
+                || step.is(LocalStep::Rejected)
+                || step.is(LocalStep::Abandoned);
+            Ok((!closes_only).then_some(step))
         }
-        step => Ok(step),
+        None => Ok(None),
     }
 }
 
@@ -770,14 +940,15 @@ pub(super) enum LocalStanding {
 
 impl LocalRow {
     pub(super) fn standing(&self) -> LocalStanding {
+        let step = listed(self.step.as_deref());
         if self.state != "completed" {
             LocalStanding::Pending
+        } else if step == Some(LocalStep::Rejected) {
+            LocalStanding::Rejected
+        } else if step == Some(LocalStep::Abandoned) {
+            LocalStanding::Abandoned
         } else {
-            match self.step.as_deref() {
-                Some(REJECTED_STEP) => LocalStanding::Rejected,
-                Some(ABANDONED_STEP) => LocalStanding::Abandoned,
-                Some(_) | None => LocalStanding::Completed,
-            }
+            LocalStanding::Completed
         }
     }
 
@@ -798,9 +969,9 @@ impl LocalRow {
     }
 
     /// Whether the row records that the operation passed the point where
-    /// its work is committed; see `is_checkpoint_step`.
+    /// its work is committed; see `LocalStep::is_checkpoint`.
     pub(super) fn is_checkpointed(&self) -> bool {
-        self.step.as_deref().is_some_and(is_checkpoint_step)
+        listed(self.step.as_deref()).is_some_and(LocalStep::is_checkpoint)
     }
 
     /// Whether all the row still owes is its index hand-off: it is
@@ -820,7 +991,7 @@ impl LocalRow {
     /// given, so whoever would resume a row asks this first.
     pub(super) fn owes_only_its_hand_off(&self) -> bool {
         self.standing() == LocalStanding::Pending
-            && self.step.as_deref().is_some_and(is_authoritative_step)
+            && listed(self.step.as_deref()).is_some_and(LocalStep::is_authoritative)
             && HAND_OFF_STATES.contains(&self.state.as_str())
     }
 
@@ -869,7 +1040,7 @@ pub(super) fn abandon_row(connection: &Connection, record_id: i64) -> rusqlite::
     Ok(connection.execute(
         "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
           WHERE id = ?1 AND state != 'completed'",
-        params![record_id, ABANDONED_STEP, now()],
+        params![record_id, LocalStep::Abandoned.as_str(), now()],
     )? == 1)
 }
 
@@ -1406,6 +1577,24 @@ mod abandoned_row_tests {
 
     fn abandoned_row() -> (String, Option<String>, i64, i64) {
         ("completed".to_owned(), Some("abandoned".to_owned()), 0, 0)
+    }
+
+    #[test]
+    fn every_step_is_stored_under_its_own_name_and_read_back() {
+        for step in LocalStep::ALL {
+            assert!(is_stored_name(step.as_str()), "{step:?}");
+            assert_eq!(LocalStep::parse(step.as_str()), Some(step));
+            assert_eq!(RecordedStep::of(step.as_str()), RecordedStep::Listed(step));
+        }
+        let mut names = LocalStep::ALL.map(LocalStep::as_str).to_vec();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), LocalStep::ALL.len());
+        // A name with the form of a step that no build writes is a step
+        // recorded, and no more is known of it.
+        assert_eq!(LocalStep::parse("some_other_step"), None);
+        assert_eq!(RecordedStep::of("some_other_step"), RecordedStep::Unlisted);
+        assert!(!RecordedStep::Unlisted.is_checkpoint());
     }
 
     #[test]

@@ -61,7 +61,7 @@ pub use keys::{
 pub use mutation::*;
 pub use read::*;
 use recovery::{
-    IndexOwner, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
+    IndexOwner, LocalStep, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
     claim_indexing, discard_operation, owns_indexing, pending_for_root,
     record_owned_persisted_context, record_persisted_context as record_recovery_context,
     touch_indexing, transition_indexing,
@@ -1679,7 +1679,7 @@ impl RepositoryService {
                     }
                 }
                 if let Some(record) = record {
-                    self.advance_lifecycle(&root, operation, record, "branch_observed")?;
+                    self.advance_lifecycle(&root, operation, record, LocalStep::BranchObserved)?;
                 }
                 branch.into_reference()
             }
@@ -1695,7 +1695,7 @@ impl RepositoryService {
                     .map_err(|error| RepositoryError::git(operation, Some(root.clone()), error))?
                     .into_reference();
                 if let Some(record) = record {
-                    self.advance_lifecycle(&root, operation, record, "branch_observed")?;
+                    self.advance_lifecycle(&root, operation, record, LocalStep::BranchObserved)?;
                 }
                 reference
             }
@@ -1721,7 +1721,12 @@ impl RepositoryService {
             .worktree(&item_id, &worktree, Some(&options))
             .map_err(|error| RepositoryError::git(operation, Some(root), error))?;
         if let Some(record) = record {
-            self.advance_lifecycle(&context.root, operation, record, "worktree_observed")?;
+            self.advance_lifecycle(
+                &context.root,
+                operation,
+                record,
+                LocalStep::WorktreeObserved,
+            )?;
         }
         Ok(ContextProvisionOutcome::Created(context))
     }
@@ -1877,12 +1882,12 @@ impl RepositoryService {
                     ));
                 }
                 (ContextIntent::Edit, Some(source)) => {
-                    let expected_source = if record.completed_step == Some("document_move_observed")
-                    {
-                        Some(ExpectedPathObservation::Missing)
-                    } else {
-                        request.expected_source.clone()
-                    };
+                    let expected_source =
+                        if record.completed_step == Some(LocalStep::DocumentMoveObserved) {
+                            Some(ExpectedPathObservation::Missing)
+                        } else {
+                            request.expected_source.clone()
+                        };
                     if let Some(expected_source) = &expected_source {
                         ensure_expected_owned_observation(
                             &context.worktree,
@@ -2034,18 +2039,18 @@ impl RepositoryService {
                     &context.root,
                     operation,
                     record,
-                    "document_destination_observed",
+                    LocalStep::DocumentDestinationObserved,
                 )?;
             }
             if moving {
                 let source = source.as_ref().expect("move has a source");
                 if source_present {
-                    let expected_source = if record.completed_step == Some("document_move_observed")
-                    {
-                        Some(ExpectedPathObservation::Missing)
-                    } else {
-                        request.expected_source.clone()
-                    };
+                    let expected_source =
+                        if record.completed_step == Some(LocalStep::DocumentMoveObserved) {
+                            Some(ExpectedPathObservation::Missing)
+                        } else {
+                            request.expected_source.clone()
+                        };
                     if let Some(expected_source) = &expected_source {
                         ensure_expected_owned_observation(
                             &context.worktree,
@@ -2062,7 +2067,7 @@ impl RepositoryService {
                         &context.root,
                         operation,
                         record,
-                        "document_move_observed",
+                        LocalStep::DocumentMoveObserved,
                     )?;
                 }
             }
@@ -2082,7 +2087,7 @@ impl RepositoryService {
                 &context.root,
                 operation,
                 record,
-                "authoring_checkpoint_observed",
+                LocalStep::AuthoringCheckpointObserved,
             )?;
             Ok(SaveOutcome::Saved {
                 context,
@@ -2394,7 +2399,7 @@ impl RepositoryService {
                     &context.root,
                     operation,
                     record,
-                    "authoring_destination_observed",
+                    LocalStep::AuthoringDestinationObserved,
                 )?;
             }
             effects.begin();
@@ -2413,7 +2418,7 @@ impl RepositoryService {
                 &context.root,
                 operation,
                 record,
-                "authoring_checkpoint_observed",
+                LocalStep::AuthoringCheckpointObserved,
             )?;
             Ok(SaveOutcome::Saved {
                 context,
@@ -2707,7 +2712,7 @@ impl RepositoryService {
                     &context.root,
                     operation,
                     record,
-                    "authoring_destination_observed",
+                    LocalStep::AuthoringDestinationObserved,
                 )?;
             }
             effects.begin();
@@ -2726,7 +2731,7 @@ impl RepositoryService {
                 &context.root,
                 operation,
                 record,
-                "authoring_checkpoint_observed",
+                LocalStep::AuthoringCheckpointObserved,
             )?;
             Ok(CommentSubmissionOutcome::Saved {
                 context,
@@ -3015,22 +3020,38 @@ impl RepositoryService {
         root: &Path,
         operation: RepositoryOperation,
         record: RecoveryRecord,
-        step: &str,
+        step: LocalStep,
     ) -> Result<(), RepositoryError> {
         if record.id == 0 {
             return Ok(());
         }
-        if matches!(
-            step,
-            "authoring_destination_observed"
-                | "document_destination_observed"
-                | "document_move_observed"
-                | "authoring_checkpoint_observed"
-        ) && self.should_inject(
-            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
-            operation,
-            root,
-        )? {
+        let follows_an_owned_write = match step {
+            LocalStep::AuthoringDestinationObserved
+            | LocalStep::DocumentDestinationObserved
+            | LocalStep::DocumentMoveObserved
+            | LocalStep::AuthoringCheckpointObserved => true,
+            LocalStep::BranchObserved
+            | LocalStep::WorktreeObserved
+            | LocalStep::AuthoritativeObserved
+            | LocalStep::RemoteChanged
+            | LocalStep::PublicationConfigurationWritten
+            | LocalStep::PublicationCommitted
+            | LocalStep::RepositoryInitialized
+            | LocalStep::ConfigurationWritten
+            | LocalStep::InitializationCommitted
+            | LocalStep::Retry
+            | LocalStep::Error
+            | LocalStep::Completed
+            | LocalStep::Rejected
+            | LocalStep::Abandoned => false,
+        };
+        if follows_an_owned_write
+            && self.should_inject(
+                FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+                operation,
+                root,
+            )?
+        {
             return Err(RepositoryError::new(
                 operation,
                 Some(root.to_owned()),
@@ -3042,7 +3063,7 @@ impl RepositoryService {
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
         migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
-        advance_after_observation(&connection, record.id, step, None, None)
+        advance_after_observation(&connection, record.id, step.as_str(), None, None)
             .map_err(|error| error.for_operation(operation, root))
     }
 
@@ -3207,7 +3228,7 @@ impl RepositoryService {
         _operation_id: OperationId,
         lease: RepositoryLease,
     ) -> Result<bool, RepositoryError> {
-        self.advance_lifecycle(root, operation, record, "authoritative_observed")?;
+        self.advance_lifecycle(root, operation, record, LocalStep::AuthoritativeObserved)?;
         if record.id == 0 {
             return Ok(false);
         }
@@ -3549,7 +3570,7 @@ impl RepositoryService {
         match repository.find_remote(&request.name) {
             Ok(remote) if remote.url() == Some(request.url.as_str()) => {
                 if record.is_pending {
-                    let changed = record.completed_step == Some("remote_changed");
+                    let changed = record.completed_step == Some(LocalStep::RemoteChanged);
                     return if self.handoff_post_authoritative(
                         &root,
                         RepositoryOperation::AddRemote,
@@ -3603,7 +3624,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::AddRemote,
             record,
-            "remote_changed",
+            LocalStep::RemoteChanged,
         )?;
         self.check_failure(
             FailurePoint::AfterRemoteMutation,
@@ -3687,7 +3708,7 @@ impl RepositoryService {
             Ok(_) => {}
             Err(error) if error.code() == git2::ErrorCode::NotFound => {
                 if record.is_pending {
-                    let changed = record.completed_step == Some("remote_changed");
+                    let changed = record.completed_step == Some(LocalStep::RemoteChanged);
                     return if self.handoff_post_authoritative(
                         &root,
                         RepositoryOperation::RemoveRemote,
@@ -3734,7 +3755,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::RemoveRemote,
             record,
-            "remote_changed",
+            LocalStep::RemoteChanged,
         )?;
         self.check_failure(
             FailurePoint::AfterRemoteMutation,
@@ -3848,7 +3869,7 @@ impl RepositoryService {
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if !record.is_pending
-                && (record.completed_step == Some("publication_committed")
+                && (record.completed_step == Some(LocalStep::PublicationCommitted)
                     || request.name.is_some())
             {
                 let commit_oid = repository
@@ -3860,7 +3881,7 @@ impl RepositoryService {
                 return Ok(PublicationRemoteOutcome::Changed { commit_oid });
             }
             if record.is_pending {
-                let changed = record.completed_step == Some("publication_committed");
+                let changed = record.completed_step == Some(LocalStep::PublicationCommitted);
                 let commit_oid = repository
                     .head()
                     .and_then(|head| head.peel_to_commit())
@@ -3919,7 +3940,7 @@ impl RepositoryService {
             &root,
             operation,
             record,
-            "publication_configuration_written",
+            LocalStep::PublicationConfigurationWritten,
         )?;
         let result = (|| {
             let tree_id = configuration_tree(&repository, source.as_bytes(), &root, operation)?;
@@ -3972,7 +3993,7 @@ impl RepositoryService {
                 return Err(error);
             }
         };
-        self.advance_lifecycle(&root, operation, record, "publication_committed")?;
+        self.advance_lifecycle(&root, operation, record, LocalStep::PublicationCommitted)?;
         match self.reconcile_registration(&repository, &root, operation) {
             Ok(()) => {
                 if self.handoff_post_authoritative(
@@ -4106,12 +4127,13 @@ impl RepositoryService {
                         completed_step: Some(step),
                         ..
                     } if *pending_id == request.operation_id
-                        && matches!(
-                            step.as_str(),
-                            "repository_initialized"
-                                | "configuration_written"
-                                | "initialization_committed"
-                        )
+                        && [
+                            LocalStep::RepositoryInitialized,
+                            LocalStep::ConfigurationWritten,
+                            LocalStep::InitializationCommitted,
+                        ]
+                        .map(Some)
+                        .contains(&LocalStep::parse(step))
                 )
             });
         let record = self.begin_lifecycle_record(
@@ -4290,7 +4312,7 @@ impl RepositoryService {
                     request.operation_id,
                     &request.primary_branch,
                 )?,
-                "repository_initialized",
+                LocalStep::RepositoryInitialized,
             )?;
             self.check_failure(
                 FailurePoint::AfterRepositoryInitialization,
@@ -4502,7 +4524,7 @@ impl RepositoryService {
                     ));
                 }
                 ensure_worktree_exclusion(&repository, &root)?;
-                if record.completed_step == Some("authoritative_observed") {
+                if record.completed_step == Some(LocalStep::AuthoritativeObserved) {
                     let commit_oid = repository
                         .head()
                         .and_then(|head| head.peel_to_commit())
@@ -4626,7 +4648,7 @@ impl RepositoryService {
                 &root,
                 RepositoryOperation::Enable,
                 record,
-                "configuration_written",
+                LocalStep::ConfigurationWritten,
             )?;
             let tree_id = initialization_tree(&repository, &config_path, unborn, &root)?;
             let tree = repository.find_tree(tree_id).map_err(|error| {
@@ -4705,7 +4727,7 @@ impl RepositoryService {
             &root,
             RepositoryOperation::Enable,
             record,
-            "initialization_committed",
+            LocalStep::InitializationCommitted,
         )?;
         match self.reconcile_registration(&repository, &root, RepositoryOperation::Enable) {
             Ok(()) => {

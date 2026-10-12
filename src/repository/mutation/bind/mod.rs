@@ -14,7 +14,7 @@ use super::{
     super::{
         AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
         RepositoryError, RepositoryService, ResolvedRepository,
-        recovery::{FinalKind, JournalRow, PendingOperation},
+        recovery::{FinalKind, JournalRow, PendingOperation, RecordedStep},
     },
     command::Command,
     context::context_names,
@@ -353,7 +353,7 @@ impl Accepted {
     pub(crate) fn recorded_local_step(
         &self,
         service: &RepositoryService,
-    ) -> Result<Option<String>, ()> {
+    ) -> Result<Option<RecordedStep>, ()> {
         match self.read_journal_row(service).map_err(|_| ())? {
             JournalRow::Absent => Ok(None),
             JournalRow::Pending(PendingOperation::Local { state: _, step }) => Ok(step),

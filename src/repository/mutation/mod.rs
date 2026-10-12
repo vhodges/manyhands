@@ -213,7 +213,7 @@ impl RepositoryService {
         &self,
         scope: &ScopeKey,
         operation_id: OperationId,
-    ) -> Result<Option<String>, ReadError> {
+    ) -> Result<Option<recovery::RecordedStep>, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             recovery::completed_step(connection, scope.as_str(), operation_id)
         })
@@ -509,6 +509,6 @@ pub mod request_store {
             ConfirmationRecord, InsertRequestOutcome, NewConfirmation, NewRequest,
             RequestOperation, RequestRecord, RequestResult,
         },
-        recovery::{FinalKind, JournalRow, PendingOperation},
+        recovery::{FinalKind, JournalRow, LocalStep, PendingOperation, RecordedStep},
     };
 }
