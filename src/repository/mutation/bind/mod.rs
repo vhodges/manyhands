@@ -23,6 +23,7 @@ use super::{
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     observe::ObservationDigest,
     outcome,
+    progress::Session,
     records::{ConfirmationRecord, RequestOperation, RequestRecord},
 };
 
@@ -97,11 +98,16 @@ pub(crate) fn resolve_root(
 ///
 /// It is the one way anything of the call reaches a binding: what a
 /// command needs of its call is a field here, and no binding is given a
-/// parameter of its own. The sink a call's progress goes to, the token
-/// that stops it and the session's credentials are the call's as well,
-/// and each is added here with the first command that reads it.
+/// parameter of its own. The session's credentials are the call's as
+/// well, and are added here with the first command that reads them.
 pub(crate) struct CallContext<'a> {
     pub(crate) service: &'a RepositoryService,
+    /// The sink the call's progress goes to and the token that stops
+    /// it.
+    // Read by the commands that report stages or can be stopped once
+    // they are accepted, which are not bound yet.
+    #[expect(dead_code)]
+    pub(crate) session: &'a dyn Session,
     /// The consent the request runs with: the confirmation its first
     /// call presents, once the boundary has found it to be this
     /// request's to use, and on a later call the one its record holds.

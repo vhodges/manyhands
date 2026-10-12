@@ -32,6 +32,7 @@ use super::{
     dto::{MutationDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
     outcome,
+    progress::NoSession,
     records::{ConfirmationRecord, NewConfirmation},
     reply::Reply,
     stored_time,
@@ -169,6 +170,7 @@ impl RepositoryService {
         let scope = binding.scope(repository, None);
         let call = CallContext {
             service: self,
+            session: &NoSession,
             confirmation: None,
         };
         let Previewed {

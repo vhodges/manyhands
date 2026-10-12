@@ -10,6 +10,7 @@ use super::{
     },
     bind::{Accepted, Answer, Binding, EndedWithoutCheckpoint, Ran, Standing},
     dto::MutationDataDto,
+    progress::Session,
     records::RequestRecord,
     reply::{Reply, RequestIdentity},
 };
@@ -87,6 +88,7 @@ impl RepositoryService {
         binding: &mut dyn Binding,
         identity: &RequestIdentity,
         record: &RequestRecord,
+        session: &dyn Session,
     ) -> Option<Envelope<MutationDataDto>> {
         let attempt = match self.enter_request(record.request_id) {
             Ok(Some(attempt)) => attempt,
@@ -141,7 +143,7 @@ impl RepositoryService {
             }
             None => None,
         };
-        let call = self.call_context(consent.as_ref());
+        let call = self.call_context(consent.as_ref(), session);
         let entered = binding.reenter(&call, &accepted, journal);
         let reply = Reply { binding, identity };
         Some(match entered {

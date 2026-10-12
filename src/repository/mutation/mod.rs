@@ -20,15 +20,14 @@
 //! - `reenter` takes up an accepted record again;
 //! - `settle` finishes, deletes or leaves the record afterwards;
 //! - `reply` identifies the request and builds its envelopes;
+//! - `progress` is the sink and the token a call is given, and how they
+//!   reach a binding;
 //! - `bind` holds what connects each command to all of that.
 
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use time::OffsetDateTime;
 
@@ -50,6 +49,7 @@ mod execute;
 mod identity;
 mod observe;
 mod outcome;
+mod progress;
 mod records;
 mod reenter;
 mod replay;
@@ -93,6 +93,7 @@ pub use dto::{
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(crate) use observe::absent_token;
+pub use progress::{CancellationToken, NoProgress, ProgressSink};
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
@@ -443,34 +444,6 @@ impl Mutation {
         }
     }
 }
-
-/// How a caller asks a running request to stop. A request that is
-/// cancelled before it is accepted does nothing.
-#[derive(Clone, Debug, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
-
-impl CancellationToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-/// Where a request reports its progress. No command reports any yet; the
-/// events are added with the commands that have stages to report.
-pub trait ProgressSink {}
-
-/// A sink for a caller that wants no progress.
-pub struct NoProgress;
-
-impl ProgressSink for NoProgress {}
 
 /// What the boundary is built from: the intent digest, the request records
 /// and the journal lookup. A front end uses the boundary itself; this is

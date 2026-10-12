@@ -23,6 +23,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
+    progress::{CallSession, Session},
     records::{self, ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
@@ -45,14 +46,15 @@ impl RepositoryService {
     pub fn execute<P: SessionCredentialProvider>(
         &self,
         call: MutationCall,
-        // No bound command needs a credential, reports a stage or can be
-        // stopped once it is accepted; the commands that do use these,
-        // and each then reaches its binding through the call context.
+        // No bound command needs a credential; the commands that do
+        // reach theirs through the call context, as every binding
+        // reaches the sink and the token.
         _credentials: &mut SessionCredentials<P>,
-        _progress: &mut dyn ProgressSink,
+        progress: &mut dyn ProgressSink,
         cancel: &CancellationToken,
     ) -> Envelope<MutationDataDto> {
-        let envelope = self.execute_call(call, cancel);
+        let session = CallSession::new(progress, cancel);
+        let envelope = self.execute_call(call, &session);
         self.offering_abandon(envelope)
     }
 
@@ -139,11 +141,7 @@ impl RepositoryService {
 
     /// One call of `execute`, before the journal is asked what its
     /// envelope can offer.
-    fn execute_call(
-        &self,
-        call: MutationCall,
-        cancel: &CancellationToken,
-    ) -> Envelope<MutationDataDto> {
+    fn execute_call(&self, call: MutationCall, session: &dyn Session) -> Envelope<MutationDataDto> {
         let MutationCall {
             request_id,
             confirmation,
@@ -177,7 +175,7 @@ impl RepositoryService {
                 {
                     let refused = if confirmation.is_some() {
                         Some(ResultCode::NotConfirmable)
-                    } else if cancel.is_cancelled() {
+                    } else if session.cancelled() {
                         Some(ResultCode::Cancelled)
                     } else {
                         None
@@ -234,7 +232,7 @@ impl RepositoryService {
                             // meanwhile: the next look answers from what
                             // it left.
                             if let Some(envelope) =
-                                self.reenter(binding.as_mut(), &identity, &record)
+                                self.reenter(binding.as_mut(), &identity, &record, session)
                             {
                                 return envelope;
                             }
@@ -243,7 +241,7 @@ impl RepositoryService {
                 }
                 None => {
                     if let Some(envelope) =
-                        self.first_call(binding.as_mut(), &identity, confirmation, cancel)
+                        self.first_call(binding.as_mut(), &identity, confirmation, session)
                     {
                         return envelope;
                     }
@@ -275,13 +273,13 @@ impl RepositoryService {
         binding: &mut dyn Binding,
         identity: &RequestIdentity,
         confirmation: Option<ConfirmationId>,
-        cancel: &CancellationToken,
+        session: &dyn Session,
     ) -> Option<Envelope<MutationDataDto>> {
         let consent = match self.consent(&Reply { binding, identity }, confirmation) {
             Ok(consent) => consent,
             Err(envelope) => return Some(envelope),
         };
-        let call = self.call_context(consent.given());
+        let call = self.call_context(consent.given(), session);
         let prepared = match binding.prepare(&call) {
             Ok(prepared) => prepared,
             Err(answer) => return Some(Reply { binding, identity }.envelope(answer, None, false)),
@@ -308,7 +306,7 @@ impl RepositoryService {
         {
             return Some(reply.stopped(ResultCode::ExternalChange));
         }
-        if cancel.is_cancelled() {
+        if session.cancelled() {
             return Some(reply.stopped(ResultCode::Cancelled));
         }
         let accepted = Accepted {
@@ -354,14 +352,17 @@ impl RepositoryService {
         Some(self.called(&reply, &accepted, || reply.binding.run(&call, &accepted)))
     }
 
-    /// What this call gives a binding to work with: the service, and the
-    /// consent the request runs with, when its command needs one.
+    /// What this call gives a binding to work with: the service, the
+    /// consent the request runs with, when its command needs one, and
+    /// what the call itself was given.
     pub(super) fn call_context<'a>(
         &'a self,
         confirmation: Option<&'a ConfirmationRecord>,
+        session: &'a dyn Session,
     ) -> CallContext<'a> {
         CallContext {
             service: self,
+            session,
             confirmation,
         }
     }
