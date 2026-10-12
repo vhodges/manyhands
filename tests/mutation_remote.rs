@@ -138,11 +138,36 @@ const CASES: &[ssh_harness::Case] = &[
         "a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over",
         a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over,
     ),
+    (
+        "a_synchronization_retried_after_the_cache_is_lost_is_blocked_until_each_piece_is_restored",
+        a_synchronization_retried_after_the_cache_is_lost_is_blocked_until_each_piece_is_restored,
+    ),
+    (
+        "a_synchronization_retried_once_everything_is_restored_is_current_and_pushes_nothing",
+        a_synchronization_retried_once_everything_is_restored_is_current_and_pushes_nothing,
+    ),
+    (
+        "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
+        the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
+    ),
 ];
 
-/// Cases run only as children of a case above, each of which expects
-/// the harness to fail them.
-const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[];
+/// Cases run only as children of the case above, which says of each
+/// whether the harness is to pass it.
+const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[
+    ("control_prints_what_the_boundary_emits", || {
+        control_prints(Printed::Emitted)
+    }),
+    ("control_prints_the_remote_location", || {
+        control_prints(Printed::RemoteLocation)
+    }),
+    ("control_prints_the_passphrase", || {
+        control_prints(Printed::Passphrase)
+    }),
+    ("control_prints_the_commit_message", || {
+        control_prints(Printed::CommitMessage)
+    }),
+];
 
 /// An observer that records the safe points it is told of, and asks for
 /// a cancellation at `stop_at`.
@@ -456,6 +481,23 @@ fn call(
     progress: &mut dyn ProgressSink,
     cancel: &CancellationToken,
 ) -> Envelope<MutationDataDto> {
+    let envelope =
+        call_before_the_stores_hold_anything(w, service, id, mutation, provider, progress, cancel);
+    w.privacy().expect("redacted durable state");
+    envelope
+}
+
+/// `call`, without the scan of the world's stores, which requires them
+/// to hold rows: a store that was just lost holds none.
+fn call_before_the_stores_hold_anything(
+    w: &World,
+    service: &RepositoryService,
+    id: &str,
+    mutation: Mutation,
+    provider: impl SessionCredentialProvider,
+    progress: &mut dyn ProgressSink,
+    cancel: &CancellationToken,
+) -> Envelope<MutationDataDto> {
     let envelope = service.execute(
         MutationCall {
             request_id: request(id),
@@ -478,7 +520,6 @@ fn call(
             .expect("the synchronization data schema");
     }
     ssh_privacy::clean(format!("{envelope:?}").as_bytes(), &w.probes).expect("redacted envelope");
-    w.privacy().expect("redacted durable state");
     envelope
 }
 
@@ -1706,5 +1747,272 @@ fn a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over(
     // The record is the retry's, and every later call is answered
     // from it.
     assert_eq!(execute(&w, REQUEST_1, repo_sync(&w)), retried);
+    Ok(())
+}
+
+// After the cache is lost.
+
+fn a_synchronization_retried_after_the_cache_is_lost_is_blocked_until_each_piece_is_restored()
+-> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let first = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(first.effects, published(local));
+    let pushes = accepted(&w.server);
+
+    // The database is lost, and with it the request's record, the
+    // journals, the registration, the selected key and the host's pin.
+    lose_the_cache(&mut w)?;
+    let unscanned = |id: &str, mutation: Mutation| {
+        call_before_the_stores_hold_anything(
+            &w,
+            &w.service,
+            id,
+            mutation,
+            Provider,
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    };
+
+    // The repository is not registered.
+    let opened = connections(&w);
+    let unregistered = unscanned(REQUEST_1, repo_sync(&w));
+    assert_eq!(unregistered.code, ResultCode::RepositoryNotRegistered);
+    assert_eq!(unregistered.outcome, Outcome::Blocked);
+    assert_eq!(actions(&unregistered), [RecoveryActionKind::IndexRebuild]);
+    assert_eq!(unregistered.operation_id, None);
+    assert!(fixed(w.service.request_record(request(REQUEST_1)))?.is_none());
+    assert_eq!(connections(&w), opened);
+    let rebuilt = unscanned(
+        REQUEST_2,
+        Mutation::IndexRebuild(IndexRebuildInput {
+            root: w.root.clone(),
+        }),
+    );
+    assert_eq!(rebuilt.outcome, Outcome::Success);
+
+    // No key is selected. The request is new: it has no record, and is
+    // accepted under a new operation, which reserves before it finds
+    // that out.
+    let keyless = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(keyless.code, ResultCode::NoSelectedKey);
+    assert_eq!(keyless.outcome, Outcome::Blocked);
+    assert_eq!(actions(&keyless), [RecoveryActionKind::RequestRetry]);
+    assert!(keyless.operation_id.is_some());
+    assert_ne!(keyless.operation_id, first.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert!(reserved(&w));
+    select_the_world_s_key(&w)?;
+
+    // Selecting a key fences every remote operation of the registry:
+    // the one this request reserved under is interrupted, its
+    // reservation let go, and nothing takes it up again. The request
+    // that stopped for want of a key is therefore not the one that goes
+    // on once there is a key: it answers `recovery_required` from then
+    // on, also after a cancellation, and its record stays accepted. A
+    // known limit, pinned here as it is.
+    assert!(!reserved(&w));
+    let fenced = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(fenced.code, ResultCode::RecoveryRequired);
+    assert_eq!(fenced.operation_id, keyless.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert!(!reserved(&w));
+    assert!(
+        !w.service
+            .cancel_request(request(REQUEST_1))
+            .data
+            .ok_or(FixtureError)?
+            .acknowledged
+    );
+    assert_eq!(
+        execute(&w, REQUEST_1, repo_sync(&w)).code,
+        ResultCode::RecoveryRequired
+    );
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    // A new request goes on: the host is not approved.
+    let untrusted = execute(&w, REQUEST_3, repo_sync(&w));
+    assert_eq!(untrusted.code, ResultCode::HostApprovalRequired);
+    assert_host_action(&w, &untrusted, RecoveryActionKind::HostApprove)?;
+    assert_eq!(
+        synchronization_data(&untrusted)?.presented_fingerprint,
+        w.server.host_identity().sha256
+    );
+    assert!(reserved(&w));
+    approve(&w)?;
+
+    // An approval fences nothing: with every piece restored, the same
+    // request finds what a fresh synchronization finds. The remote holds
+    // the commit already, and nothing is pushed.
+    let current = execute(&w, REQUEST_3, repo_sync(&w));
+    assert_current(&current);
+    assert_eq!(current.operation_id, untrusted.operation_id);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_3).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    Ok(())
+}
+
+fn select_the_world_s_key(w: &World) -> Result<(), FixtureError> {
+    let RegisterSharedKeyOutcome::Registered(key) =
+        fixed(w.service.register_shared_key(RegisterSharedKeyRequest {
+            label: "acceptance-selected".into(),
+            ownership: SharedKeyOwnership::Imported,
+            private_key_path: w.server.client_key_path().into(),
+            public_key_path: None,
+        }))?
+    else {
+        return Err(FixtureError);
+    };
+    fixed(w.service.select_shared_key(key.id))?;
+    Ok(())
+}
+
+/// The remote held the commit already: a no-op that names no commit.
+fn assert_current(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.outcome, Outcome::Noop);
+    assert_eq!(envelope.code, ResultCode::AlreadyApplied);
+    assert_eq!(
+        envelope.effects,
+        Effects {
+            publication: PublicationEffect::Current,
+            discovery: DiscoveryEffect::Current,
+            ..Effects::not_requested()
+        }
+    );
+}
+
+/// The database, with everything it held, is deleted, and the service
+/// opened again on what is left.
+fn lose_the_cache(w: &mut World) -> Result<(), FixtureError> {
+    for entry in fixed(std::fs::read_dir(w.data()))? {
+        let path = fixed(entry)?.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(REGISTRY_FILE))
+        {
+            fixed(std::fs::remove_file(path))?;
+        }
+    }
+    w.service = fixed(RepositoryService::open_at(&w.data()))?;
+    Ok(())
+}
+
+/// The design's own sequence: everything is restored before the request
+/// is sent again. It has no record, is taken as new, and reports what a
+/// fresh synchronization finds.
+fn a_synchronization_retried_once_everything_is_restored_is_current_and_pushes_nothing()
+-> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let first = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(first.effects, published(local));
+    let pushes = accepted(&w.server);
+
+    lose_the_cache(&mut w)?;
+    let rebuilt = call_before_the_stores_hold_anything(
+        &w,
+        &w.service,
+        REQUEST_2,
+        Mutation::IndexRebuild(IndexRebuildInput {
+            root: w.root.clone(),
+        }),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(rebuilt.outcome, Outcome::Success);
+    select_the_world_s_key(&w)?;
+    approve(&w)?;
+
+    let current = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_current(&current);
+    assert_ne!(current.operation_id, first.operation_id);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+// The harness's scan of everything a case writes to its output.
+
+/// What a control writes to its output besides what the boundary gave
+/// it.
+#[derive(Clone, Copy)]
+enum Printed {
+    /// Nothing: every event and the result, as they are.
+    Emitted,
+    RemoteLocation,
+    Passphrase,
+    CommitMessage,
+}
+
+/// A synchronization that publishes a commit whose message is private,
+/// with everything the boundary emitted of it written to the case's
+/// output, and then what `printed` names.
+fn control_prints(printed: Printed) -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    w.probes.push(MESSAGE.as_bytes().to_vec());
+    ssh_privacy::save(&w.probes)?;
+    let local = advance_with_message(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let mut events = Events::default();
+    let envelope = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut events,
+        &CancellationToken::new(),
+    );
+    assert_eq!(envelope.effects, published(local));
+    assert_eq!(events.0.len(), 7);
+    for event in &events.0 {
+        println!("{}", fixed(serde_json::to_string(event))?);
+        eprintln!("{event:?}");
+    }
+    println!("{}", fixed(serde_json::to_string(&envelope))?);
+    eprintln!("{envelope:?}");
+    match printed {
+        Printed::Emitted => {}
+        Printed::RemoteLocation => println!("{}", w.server.url()),
+        Printed::Passphrase => eprintln!("{PASSWORD}"),
+        Printed::CommitMessage => println!("{MESSAGE}"),
+    }
+    Ok(())
+}
+
+fn the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private()
+-> Result<(), FixtureError> {
+    ssh_privacy::save(&[b"runner-private-capture-control".to_vec()])?;
+    // The scan passes a case that prints every event and its result.
+    assert_eq!(
+        ssh_harness::run_isolated_with_output_privacy("control_prints_what_the_boundary_emits"),
+        Ok(())
+    );
+    // And it can fail: the same case, with one private thing more.
+    for control in [
+        "control_prints_the_remote_location",
+        "control_prints_the_passphrase",
+        "control_prints_the_commit_message",
+    ] {
+        assert_eq!(
+            ssh_harness::run_isolated_with_output_privacy(control),
+            Err(ssh_harness::IsolationFailure::OutputPrivacy),
+            "{control}"
+        );
+    }
     Ok(())
 }
