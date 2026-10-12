@@ -19,10 +19,11 @@ use super::{
     super::{
         super::{
             AuthoringKind, AuthoringTarget, ClosureState, ContextIntent, DependencyDto,
-            ExpectedPathObservation, ItemDto, ItemDtoKind, ProposedRelationships,
-            RelationshipWrite, RepositoryError, RepositoryErrorKind, RepositoryOperation,
-            RepositoryService, ResolvedRepository, SaveTicketRequest, TicketDraft,
-            TicketWriteOptions, apply_ticket_write_options, owned_file_bytes, recovery::JournalRow,
+            ExpectedPathObservation, FailurePoint, ItemDto, ItemDtoKind, ProposedRelationships,
+            ReadError, RelationshipWrite, RepositoryError, RepositoryErrorKind,
+            RepositoryOperation, RepositoryService, ResolvedRepository, SaveTicketRequest,
+            TicketDraft, TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
+            recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
@@ -30,7 +31,7 @@ use super::{
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
         observe::{self, ObservedFile},
-        outcome::SaveReport,
+        outcome::{self, SaveReport},
         records::RequestRecord,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
@@ -86,6 +87,10 @@ pub(crate) struct TicketBinding {
     /// The rejection the relationship check gave a request that is
     /// entered again. `reenter` decides whether it stands.
     rejected: Option<Answer>,
+    /// The error of a relationship check that could not be read for a
+    /// request that is entered again. `reenter` decides whether it
+    /// stands, as it does for a rejection.
+    unread: Option<Answer>,
 }
 
 impl From<TicketCreateInput> for TicketBinding {
@@ -116,6 +121,7 @@ impl From<TicketCreateInput> for TicketBinding {
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
             rejected: None,
+            unread: None,
         }
     }
 }
@@ -144,6 +150,7 @@ impl From<TicketSaveInput> for TicketBinding {
             options: TicketWriteOptions::default(),
             unresolved: Vec::new(),
             rejected: None,
+            unread: None,
         }
     }
 }
@@ -382,7 +389,8 @@ impl TicketBinding {
     /// a cycle with this one's. Its relationships are checked again, and
     /// a rejection is kept in `rejected` for `reenter` to decide on,
     /// which knows whether the request's own commit is already there. A
-    /// failure to read does not stop it.
+    /// check that cannot be read is kept in `unread` in the same way: a
+    /// re-entry fails closed, as a first call does.
     fn check_relationships(
         &mut self,
         service: &RepositoryService,
@@ -420,11 +428,25 @@ impl TicketBinding {
             },
         };
         if !named.is_empty() {
-            let check = service.check_ticket_relationships(repository, &self.id, &proposed);
+            let check = if service
+                .should_inject(
+                    FailurePoint::BeforeRequestRelationshipCheck,
+                    RepositoryOperation::Read,
+                    repository.root(),
+                )
+                .unwrap_or(false)
+            {
+                Err(ReadError::new(ResultCode::IndexUnavailable))
+            } else {
+                service.check_ticket_relationships(repository, &self.id, &proposed)
+            };
             let check = match (check, checking) {
                 (Ok(check), _) => Some(check),
                 (Err(error), Checking::NewRequest) => return Err(Answer::of_read(&error)),
-                (Err(_), Checking::Reentry) => None,
+                (Err(error), Checking::Reentry) => {
+                    self.unread = Some(Answer::of_read(&error));
+                    None
+                }
             };
             if let Some(check) = check {
                 match (check.rejection, checking) {
@@ -821,6 +843,7 @@ impl Binding for TicketBinding {
             options: _,
             unresolved: _,
             rejected: _,
+            unread: _,
         } = self;
         let listed: Vec<&str> = match deps {
             RelationshipWrite::Set(deps) => deps.iter().map(String::as_str).collect(),
@@ -883,14 +906,36 @@ impl Binding for TicketBinding {
         // domain, which checks no cycle, is not called. Only a commit of
         // the request's own already holds what it asks for, and the
         // check's answer is then about a state the request itself made.
-        match self.rejected.take() {
-            Some(answer) if before.own().is_none() => Err(Ran {
+        //
+        // A check that could not be read says nothing of that, and the
+        // request is not let through on it: the domain would write an
+        // edge nobody checked. It is answered with the read's own error
+        // and its record is left accepted, so the same request, which is
+        // what the result offers, is checked again.
+        let (rejected, unread) = (self.rejected.take(), self.unread.take());
+        if before.own().is_some() {
+            return Ok(Entered::Authoring(before));
+        }
+        if let Some(answer) = rejected {
+            return Err(Ran {
                 answer,
                 standing: Standing::NotRun {
                     journal: before.journal,
                 },
+            });
+        }
+        match unread {
+            Some(answer) => Err(Ran {
+                answer: Answer {
+                    // The record was read a moment ago, so the index
+                    // is there: the same request is what is sent, and
+                    // not the rebuild the code would offer.
+                    recovery: vec![outcome::same_request(accepted.request_id)],
+                    ..answer
+                },
+                standing: Standing::Stopped { journal: None },
             }),
-            Some(_) | None => Ok(Entered::Authoring(before)),
+            None => Ok(Entered::Authoring(before)),
         }
     }
 

@@ -544,6 +544,13 @@ pub(crate) fn original_request(request_id: String) -> RecoveryAction {
     )
 }
 
+/// The action that offers the request `request_id` itself again: what
+/// a result offers when its record was left accepted and the same
+/// request is what goes on, whatever its code offers of its own.
+pub(crate) fn same_request(request_id: RequestId) -> RecoveryAction {
+    original_request(request_id.to_string())
+}
+
 /// What a result names, for the actions it offers.
 pub(crate) struct Named<'a> {
     pub(crate) code: ResultCode,

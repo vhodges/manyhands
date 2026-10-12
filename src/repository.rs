@@ -852,6 +852,11 @@ pub enum FailurePoint {
     /// cancellation its observer asked for: the write fails there, and
     /// nothing is recorded.
     BeforeSynchronizationCancellation,
+    /// The mutation boundary, where a ticket write reads whether the
+    /// relationships it asks for are allowed: the read fails there, as
+    /// the index being held or unreadable for a moment would have it
+    /// fail.
+    BeforeRequestRelationshipCheck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

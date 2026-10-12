@@ -2443,3 +2443,181 @@ fn a_save_that_committed_is_finished_whatever_the_relationship_check_says_now() 
     assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
     assert_eq!(retry.effects.commit_oid, Some(commit.to_string()));
 }
+
+/// Asserts that a re-entry was stopped because its relationship check
+/// could not be read: the read's own error, the same request offered,
+/// nothing written, and the record left accepted for it.
+fn assert_stopped_unchecked(
+    world: &World,
+    retry: &Envelope<MutationDataDto>,
+    operation_id: &str,
+    id: &str,
+) {
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::IndexUnavailable,
+            Some(FailureClass::Blocked)
+        )
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(recovery_actions(retry), ["request.retry"]);
+    assert_eq!(retry.recovery[0].arguments["request_id"], REQUEST_1);
+    let record = world.record(REQUEST_1).expect("the record stays");
+    assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+    assert_eq!(record.result, None);
+    // The domain, which checks no cycle, was not called: no row was
+    // begun, and no context, branch or file was made or changed.
+    assert_eq!(world.journal_row(operation_id), JournalRow::Absent);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert!(!world.worktree(id).exists());
+    assert!(world.branch_tip(id).is_none());
+}
+
+/// A re-entry fails closed. Another request closed a cycle with this
+/// one's relationship while it was accepted and had not run; the retry's
+/// check cannot be read for a moment. Let through, the domain would
+/// write the second edge.
+#[test]
+fn a_save_entered_again_whose_relationship_check_cannot_be_read_writes_nothing() {
+    let mut world = World::new();
+    let created = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(created.code, ResultCode::Ok);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let depending = |world: &World| {
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &token)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let operation_id = world
+        .record(REQUEST_1)
+        .expect("the record stays")
+        .operations[0]
+        .operation_id
+        .to_string();
+    let other = world.execute(
+        REQUEST_2,
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_A.to_owned()]),
+            ..world.save_input(TICKET_NEW, &world.token(TICKET_NEW))
+        }),
+    );
+    assert_eq!(other.code, ResultCode::Ok);
+
+    // The retry, with the check unreadable.
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestRelationshipCheck).open_service(world.data.path());
+    let retry = world.execute(REQUEST_1, depending(&world));
+    assert_stopped_unchecked(&world, &retry, &operation_id, TICKET_A);
+    assert!(!world.primary_source(TICKET_A).contains("deps:"));
+
+    // The same request once the check can be read: the cycle is refused,
+    // as it is for a re-entry whose check was read at once.
+    world.reopen();
+    let again = world.execute(REQUEST_1, depending(&world));
+    assert_cycle_rejected(&again);
+    world.assert_nothing_exists(REQUEST_1, TICKET_A);
+}
+
+/// The same for a create.
+#[test]
+fn a_create_entered_again_whose_relationship_check_cannot_be_read_writes_nothing() {
+    let mut world = World::new();
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(world.data.path());
+    let depending = |world: &World| {
+        Mutation::TicketCreate(TicketCreateInput {
+            deps: vec![TICKET_A.to_owned()],
+            ..world.create_input(TICKET_NEW)
+        })
+    };
+    let died = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(died.code, ResultCode::InternalError);
+    let operation_id = world
+        .record(REQUEST_1)
+        .expect("the record stays")
+        .operations[0]
+        .operation_id
+        .to_string();
+
+    world.service =
+        FailOnce::at(FailurePoint::BeforeRequestRelationshipCheck).open_service(world.data.path());
+    let retry = world.execute(REQUEST_1, depending(&world));
+    assert_stopped_unchecked(&world, &retry, &operation_id, TICKET_NEW);
+
+    // Nothing stands in its way, and the same request creates the ticket.
+    world.reopen();
+    let again = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(
+        (again.outcome, again.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert!(world.worktree_source(TICKET_NEW).contains("deps:"));
+}
+
+/// The guard of the rejection on re-entry: it stands only while the
+/// request has no commit of its own. A save that committed and whose
+/// hand-off failed has its row pending and its own commit in range; the
+/// index then learns of an edge that closes a cycle with it. The check
+/// rejects what the request asks for, and the request is finished with
+/// its commit all the same: the check is about a state the request made.
+#[test]
+fn a_save_in_flight_that_committed_is_finished_though_its_check_now_finds_a_cycle() {
+    let mut world = World::new();
+    let created = world.execute(REQUEST_3, world.create(TICKET_NEW));
+    assert_eq!(created.code, ResultCode::Ok);
+    world.service =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let token = world.token(TICKET_A);
+    let depending = |world: &World| {
+        Mutation::TicketSave(TicketSaveInput {
+            deps: RelationshipWrite::Set(vec![TICKET_NEW.to_owned()]),
+            ..world.save_input(TICKET_A, &token)
+        })
+    };
+    let first = world.execute(REQUEST_1, depending(&world));
+    assert_eq!(
+        (first.outcome, first.code),
+        (Outcome::Partial, ResultCode::DiscoveryPending)
+    );
+    let commit = first.effects.commit_oid.clone().expect("a commit");
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    // The index reads an edge from the new ticket to A, made by hand:
+    // nothing else can write one while the row is pending.
+    let edges = crate::support::items::index(world.data.path())
+        .execute(
+            "INSERT INTO item_edges (item_id, target_id, kind)
+             SELECT id, ?1, 'deps' FROM discovered_items WHERE item_id = ?2",
+            [TICKET_A, TICKET_NEW],
+        )
+        .unwrap();
+    assert!(edges > 0, "the new ticket is indexed");
+    let check = world
+        .service
+        .check_ticket_relationships(
+            &world.resolved(),
+            &crate::support::items::item_id(TICKET_A),
+            &manyhands::repository::ProposedRelationships {
+                deps: vec![crate::support::items::item_id(TICKET_NEW)],
+                parent: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        check.rejection.map(|rejection| rejection.code),
+        Some(ResultCode::RelationshipCycle),
+        "the check rejects what the request asks for"
+    );
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, depending(&world));
+    assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
+    assert_eq!(retry.effects.commit_oid, Some(commit));
+}
