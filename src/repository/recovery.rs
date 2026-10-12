@@ -884,6 +884,21 @@ pub(super) fn pending_rows(
         .collect()
 }
 
+/// The table of the remote journal, and that of the key journal.
+pub(super) const REMOTE_JOURNAL_TABLE: &str = "remote_operation_records";
+pub(super) const KEY_JOURNAL_TABLE: &str = "key_material_operations";
+
+/// Whether the index holds the table `table`. An index that has never
+/// held an operation of the remote journal or of the key journal may
+/// lack that journal's table.
+pub(super) fn has_table(connection: &Connection, table: &str) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )
+}
+
 /// Whether the remote journal or the key journal holds an operation of
 /// the ID, in any repository. Such an operation is not a local one even
 /// when the local journal holds a row under its ID, as it does for the
@@ -894,17 +909,10 @@ pub(super) fn held_by_another_journal(
     operation_id: &str,
 ) -> rusqlite::Result<bool> {
     for (table, column) in [
-        ("remote_operation_records", "operation_ulid"),
-        ("key_material_operations", "operation_id"),
+        (REMOTE_JOURNAL_TABLE, "operation_ulid"),
+        (KEY_JOURNAL_TABLE, "operation_id"),
     ] {
-        // An index that has never held such an operation may lack the
-        // table.
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-            [table],
-            |row| row.get(0),
-        )?;
-        if !exists {
+        if !has_table(connection, table)? {
             continue;
         }
         let held: bool = connection.query_row(
