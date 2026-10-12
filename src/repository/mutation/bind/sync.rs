@@ -546,11 +546,7 @@ impl SyncBinding {
                 .map_err(refused)?
             {
                 ConfigurationInspection::Valid(configuration) => configuration,
-                // Registered, with no configuration: not enabled.
-                ConfigurationInspection::Missing => {
-                    return Err(Answer::stopped(ResultCode::RepositoryNotEnabled));
-                }
-                ConfigurationInspection::Invalid(_) => {
+                ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
                     return Err(Answer::stopped(ResultCode::InvalidConfiguration));
                 }
             };

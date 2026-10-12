@@ -759,7 +759,7 @@ fn committed_configuration(
         Ok(entry) => entry,
         // Not enabled, as far as its history says.
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
-            return Err(ResultCode::RepositoryNotEnabled);
+            return Err(ResultCode::RepositoryNotRegistered);
         }
         Err(error) => return Err(inaccessible(error)),
     };

@@ -49,10 +49,12 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         }
         RepositoryErrorKind::ConflictedWorktree => ResultCode::WorktreeConflicted,
         RepositoryErrorKind::InvalidConfiguration => ResultCode::InvalidConfiguration,
-        RepositoryErrorKind::RepositoryNotRegistered => ResultCode::RepositoryNotRegistered,
-        // The repository has no Manyhands configuration. A rebuild does
-        // not give it one, so this is not the code that offers one.
-        RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotEnabled,
+        // A domain operation says a repository is not enabled only of
+        // one it resolved, which is registered. `repository_not_enabled`
+        // is not that: it is of a repository that is not registered and
+        // that Git shows was never enabled; see `bind::never_enabled`.
+        RepositoryErrorKind::RepositoryNotRegistered
+        | RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotRegistered,
         RepositoryErrorKind::IndexUnavailable => ResultCode::IndexUnavailable,
         RepositoryErrorKind::RepositoryBusy => ResultCode::Busy,
         RepositoryErrorKind::RecoveryRequired

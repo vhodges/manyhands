@@ -255,7 +255,7 @@ impl Binding for IndexBinding {
     /// the only thing that completes it.
     fn reenter(
         &mut self,
-        _call: &CallContext<'_>,
+        call: &CallContext<'_>,
         _accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
@@ -268,7 +268,26 @@ impl Binding for IndexBinding {
                 answer: current(),
                 standing: Standing::Final,
             }),
-            JournalRow::Absent | JournalRow::Pending(_) => Ok(Entered::Unfinished),
+            JournalRow::Absent | JournalRow::Pending(_) => {
+                // A rebuild is asked again, before it registers
+                // anything, whether its repository is enabled: what it
+                // was accepted on may no longer be there. A refresh needs
+                // no such question, since it registers nothing.
+                match self.verb {
+                    Verb::Rebuild => {
+                        if let Err(answer) = resolve_root(call.service, &self.root)
+                            && answer.code == ResultCode::RepositoryNotEnabled
+                        {
+                            return Err(Ran {
+                                answer,
+                                standing: Standing::NotRun { journal },
+                            });
+                        }
+                    }
+                    Verb::Refresh => {}
+                }
+                Ok(Entered::Unfinished)
+            }
             // No local operation ends in another way or owes work once it
             // has completed. Nothing is run or settled on a row that
             // says so.

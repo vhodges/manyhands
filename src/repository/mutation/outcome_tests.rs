@@ -113,7 +113,7 @@ const KINDS: [(RepositoryErrorKind, ResultCode); 36] = [
     ),
     (
         RepositoryErrorKind::RepositoryNotEnabled,
-        ResultCode::RepositoryNotEnabled,
+        ResultCode::RepositoryNotRegistered,
     ),
     (
         RepositoryErrorKind::MissingAuthoringTarget,

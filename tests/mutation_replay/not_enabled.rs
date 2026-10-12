@@ -1,5 +1,6 @@
-//! A Git repository that was never enabled: it has no Manyhands
-//! configuration, in its working tree or in what its head commits. No
+//! A Git repository that was never enabled: it is not registered, and it
+//! has no Manyhands configuration in its working tree, in what its head
+//! commits, or at the tip of any local branch. No
 //! command enables it as a side effect. `index rebuild` and `index
 //! refresh` refuse it and register nothing, and every command that needs
 //! an enabled repository says that it is not enabled and offers nothing:
@@ -14,7 +15,7 @@ use std::fs;
 
 use manyhands::{
     repository::{
-        AuthoringKind, IndexRebuildInput, IndexRefreshInput, ItemSyncInput, Mutation,
+        AuthoringKind, FailurePoint, IndexRebuildInput, IndexRefreshInput, ItemSyncInput, Mutation,
         MutationDataDto, RebuildRepositoryRequest, RemoteAddInput, RemoteRemoveInput,
         RemoteSelectInput, RepoRemoveInput, RepoSyncInput,
     },
@@ -258,11 +259,14 @@ fn a_rebuild_of_a_never_enabled_repository_does_not_replace_a_corrupt_database()
     );
 }
 
-/// A repository that is registered and has no configuration: what an
-/// earlier build's rebuild left of one that was never enabled. It is not
-/// enabled either, and the rebuild that changes nothing is not offered.
+/// A repository that is registered and has no configuration at its root:
+/// what an earlier build's rebuild left of a plain repository, and also
+/// what an enabled repository shows when its root is on a branch from
+/// before it was enabled. Whether it was ever enabled is not asked of a
+/// repository that is registered: it keeps the answers it had, and the
+/// synchronization keeps the action that shows what is missing.
 #[test]
-fn a_registered_repository_with_no_configuration_is_not_enabled_and_is_offered_nothing() {
+fn a_registered_repository_with_no_configuration_keeps_the_answers_it_had() {
     let (world, _plain) = never_enabled();
     world
         .service
@@ -273,25 +277,182 @@ fn a_registered_repository_with_no_configuration_is_not_enabled_and_is_offered_n
         .unwrap();
     assert!(registered(&world));
     let requests = [
-        ("ticket create", world.create(TICKET_NEW)),
+        (
+            "ticket create",
+            world.create(TICKET_NEW),
+            ResultCode::RepositoryNotRegistered,
+            "index.rebuild",
+        ),
         (
             "document create",
             world.document_create(DOCUMENT_NEW, DOCUMENT_NEW_PATH),
+            ResultCode::RepositoryNotRegistered,
+            "index.rebuild",
         ),
         (
             "repo sync",
             Mutation::RepoSync(RepoSyncInput {
                 root: world.root.clone(),
             }),
+            ResultCode::InvalidConfiguration,
+            "repo.inspect",
         ),
     ];
-    for (command, request) in requests {
+    for (command, request, code, action) in requests {
         let refused = world.execute(REQUEST_1, request);
         assert_eq!(refused.command, command);
-        assert_not_enabled(&world, command, &refused);
-        // The domain refuses a document create once it is accepted; its
-        // record is released with nothing in flight.
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, code),
+            "{command}"
+        );
+        assert_eq!(recovery_actions(&refused), [action], "{command}");
         assert!(world.record(REQUEST_1).is_none(), "{command}");
         assert_eq!(world.pending_journal_rows(), 0, "{command}");
     }
+}
+
+/// Puts the root of the world's repository on the commit it began with,
+/// from before it was enabled: on a branch made there, or detached.
+fn check_out_from_before_enabling(world: &World, detached: bool) {
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let mut walk = repository.revwalk().unwrap();
+    walk.push_head().unwrap();
+    let first = walk.last().unwrap().unwrap();
+    let commit = repository.find_commit(first).unwrap();
+    assert!(
+        commit
+            .tree()
+            .unwrap()
+            .get_path(std::path::Path::new(".manyhands/config.toml"))
+            .is_err(),
+        "the first commit is from before enabling"
+    );
+    if detached {
+        repository.set_head_detached(first).unwrap();
+    } else {
+        repository.branch("old", &commit, false).unwrap();
+        repository.set_head("refs/heads/old").unwrap();
+    }
+    repository
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    assert!(!world.root.join(".manyhands/config.toml").exists());
+}
+
+/// The review's sequence. The repository was enabled on `main`; its root
+/// is then put on a branch from before that, or detached there, and the
+/// index is lost. It was enabled: the tip of a local branch holds its
+/// configuration. So it is not registered, and the rebuild that is
+/// offered brings it back, as before.
+#[test]
+fn an_enabled_repository_on_a_commit_from_before_enabling_is_restored_by_its_rebuild() {
+    for detached in [false, true] {
+        let mut world = World::new();
+        check_out_from_before_enabling(&world, detached);
+        world.lose_cache();
+
+        let refused = world.execute(REQUEST_1, world.save(TICKET_A, "v1:any"));
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, ResultCode::RepositoryNotRegistered),
+            "detached {detached}"
+        );
+        assert_eq!(recovery_actions(&refused), ["index.rebuild"]);
+        assert_eq!(world.request_rows(), 0);
+
+        let rebuilt = world.execute(REQUEST_2, rebuild(&world));
+        assert_eq!(
+            (rebuilt.outcome, rebuilt.code),
+            (Outcome::Success, ResultCode::Ok),
+            "detached {detached}"
+        );
+        assert!(registered(&world), "detached {detached}");
+        assert_eq!(world.execute(REQUEST_2, rebuild(&world)), rebuilt);
+    }
+}
+
+/// Replaces the world's index with a file that is not a database, and
+/// opens a service over it as the next process would.
+fn corrupt_index(world: &mut World) -> std::path::PathBuf {
+    let database = world.data.path().join("manyhands.sqlite3");
+    for entry in fs::read_dir(world.data.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("manyhands.sqlite3") && !name.ends_with(".lock") {
+            fs::remove_file(&path).unwrap();
+        }
+    }
+    fs::write(&database, b"not sqlite").unwrap();
+    world.reopen();
+    database
+}
+
+/// What a root is refused for as no repository's working tree comes
+/// before whether it was enabled: a bare repository is `bare_repository`
+/// and a directory that is no repository is `not_repository`, with an
+/// index that can be read and with one that cannot.
+#[test]
+fn a_bare_repository_and_a_directory_that_is_none_are_refused_as_what_they_are() {
+    for corrupt in [false, true] {
+        let mut world = World::new();
+        let enabled_root = world.root.clone();
+        let bare = support::bare_repository();
+        let nothing = tempfile::tempdir().unwrap();
+        let database = corrupt.then(|| corrupt_index(&mut world));
+        for (root, code) in [
+            (bare.root.clone(), ResultCode::BareRepository),
+            (nothing.path().to_owned(), ResultCode::NotRepository),
+        ] {
+            world.root = root.canonicalize().unwrap();
+            let refused = world.execute(REQUEST_1, rebuild(&world));
+            assert_eq!(
+                (refused.outcome, refused.code),
+                (Outcome::Error, code),
+                "corrupt {corrupt}"
+            );
+            if let Some(database) = &database {
+                // Refused before anything is replaced or accepted for it.
+                assert_eq!(refused.operation_id, None);
+                assert_eq!(fs::read(database).unwrap(), b"not sqlite");
+            }
+        }
+        // The world's own scan needs a database to read.
+        world.root = enabled_root;
+        let rebuilt = world.execute(REQUEST_2, rebuild(&world));
+        assert_eq!(rebuilt.code, ResultCode::Ok, "corrupt {corrupt}");
+    }
+}
+
+/// A rebuild that was accepted and never ran is asked again, when it is
+/// entered again, whether its repository is enabled, before it registers
+/// anything: what it was accepted on may no longer be there.
+#[test]
+fn a_rebuild_entered_again_does_not_register_a_repository_that_is_no_longer_enabled() {
+    let (mut world, plain) = never_enabled();
+    // Enabled, as far as Git says: its head commits a configuration.
+    let before = plain.repository.head().unwrap().peel_to_commit().unwrap();
+    support::commit_tracked_configuration(&plain, &support::config_source());
+    let operations = count(&world, "operation_records");
+    world.service = support::FailOnce::at(FailurePoint::BeforeRequestDomainCall)
+        .open_service(world.data.path());
+    let died = world.execute(REQUEST_1, rebuild(&world));
+    assert_eq!(died.code, ResultCode::InternalError);
+    assert!(world.record(REQUEST_1).is_some());
+    assert!(!registered(&world));
+
+    // The configuration goes: the branch is put back where it was.
+    plain
+        .repository
+        .reset(before.as_object(), git2::ResetType::Hard, None)
+        .unwrap();
+    assert!(!world.root.join(".manyhands/config.toml").exists());
+
+    world.reopen();
+    let retry = world.execute(REQUEST_1, rebuild(&world));
+    assert_not_enabled(&world, "index rebuild", &retry);
+    assert!(!registered(&world));
+    // No operation was begun for it, and its record is released.
+    assert_eq!(count(&world, "operation_records"), operations);
+    assert!(world.record(REQUEST_1).is_none());
 }

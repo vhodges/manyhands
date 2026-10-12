@@ -119,14 +119,18 @@ fn not_registered(error: &ReadError) -> Answer {
 }
 
 /// Whether the Git repository at `root` was never enabled: it has no
-/// Manyhands configuration, neither in its working tree nor in what its
-/// head commits. Enabling commits the configuration, and a repository
-/// that is being enabled has the file before it has the commit, so
-/// either one says the repository is, or is becoming, enabled.
+/// Manyhands configuration in its working tree, in what its head
+/// commits, or at the tip of any local branch. Enabling commits the
+/// configuration on the primary branch, and a repository that is being
+/// enabled has the file before it has the commit. A root that was put on
+/// a branch from before enabling, or detached there, still has the
+/// branch that holds it. Any one of them says the repository is, or is
+/// becoming, enabled.
 ///
 /// `false` for anything that cannot be read: only what is seen to be
-/// missing is called so, and a root that is no repository is the
-/// domain's to refuse.
+/// missing is called so. `false` too for a bare repository and for a
+/// root that is no repository, which are refused as what they are by
+/// what refuses them already.
 pub(crate) fn never_enabled(root: &Path) -> bool {
     let configuration = Path::new(canonical::CONFIG_PATH);
     match root.join(configuration).symlink_metadata() {
@@ -141,19 +145,39 @@ pub(crate) fn never_enabled(root: &Path) -> bool {
     ) else {
         return false;
     };
-    let tree = match repository.head() {
-        Ok(head) => match head.peel_to_tree() {
-            Ok(tree) => tree,
-            Err(_) => return false,
-        },
-        // No commit yet, so none holds a configuration.
-        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return true,
-        Err(_) => return false,
-    };
-    match tree.get_path(configuration) {
-        Ok(_) => false,
-        Err(error) => error.code() == git2::ErrorCode::NotFound,
+    if repository.is_bare() {
+        return false;
     }
+    // Whether the tree a reference names is seen to hold no
+    // configuration. A tree that cannot be read is not.
+    let lacks = |reference: &git2::Reference<'_>| {
+        reference.peel_to_tree().is_ok_and(|tree| {
+            tree.get_path(configuration)
+                .is_err_and(|error| error.code() == git2::ErrorCode::NotFound)
+        })
+    };
+    match repository.head() {
+        Ok(head) => {
+            if !lacks(&head) {
+                return false;
+            }
+        }
+        // No commit yet on the branch that is checked out.
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {}
+        Err(_) => return false,
+    }
+    let Ok(branches) = repository.branches(Some(git2::BranchType::Local)) else {
+        return false;
+    };
+    for branch in branches {
+        let Ok((branch, _)) = branch else {
+            return false;
+        };
+        if !lacks(branch.get()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// What one call of the boundary gives a binding to work with, in each of
@@ -913,3 +937,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
 #[cfg(test)]
 #[path = "before_tests.rs"]
 mod before_tests;
+
+#[cfg(test)]
+#[path = "enabled_tests.rs"]
+mod enabled_tests;
