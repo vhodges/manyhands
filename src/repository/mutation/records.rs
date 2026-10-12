@@ -697,17 +697,30 @@ pub(in super::super) fn operation_owner(
     scope_key: &str,
     operation_id: OperationId,
 ) -> rusqlite::Result<Option<String>> {
+    operation_holder(connection, OperationFamily::Local, scope_key, operation_id)
+}
+
+/// `operation_owner`, for an operation of any journal: the request
+/// whose record holds the operation `operation_id` of `family` in
+/// `scope_key` and is not finished. That request, sent again, is what
+/// takes the operation up with the input it was begun with.
+pub(super) fn operation_holder(
+    connection: &Connection,
+    family: OperationFamily,
+    scope_key: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<String>> {
     connection
         .query_row(
             "SELECT request_records.request_ulid
                FROM request_operations
                JOIN request_records USING (request_ulid)
-              WHERE request_operations.family = 'local'
+              WHERE request_operations.family = ?3
                 AND request_operations.operation_ulid = ?2
                 AND request_records.scope_key = ?1
                 AND request_records.state = 'accepted'
               ORDER BY request_records.request_ulid LIMIT 1",
-            params![scope_key, operation_id.to_string()],
+            params![scope_key, operation_id.to_string(), family.as_str()],
             |row| row.get(0),
         )
         .optional()
