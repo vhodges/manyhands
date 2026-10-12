@@ -412,6 +412,9 @@ recovery_actions! {
     RequestRetry => "request.retry", ["request_id"];
     /// Prepare the command again for a new confirmation.
     RequestPrepare => "request.prepare", [];
+    /// Cancel the request `request_id`, then submit it once more: that
+    /// call ends it cancelled and lets go of what it holds.
+    RequestCancel => "request.cancel", ["request_id"];
     /// Abandon the operation the action names, in the repository at `root`.
     OperationAbandon => "operation.abandon", ["root"];
     /// Set the identity of the repository at `root`.

@@ -1556,13 +1556,14 @@ fn a_host_with_an_empty_port_is_not_a_host() {
 }
 
 /// Every recovery action, with the keys of its arguments.
-const RECOVERY_ACTIONS: [(&str, &[&str]); 10] = [
+const RECOVERY_ACTIONS: [(&str, &[&str]); 11] = [
     ("index.rebuild", &["root"]),
     ("index.refresh", &["root"]),
     ("repo.inspect", &["root"]),
     ("operation.resume", &[]),
     ("request.retry", &["request_id"]),
     ("request.prepare", &[]),
+    ("request.cancel", &["request_id"]),
     ("operation.abandon", &["root"]),
     ("repo.identity_set", &["root"]),
     ("host.approve", &["authority", "root"]),

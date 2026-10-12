@@ -14,12 +14,13 @@
         "operation.resume",
         "request.retry",
         "request.prepare",
+        "request.cancel",
         "operation.abandon",
         "repo.identity_set",
         "host.approve",
         "host.replace"
       ],
-      "description": "What to do next. An action carries exactly the arguments it registers, or, when one of them is root and the result names no repository, none. index.rebuild, index.refresh, repo.inspect, operation.abandon and repo.identity_set take root, the repository's root. host.approve and host.replace take root and authority. request.retry takes request_id. operation.resume and request.prepare take none. operation.resume and operation.abandon set operation_id."
+      "description": "What to do next. An action carries exactly the arguments it registers, or, when one of them is root and the result names no repository, none. index.rebuild, index.refresh, repo.inspect, operation.abandon and repo.identity_set take root, the repository's root. host.approve and host.replace take root and authority. request.retry and request.cancel take request_id. request.cancel asks the request to stop; the request is then submitted once more, which ends it cancelled. operation.resume and request.prepare take none. operation.resume and operation.abandon set operation_id."
     },
     "operation_id": {
       "type": ["string", "null"]

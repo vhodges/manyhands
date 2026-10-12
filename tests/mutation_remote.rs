@@ -1180,8 +1180,42 @@ fn pin_a_held_reservation(
         RequestState::Accepted
     );
 
+    // A result with no way forward offers its cancellation, and nothing
+    // else: the same request cannot go on. One the same request can go on
+    // from does not offer it.
+    for envelope in [&first, &again] {
+        let offered: Vec<&str> = envelope
+            .recovery
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect();
+        if stopped.retry {
+            assert!(!offered.contains(&"request.cancel"));
+        } else {
+            assert_eq!(offered, ["request.cancel"]);
+        }
+    }
+    // The offered action is what is taken, where there is one: it names
+    // the request to cancel.
+    let named = again
+        .recovery
+        .iter()
+        .find(|action| action.action.as_str() == "request.cancel")
+        .map(|action| {
+            assert_eq!(action.operation_id, None);
+            assert_eq!(action.arguments.len(), 1);
+            action.arguments["request_id"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or(FixtureError)
+        })
+        .transpose()?;
+    assert_eq!(named.is_some(), !stopped.retry);
+    let cancelled = named.as_deref().unwrap_or(REQUEST_1);
+    assert_eq!(cancelled, REQUEST_1);
+
     // A cancellation, then the same request.
-    let cancel = w.service.cancel_request(request(REQUEST_1));
+    let cancel = w.service.cancel_request(request(cancelled));
     assert_eq!(cancel.code, ResultCode::Ok);
     let asked = cancel.data.ok_or(FixtureError)?;
     assert!(asked.requested);
@@ -1229,7 +1263,6 @@ fn a_divergent_remote_is_merge_required_and_holds_its_reservation() -> Result<()
             retry: false,
         },
     )?;
-    assert!(first.recovery.is_empty());
     assert!(first.data.is_none());
     // No merge commit, integration window or conflict exists, and
     // neither side's branches moved.
@@ -1271,7 +1304,7 @@ fn a_remotely_deleted_item_branch_is_remote_branch_deleted_and_holds_its_reserva
     assert_eq!(published.outcome, Outcome::Success);
     fixed(fixed(w.bare()?.find_reference(CONTEXT))?.delete())?;
 
-    let first = pin_a_held_reservation(
+    pin_a_held_reservation(
         &w,
         &Stopped {
             mutation: item_sync,
@@ -1280,7 +1313,6 @@ fn a_remotely_deleted_item_branch_is_remote_branch_deleted_and_holds_its_reserva
             retry: false,
         },
     )?;
-    assert!(first.recovery.is_empty());
     // The branch is not published again.
     assert!(w.bare()?.find_reference(CONTEXT).is_err());
     Ok(())
@@ -2500,7 +2532,7 @@ fn a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothin
         // The fetch showed that the remote holds the commit.
         assert_eq!(refused.outcome, Outcome::Partial);
         assert_eq!(refused.effects, published_and_cancelled(local));
-        assert!(refused.recovery.is_empty());
+        assert_eq!(actions(&refused), [RecoveryActionKind::RequestCancel]);
         assert_eq!(refused.operation_id, lost.operation_id);
         assert_eq!(merge_rows(&w)?, 0);
         assert_eq!(merge_commits(&repo)?, 0);
@@ -2533,7 +2565,7 @@ fn a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothin
 /// The review's I5. `merge_required` is dealt with by rebasing the
 /// local branch onto the remote's, and the same request does not go on
 /// from there: its operation recorded the branch as it was. So the
-/// result does not offer the same request.
+/// result does not offer the same request: it offers its cancellation.
 fn merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased()
 -> Result<(), FixtureError> {
     let w = World::new()?;
@@ -2544,7 +2576,7 @@ fn merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebase
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
     let refused = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(refused.code, ResultCode::MergeRequired);
-    assert!(refused.recovery.is_empty());
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestCancel]);
 
     // The user rebases: the local change, on top of the remote's.
     let rebased = commit(&repo, incoming, "local-divergent", b"local-divergent")?;

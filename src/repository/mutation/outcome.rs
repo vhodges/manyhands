@@ -805,7 +805,8 @@ fn recovery(
         // remote, a key that is missing, refused or locked, a host that
         // is not trusted. None is answered by an action of the code's
         // own here. The same request is offered, by the rule for a
-        // synchronization below, and `with_host_action` adds the
+        // synchronization below, or its cancellation where the same
+        // request cannot go on, and `with_host_action` adds the
         // approval of a host the result names.
         | ResultCode::MergeRequired
         | ResultCode::RemoteBranchDeleted
@@ -849,8 +850,20 @@ fn recovery(
     // operation refuses it; and a branch deleted at the remote stays
     // deleted. The same request is not offered for what it cannot do.
     // The reservation is let go by `request cancel` and one more call
-    // of the request, which no action names, and a new request goes on.
+    // of the request, and a new request goes on: that exit is what is
+    // offered, for a request whose record was left accepted, since the
+    // reservation is held for as long as it is. `offering_cancel` keeps
+    // the action only while the reservation is the request's own.
     let never = never_finished_by_the_same_request(code, command);
+    if never
+        && retry
+        && let Some(request_id) = request_id
+    {
+        actions.push(RecoveryAction::new(
+            RecoveryActionKind::RequestCancel,
+            [(REQUEST_ARGUMENT, request_id.to_string().into())],
+        ));
+    }
     let offered = actions
         .iter()
         .any(|action| action.action == RecoveryActionKind::RequestRetry);
@@ -1038,6 +1051,8 @@ impl RepositoryService {
     ///
     /// 1. For a call of `execute`, `operation.resume` is kept only where
     ///    a resume would take the operation up; see `offering_resume`.
+    ///    `request.cancel` is kept only while the reservation is the
+    ///    request's own; see `offering_cancel`.
     /// 2. `operation.abandon` is added where a pending local operation
     ///    stands in the way, with `operation.resume` before
     ///    `repo.inspect` and the abandon after it; see
@@ -1047,10 +1062,47 @@ impl RepositoryService {
     /// a replayed one among them.
     pub(super) fn offering<T>(&self, envelope: Envelope<T>, call: CallKind) -> Envelope<T> {
         let envelope = match call {
-            CallKind::Execute => self.offering_resume(envelope),
+            CallKind::Execute => self.offering_cancel(self.offering_resume(envelope)),
             CallKind::Prepare => envelope,
         };
         self.offering_abandon(envelope)
+    }
+
+    /// Keeps `request.cancel` among what an envelope offers only while
+    /// the repository's reservation is the operation the envelope names:
+    /// the request's own. The action is the exit of a synchronization
+    /// that holds its reservation and cannot go on; where the reservation
+    /// is another operation's, or there is none, a cancellation would let
+    /// nothing of this request's go.
+    ///
+    /// The reservation is read only for an envelope that offers the
+    /// action. One that cannot be read drops it: the envelope then offers
+    /// what it did before the action existed.
+    fn offering_cancel<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
+        let offers = envelope
+            .recovery
+            .iter()
+            .any(|action| action.action == RecoveryActionKind::RequestCancel);
+        if !offers {
+            return envelope;
+        }
+        let own = envelope
+            .scope
+            .repository
+            .as_deref()
+            .zip(envelope.operation_id.as_deref())
+            .is_some_and(|(root, operation_id)| {
+                self.active_remote_operation(Path::new(root))
+                    .ok()
+                    .flatten()
+                    .is_some_and(|active| active.operation_id().to_string() == operation_id)
+            });
+        if !own {
+            envelope
+                .recovery
+                .retain(|action| action.action != RecoveryActionKind::RequestCancel);
+        }
+        envelope
     }
 
     /// Keeps `operation.resume` among what an envelope offers only

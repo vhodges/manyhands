@@ -1544,12 +1544,13 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
             // recorded the branch as it was, so a branch that was merged
             // or rebased is refused, and a branch deleted at the remote
             // stays deleted. The way out is `request cancel`, the same
-            // request once more to end it, and a new request.
+            // request once more to end it, and a new request: that is
+            // what is offered, and the same request is not.
             if matches!(
                 code,
                 ResultCode::MergeRequired | ResultCode::RemoteBranchDeleted
             ) {
-                assert!(held.is_empty(), "{code:?}");
+                assert_eq!(held, ["request.cancel"], "{code:?}");
                 continue;
             }
             assert_eq!(held.first(), Some(&"request.retry"), "{code:?}");
@@ -1587,6 +1588,58 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
     // The rule is a synchronization's: an item write that stopped on an
     // external change is still offered nothing.
     assert!(actions_of(Command::TicketSave, ResultCode::ExternalChange, true).is_empty());
+}
+
+/// `request.cancel` is the exit of a synchronization that holds its
+/// reservation and has no way forward. It names the request, and it is
+/// offered for the two codes that have none, by a synchronization whose
+/// record was left accepted, and for nothing else: not for a record that
+/// is finished or was never made, not for a preview, which has no
+/// request, and not for another command.
+#[test]
+fn a_blocked_synchronization_with_no_way_forward_is_offered_its_cancellation() {
+    let request_id = RequestId::new();
+    let offered = |command, code, request_id, retry| {
+        recovery(code, command, Some("/repository"), request_id, None, retry)
+    };
+    let names = |actions: &[RecoveryAction]| -> Vec<&str> {
+        actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect()
+    };
+    for command in Command::ALL {
+        for code in ResultCode::ALL {
+            for retry in [false, true] {
+                let actions = offered(command, code, Some(request_id), retry);
+                let cancels = command.stops_at_safe_points()
+                    && retry
+                    && matches!(
+                        code,
+                        ResultCode::MergeRequired | ResultCode::RemoteBranchDeleted
+                    );
+                assert_eq!(
+                    names(&actions).contains(&"request.cancel"),
+                    cancels,
+                    "{command:?} {code:?} retry {retry}"
+                );
+                if cancels {
+                    assert_eq!(names(&actions), ["request.cancel"], "{command:?} {code:?}");
+                    assert_eq!(
+                        actions[0].arguments.get("request_id"),
+                        Some(&serde_json::Value::String(request_id.to_string())),
+                        "{command:?} {code:?}"
+                    );
+                    assert_eq!(actions[0].operation_id, None);
+                }
+            }
+            // No request to cancel.
+            assert!(
+                !names(&offered(command, code, None, true)).contains(&"request.cancel"),
+                "{command:?} {code:?}"
+            );
+        }
+    }
 }
 
 /// A finished synchronization is given its action again when it is
@@ -2094,4 +2147,41 @@ fn an_own_operation_that_is_not_to_be_abandoned_is_not_offered() {
         )
         .is_empty()
     );
+}
+
+/// `request.cancel` is kept only while the repository's reservation is
+/// the request's own operation. A result that names an operation the
+/// repository holds no reservation for, as that of a request that was
+/// fenced or whose reservation has been let go, offers no cancellation:
+/// there is nothing of the request's to let go.
+#[test]
+fn a_cancellation_is_not_offered_for_a_reservation_that_is_not_the_request_s_own() {
+    let data = tempfile::tempdir().expect("a directory");
+    let service = RepositoryService::open_at(data.path()).expect("a service");
+    let request_id = RequestId::new();
+    let envelope = Envelope::<()>::classified_mutation(
+        Command::RepoSync.name(),
+        crate::results::Scope {
+            repository: Some("/nowhere".to_owned()),
+            ..crate::results::Scope::default()
+        },
+        false,
+        ResultCode::MergeRequired,
+        crate::results::Effects::not_requested(),
+        false,
+    )
+    .with_request_id(request_id.to_string())
+    .with_operation_id(OperationId::new().to_string())
+    .with_recovery(recovery(
+        ResultCode::MergeRequired,
+        Command::RepoSync,
+        Some("/nowhere"),
+        Some(request_id),
+        None,
+        true,
+    ));
+    assert_eq!(envelope.recovery.len(), 1);
+    assert_eq!(envelope.recovery[0].action.as_str(), "request.cancel");
+    let offered = service.offering(envelope, CallKind::Execute);
+    assert!(offered.recovery.is_empty(), "{:?}", offered.recovery);
 }
