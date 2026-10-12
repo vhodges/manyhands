@@ -20,8 +20,8 @@
 //! - `reenter` takes up an accepted record again;
 //! - `settle` finishes, deletes or leaves the record afterwards;
 //! - `reply` identifies the request and builds its envelopes;
-//! - `progress` is the sink and the token a call is given, and how they
-//!   reach a binding;
+//! - `progress` is the sink, the token and the credentials a call is
+//!   given and how they reach a binding, and `cancel_request`;
 //! - `bind` holds what connects each command to all of that.
 
 // `ReadError` carries its whole scope by value, as the result contract has it.

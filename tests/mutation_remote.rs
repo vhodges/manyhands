@@ -47,6 +47,10 @@ const CASES: &[ssh_harness::Case] = &[
         an_observer_stops_a_synchronization_at_the_safe_point_it_asks_at,
     ),
     (
+        "the_sibling_does_not_continue_a_merge_it_is_set_to_refuse",
+        the_sibling_does_not_continue_a_merge_it_is_set_to_refuse,
+    ),
+    (
         "a_clean_synchronization_is_published_and_the_server_holds_the_commit",
         a_clean_synchronization_is_published_and_the_server_holds_the_commit,
     ),
@@ -407,6 +411,51 @@ fn an_observer_stops_a_synchronization_at_the_safe_point_it_asks_at() -> Result<
     assert_eq!(phase(&w, request.operation_id)?, "cancelled");
     assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, served);
     assert_eq!(w.server.receive_updates().len(), updates);
+    Ok(())
+}
+
+/// A synchronization that merges, and leaves a conflict behind, is not
+/// one a caller that never merges takes up: under the same operation ID
+/// it is refused before anything is read, reserved or changed.
+fn the_sibling_does_not_continue_a_merge_it_is_set_to_refuse() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local_base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, local_base, "conflict", b"local conflict")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let incoming_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(&w.peer, incoming_base, "conflict", b"incoming conflict")?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let merging = w.primary();
+    assert!(matches!(
+        w.sync(merging.clone()),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let rows = merge_rows(&w)?;
+    assert!(rows > 0);
+    let before = phase(&w, merging.operation_id)?;
+    let opened = w.server.accepted_keys().len();
+
+    let mut again = merging.clone();
+    again.restart = true;
+    let mut points = Points::default();
+    assert!(matches!(
+        observed(&w, again, REFUSING, &mut points),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert!(points.seen.is_empty());
+    assert_eq!(merge_rows(&w)?, rows);
+    assert_eq!(phase(&w, merging.operation_id)?, before);
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
+    assert_eq!(w.server.accepted_keys().len(), opened);
     Ok(())
 }
 

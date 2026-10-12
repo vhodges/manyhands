@@ -262,7 +262,7 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
-    use super::Command;
+    use super::{Command, ProgressStage};
 
     #[test]
     fn a_stored_name_is_read_back_as_its_command() {
@@ -290,6 +290,28 @@ mod tests {
         assert_eq!(Command::RepoRemove.name(), "repo remove");
         assert_eq!(Command::KeyDelete.name(), "key delete");
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
+        assert_eq!(Command::ItemSync.name(), "item sync");
+        assert_eq!(Command::RepoSync.name(), "repo sync");
+    }
+
+    #[test]
+    fn only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation() {
+        for command in Command::ALL {
+            let synchronization = matches!(command, Command::ItemSync | Command::RepoSync);
+            assert_eq!(
+                command.stops_at_safe_points(),
+                synchronization,
+                "{command:?}"
+            );
+            if synchronization {
+                assert!(!command.needs_confirmation(), "{command:?}");
+                assert!(command.has_operation(), "{command:?}");
+                assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+            }
+        }
+        assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
+        assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
+        assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);
     }
 
     #[test]
