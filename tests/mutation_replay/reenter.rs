@@ -18,7 +18,7 @@ use crate::support::{
     FailOnce,
     items::TICKET_A,
     mutation::{
-        BODY, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_NEW, TITLE, World, recovery_actions,
+        self, BODY, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_NEW, TITLE, World, recovery_actions,
         ticket_data,
     },
 };
@@ -1477,45 +1477,6 @@ fn a_save_that_changed_nothing_does_not_take_a_later_commit_of_the_same_content(
     assert_eq!(record.result.unwrap().outcome, Outcome::Noop);
 }
 
-const UNIDENTIFIED_HOME: &str = "MANYHANDS_UNIDENTIFIED_HOME";
-
-/// Runs the calling test, `name`, in a process of its own in which no
-/// identity is found outside the repository: where libgit2 looks for
-/// configuration is process-wide. `false` in the parent, once the child
-/// has passed; `true` in the child, which goes on with the test.
-fn in_a_process_without_an_identity(name: &str) -> bool {
-    let Some(home) = std::env::var_os(UNIDENTIFIED_HOME) else {
-        let home = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &format!("reenter::{name}"), "--nocapture"])
-            .env(UNIDENTIFIED_HOME, home.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "the child failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-            "the child ran no test"
-        );
-        return false;
-    };
-    for level in [
-        git2::ConfigLevel::System,
-        git2::ConfigLevel::Global,
-        git2::ConfigLevel::XDG,
-        git2::ConfigLevel::ProgramData,
-    ] {
-        // This exact-test child runs nothing else, so no other use of
-        // libgit2 overlaps the change.
-        unsafe { git2::opts::set_search_path(level, &home).unwrap() };
-    }
-    true
-}
-
 fn remove_identity(world: &World) {
     let mut local = git2::Repository::open(&world.root)
         .unwrap()
@@ -1570,8 +1531,8 @@ fn stopped_for_an_identity_and_lost() -> (World, String, String) {
 
 #[test]
 fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit() {
-    if !in_a_process_without_an_identity(
-        "a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit",
+    if !mutation::in_a_process_without_an_identity(
+        "reenter::a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit",
     ) {
         return;
     }
@@ -1599,8 +1560,8 @@ fn a_request_that_stopped_for_an_identity_does_not_take_another_request_s_commit
 
 #[test]
 fn a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_one() {
-    if !in_a_process_without_an_identity(
-        "a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_one",
+    if !mutation::in_a_process_without_an_identity(
+        "reenter::a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_one",
     ) {
         return;
     }
@@ -1627,8 +1588,8 @@ fn a_request_that_stopped_for_an_identity_runs_as_a_new_request_once_there_is_on
 
 #[test]
 fn a_request_that_stopped_for_an_identity_takes_no_commit_however_often_it_is_retried() {
-    if !in_a_process_without_an_identity(
-        "a_request_that_stopped_for_an_identity_takes_no_commit_however_often_it_is_retried",
+    if !mutation::in_a_process_without_an_identity(
+        "reenter::a_request_that_stopped_for_an_identity_takes_no_commit_however_often_it_is_retried",
     ) {
         return;
     }

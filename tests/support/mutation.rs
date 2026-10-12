@@ -16,10 +16,10 @@ use manyhands::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
         DocumentMutationDto, DocumentSaveInput, KeyGenerateInput, KeyMutationDto, Mutation,
         MutationCall, MutationDataDto, NoProgress, OperationFamily, OperationId,
-        OperationMutationDto, RegisterSharedKeyOutcome, RegisterSharedKeyRequest,
-        RelationshipWrite, RemoteMutationDto, RepositoryService, RequestId, ResolvedRepository,
-        SharedKeyId, SharedKeyOwnership, TicketCreateInput, TicketDraft, TicketMutationDto,
-        TicketSaveInput, TicketSlugAssignInput,
+        OperationMutationDto, ProgressEvent, ProgressSink, RegisterSharedKeyOutcome,
+        RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto, RepositoryService,
+        RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership, TicketCreateInput,
+        TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SecretPassphrase,
             SessionCredentialProvider, SessionCredentials, UnlockRequest,
@@ -587,11 +587,22 @@ impl Drop for World {
     }
 }
 
-struct NoPassphrase;
+/// A provider with no passphrase to give: nobody is there to ask.
+pub struct NoPassphrase;
 
 impl SessionCredentialProvider for NoPassphrase {
     fn request_passphrase(&mut self, _request: &UnlockRequest) -> PassphraseResponse {
         PassphraseResponse::Unavailable
+    }
+}
+
+/// A sink that keeps what it is sent.
+#[derive(Default)]
+pub struct Events(pub Vec<ProgressEvent>);
+
+impl ProgressSink for Events {
+    fn event(&mut self, event: &ProgressEvent) {
+        self.0.push(event.clone());
     }
 }
 
@@ -1372,4 +1383,43 @@ pub fn drive_confirmed(
         },
         rule,
     );
+}
+
+const UNIDENTIFIED_HOME: &str = "MANYHANDS_UNIDENTIFIED_HOME";
+
+/// Runs the calling test, whose path in its test target is `name`, in a
+/// process of its own in which no identity is found outside the
+/// repository: where libgit2 looks for configuration is process-wide. `false` in the parent, once the child
+/// has passed; `true` in the child, which goes on with the test.
+pub fn in_a_process_without_an_identity(name: &str) -> bool {
+    let Some(home) = std::env::var_os(UNIDENTIFIED_HOME) else {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .env(UNIDENTIFIED_HOME, home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the child ran no test"
+        );
+        return false;
+    };
+    for level in [
+        git2::ConfigLevel::System,
+        git2::ConfigLevel::Global,
+        git2::ConfigLevel::XDG,
+        git2::ConfigLevel::ProgramData,
+    ] {
+        // This exact-test child runs nothing else, so no other use of
+        // libgit2 overlaps the change.
+        unsafe { git2::opts::set_search_path(level, &home).unwrap() };
+    }
+    true
 }

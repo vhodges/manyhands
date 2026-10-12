@@ -7,9 +7,9 @@
 use manyhands::{
     repository::{
         AbandonOperationOutcome, AbandonOperationRequest, CancellationToken, FailurePoint,
-        Mutation, MutationCall, MutationDataDto, OperationId, OperationResumeInput, ProgressEvent,
-        ProgressSink, ProgressStage, RemoteAddInput, RequestId, RequestState,
-        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        Mutation, MutationCall, MutationDataDto, OperationId, OperationResumeInput, ProgressStage,
+        RemoteAddInput, RequestId, RequestState,
+        keys::SessionCredentials,
         request_store::{FinalKind, JournalRow},
     },
     results::{
@@ -22,7 +22,10 @@ use crate::support::{
     FailOnce,
     conformance::{Ask, Row},
     items::{self, TICKET_A},
-    mutation::{self, KeyWorld, REQUEST_1, REQUEST_2, REQUEST_3, TITLE, World, recovery_actions},
+    mutation::{
+        self, Events, KeyWorld, NoPassphrase, REQUEST_1, REQUEST_2, REQUEST_3, TITLE, World,
+        recovery_actions,
+    },
     operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
 };
 
@@ -646,24 +649,6 @@ fn a_resume_entered_again_on_an_operation_it_cannot_resume_leaves_no_record() {
     // Its ID is free: the same ID is a new request.
     let unknown = world.execute(REQUEST_2, resume(&world, UNKNOWN));
     assert_eq!(unknown.code, ResultCode::OperationNotFound);
-}
-
-struct NoPassphrase;
-
-impl SessionCredentialProvider for NoPassphrase {
-    fn request_passphrase(&mut self, _request: &UnlockRequest) -> PassphraseResponse {
-        PassphraseResponse::Unavailable
-    }
-}
-
-/// A sink that keeps what it is sent.
-#[derive(Default)]
-struct Events(Vec<ProgressEvent>);
-
-impl ProgressSink for Events {
-    fn event(&mut self, event: &ProgressEvent) {
-        self.0.push(event.clone());
-    }
 }
 
 #[test]

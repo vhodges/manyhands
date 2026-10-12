@@ -10,7 +10,7 @@ use manyhands::{
         CancelDto, CancellationToken, FailurePoint, IndexRefreshInput, Mutation, MutationCall,
         MutationDataDto, OperationFamily, OperationId, ProgressEvent, ProgressSink, ProgressStage,
         RequestId, RequestState,
-        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        keys::SessionCredentials,
         request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
     },
     results::{Effects, Envelope, Outcome, ResultCode},
@@ -21,30 +21,15 @@ use crate::support::{
     FailOnce,
     golden::{self, ContractCase},
     items::TICKET_A,
-    mutation::{self, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_NEW, TITLE, World},
+    mutation::{
+        self, Events, NoPassphrase, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_NEW, TITLE,
+        World,
+    },
     schema,
 };
 
 const PROGRESS_SCHEMA: &str = "progress_event.schema.json";
 const CANCEL_SCHEMA: &str = "cancel.schema.json";
-
-struct NoPassphrase;
-
-impl SessionCredentialProvider for NoPassphrase {
-    fn request_passphrase(&mut self, _request: &UnlockRequest) -> PassphraseResponse {
-        PassphraseResponse::Unavailable
-    }
-}
-
-/// A sink that keeps what it is sent.
-#[derive(Default)]
-struct Events(Vec<ProgressEvent>);
-
-impl ProgressSink for Events {
-    fn event(&mut self, event: &ProgressEvent) {
-        self.0.push(event.clone());
-    }
-}
 
 fn request(id: &str) -> RequestId {
     RequestId::parse(id).unwrap()
