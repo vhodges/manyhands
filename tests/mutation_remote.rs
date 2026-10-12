@@ -217,6 +217,58 @@ const CASES: &[ssh_harness::Case] = &[
         a_cancellation_that_could_not_be_recorded_on_the_operation_stops_the_next_call,
     ),
     (
+        "a_resume_reconciles_a_push_whose_result_was_lost_and_pushes_nothing",
+        a_resume_reconciles_a_push_whose_result_was_lost_and_pushes_nothing,
+    ),
+    (
+        "a_resume_runs_the_hand_off_a_published_synchronization_owes",
+        a_resume_runs_the_hand_off_a_published_synchronization_owes,
+    ),
+    (
+        "a_resume_does_not_take_up_a_fenced_synchronization",
+        a_resume_does_not_take_up_a_fenced_synchronization,
+    ),
+    (
+        "a_resume_never_merges_and_leaves_nothing_of_a_merge",
+        a_resume_never_merges_and_leaves_nothing_of_a_merge,
+    ),
+    (
+        "a_resume_does_not_continue_a_merge_made_some_other_way",
+        a_resume_does_not_continue_a_merge_made_some_other_way,
+    ),
+    (
+        "a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up",
+        a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up,
+    ),
+    (
+        "a_resume_that_cannot_unlock_the_key_leaves_the_synchronization_to_its_request",
+        a_resume_that_cannot_unlock_the_key_leaves_the_synchronization_to_its_request,
+    ),
+    (
+        "a_resume_of_an_item_s_synchronization_is_replayed_while_its_branch_holds_the_commit",
+        a_resume_of_an_item_s_synchronization_is_replayed_while_its_branch_holds_the_commit,
+    ),
+    (
+        "a_resume_stopped_for_an_untrusted_host_names_the_host_and_offers_its_approval",
+        a_resume_stopped_for_an_untrusted_host_names_the_host_and_offers_its_approval,
+    ),
+    (
+        "a_resume_whose_answer_was_lost_says_what_the_synchronization_it_took_up_published",
+        a_resume_whose_answer_was_lost_says_what_the_synchronization_it_took_up_published,
+    ),
+    (
+        "a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replayed_as_it_is",
+        a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replayed_as_it_is,
+    ),
+    (
+        "a_resume_cancelled_during_its_push_whose_answer_was_lost_still_reports_the_push",
+        a_resume_cancelled_during_its_push_whose_answer_was_lost_still_reports_the_push,
+    ),
+    (
+        "a_resume_stopped_by_its_token_whose_answer_was_lost_is_told_it_was_cancelled",
+        a_resume_stopped_by_its_token_whose_answer_was_lost_is_told_it_was_cancelled,
+    ),
+    (
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
@@ -629,7 +681,12 @@ fn call_before_the_stores_hold_anything(
     // commit: each is checked against the published schemas instead.
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
-    let synchronization = matches!(envelope.command.as_str(), "item sync" | "repo sync");
+    // A resume that took up a synchronization carries that
+    // synchronization's data.
+    let synchronization = matches!(
+        envelope.command.as_str(),
+        "item sync" | "repo sync" | "operation resume"
+    );
     if synchronization && !value["data"].is_null() {
         schema::check_published("synchronization_mutation.schema.json", &value["data"])
             .expect("the synchronization data schema");
@@ -2993,4 +3050,770 @@ fn a_cancellation_that_could_not_be_recorded_on_the_operation_stops_the_next_cal
     // Cleared once the operation was cancelled.
     assert!(!stored.cancel_requested);
     assert_final(&w, REQUEST_1, &ended)
+}
+
+// Resume: a synchronization taken up by a request that did not begin it.
+
+fn resume(w: &World, operation: &str) -> Mutation {
+    Mutation::OperationResume(OperationResumeInput {
+        root: w.root.clone(),
+        operation_id: OperationId::parse(operation).unwrap(),
+    })
+}
+
+/// A synchronization of the primary branch whose push the server took
+/// and whose result was lost: the commit it pushed, and its envelope.
+/// It holds the reservation, and its record is accepted.
+fn lost_push(w: &World, id: &str) -> Result<(git2::Oid, Envelope<MutationDataDto>), FixtureError> {
+    let candidate = advance(&w.repo()?, "refs/heads/main", "lost-output")?;
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    let lost = execute(w, id, repo_sync(w));
+    assert!(w.server.receive_status_withheld());
+    assert_eq!(lost.code, ResultCode::TransportUnavailable);
+    assert_eq!(lost.effects.publication, PublicationEffect::Pending);
+    w.server.clear_fault();
+    Ok((candidate, lost))
+}
+
+/// Asserts that a resume stopped with nothing recorded of it.
+fn assert_no_record_of(w: &World, id: &str, envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.command, "operation resume");
+    assert_eq!(envelope.request_id.as_deref(), Some(id));
+    // The operation is another request's.
+    assert_eq!(envelope.operation_id, None);
+    assert!(record(w, id).is_none());
+}
+
+fn a_resume_reconciles_a_push_whose_result_was_lost_and_pushes_nothing() -> Result<(), FixtureError>
+{
+    use ProgressStage as S;
+    let w = World::new()?;
+    approve(&w)?;
+    let pushes = accepted(&w.server);
+    let (candidate, lost) = lost_push(&w, REQUEST_1)?;
+    let operation = lost.operation_id.clone().ok_or(FixtureError)?;
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert!(reserved(&w));
+
+    let mut events = Events::default();
+    let resumed = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut events,
+        &CancellationToken::new(),
+    );
+    assert_eq!(resumed.command, "operation resume");
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_eq!(resumed.code, ResultCode::Ok);
+    // What the operation shows of itself: the remote holds the commit,
+    // and its first push is what put it there.
+    assert_eq!(resumed.effects, published(candidate));
+    assert_eq!(resumed.request_id.as_deref(), Some(REQUEST_2));
+    assert_eq!(resumed.operation_id, None);
+    assert!(resumed.data.is_none());
+    assert!(resumed.recovery.is_empty());
+    // The remote was asked, and nothing was pushed a second time.
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id("refs/heads/main"))?,
+        candidate
+    );
+    assert!(!reserved(&w));
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "completed"
+    );
+    assert_eq!(merge_rows(&w)?, 0);
+    let stored = record(&w, REQUEST_2).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Finished);
+    assert_eq!(stored.target, operation);
+    assert!(stored.operations.is_empty());
+    assert_eq!(stored.base_ref.as_deref(), Some("refs/heads/main"));
+    // Its events are the resume's own, in the order of the safe points
+    // it reached, and none of them is a push.
+    let seen = stages(&events.0);
+    assert_eq!(seen[..3], [S::Accepted, S::Observing, S::Fetching]);
+    assert!(!seen.contains(&S::Pushing), "{seen:?}");
+    for event in &events.0 {
+        assert_eq!(event.request_id, REQUEST_2);
+        assert_eq!(event.command, "operation resume");
+        assert_eq!(event.operation_id, None);
+        assert_eq!(event.scope, resumed.scope);
+        let rendered = serde_json::to_value(event).expect("an event serializes");
+        schema::check_published("progress_event.schema.json", &rendered)
+            .expect("the progress event schema");
+    }
+
+    // The resume is replayed from its record: no connection.
+    let opened = connections(&w);
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), resumed);
+    assert_eq!(connections(&w), opened);
+    // The same request ID for another operation is another request.
+    let mismatch = execute(&w, REQUEST_2, resume(&w, "01ARZ3NDEKTSV4RRFFQ69G5FZZ"));
+    assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+    assert_eq!(mismatch.effects, Effects::not_requested());
+
+    // The synchronization's own request, sent again, is finished from
+    // what its operation came to: it connects to nothing and pushes
+    // nothing.
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(finished.outcome, Outcome::Success);
+    assert_eq!(finished.code, ResultCode::Ok);
+    assert_eq!(finished.effects, published(candidate));
+    assert_eq!(finished.operation_id, lost.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    // An operation that has ended owes nothing.
+    let noop = execute(&w, REQUEST_3, resume(&w, &operation));
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_eq!(noop.code, ResultCode::AlreadyApplied);
+    assert_eq!(noop.effects, Effects::not_requested());
+    assert_no_record_of(&w, REQUEST_3, &noop);
+    assert_eq!(connections(&w), opened);
+    Ok(())
+}
+
+fn a_resume_runs_the_hand_off_a_published_synchronization_owes() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let commit = advance(&w.repo()?, "refs/heads/main", "index-candidate")?;
+    let pushes = accepted(&w.server);
+    let db = w.db()?;
+    fixed(db.execute_batch("CREATE TRIGGER fail_handoff BEFORE UPDATE ON operation_records WHEN NEW.state='completed' AND NEW.action='refresh' BEGIN SELECT RAISE(ABORT,'fixed failure'); END"))?;
+    let partial = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(partial.code, ResultCode::DiscoveryPending);
+    let operation = partial.operation_id.clone().ok_or(FixtureError)?;
+    // What the result offered is this request.
+    assert_eq!(actions(&partial), [RecoveryActionKind::OperationResume]);
+    assert_eq!(partial.recovery[0].operation_id, partial.operation_id);
+    let opened = connections(&w);
+    let owed = Effects {
+        publication: PublicationEffect::Published,
+        discovery: DiscoveryEffect::Pending,
+        commit_oid: Some(commit.to_string()),
+        ..Effects::not_requested()
+    };
+
+    // While the hand-off still fails, the resume says what the
+    // operation's own request says, and offers the resume again.
+    let still = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(still.outcome, Outcome::Partial);
+    assert_eq!(still.code, ResultCode::DiscoveryPending);
+    assert_eq!(still.effects, owed);
+    assert_eq!(actions(&still), [RecoveryActionKind::OperationResume]);
+    assert_eq!(still.recovery[0].operation_id.as_deref(), Some(&*operation));
+    assert!(still.recovery[0].arguments.is_empty());
+    assert_no_record_of(&w, REQUEST_2, &still);
+
+    fixed(db.execute_batch("DROP TRIGGER fail_handoff"))?;
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_eq!(resumed.code, ResultCode::Ok);
+    assert_eq!(resumed.effects, published(commit));
+    assert!(resumed.recovery.is_empty());
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    // The hand-off is local: nothing was connected to or pushed.
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(finished.outcome, Outcome::Success);
+    assert_eq!(finished.effects, published(commit));
+    assert_eq!(finished.operation_id, partial.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    Ok(())
+}
+
+fn a_resume_does_not_take_up_a_fenced_synchronization() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    select_the_key_again(&w)?;
+    assert!(!reserved(&w));
+    let before = phase(&w, OperationId::parse(&operation).unwrap())?;
+    let opened = connections(&w);
+
+    let refused = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(refused.code, ResultCode::OriginalRequestRequired);
+    assert_eq!(refused.effects, Effects::not_requested());
+    // The request that began it is the one that is given its answer.
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(refused.recovery[0].arguments["request_id"], REQUEST_1);
+    assert_no_record_of(&w, REQUEST_2, &refused);
+    assert_eq!(phase(&w, OperationId::parse(&operation).unwrap())?, before);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+
+    let fenced = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_fenced_before_a_push(&w, REQUEST_1, &fenced)?;
+    assert_eq!(fenced.operation_id, held.operation_id);
+    Ok(())
+}
+
+fn a_resume_never_merges_and_leaves_nothing_of_a_merge() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let repo = w.repo()?;
+    let pushes = accepted(&w.server);
+    let (local, lost) = lost_push(&w, REQUEST_1)?;
+    let operation = lost.operation_id.clone().ok_or(FixtureError)?;
+    // A peer builds on what the server took.
+    let server = w.bare()?;
+    let built = commit(&server, local, "peer-on-top", b"peer-on-top")?;
+    fixed(server.reference("refs/heads/main", built, true, "fixture"))?;
+    let branches = local_branches(&repo)?;
+
+    let refused = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(refused.code, ResultCode::MergeRequired);
+    // The remote was asked, and holds the commit the operation pushed.
+    assert_eq!(refused.outcome, Outcome::Partial);
+    assert_eq!(refused.effects, published_and_cancelled(local));
+    // Neither the resume nor the synchronization's own request gets
+    // past history that has to be merged: neither is offered.
+    assert!(refused.recovery.is_empty());
+    assert_no_record_of(&w, REQUEST_2, &refused);
+    assert_eq!(merge_rows(&w)?, 0);
+    assert_eq!(merge_commits(&repo)?, 0);
+    assert_eq!(local_branches(&repo)?, branches);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, built);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    // The reservation is the operation's, and its request still holds
+    // it.
+    assert!(reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    Ok(())
+}
+
+/// F2's bindings cannot leave a merge. A synchronization that was begun
+/// some other way and stopped on a conflict is not a resume's to
+/// continue.
+fn a_resume_does_not_continue_a_merge_made_some_other_way() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let repo = w.repo()?;
+    let local_base = fixed(repo.refname_to_id("refs/heads/main"))?;
+    let local = commit(&repo, local_base, "conflict", b"local conflict")?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(local, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference("refs/heads/main", local, true, "fixture"))?;
+    let incoming_base = fixed(w.peer.refname_to_id("refs/heads/main"))?;
+    let incoming = commit(&w.peer, incoming_base, "conflict", b"incoming conflict")?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let merging = w.primary();
+    assert!(matches!(
+        w.sync(merging.clone()),
+        Err(SynchronizationError::ConflictPending { .. })
+    ));
+    let rows = merge_rows(&w)?;
+    assert!(rows > 0);
+    let before = phase(&w, merging.operation_id)?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+
+    let refused = execute(&w, REQUEST_1, resume(&w, &merging.operation_id.to_string()));
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(refused.code, ResultCode::RecoveryRequired);
+    assert_eq!(refused.effects.commit_oid, None);
+    assert_eq!(actions(&refused), [RecoveryActionKind::RepoInspect]);
+    assert_no_record_of(&w, REQUEST_1, &refused);
+    assert_eq!(merge_rows(&w)?, rows);
+    assert_eq!(phase(&w, merging.operation_id)?, before);
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    Ok(())
+}
+
+fn a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up() -> Result<(), FixtureError> {
+    use ProgressStage as S;
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let served = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    let opened = connections(&w);
+
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: S::Fetching,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let cancelled = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(cancelled.command, "operation resume");
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    assert_eq!(cancelled.effects.commit_oid, None);
+    assert!(cancelled.recovery.is_empty());
+    assert_eq!(
+        sink.seen,
+        [S::Accepted, S::Observing, S::Fetching, S::Stopping]
+    );
+    // It stopped before it opened a connection, and pushed nothing.
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, served);
+    assert!(!reserved(&w));
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    // That is final for the operation, and so for the resume.
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), cancelled);
+
+    // And for the request that began the operation.
+    let ended = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(ended.code, ResultCode::Cancelled);
+    assert_eq!(ended.operation_id, held.operation_id);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(accepted(&w.server), pushes);
+    // A cancelled operation is never taken up again. Its row says that
+    // Git may hold something of what it began, so the repository is
+    // what is looked at.
+    let opened = connections(&w);
+    let left = execute(&w, REQUEST_3, resume(&w, &operation));
+    assert_eq!(left.outcome, Outcome::Blocked);
+    assert_eq!(left.code, ResultCode::RecoveryRequired);
+    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    assert_no_record_of(&w, REQUEST_3, &left);
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert_eq!(connections(&w), opened);
+    Ok(())
+}
+
+fn a_resume_that_cannot_unlock_the_key_leaves_the_synchronization_to_its_request()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+
+    // No passphrase this time either.
+    let stopped = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        resume(&w, &operation),
+        NoPassphrase,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(stopped.code, ResultCode::UnlockRequired);
+    assert_eq!(stopped.outcome, held.outcome);
+    assert_eq!(stopped.effects, held.effects);
+    // Nothing is held for the resume: the reservation is the
+    // operation's, and its own request is what holds that.
+    assert!(stopped.recovery.is_empty());
+    assert_no_record_of(&w, REQUEST_2, &stopped);
+    assert!(reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    assert_eq!(accepted(&w.server), pushes);
+
+    // With the passphrase, a resume under the same request ID goes on.
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_eq!(resumed.effects, published(local));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert!(!reserved(&w));
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(finished.effects, published(local));
+    assert_eq!(finished.operation_id, held.operation_id);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+fn a_resume_of_an_item_s_synchronization_is_replayed_while_its_branch_holds_the_commit()
+-> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    w.context()?;
+    let tip = fixed(w.repo()?.refname_to_id(CONTEXT))?;
+    let pushes = accepted(&w.server);
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    let lost = execute(&w, REQUEST_1, item_sync(&w));
+    assert_eq!(lost.code, ResultCode::TransportUnavailable);
+    w.server.clear_fault();
+    let operation = lost.operation_id.clone().ok_or(FixtureError)?;
+
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(resumed.outcome, Outcome::Success);
+    assert_eq!(resumed.effects, published(tip));
+    assert_eq!(fixed(w.bare()?.refname_to_id(CONTEXT))?, tip);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    // The resume is placed on the branch the operation synchronized:
+    // the commit it names is the item's, and no commit of primary.
+    assert_eq!(
+        record(&w, REQUEST_2)
+            .ok_or(FixtureError)?
+            .base_ref
+            .as_deref(),
+        Some(CONTEXT)
+    );
+    assert!(!fixed(w.repo()?.graph_descendant_of(
+        fixed(w.repo()?.refname_to_id("refs/heads/main"))?,
+        tip
+    ))?);
+    // What it names of an item is the operation's ID alone.
+    assert_eq!(resumed.scope.item_id, None);
+    assert_eq!(resumed.scope.branch, None);
+
+    let opened = connections(&w);
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), resumed);
+    assert_eq!(connections(&w), opened);
+    let finished = execute(&w, REQUEST_1, item_sync(&w));
+    assert_eq!(finished.effects, published(tip));
+    assert_eq!(finished.operation_id, lost.operation_id);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+fn a_resume_stopped_for_an_untrusted_host_names_the_host_and_offers_its_approval()
+-> Result<(), FixtureError> {
+    // No approval: the service has never trusted the server.
+    let w = World::new()?;
+    let held = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(held.code, ResultCode::HostApprovalRequired);
+    assert!(reserved(&w));
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+
+    let stopped = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(stopped.code, ResultCode::HostApprovalRequired);
+    assert_eq!(stopped.outcome, held.outcome);
+    // The host it reached, as the synchronization's own request names
+    // it, and the approval that deals with it.
+    let data = synchronization_data(&stopped)?;
+    assert_eq!(Some(data), synchronization_data(&held).ok());
+    assert_eq!(data.port, w.server.address().port());
+    assert_eq!(actions(&stopped), [RecoveryActionKind::HostApprove]);
+    let offered = &stopped.recovery[0];
+    assert_eq!(
+        offered
+            .arguments
+            .get("authority")
+            .and_then(|value| value.as_str()),
+        Some(format!("127.0.0.1:{}", w.server.address().port()).as_str())
+    );
+    assert_eq!(
+        offered
+            .arguments
+            .get("root")
+            .and_then(|value| value.as_str()),
+        stopped.scope.repository.as_deref()
+    );
+    assert_no_record_of(&w, REQUEST_2, &stopped);
+    assert!(reserved(&w));
+
+    // With the host approved the resume goes on: the remote holds what
+    // the branch holds, and nothing is pushed.
+    approve(&w)?;
+    let pushes = accepted(&w.server);
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_current(&resumed);
+    assert_eq!(resumed.command, "operation resume");
+    assert_eq!(accepted(&w.server), pushes);
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_current(&finished);
+    assert_eq!(finished.operation_id, held.operation_id);
+    Ok(())
+}
+
+/// A final answer never understates a push: a resume that pushed and
+/// lost its answer is not answered as a no-op by the row it completed.
+fn a_resume_whose_answer_was_lost_says_what_the_synchronization_it_took_up_published()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestSettlement,
+    ))?;
+
+    // The call pushed and died before it recorded its end.
+    let lost = call(
+        &w,
+        &failing,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "completed"
+    );
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    // The same request finds the operation ended, and says what the
+    // operation itself shows that it came to. Nothing is connected to.
+    let opened = connections(&w);
+    let found = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(found.outcome, Outcome::Success);
+    assert_eq!(found.code, ResultCode::Ok);
+    assert_eq!(found.effects, published(local));
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), found);
+    Ok(())
+}
+
+/// A resume that takes up a synchronization whose push is intended and
+/// not accounted for, and is cancelled while the remote cannot be
+/// asked: the operation is ended and the repository freed, and the
+/// answer says of the push only that it is not confirmed. That answer
+/// is final, and is given again exactly as it was.
+fn a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replayed_as_it_is()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let (_, lost) = lost_push(&w, REQUEST_1)?;
+    let operation = lost.operation_id.clone().ok_or(FixtureError)?;
+    // From here on the server cannot be reached at all.
+    w.server.disconnect_at(FixtureBoundary::Handshake);
+    assert!(reserved(&w));
+
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: ProgressStage::Observing,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let ended = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(ended.command, "operation resume");
+    assert_eq!(ended.code, ResultCode::RecoveryRequired);
+    assert_eq!(ended.outcome, Outcome::Blocked);
+    // Neither published nor not published.
+    assert_eq!(
+        ended.effects,
+        Effects {
+            publication: PublicationEffect::Pending,
+            ..Effects::not_requested()
+        }
+    );
+    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    assert!(!reserved(&w));
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+
+    // Given again, it is the same answer, with what it offers.
+    let opened = connections(&w);
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), ended);
+    assert_eq!(connections(&w), opened);
+    // The synchronization's own request is told the same of its push.
+    let own = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(own.operation_id, lost.operation_id);
+    assert_not_confirmed(&w, REQUEST_1, &own)?;
+    Ok(())
+}
+
+/// A resume whose own call pushed, was cancelled as the push returned,
+/// and died before it recorded its end. The row it left is a cancelled
+/// one, which nothing takes up; the same resume, sent again, is still
+/// told what the operation's row shows of the push.
+fn a_resume_cancelled_during_its_push_whose_answer_was_lost_still_reports_the_push()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestSettlement,
+    ))?;
+    let token = CancellationToken::new();
+    let hook = {
+        let token = token.clone();
+        during_the_push(move || token.cancel())
+    };
+    let lost = call(
+        &w,
+        &failing,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut NoProgress,
+        &token,
+    );
+    drop(hook);
+    assert_eq!(lost.code, ResultCode::InternalError);
+    // The server took the push, and the operation was cancelled.
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    let opened = connections(&w);
+    let found = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(found.code, ResultCode::Cancelled);
+    assert_eq!(found.outcome, Outcome::Cancelled);
+    assert_eq!(found.effects, published_and_cancelled(local));
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), found);
+    // A resume that did nothing under the operation claims nothing of
+    // it: the operation has ended, and its own request is where its
+    // push is reported.
+    let other = execute(&w, REQUEST_3, resume(&w, &operation));
+    assert_eq!(other.code, ResultCode::AlreadyApplied);
+    assert_eq!(other.effects, Effects::not_requested());
+    assert_no_record_of(&w, REQUEST_3, &other);
+    let own = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(own.code, ResultCode::Cancelled);
+    assert_eq!(own.effects, published_and_cancelled(local));
+    Ok(())
+}
+
+/// A resume that stopped the synchronization it took up and died before
+/// it recorded its end. The cancelled row is one a resume does not take
+/// up; the resume that cancelled it is all the same told so when it is
+/// sent again, as the operation's own request is.
+fn a_resume_stopped_by_its_token_whose_answer_was_lost_is_told_it_was_cancelled()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let held = held_before_a_push(&w, REQUEST_1);
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestSettlement,
+    ))?;
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: ProgressStage::Fetching,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let lost = call(
+        &w,
+        &failing,
+        REQUEST_2,
+        resume(&w, &operation),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "cancelled"
+    );
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    let opened = connections(&w);
+    let found = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(found.code, ResultCode::Cancelled);
+    assert_eq!(found.outcome, Outcome::Cancelled);
+    assert_eq!(found.effects.commit_oid, None);
+    assert!(found.recovery.is_empty());
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(
+        record(&w, REQUEST_2).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(execute(&w, REQUEST_2, resume(&w, &operation)), found);
+    Ok(())
 }
