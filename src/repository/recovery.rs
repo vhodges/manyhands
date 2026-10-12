@@ -442,105 +442,82 @@ fn begin_or_reconcile(
     })
 }
 
-/// A step of the local journal: a name an operation records on its row,
-/// in the column `completed_step`, once that much of its work is done.
-/// These are all the names a build writes there. Each is stored as
-/// `as_str` gives it and read back with `parse`, so the name is spelled
-/// in one place.
-///
-/// The journal keeps the column as free text. A row may so hold a name
-/// that has the form of one and is none of these; see `RecordedStep`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LocalStep {
+/// Declares `LocalStep`, `LocalStep::ALL` and `LocalStep::as_str` from one
+/// list, so a step cannot be declared and left out of `ALL`, which
+/// `parse` reads.
+macro_rules! local_steps {
+    ($($(#[$doc:meta])+ $variant:ident => $name:literal;)+) => {
+        /// A step of the local journal: a name an operation records on its row,
+        /// in the column `completed_step`, once that much of its work is done.
+        /// These are all the names a build writes there. Each is stored as
+        /// `as_str` gives it and read back with `parse`, so the name is spelled
+        /// in one place.
+        ///
+        /// The journal keeps the column as free text. A row may so hold a name
+        /// that has the form of one and is none of these; see `RecordedStep`.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum LocalStep {
+            $($(#[$doc])+ $variant),+
+        }
+
+        impl LocalStep {
+            /// Every step, in the order of the declaration.
+            pub const ALL: [Self; [$(Self::$variant),+].len()] = [$(Self::$variant),+];
+
+            /// The name as the journal stores it.
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+    };
+}
+
+local_steps! {
     /// The branch of an authoring context was created or found.
-    BranchObserved,
+    BranchObserved => "branch_observed";
     /// The worktree of an authoring context was created or found.
-    WorktreeObserved,
+    WorktreeObserved => "worktree_observed";
     /// An authoring write reached its destination file.
-    AuthoringDestinationObserved,
+    AuthoringDestinationObserved => "authoring_destination_observed";
     /// A document write reached its destination file.
-    DocumentDestinationObserved,
+    DocumentDestinationObserved => "document_destination_observed";
     /// A document move removed its source file.
-    DocumentMoveObserved,
+    DocumentMoveObserved => "document_move_observed";
     /// An authoring operation passed its checkpoint, whether the
     /// checkpoint committed or found nothing to commit.
-    AuthoringCheckpointObserved,
+    AuthoringCheckpointObserved => "authoring_checkpoint_observed";
     /// The operation's work is observed in the authoritative branch and
     /// its index hand-off has begun.
-    AuthoritativeObserved,
+    AuthoritativeObserved => "authoritative_observed";
     /// A remote was added or removed.
-    RemoteChanged,
+    RemoteChanged => "remote_changed";
     /// The publication remote was written to the configuration file.
-    PublicationConfigurationWritten,
+    PublicationConfigurationWritten => "publication_configuration_written";
     /// The publication remote's configuration was committed.
-    PublicationCommitted,
+    PublicationCommitted => "publication_committed";
     /// A new repository was initialized.
-    RepositoryInitialized,
+    RepositoryInitialized => "repository_initialized";
     /// The Manyhands configuration file was written.
-    ConfigurationWritten,
+    ConfigurationWritten => "configuration_written";
     /// The Manyhands configuration was committed.
-    InitializationCommitted,
+    InitializationCommitted => "initialization_committed";
     /// A rebuild or refresh was left to be run again.
-    Retry,
+    Retry => "retry";
     /// A rebuild failed.
-    Error,
+    Error => "error";
     /// The row completed having recorded no step of its own.
-    Completed,
+    Completed => "completed";
     /// The row of a call that was rejected and left nothing behind. A
     /// repeat of its ID begins again.
-    Rejected,
+    Rejected => "rejected";
     /// The row was closed by `abandon_operation`. Its ID is never begun
     /// again and never replayed.
-    Abandoned,
+    Abandoned => "abandoned";
 }
 
 impl LocalStep {
-    /// Every step, in the order of the declaration.
-    pub const ALL: [Self; 18] = [
-        Self::BranchObserved,
-        Self::WorktreeObserved,
-        Self::AuthoringDestinationObserved,
-        Self::DocumentDestinationObserved,
-        Self::DocumentMoveObserved,
-        Self::AuthoringCheckpointObserved,
-        Self::AuthoritativeObserved,
-        Self::RemoteChanged,
-        Self::PublicationConfigurationWritten,
-        Self::PublicationCommitted,
-        Self::RepositoryInitialized,
-        Self::ConfigurationWritten,
-        Self::InitializationCommitted,
-        Self::Retry,
-        Self::Error,
-        Self::Completed,
-        Self::Rejected,
-        Self::Abandoned,
-    ];
-
-    /// The name as the journal stores it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BranchObserved => "branch_observed",
-            Self::WorktreeObserved => "worktree_observed",
-            Self::AuthoringDestinationObserved => "authoring_destination_observed",
-            Self::DocumentDestinationObserved => "document_destination_observed",
-            Self::DocumentMoveObserved => "document_move_observed",
-            Self::AuthoringCheckpointObserved => "authoring_checkpoint_observed",
-            Self::AuthoritativeObserved => "authoritative_observed",
-            Self::RemoteChanged => "remote_changed",
-            Self::PublicationConfigurationWritten => "publication_configuration_written",
-            Self::PublicationCommitted => "publication_committed",
-            Self::RepositoryInitialized => "repository_initialized",
-            Self::ConfigurationWritten => "configuration_written",
-            Self::InitializationCommitted => "initialization_committed",
-            Self::Retry => "retry",
-            Self::Error => "error",
-            Self::Completed => "completed",
-            Self::Rejected => "rejected",
-            Self::Abandoned => "abandoned",
-        }
-    }
-
     /// The step stored as `stored`. `None` for any other text.
     pub fn parse(stored: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|step| step.as_str() == stored)
@@ -1581,30 +1558,35 @@ mod abandoned_row_tests {
 
     #[test]
     fn every_step_is_stored_under_its_own_name_and_read_back() {
+        // `ALL` is every variant by construction: `local_steps!` declares
+        // the enum and `ALL` from the same list. What is held here is
+        // what the journal stores: these names, each read back as its
+        // own step. A step that is added, renamed or moved fails this
+        // until its stored name is written here.
+        assert_eq!(
+            LocalStep::ALL.map(LocalStep::as_str),
+            [
+                "branch_observed",
+                "worktree_observed",
+                "authoring_destination_observed",
+                "document_destination_observed",
+                "document_move_observed",
+                "authoring_checkpoint_observed",
+                "authoritative_observed",
+                "remote_changed",
+                "publication_configuration_written",
+                "publication_committed",
+                "repository_initialized",
+                "configuration_written",
+                "initialization_committed",
+                "retry",
+                "error",
+                "completed",
+                "rejected",
+                "abandoned",
+            ]
+        );
         for step in LocalStep::ALL {
-            // A step added to the enum is added to `ALL`, which `parse`
-            // reads: this match stops compiling until it is placed, and
-            // the count below fails until `ALL` holds it.
-            match step {
-                LocalStep::BranchObserved
-                | LocalStep::WorktreeObserved
-                | LocalStep::AuthoringDestinationObserved
-                | LocalStep::DocumentDestinationObserved
-                | LocalStep::DocumentMoveObserved
-                | LocalStep::AuthoringCheckpointObserved
-                | LocalStep::AuthoritativeObserved
-                | LocalStep::RemoteChanged
-                | LocalStep::PublicationConfigurationWritten
-                | LocalStep::PublicationCommitted
-                | LocalStep::RepositoryInitialized
-                | LocalStep::ConfigurationWritten
-                | LocalStep::InitializationCommitted
-                | LocalStep::Retry
-                | LocalStep::Error
-                | LocalStep::Completed
-                | LocalStep::Rejected
-                | LocalStep::Abandoned => {}
-            }
             assert!(is_stored_name(step.as_str()), "{step:?}");
             assert_eq!(LocalStep::parse(step.as_str()), Some(step));
             assert_eq!(RecordedStep::of(step.as_str()), RecordedStep::Listed(step));
@@ -1612,8 +1594,11 @@ mod abandoned_row_tests {
         let mut names = LocalStep::ALL.map(LocalStep::as_str).to_vec();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), LocalStep::ALL.len());
-        assert_eq!(names.len(), 18, "one name for each arm of the match above");
+        assert_eq!(
+            names.len(),
+            LocalStep::ALL.len(),
+            "no two steps share a name"
+        );
         // A name with the form of a step that no build writes is a step
         // recorded, and no more is known of it.
         assert_eq!(LocalStep::parse("some_other_step"), None);
