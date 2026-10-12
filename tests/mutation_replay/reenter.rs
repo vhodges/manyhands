@@ -1224,14 +1224,22 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
             "busy" if envelope["outcome"] == "error" => {
                 assert!(envelope["effects"]["commit_oid"].is_null(), "{what}");
             }
-            // Busy after the commit, at the index hand-off, while the
-            // other process held the repository (seen on Windows): the
-            // commit is reported and the request is to be sent again.
+            // Busy part of the way through, while the other process held
+            // the repository (both seen on Windows): what was done is
+            // reported and the request is to be sent again. Busy after
+            // the commit, at the index hand-off, reports the commit; busy
+            // after the write, before the commit, reports the write alone
+            // and the other process made the commit.
             "busy" => {
-                succeeded += 1;
                 assert_eq!(envelope["outcome"], "partial", "{what}");
-                assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
-                assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
+                assert_eq!(envelope["effects"]["write"], "written", "{what}");
+                if envelope["effects"]["checkpoint"] == "committed" {
+                    succeeded += 1;
+                    assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
+                } else {
+                    assert_eq!(envelope["effects"]["checkpoint"], "pending", "{what}");
+                    assert!(envelope["effects"]["commit_oid"].is_null(), "{what}");
+                }
                 assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
                 assert_eq!(envelope["recovery"][0]["action"], "request.retry", "{what}");
             }
