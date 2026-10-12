@@ -2,6 +2,7 @@
 //! no longer refuses every other operation on its repository. It needs
 //! confirmation.
 
+use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::path::{Path, PathBuf};
 
 use crate::results::{ResultCode, Scope};
@@ -314,17 +315,38 @@ impl Binding for OperationAbandonBinding {
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
-        _accepted: &Accepted,
+        accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        // No row is read for a request with no operation. Nothing is run
-        // or settled on one that is.
-        if journal != NO_ROW {
-            return Err(Ran {
-                answer: Answer::stopped(ResultCode::InternalError),
-                standing: Standing::NotRun { journal },
-            });
+        confirm::reenter(self, call, accepted, journal)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        Some(self)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for OperationAbandonBinding {
+    /// No row is read for a request with no operation. Nothing is run
+    /// or settled on one that is.
+    fn row(&mut self, _call: &CallContext<'_>, _accepted: &Accepted, journal: &JournalRow) -> Row {
+        if *journal == NO_ROW {
+            Row::Unrecorded
+        } else {
+            Row::Impossible
         }
+    }
+
+    fn observe_again(
+        &mut self,
+        call: &CallContext<'_>,
+        _accepted: &Accepted,
+        _journal: &JournalRow,
+    ) -> Result<Seen, Ran> {
         let found = match self.observe(call.service) {
             Ok((_, found)) => found,
             // Nothing is known of the row: the record is kept.
@@ -340,19 +362,17 @@ impl Binding for OperationAbandonBinding {
             standing: Standing::NotRun { journal: NO_ROW },
         };
         match &found {
-            AbandonableOperation::Abandoned => Err(Ran {
-                answer: Answer::stopped(ResultCode::AlreadyApplied),
-                standing: Standing::Final,
-            }),
+            AbandonableOperation::Abandoned => {
+                Ok(Seen::EndState(Answer::stopped(ResultCode::AlreadyApplied)))
+            }
             AbandonableOperation::Pending(remains) => {
-                // A request whose record holds no consent that can be
-                // read has none that anything could be compared with:
-                // nothing is run.
-                if call.previewed() != Some(Self::digest(&found)) {
-                    return Err(changed());
-                }
+                // What the domain call is told the row was seen as. It
+                // is made only when the row is the one that was shown.
                 self.seen = Some(remains.standing.clone());
-                Ok(Entered::Unfinished)
+                Ok(Seen::State {
+                    found: Self::digest(&found),
+                    own: None,
+                })
             }
             AbandonableOperation::AnotherJournal => Err(Ran {
                 answer: Answer::stopped(ResultCode::InvalidInput),
@@ -364,12 +384,6 @@ impl Binding for OperationAbandonBinding {
         }
     }
 
-    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
-    }
-}
-
-impl Confirmed for OperationAbandonBinding {
     /// A preview is given only of a pending operation of the local
     /// journal alone. An ID the remote journal or the key journal holds
     /// is `invalid_input`, asked first: this command does not abandon

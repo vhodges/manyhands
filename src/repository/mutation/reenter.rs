@@ -9,6 +9,7 @@ use super::{
         recovery::{FinalKind, JournalRow},
     },
     bind::{Accepted, Answer, Binding, EndedWithoutCheckpoint, Ran, Standing},
+    confirm,
     dto::MutationDataDto,
     progress::Session,
     records::RequestRecord,
@@ -144,7 +145,21 @@ impl RepositoryService {
             None => None,
         };
         let call = self.call_context(consent.as_ref(), session);
-        let entered = binding.reenter(&call, &accepted, journal);
+        // A command that needs confirmation is entered again by the one
+        // function that compares what is there with what was previewed,
+        // whatever its binding's own `reenter` is. A binding of such a
+        // command that does not give its probes is not run.
+        let entered = if binding.command().needs_confirmation() {
+            match binding.as_confirmed() {
+                Some(confirmed) => confirm::reenter(confirmed, &call, &accepted, journal),
+                None => Err(Ran {
+                    answer: Answer::stopped(ResultCode::InternalError),
+                    standing: Standing::Stopped { journal: None },
+                }),
+            }
+        } else {
+            binding.reenter(&call, &accepted, journal)
+        };
         let reply = Reply { binding, identity };
         Some(match entered {
             Ok(entered) => self.called(&reply, &accepted, session, || {

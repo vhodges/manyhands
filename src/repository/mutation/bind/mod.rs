@@ -17,6 +17,7 @@ use super::{
         recovery::{FinalKind, JournalRow, PendingOperation, RecordedStep},
     },
     command::Command,
+    confirm::{Row, Seen},
     context::context_names,
     dto::{MutationDataDto, PreviewDetailsDto, PreviewEffect},
     evidence::{PathEvidence, Position},
@@ -254,17 +255,54 @@ pub(crate) struct Previewed {
 ///   `Prepared::observation`, and the boundary refuses a request whose
 ///   digest is not its confirmation's as `external_change`. A check
 ///   there would answer a stale preview with the check's own code.
-/// - Its `Binding::reenter` first asks whether the command's end state
+/// - Its re-entry is `confirm::reenter`, which it gives the three probes
+///   below. That function first asks whether the command's end state
 ///   holds, and finishes the request when it does. Otherwise it observes
 ///   again and compares with `CallContext::confirmation`, unless the
 ///   request's operation has recorded a step: from then on the request's
-///   own work has changed what would be observed.
+///   own work has changed what would be observed. The binding's
+///   `Binding::reenter` is that function, and `Binding::as_confirmed`
+///   answers `Some(self)`.
 pub(crate) trait Confirmed: Binding {
     /// Validates the input, observes, and makes the checks the command's
     /// domain operation would refuse it for. It changes nothing and takes
     /// no lease. An `Err` answers `prepare` with no confirmation: a
     /// rejection, or a no-op when the command's end state already holds.
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer>;
+
+    /// Re-entry, first probe: how the row of the request's operation
+    /// reads, as it was before this call. `confirm::reenter` asks it
+    /// before anything is observed; see `confirm::Row`.
+    ///
+    /// `Row::Recorded` is the one answer on which nothing is compared
+    /// with what was previewed. It is given only for a row that says the
+    /// request's own work has changed what would be observed.
+    fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, journal: &JournalRow) -> Row;
+
+    /// Re-entry, second probe, asked only of a row that reads
+    /// `Row::Unrecorded`: whether the command's end state holds, and
+    /// otherwise the digest of the state there is now, observed as the
+    /// preview observed it; see `confirm::Seen`. An `Err` answers the
+    /// request: what could not be read, or what the command is refused
+    /// for as things are.
+    fn observe_again(
+        &mut self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        journal: &JournalRow,
+    ) -> Result<Seen, Ran>;
+
+    /// The answer when what is there is not what was previewed.
+    /// `consented` is false for a request whose record holds no consent
+    /// that can be read: nothing could be compared. Either way the
+    /// domain is not called. `external_change`, with the record settled
+    /// from the row, unless the binding has more to say.
+    fn differs(&mut self, journal: JournalRow, _consented: bool) -> Ran {
+        Ran {
+            answer: Answer::stopped(ResultCode::ExternalChange),
+            standing: Standing::NotRun { journal },
+        }
+    }
 }
 
 /// An accepted request, as the call that is running it holds it. A first
@@ -669,6 +707,14 @@ pub(crate) trait Binding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran>;
+
+    /// The binding as one of a command that needs confirmation. Such a
+    /// binding answers `Some(self)`, and its re-entry is then made by
+    /// `confirm::reenter` from its probes and by nothing else. `None`
+    /// for every other binding.
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
+    }
 
     /// Re-entry, the domain call: made with the recorded operation ID and
     /// the recorded expectation, which is the only way the work is

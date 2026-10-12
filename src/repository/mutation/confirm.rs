@@ -25,12 +25,15 @@
 use crate::results::{Effects, Envelope, ResultCode, Scope, absolute_path_string};
 
 use super::{
-    super::RepositoryService,
+    super::{RepositoryService, recovery::JournalRow},
     Mutation,
-    bind::{Answer, Binding, CallContext, Place, Previewed},
+    bind::{
+        Accepted, Answer, Binding, CallContext, Confirmed, Entered, Place, Previewed, Ran, Standing,
+    },
     command::Command,
     dto::{MutationDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
+    observe::ObservationDigest,
     outcome,
     progress::NoSession,
     records::{ConfirmationRecord, NewConfirmation},
@@ -108,6 +111,111 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
     };
     Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
         .with_recovery(recovery)
+}
+
+/// How the row of a confirmed request's operation reads when the request
+/// is entered again: what `Confirmed::row` answers.
+pub(crate) enum Row {
+    /// No row of the command's operation reads so. Nothing is run, and
+    /// the answer is `internal_error`.
+    Impossible,
+    /// The row answers the request, or what the binding read of it
+    /// does: an operation that has ended, or one that cannot go on as
+    /// things are. The domain is not called.
+    Answers(Box<Ran>),
+    /// The operation has recorded that it began its work. The request's
+    /// own work has changed what would be observed, so nothing is
+    /// compared, and the confirmation is the request's however old it
+    /// is: the domain is called.
+    Recorded,
+    /// Nothing of the request's is known to be done: the state is
+    /// observed again and compared with what was previewed.
+    Unrecorded,
+}
+
+impl Row {
+    /// A row that answers the request with `ran`.
+    pub(crate) fn answers(ran: Ran) -> Self {
+        Self::Answers(Box::new(ran))
+    }
+}
+
+/// What a confirmed binding observed on re-entry under a row that reads
+/// `Row::Unrecorded`: what `Confirmed::observe_again` answers.
+pub(crate) enum Seen {
+    /// The command's end state holds, by the request's work or by
+    /// another's. With no row the request is finished with this answer,
+    /// a no-op. A row that is pending is the domain's to end, and it is
+    /// called; the answer is not used then.
+    EndState(Answer),
+    /// The state there is now. `found` is its digest. `own` is the
+    /// digest of a state the request's own work turned into the one
+    /// found before it recorded anything, when there is such a state: a
+    /// consent to either is a consent to what is there.
+    State {
+        found: ObservationDigest,
+        own: Option<ObservationDigest>,
+    },
+}
+
+/// The re-entry of a command that needs confirmation: every such
+/// binding is entered again through here, with its three probes.
+///
+/// In order:
+///
+/// 1. The row is read; see `Row`. A row that answers the request, or
+///    that no operation of the command has, ends the call here. A row
+///    that has recorded the request's work is taken up by the domain
+///    call with nothing compared.
+/// 2. Otherwise the binding observes; see `Seen`. When the command's
+///    end state holds and no row stands, the request is a no-op and is
+///    finished; with a pending row the domain is called to end it.
+/// 3. Otherwise what was observed is compared with what the request's
+///    consent was to, `CallContext::previewed`. This is the only thing
+///    that keeps a destructive command from running on a stale consent
+///    after lost output, and it is made here for every binding: a
+///    difference, or a consent that cannot be read, is answered by
+///    `Confirmed::differs` and the domain is not called.
+pub(crate) fn reenter<B: Confirmed + ?Sized>(
+    binding: &mut B,
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    journal: JournalRow,
+) -> Result<Entered, Ran> {
+    match binding.row(call, accepted, &journal) {
+        Row::Impossible => {
+            return Err(Ran {
+                answer: Answer::stopped(ResultCode::InternalError),
+                standing: Standing::NotRun { journal },
+            });
+        }
+        Row::Answers(ran) => return Err(*ran),
+        Row::Recorded => return Ok(Entered::Unfinished),
+        Row::Unrecorded => {}
+    }
+    match binding.observe_again(call, accepted, &journal)? {
+        Seen::EndState(answer) => {
+            if journal == JournalRow::Absent {
+                Err(Ran {
+                    answer,
+                    standing: Standing::Final,
+                })
+            } else {
+                Ok(Entered::Unfinished)
+            }
+        }
+        Seen::State { found, own } => {
+            let previewed = call.previewed();
+            let consented_to = previewed
+                .as_ref()
+                .is_some_and(|previewed| *previewed == found || Some(previewed) == own.as_ref());
+            if consented_to {
+                Ok(Entered::Unfinished)
+            } else {
+                Err(binding.differs(journal, previewed.is_some()))
+            }
+        }
+    }
 }
 
 /// What `consent` found for a request no record holds.

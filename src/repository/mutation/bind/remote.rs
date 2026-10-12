@@ -12,6 +12,7 @@
 //! write of one file, and it is bound as one: the shared save code reads
 //! its commit from Git at the configuration file's path.
 
+use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -1140,6 +1141,15 @@ impl RemoteRemoveBinding {
         }
     }
 
+    /// A re-entry that stops before its domain call, with the request's
+    /// data.
+    fn not_run(&self, answer: Answer, journal: JournalRow) -> Ran {
+        Ran {
+            answer: answer.with_data(self.data()),
+            standing: Standing::NotRun { journal },
+        }
+    }
+
     /// A row that has completed: what the request is answered with, and
     /// what becomes of its record. No domain call is made.
     ///
@@ -1289,18 +1299,28 @@ impl Binding for RemoteRemoveBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        let not_run = |answer: Answer, journal: JournalRow| Ran {
-            answer: answer.with_data(self.data()),
-            standing: Standing::NotRun { journal },
-        };
-        let step = match &journal {
+        confirm::reenter(self, call, accepted, journal)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        Some(self)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for RemoteRemoveBinding {
+    fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, journal: &JournalRow) -> Row {
+        let step = match journal {
             JournalRow::Absent => None,
             JournalRow::Pending(PendingOperation::Local { state: _, step }) => *step,
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,
                 checkpointed: _,
-            } => return Err(self.ended(call, accepted, journal)),
+            } => return Row::answers(self.ended(call, accepted, journal.clone())),
             // No local operation is in another journal, ends in another
             // way or owes work once it has completed. Nothing is run or
             // settled on a row that says so.
@@ -1312,66 +1332,68 @@ impl Binding for RemoteRemoveBinding {
                 owes_work: _,
                 checkpointed: _,
             } => {
-                return Err(not_run(Answer::stopped(ResultCode::InternalError), journal));
+                return Row::answers(
+                    self.not_run(Answer::stopped(ResultCode::InternalError), journal.clone()),
+                );
             }
         };
-        if step.is_some() {
-            // The domain operation removes whatever remote has the name
-            // when it is called, also under a row that has removed one.
-            // A remote that is there now was added since, and nobody was
-            // shown it: the operation is not called while it stands.
-            return match self.in_place(&accepted.root()) {
-                Ok(false) => Ok(Entered::Unfinished),
-                Ok(true) => Err(not_run(
-                    self.answer(ResultCode::ExternalChange, true),
-                    journal,
-                )),
-                Err(()) => Err(not_run(
-                    Answer::stopped(ResultCode::RepositoryInaccessible),
-                    journal,
-                )),
-            };
+        if step.is_none() {
+            return Row::Unrecorded;
         }
+        // The domain operation removes whatever remote has the name
+        // when it is called, also under a row that has removed one.
+        // A remote that is there now was added since, and nobody was
+        // shown it: the operation is not called while it stands.
+        match self.in_place(&accepted.root()) {
+            Ok(false) => Row::Recorded,
+            Ok(true) => Row::answers(self.not_run(
+                self.answer(ResultCode::ExternalChange, true),
+                journal.clone(),
+            )),
+            Err(()) => Row::answers(self.not_run(
+                Answer::stopped(ResultCode::RepositoryInaccessible),
+                journal.clone(),
+            )),
+        }
+    }
+
+    fn observe_again(
+        &mut self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        journal: &JournalRow,
+    ) -> Result<Seen, Ran> {
         match self.in_place(&accepted.root()) {
             Ok(true) => {}
-            Ok(false) if journal == JournalRow::Absent => {
-                return Err(Ran {
-                    answer: self.answer(ResultCode::AlreadyApplied, false),
-                    standing: Standing::Final,
-                });
+            Ok(false) => {
+                return Ok(Seen::EndState(
+                    self.answer(ResultCode::AlreadyApplied, false),
+                ));
             }
-            Ok(false) => return Ok(Entered::Unfinished),
             Err(()) => {
-                return Err(not_run(
+                return Err(self.not_run(
                     Answer::stopped(ResultCode::RepositoryInaccessible),
-                    journal,
+                    journal.clone(),
                 ));
             }
         }
         let removal = match self.observe(call.service) {
             Ok(removal) => removal,
-            Err(answer) => return Err(not_run(answer, journal)),
+            Err(answer) => return Err(self.not_run(answer, journal.clone())),
         };
         if let Err(answer) = self.removable(&removal) {
-            return Err(not_run(answer, journal));
+            return Err(self.not_run(answer, journal.clone()));
         }
-        // A request whose record holds no consent that can be read has
-        // none that anything could be compared with: nothing is run.
-        if call.previewed() != Some(self.digest(&removal)) {
-            return Err(not_run(
-                Answer::stopped(ResultCode::ExternalChange),
-                journal,
-            ));
-        }
-        Ok(Entered::Unfinished)
+        Ok(Seen::State {
+            found: self.digest(&removal),
+            own: None,
+        })
     }
 
-    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+    fn differs(&mut self, journal: JournalRow, _consented: bool) -> Ran {
+        self.not_run(Answer::stopped(ResultCode::ExternalChange), journal)
     }
-}
 
-impl Confirmed for RemoteRemoveBinding {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         self.validate()?;
         let removal = self

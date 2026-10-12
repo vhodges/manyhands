@@ -1,6 +1,7 @@
 //! `repo remove`: a repository is taken out of the repository list
 //! again. It needs confirmation.
 
+use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::path::PathBuf;
 
 use crate::results::{ResultCode, Scope, timestamp_string};
@@ -211,16 +212,26 @@ impl Binding for RepoRemoveBinding {
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
-        _accepted: &Accepted,
+        accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        let not_run = |answer: Answer, journal: JournalRow| Ran {
-            answer,
-            standing: Standing::NotRun { journal },
-        };
-        match &journal {
+        confirm::reenter(self, call, accepted, journal)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        Some(self)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        Self::call(call.service, accepted)
+    }
+}
+
+impl Confirmed for RepoRemoveBinding {
+    fn row(&mut self, _call: &CallContext<'_>, _accepted: &Accepted, journal: &JournalRow) -> Row {
+        match journal {
             JournalRow::Absent
-            | JournalRow::Pending(PendingOperation::Local { state: _, step: _ }) => {}
+            | JournalRow::Pending(PendingOperation::Local { state: _, step: _ }) => Row::Unrecorded,
             // The operation is a local one, and its row never completes:
             // it is deleted with the registration, and one that was
             // rejected reads as absent. Nothing is run or settled on a
@@ -232,62 +243,57 @@ impl Binding for RepoRemoveBinding {
                 kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
                 owes_work: _,
                 checkpointed: _,
-            } => {
-                return Err(not_run(Answer::stopped(ResultCode::InternalError), journal));
+            } => Row::Impossible,
+        }
+    }
+
+    fn observe_again(
+        &mut self,
+        call: &CallContext<'_>,
+        _accepted: &Accepted,
+        journal: &JournalRow,
+    ) -> Result<Seen, Ran> {
+        let registered = self.observe(call.service).map_err(|answer| Ran {
+            answer,
+            standing: Standing::NotRun {
+                journal: journal.clone(),
+            },
+        })?;
+        Ok(if registered.registration.is_none() {
+            Seen::EndState(Answer::stopped(ResultCode::AlreadyApplied))
+        } else {
+            Seen::State {
+                found: Self::digest(&registered),
+                own: None,
             }
-        }
-        let registered = match self.observe(call.service) {
-            Ok(registered) => registered,
-            Err(answer) => return Err(not_run(answer, journal)),
-        };
-        if registered.registration.is_none() {
-            return if journal == JournalRow::Absent {
-                Err(Ran {
-                    answer: Answer::stopped(ResultCode::AlreadyApplied),
-                    standing: Standing::Final,
-                })
-            } else {
-                Ok(Entered::Unfinished)
-            };
-        }
-        // A request whose record holds no consent that can be read has
-        // none that anything could be compared with: nothing is run.
-        let Some(previewed) = call.previewed() else {
-            return Err(not_run(
-                Answer::stopped(ResultCode::ExternalChange),
-                journal,
-            ));
-        };
-        if previewed == Self::digest(&registered) {
-            return Ok(Entered::Unfinished);
-        }
-        // Another registration than the one that was previewed. The
-        // request was accepted with the previewed one in place, so that
-        // one has been removed since, by this request or by another: a
-        // removal leaves no row to say which. With no row the request's
-        // end state holds, and the registration that is there now is not
-        // the request's to remove. A row that is pending has removed
-        // nothing, and refuses everything else on the repository: what
-        // is there is not what was shown.
-        if journal == JournalRow::Absent {
-            Err(Ran {
+        })
+    }
+
+    /// Another registration than the one that was previewed. The
+    /// request was accepted with the previewed one in place, so that
+    /// one has been removed since, by this request or by another: a
+    /// removal leaves no row to say which. With no row the request's
+    /// end state holds, and the registration that is there now is not
+    /// the request's to remove. A row that is pending has removed
+    /// nothing, and refuses everything else on the repository: what
+    /// is there is not what was shown.
+    ///
+    /// A request whose record holds no consent that can be read has
+    /// none that anything could be compared with: nothing is run.
+    fn differs(&mut self, journal: JournalRow, consented: bool) -> Ran {
+        if consented && journal == JournalRow::Absent {
+            Ran {
                 answer: Answer::stopped(ResultCode::AlreadyApplied),
                 standing: Standing::Final,
-            })
+            }
         } else {
-            Err(not_run(
-                Answer::stopped(ResultCode::ExternalChange),
-                journal,
-            ))
+            Ran {
+                answer: Answer::stopped(ResultCode::ExternalChange),
+                standing: Standing::NotRun { journal },
+            }
         }
     }
 
-    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        Self::call(call.service, accepted)
-    }
-}
-
-impl Confirmed for RepoRemoveBinding {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let registered = self.observe(call.service)?;
         let Some((_, enabled_at)) = registered.registration else {

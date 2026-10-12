@@ -32,6 +32,7 @@
 //! nothing else. It is no field of the digest, and no record, journal
 //! row, result or error holds it or anything made from it.
 
+use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::{
     cell::Cell,
     path::{Path, PathBuf},
@@ -1369,48 +1370,47 @@ impl Binding for KeyDeleteBinding {
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
-        _accepted: &Accepted,
+        accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        let not_run = |answer: Answer, journal: JournalRow| Ran {
-            answer,
-            standing: Standing::NotRun { journal },
-        };
-        match &journal {
+        confirm::reenter(self, call, accepted, journal)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        Some(self)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for KeyDeleteBinding {
+    fn row(&mut self, call: &CallContext<'_>, _accepted: &Accepted, journal: &JournalRow) -> Row {
+        match journal {
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: _,
                 checkpointed: _,
             } => {
                 self.review.set(None);
-                Ok(Entered::Unfinished)
+                Row::Recorded
             }
             JournalRow::Pending(PendingOperation::KeyMaterial { phase: _ }) => {
                 match self.review(call.service) {
-                    Ok(_) => Ok(Entered::Unfinished),
-                    Err(answer) => Err(not_run(
-                        Answer {
-                            local_change: self.removed(Some(&journal)),
+                    Ok(_) => Row::Recorded,
+                    Err(answer) => Row::answers(Ran {
+                        answer: Answer {
+                            local_change: self.removed(Some(journal)),
                             ..answer
                         },
-                        journal,
-                    )),
+                        standing: Standing::NotRun {
+                            journal: journal.clone(),
+                        },
+                    }),
                 }
             }
-            JournalRow::Absent => {
-                let observed = match self.observe(call.service) {
-                    Ok(observed) => observed,
-                    Err(answer) => return Err(not_run(answer, journal)),
-                };
-                // A request whose record holds no consent that can be
-                // read has none that anything could be compared with:
-                // nothing is run.
-                if call.previewed() != Some(observed) {
-                    self.review.set(None);
-                    return Err(not_run(self.answer(ResultCode::ExternalChange), journal));
-                }
-                Ok(Entered::Unfinished)
-            }
+            JournalRow::Absent => Row::Unrecorded,
             // No row of a deletion reads so. Nothing is run or settled
             // on one that does.
             JournalRow::Pending(
@@ -1421,16 +1421,35 @@ impl Binding for KeyDeleteBinding {
                 kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
                 owes_work: _,
                 checkpointed: _,
-            } => Err(not_run(Answer::stopped(ResultCode::InternalError), journal)),
+            } => Row::Impossible,
         }
     }
 
-    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+    fn observe_again(
+        &mut self,
+        call: &CallContext<'_>,
+        _accepted: &Accepted,
+        journal: &JournalRow,
+    ) -> Result<Seen, Ran> {
+        match self.observe(call.service) {
+            Ok(found) => Ok(Seen::State { found, own: None }),
+            Err(answer) => Err(Ran {
+                answer,
+                standing: Standing::NotRun {
+                    journal: journal.clone(),
+                },
+            }),
+        }
     }
-}
 
-impl Confirmed for KeyDeleteBinding {
+    fn differs(&mut self, journal: JournalRow, _consented: bool) -> Ran {
+        self.review.set(None);
+        Ran {
+            answer: self.answer(ResultCode::ExternalChange),
+            standing: Standing::NotRun { journal },
+        }
+    }
+
     /// The preview is of the registration alone, read by the preflight:
     /// the key store is not opened for it, and no file is read.
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {

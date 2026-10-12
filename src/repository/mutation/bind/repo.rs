@@ -27,6 +27,7 @@
 //! **A row that ended without a checkpoint step** says nothing for these
 //! commands; see `ended_without_checkpoint`.
 
+use crate::repository::mutation::confirm::{self, Row, Seen};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -1093,23 +1094,46 @@ impl Binding for RepoBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
+        confirm::reenter(self, call, accepted, journal)
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        Some(self)
+    }
+
+    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        self.call(call.service, accepted)
+    }
+}
+
+impl Confirmed for RepoBinding {
+    fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, journal: &JournalRow) -> Row {
         let service = call.service;
-        let not_run = |answer: Answer, journal: JournalRow| Ran {
+        let not_run = |answer: Answer| Ran {
             answer,
-            standing: Standing::NotRun { journal },
+            standing: Standing::NotRun {
+                journal: journal.clone(),
+            },
         };
         // What the request's consent was to. A request whose record
         // holds none, or one that cannot be read as a digest, has none
         // that anything could be compared with: nothing is run on that.
         let previewed = call.previewed();
-        let step = match &journal {
+        let step = match journal {
             JournalRow::Absent => None,
             JournalRow::Pending(PendingOperation::Local { state: _, step }) => *step,
             JournalRow::Final {
                 kind: FinalKind::Completed,
                 owes_work: false,
                 checkpointed: _,
-            } => return Err(self.ended(service, accepted, journal, previewed.as_ref())),
+            } => {
+                return Row::answers(self.ended(
+                    service,
+                    accepted,
+                    journal.clone(),
+                    previewed.as_ref(),
+                ));
+            }
             // No local operation is in another journal, ends in another
             // way or owes work once it has completed. Nothing is run or
             // settled on a row that says so.
@@ -1120,15 +1144,11 @@ impl Binding for RepoBinding {
                 kind: FinalKind::Completed | FinalKind::Cancelled | FinalKind::RetainedForInspection,
                 owes_work: _,
                 checkpointed: _,
-            } => {
-                return Err(not_run(Answer::stopped(ResultCode::InternalError), journal));
-            }
+            } => return Row::Impossible,
         };
         let root = accepted.root();
-        let changed =
-            |journal: JournalRow| not_run(Answer::stopped(ResultCode::ExternalChange), journal);
         let Some(previewed) = previewed else {
-            return Err(changed(journal));
+            return Row::answers(not_run(Answer::stopped(ResultCode::ExternalChange)));
         };
         // Everything that depends on the identity is done once the
         // commit is recorded: enablement writes the identity to the
@@ -1145,62 +1165,71 @@ impl Binding for RepoBinding {
             // can be read.
             let effective = self.effective_identity_at(&root).ok().flatten();
             self.acting = self.acting_with(effective.as_ref());
-            return Ok(Entered::Unfinished);
+            return Row::Recorded;
         }
         if step.is_some() {
             let effective = match self.effective_identity_at(&root) {
                 Ok(effective) => effective,
-                Err(answer) => return Err(not_run(answer, journal)),
+                Err(answer) => return Row::answers(not_run(answer)),
             };
             if previewed.unchanging != self.identity_digest(effective.as_ref()) {
-                return Err(changed(journal));
+                return Row::answers(not_run(Answer::stopped(ResultCode::ExternalChange)));
             }
             self.acting = self.acting_with(effective.as_ref());
-            return Ok(Entered::Unfinished);
+            return Row::Recorded;
         }
-        let holds = self.end_state_holds(&root);
-        if holds && journal == JournalRow::Absent {
-            return Err(Ran {
-                answer: enabled(None),
-                standing: Standing::Final,
-            });
+        Row::Unrecorded
+    }
+
+    fn observe_again(
+        &mut self,
+        _call: &CallContext<'_>,
+        accepted: &Accepted,
+        journal: &JournalRow,
+    ) -> Result<Seen, Ran> {
+        let holds = self.end_state_holds(&accepted.root());
+        if holds && *journal == JournalRow::Absent {
+            return Ok(Seen::EndState(enabled(None)));
         }
         let observed = match self.observe() {
             Ok(observed) => observed,
-            Err(answer) => return Err(not_run(answer, journal)),
+            Err(answer) => {
+                return Err(Ran {
+                    answer,
+                    standing: Standing::NotRun {
+                        journal: journal.clone(),
+                    },
+                });
+            }
         };
+        self.acting = self.acting_identity(&observed);
         // A row that is pending is the domain's to end, also when the
         // repository was enabled as requested under it: nothing is
         // written then, and nothing is compared.
-        if !holds {
-            let found = self.digest(&observed);
-            let own_directory = journal != JournalRow::Absent
-                && matches!(
-                    observed.state,
-                    State::Create {
-                        target: Target::EmptyDirectory
-                    }
-                )
-                && previewed.state
-                    == self.state_digest(&State::Create {
-                        target: Target::Absent,
-                    });
-            if previewed.unchanging != found.unchanging
-                || (previewed.state != found.state && !own_directory)
-            {
-                return Err(changed(journal));
-            }
+        if holds {
+            return Ok(Seen::EndState(enabled(None)));
         }
-        self.acting = self.acting_identity(&observed);
-        Ok(Entered::Unfinished)
+        let found = self.digest(&observed);
+        // One difference is the request's own: a create whose row is
+        // pending made its directory before it recorded anything, so a
+        // preview of an absent target accepts an empty directory under
+        // that row.
+        let own_directory = *journal != JournalRow::Absent
+            && matches!(
+                observed.state,
+                State::Create {
+                    target: Target::EmptyDirectory
+                }
+            );
+        let own = own_directory.then(|| ObservationDigest {
+            state: self.state_digest(&State::Create {
+                target: Target::Absent,
+            }),
+            unchanging: found.unchanging.clone(),
+        });
+        Ok(Seen::State { found, own })
     }
 
-    fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
-    }
-}
-
-impl Confirmed for RepoBinding {
     fn preview(&mut self, _call: &CallContext<'_>) -> Result<Previewed, Answer> {
         self.validate()?;
         let observed = self.observe()?;
