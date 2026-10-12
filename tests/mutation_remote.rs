@@ -108,6 +108,34 @@ const CASES: &[ssh_harness::Case] = &[
         "a_published_commit_whose_index_hand_off_failed_is_partial_and_its_retry_pushes_nothing",
         a_published_commit_whose_index_hand_off_failed_is_partial_and_its_retry_pushes_nothing,
     ),
+    (
+        "the_events_of_a_synchronization_arrive_in_safe_point_order_and_hold_nothing_private",
+        the_events_of_a_synchronization_arrive_in_safe_point_order_and_hold_nothing_private,
+    ),
+    (
+        "a_token_cancelled_before_execute_does_nothing",
+        a_token_cancelled_before_execute_does_nothing,
+    ),
+    (
+        "a_token_cancelled_from_the_sink_stops_at_the_first_safe_point",
+        a_token_cancelled_from_the_sink_stops_at_the_first_safe_point,
+    ),
+    (
+        "a_cancellation_requested_while_the_transport_is_blocked_is_honored_when_it_returns",
+        a_cancellation_requested_while_the_transport_is_blocked_is_honored_when_it_returns,
+    ),
+    (
+        "a_cancellation_requested_before_the_reservation_exists_is_honored_at_the_first_safe_point",
+        a_cancellation_requested_before_the_reservation_exists_is_honored_at_the_first_safe_point,
+    ),
+    (
+        "an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so",
+        an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so,
+    ),
+    (
+        "a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over",
+        a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over,
+    ),
 ];
 
 /// Cases run only as children of a case above, each of which expects
@@ -1195,5 +1223,472 @@ fn a_published_commit_whose_index_hand_off_failed_is_partial_and_its_retry_pushe
         record(&w, REQUEST_1).ok_or(FixtureError)?.state,
         RequestState::Finished
     );
+    Ok(())
+}
+
+// Progress.
+
+/// Planted in the message of the commit a synchronization publishes.
+const MESSAGE: &str = "commit-message-private-progress-sentinel";
+
+fn stages(events: &[ProgressEvent]) -> Vec<ProgressStage> {
+    events.iter().map(|event| event.stage).collect()
+}
+
+/// Commits a file to `reference` under a message that is private.
+fn advance_with_message(
+    repo: &git2::Repository,
+    reference: &str,
+    name: &str,
+) -> Result<git2::Oid, FixtureError> {
+    let parent = fixed(repo.find_commit(fixed(repo.refname_to_id(reference))?))?;
+    let mut builder = fixed(repo.treebuilder(Some(&fixed(parent.tree())?)))?;
+    fixed(builder.insert(name, fixed(repo.blob(name.as_bytes()))?, 0o100644))?;
+    let tree = fixed(repo.find_tree(fixed(builder.write())?))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let new = fixed(repo.commit(None, &signature, &signature, MESSAGE, &tree, &[&parent]))?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(new, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference(reference, new, true, "owned fixture advance"))?;
+    Ok(new)
+}
+
+fn the_events_of_a_synchronization_arrive_in_safe_point_order_and_hold_nothing_private()
+-> Result<(), FixtureError> {
+    use ProgressStage as S;
+    let mut w = World::new()?;
+    approve(&w)?;
+    w.probes.push(MESSAGE.as_bytes().to_vec());
+    ssh_privacy::save(&w.probes)?;
+    // The remote is ahead by one commit and the local branch by none:
+    // the first synchronization updates the local branch.
+    let incoming = advance_with_message(&w.peer, "refs/heads/main", "peer-advance")?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
+    let mut events = Events::default();
+    let updated = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut events,
+        &CancellationToken::new(),
+    );
+    assert_eq!(updated.outcome, Outcome::Noop);
+    assert_eq!(
+        stages(&events.0),
+        [
+            S::Accepted,
+            S::Connecting,
+            S::Fetching,
+            S::Observing,
+            S::UpdatingLocal,
+            S::Observing,
+            S::Indexing
+        ]
+    );
+    assert_eq!(fixed(w.repo()?.refname_to_id("refs/heads/main"))?, incoming);
+
+    // Then the local branch is ahead: the second pushes.
+    let repo = w.repo()?;
+    let local = advance_with_message(&repo, "refs/heads/main", "local-advance")?;
+    let mut events = Events::default();
+    let pushed = call(
+        &w,
+        &w.service,
+        REQUEST_2,
+        repo_sync(&w),
+        Provider,
+        &mut events,
+        &CancellationToken::new(),
+    );
+    // Every event was sent before the result was returned: the sink
+    // holds them all here, and nothing is sent afterwards.
+    assert_eq!(pushed.effects, published(local));
+    assert_eq!(
+        stages(&events.0),
+        [
+            S::Accepted,
+            S::Connecting,
+            S::Fetching,
+            S::Observing,
+            S::Pushing,
+            S::Verifying,
+            S::Indexing
+        ]
+    );
+    for event in &events.0 {
+        assert_eq!(event.request_id, REQUEST_2);
+        assert_eq!(event.operation_id, pushed.operation_id);
+        assert_eq!(event.command, "repo sync");
+        assert_eq!(event.scope, pushed.scope);
+        let rendered = fixed(serde_json::to_vec(event))?;
+        ssh_privacy::clean(&rendered, &w.probes)?;
+        ssh_privacy::clean(format!("{event:?}").as_bytes(), &w.probes)?;
+    }
+    // Nothing is published until the push has returned, and then the
+    // commit is.
+    for event in &events.0[..5] {
+        assert_eq!(event.effects.commit_oid, None, "{:?}", event.stage);
+    }
+    for event in &events.0[5..] {
+        assert_eq!(
+            event.effects.publication,
+            PublicationEffect::Published,
+            "{:?}",
+            event.stage
+        );
+        assert_eq!(event.effects.commit_oid, Some(local.to_string()));
+    }
+    Ok(())
+}
+
+// Cancellation.
+
+fn a_token_cancelled_before_execute_does_nothing() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+    let token = CancellationToken::new();
+    token.cancel();
+    let mut events = Events::default();
+    let envelope = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut events,
+        &token,
+    );
+    assert_eq!(envelope.outcome, Outcome::Cancelled);
+    assert_eq!(envelope.code, ResultCode::Cancelled);
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert_eq!(envelope.operation_id, None);
+    assert!(events.0.is_empty());
+    assert!(record(&w, REQUEST_1).is_none());
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+/// A sink that cancels its call's token when it is told of `stage`.
+struct CancelAt {
+    stage: ProgressStage,
+    token: CancellationToken,
+    seen: Vec<ProgressStage>,
+}
+
+impl ProgressSink for CancelAt {
+    fn event(&mut self, event: &ProgressEvent) {
+        self.seen.push(event.stage);
+        if event.stage == self.stage {
+            self.token.cancel();
+        }
+    }
+}
+
+fn a_token_cancelled_from_the_sink_stops_at_the_first_safe_point() -> Result<(), FixtureError> {
+    use ProgressStage as S;
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let served = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+    let token = CancellationToken::new();
+    // The first safe point is the one before the fetch.
+    let mut sink = CancelAt {
+        stage: S::Fetching,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let cancelled = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    assert_eq!(cancelled.effects.commit_oid, None);
+    assert!(cancelled.operation_id.is_some());
+    assert!(cancelled.recovery.is_empty());
+    assert_eq!(
+        sink.seen,
+        [S::Accepted, S::Connecting, S::Fetching, S::Stopping]
+    );
+    // It stopped before it opened a connection, and pushed nothing.
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, served);
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+
+    // The same request returns the stored result, whatever its token.
+    let again = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(again, cancelled);
+    assert_eq!(connections(&w), opened);
+    // A new request synchronizes.
+    let fresh = execute(&w, REQUEST_2, repo_sync(&w));
+    assert_eq!(fresh.effects, published(local));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+/// A call of `execute` on another thread, by a service of its own on
+/// the world's data. The world itself stays on the test's thread.
+fn execute_elsewhere(
+    w: &World,
+    id: &'static str,
+) -> Result<std::thread::JoinHandle<Envelope<MutationDataDto>>, FixtureError> {
+    let service = fixed(RepositoryService::open_at(&w.data()))?;
+    let root = w.root.clone();
+    Ok(std::thread::spawn(move || {
+        service.execute(
+            MutationCall {
+                request_id: request(id),
+                confirmation: None,
+                mutation: Mutation::RepoSync(RepoSyncInput { root }),
+            },
+            &mut SessionCredentials::new(Provider),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    }))
+}
+
+/// What a call on another thread returned, scanned as `call` scans.
+fn joined(
+    w: &World,
+    handle: std::thread::JoinHandle<Envelope<MutationDataDto>>,
+) -> Result<Envelope<MutationDataDto>, FixtureError> {
+    let envelope = handle.join().map_err(|_| FixtureError)?;
+    ssh_privacy::clean(&fixed(serde_json::to_vec(&envelope))?, &w.probes)?;
+    w.privacy()?;
+    Ok(envelope)
+}
+
+fn a_cancellation_requested_while_the_transport_is_blocked_is_honored_when_it_returns()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let served = fixed(w.bare()?.refname_to_id("refs/heads/main"))?;
+    let pushes = accepted(&w.server);
+    let hold = w.server.hold_advertisement()?;
+    let running = execute_elsewhere(&w, REQUEST_1)?;
+    hold.wait_until_held()?;
+
+    // The synchronization is inside its first transport call, with the
+    // reservation its own.
+    assert!(reserved(&w));
+    let opened = connections(&w);
+    let cancel = w.service.cancel_request(request(REQUEST_1));
+    assert_eq!(cancel.command, "request cancel");
+    assert_eq!(cancel.code, ResultCode::Ok);
+    assert_eq!(cancel.request_id, None);
+    let asked = cancel.data.ok_or(FixtureError)?;
+    assert_eq!(asked.request_id, REQUEST_1);
+    assert_eq!(asked.state, RequestState::Accepted);
+    assert!(asked.requested);
+    // The transport call has not returned: nothing has acknowledged it.
+    assert!(!asked.acknowledged);
+    assert!(reserved(&w));
+
+    hold.release()?;
+    let cancelled = joined(&w, running)?;
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    // The operation itself was asked, so it stopped as soon as the
+    // transport call returned: it did not go on to fetch and stop at
+    // the safe point after that.
+    assert_eq!(connections(&w), opened);
+    assert_eq!(cancelled.effects.commit_oid, None);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, served);
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    let after = w.service.cancel_request(request(REQUEST_1));
+    let after = after.data.ok_or(FixtureError)?;
+    assert_eq!(after.state, RequestState::Finished);
+    assert!(!after.requested);
+    assert!(after.acknowledged);
+    // A request no record holds.
+    let unknown = w.service.cancel_request(request(REQUEST_3));
+    assert_eq!(unknown.code, ResultCode::RequestNotFound);
+    assert!(unknown.data.is_none());
+    Ok(())
+}
+
+fn a_cancellation_requested_before_the_reservation_exists_is_honored_at_the_first_safe_point()
+-> Result<(), FixtureError> {
+    use ProgressStage as S;
+    let w = World::new()?;
+    approve(&w)?;
+    advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+    // The call is stopped where the boundary has accepted the request
+    // and has not yet made its domain call: there is no reservation.
+    let elsewhere = fixed(RepositoryService::open_at(&w.data()))?;
+    let root = w.root.clone();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let report = seen.clone();
+    w.service.set_request_hook_for_testing(move || {
+        let reserved = elsewhere.active_remote_operation(&root).unwrap().is_some();
+        let cancel = elsewhere.cancel_request(request(REQUEST_1));
+        *report.lock().unwrap() = Some((reserved, cancel.data));
+    });
+    let mut events = Events::default();
+    let cancelled = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut events,
+        &CancellationToken::new(),
+    );
+    let (was_reserved, asked) = seen.lock().unwrap().take().ok_or(FixtureError)?;
+    assert!(!was_reserved);
+    let asked = asked.ok_or(FixtureError)?;
+    assert!(asked.requested);
+    assert!(!asked.acknowledged);
+
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(cancelled.code, ResultCode::Cancelled);
+    assert_eq!(
+        stages(&events.0),
+        [S::Accepted, S::Connecting, S::Fetching, S::Stopping]
+    );
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert!(!reserved(&w));
+    let stored = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(stored.state, RequestState::Finished);
+    // The flag was cleared as it was honored.
+    assert!(!stored.cancel_requested);
+    Ok(())
+}
+
+/// A sink that, when it is told of `stage`, has the request's operation
+/// asked to give way, as a poll is: the synchronization then reports
+/// itself interrupted, and its row is not cancelled.
+struct YieldAt {
+    stage: ProgressStage,
+    registry: std::path::PathBuf,
+}
+
+impl ProgressSink for YieldAt {
+    fn event(&mut self, event: &ProgressEvent) {
+        if event.stage == self.stage {
+            rusqlite::Connection::open(&self.registry)
+                .unwrap()
+                .execute(
+                    "UPDATE remote_operation_records SET yield_requested=1 WHERE operation_ulid=?1",
+                    [event.operation_id.as_deref().unwrap()],
+                )
+                .unwrap();
+        }
+    }
+}
+
+fn an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let mut sink = YieldAt {
+        stage: ProgressStage::Pushing,
+        registry: w.data().join(REGISTRY_FILE),
+    };
+    let interrupted = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut sink,
+        &CancellationToken::new(),
+    );
+    let operation = OperationId::parse(interrupted.operation_id.as_deref().ok_or(FixtureError)?)
+        .map_err(|_| FixtureError)?;
+    assert_eq!(phase(&w, operation)?, "interrupted");
+    // Interrupted, and not cancelled: the row is what says which.
+    assert_eq!(interrupted.code, ResultCode::RecoveryRequired);
+    assert_eq!(interrupted.outcome, Outcome::Blocked);
+    assert_eq!(
+        actions(&interrupted),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    // The same request takes it up and finishes it.
+    let finished = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(finished.effects, published(local));
+    assert_eq!(finished.operation_id, interrupted.operation_id);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+fn a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let hold = w.server.hold_advertisement()?;
+    let first = execute_elsewhere(&w, REQUEST_1)?;
+    hold.wait_until_held()?;
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    // The retry enters the same record and takes the operation from
+    // the call that is still inside its transport.
+    let retried = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(retried.outcome, Outcome::Success);
+    assert_eq!(retried.effects, published(local));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+
+    // The first call comes back fenced: it pushes nothing, settles
+    // nothing and claims nothing.
+    hold.release()?;
+    let fenced = joined(&w, first)?;
+    assert_eq!(fenced.code, ResultCode::RecoveryRequired);
+    assert_eq!(fenced.operation_id, retried.operation_id);
+    assert_ne!(fenced.effects.publication, PublicationEffect::Current);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    // The record is the retry's, and every later call is answered
+    // from it.
+    assert_eq!(execute(&w, REQUEST_1, repo_sync(&w)), retried);
     Ok(())
 }
