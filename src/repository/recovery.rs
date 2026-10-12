@@ -1582,6 +1582,29 @@ mod abandoned_row_tests {
     #[test]
     fn every_step_is_stored_under_its_own_name_and_read_back() {
         for step in LocalStep::ALL {
+            // A step added to the enum is added to `ALL`, which `parse`
+            // reads: this match stops compiling until it is placed, and
+            // the count below fails until `ALL` holds it.
+            match step {
+                LocalStep::BranchObserved
+                | LocalStep::WorktreeObserved
+                | LocalStep::AuthoringDestinationObserved
+                | LocalStep::DocumentDestinationObserved
+                | LocalStep::DocumentMoveObserved
+                | LocalStep::AuthoringCheckpointObserved
+                | LocalStep::AuthoritativeObserved
+                | LocalStep::RemoteChanged
+                | LocalStep::PublicationConfigurationWritten
+                | LocalStep::PublicationCommitted
+                | LocalStep::RepositoryInitialized
+                | LocalStep::ConfigurationWritten
+                | LocalStep::InitializationCommitted
+                | LocalStep::Retry
+                | LocalStep::Error
+                | LocalStep::Completed
+                | LocalStep::Rejected
+                | LocalStep::Abandoned => {}
+            }
             assert!(is_stored_name(step.as_str()), "{step:?}");
             assert_eq!(LocalStep::parse(step.as_str()), Some(step));
             assert_eq!(RecordedStep::of(step.as_str()), RecordedStep::Listed(step));
@@ -1590,6 +1613,7 @@ mod abandoned_row_tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), LocalStep::ALL.len());
+        assert_eq!(names.len(), 18, "one name for each arm of the match above");
         // A name with the form of a step that no build writes is a step
         // recorded, and no more is known of it.
         assert_eq!(LocalStep::parse("some_other_step"), None);
