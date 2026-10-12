@@ -694,6 +694,55 @@ fn a_late_retry_of_a_selection_that_never_ran_is_finished_as_an_external_change(
     assert_selection_refused_as_late(&world, REQUEST_1, &retry, head, "backup");
 }
 
+/// A late retry that cannot read the configuration file learns nothing
+/// of whether the setting moved. It is not finished as an external
+/// change, which would be given again for good though nothing changed:
+/// it answers the read's error, and its record stays accepted for the
+/// same request, which goes on once the file can be read.
+#[test]
+fn a_late_retry_of_a_selection_that_cannot_read_the_configuration_keeps_its_record() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+    });
+    let elsewhere = plain(world.data.path());
+    let first = mutation::execute_with(&elsewhere, REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(first.outcome, Outcome::Success);
+    let head = world.primary_head();
+    let lost = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_eq!(lost.code, ResultCode::InternalError);
+
+    // The file cannot be read as a file: a directory stands in its place.
+    let file = world.root.join(CONFIG);
+    let aside = world.root.join(".manyhands/config.aside");
+    std::fs::rename(&file, &aside).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let retry = world.execute(REQUEST_2, select(&world, Some("origin")));
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::rename(&aside, &file).unwrap();
+
+    assert_ne!(retry.code, ResultCode::ExternalChange);
+    assert!(retry.failure_class().is_some());
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(
+        crate::support::mutation::recovery_actions(&retry),
+        ["request.retry"]
+    );
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    assert_eq!(world.primary_head(), head);
+
+    // Nothing had changed: the same request is the no-op it was.
+    let again = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_selection_unchanged(&again);
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.primary_head(), head);
+}
+
 /// Row 9 of the design's table, for a selection: a request that changes
 /// nothing, whose result is lost, is a no-op on its retry too, though an
 /// earlier commit holds exactly what it asked for.

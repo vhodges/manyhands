@@ -597,9 +597,32 @@ impl Binding for RemoteSelectBinding {
     /// end state, whoever wrote it. Anything else is a choice made since:
     /// the request is finished as an external change, and commits
     /// nothing over it.
+    ///
+    /// A file that cannot be read says neither. The request is answered
+    /// with the read's error and its record is left accepted: nothing is
+    /// known to have changed, and the same request asks again.
     fn moved(&self, _service: &RepositoryService, accepted: &Accepted) -> Option<Ran> {
         let root = accepted.root();
-        let file = configuration_file(&root);
+        let file = match owned_file_bytes(
+            &root,
+            Path::new(canonical::CONFIG_PATH),
+            RepositoryOperation::Read,
+            &root,
+        ) {
+            Ok(file) => file,
+            // Only the kind is read.
+            Err(error) => {
+                return Some(Ran {
+                    answer: save::Save::answer(
+                        self,
+                        outcome::repository_error_code(error.kind),
+                        Effects::not_requested(),
+                        &root,
+                    ),
+                    standing: Standing::Stopped { journal: None },
+                });
+            }
+        };
         let observed = match &file {
             Some(bytes) => ExpectedPathObservation::from_bytes(bytes),
             None => ExpectedPathObservation::Missing,
