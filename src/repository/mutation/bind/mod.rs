@@ -681,6 +681,14 @@ pub(crate) enum EndedWithoutCheckpoint {
     /// refused before it. The record is released and the call is run as a
     /// new request.
     DidNothing,
+    /// The operation did nothing, as for `DidNothing`, and the command
+    /// changes a setting with no token of the caller's to guard a second
+    /// run: run as new, it would observe the setting as it is now and put
+    /// its choice over one made since the request was accepted. The
+    /// record is released only when `Binding::moved` finds the setting
+    /// where the request can still act on it; otherwise the request is
+    /// settled with what `moved` answers.
+    DidNothingToASetting,
     /// Nothing: the operation's completed row has no checkpoint step
     /// whatever it did. The record is kept and the binding's `reenter`
     /// is called, as for any other row of an operation that has ended.
@@ -714,6 +722,24 @@ pub(crate) trait Binding {
     /// lost output, and send a confirmed command back through a
     /// confirmation it has already used. Those answer `SaysNothing`.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint;
+
+    /// Asked only of a binding that answers
+    /// `EndedWithoutCheckpoint::DidNothingToASetting`, before the record
+    /// of a request whose operation did nothing is released: whether the
+    /// setting the request would change has moved since the request was
+    /// accepted. `None` when it is as the first call observed it, or
+    /// already as the request asks: the record is released and the
+    /// request runs as new. `Some` settles the request with that answer
+    /// instead, and nothing is run.
+    ///
+    /// The default refuses: a binding that names the rule and gives no
+    /// probe is not run as new on nothing.
+    fn moved(&self, _service: &RepositoryService, _accepted: &Accepted) -> Option<Ran> {
+        Some(Ran {
+            answer: Answer::stopped(ResultCode::InternalError),
+            standing: Standing::Stopped { journal: None },
+        })
+    }
 
     /// Where the request works: a repository, by its root as the caller
     /// gave it, or the application.

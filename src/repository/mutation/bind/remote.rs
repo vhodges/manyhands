@@ -545,8 +545,39 @@ impl Binding for RemoteSelectBinding {
     /// it found the configuration as requested, or stopped before its
     /// write. The record is released and the request runs as new, which
     /// finds the same and reports a no-op with no commit.
+    ///
+    /// A selection takes no token of its caller's, so nothing guards
+    /// that second run but `moved`.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
-        EndedWithoutCheckpoint::DidNothing
+        EndedWithoutCheckpoint::DidNothingToASetting
+    }
+
+    /// The configuration file is what a selection changes. It has not
+    /// moved while it is the file the request was accepted against, and
+    /// a file that already names the requested remote is the request's
+    /// end state, whoever wrote it. Anything else is a choice made since:
+    /// the request is finished as an external change, and commits
+    /// nothing over it.
+    fn moved(&self, _service: &RepositoryService, accepted: &Accepted) -> Option<Ran> {
+        let root = accepted.root();
+        let file = configuration_file(&root);
+        let observed = match &file {
+            Some(bytes) => ExpectedPathObservation::from_bytes(bytes),
+            None => ExpectedPathObservation::Missing,
+        };
+        let stands = observed == accepted.expectation()
+            || file
+                .as_deref()
+                .is_some_and(|bytes| save::Save::holds_bytes(self, bytes));
+        (!stands).then(|| Ran {
+            answer: save::Save::answer(
+                self,
+                ResultCode::ExternalChange,
+                Effects::not_requested(),
+                &root,
+            ),
+            standing: Standing::Final,
+        })
     }
 
     fn place(&self) -> Place<'_> {
@@ -616,7 +647,9 @@ impl Binding for RemoteSelectBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, call.service, accepted, journal).map(Entered::Authoring)
+        save::reenter(self, call.service, accepted, journal)
+            .map(Entered::Authoring)
+            .map_err(finished_when_superseded)
     }
 
     fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
@@ -625,10 +658,35 @@ impl Binding for RemoteSelectBinding {
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
         match entered.authoring() {
-            Ok(before) => save::rerun(self, call.service, accepted, before),
+            Ok(before) => {
+                finished_when_superseded(save::rerun(self, call.service, accepted, before))
+            }
             Err(ran) => ran,
         }
     }
+}
+
+/// A selection entered again that is an external change with nothing of
+/// its own in flight is finished with that answer. Settled as a save's
+/// is, its record would be released, and the same request sent once more
+/// would run as new and commit its choice over the later one: a save is
+/// guarded there by its caller's token, and a selection has none.
+///
+/// A selection whose own operation is in flight keeps its record
+/// accepted, as before: its row is still to be dealt with.
+fn finished_when_superseded(ran: Ran) -> Ran {
+    let Ran { answer, standing } = ran;
+    let standing = match standing {
+        Standing::Stopped {
+            journal: Some(journal),
+        } if answer.code == ResultCode::ExternalChange && !journal.in_flight() => Standing::Final,
+        standing @ (Standing::Final
+        | Standing::Owed
+        | Standing::Unconfirmed
+        | Standing::NotRun { journal: _ }
+        | Standing::Stopped { journal: _ }) => standing,
+    };
+    Ran { answer, standing }
 }
 
 /// The input of `remote remove`: the remote to take out of the

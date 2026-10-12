@@ -557,6 +557,97 @@ fn a_remote_is_selected_with_its_commit_and_selecting_it_again_is_a_no_op() {
     assert_eq!(world.pending_journal_rows(), 0);
 }
 
+/// Asserts that a retry of a selection was refused because the
+/// configuration has moved since its request was accepted: nothing is
+/// committed, the later selection stands, and the request is finished
+/// with that answer, which is given again from then on.
+fn assert_selection_refused_as_late(
+    world: &World,
+    request_id: &str,
+    retry: &Envelope<MutationDataDto>,
+    head: git2::Oid,
+    standing: &str,
+) {
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+            Some(FailureClass::Blocked)
+        )
+    );
+    assert_eq!(retry.effects, Effects::not_requested());
+    assert_eq!(remote_data(retry).name.as_deref(), Some("origin"));
+    assert!(retry.recovery.is_empty());
+    assert_eq!(world.primary_head(), head);
+    assert_eq!(selected_at(world, head).as_deref(), Some(standing));
+    assert_configuration_clean(world);
+    assert_eq!(
+        world.record(request_id).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    // Sent again, and again: the same answer, and nothing committed.
+    for _ in 0..2 {
+        assert_eq!(
+            &world.execute(request_id, select(world, Some("origin"))),
+            retry
+        );
+    }
+    assert_eq!(world.primary_head(), head);
+}
+
+/// A selection that found its remote selected changed nothing, and its
+/// row ended without the step that marks a commit. When its result was
+/// lost and someone has selected another remote since, its retry does not
+/// run as a new request and commit the older choice over the later one.
+#[test]
+fn a_late_retry_of_a_selection_that_changed_nothing_does_not_overwrite_a_later_selection() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestSettlement).open_service(data)
+    });
+    git_remote(&world, "backup", "git@example.invalid:team/backup.git");
+    let elsewhere = plain(world.data.path());
+    let first = mutation::execute_with(&elsewhere, REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(first.outcome, Outcome::Success);
+
+    let lost = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    let later = mutation::execute_with(&elsewhere, REQUEST_3, select(&world, Some("backup")));
+    assert_eq!(later.outcome, Outcome::Success);
+    let head = world.primary_head();
+
+    let retry = world.execute(REQUEST_2, select(&world, Some("origin")));
+    assert_selection_refused_as_late(&world, REQUEST_2, &retry, head, "backup");
+}
+
+/// The same for a selection that was accepted and never ran: its retry is
+/// an external change, and the request is finished with it. Were its
+/// record released, the same request sent once more would run as new and
+/// commit the older choice.
+#[test]
+fn a_late_retry_of_a_selection_that_never_ran_is_finished_as_an_external_change() {
+    let world = world_with_origin(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+    });
+    git_remote(&world, "backup", "git@example.invalid:team/backup.git");
+    let died = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(died.code, ResultCode::InternalError);
+
+    let elsewhere = plain(world.data.path());
+    let later = mutation::execute_with(&elsewhere, REQUEST_2, select(&world, Some("backup")));
+    assert_eq!(later.outcome, Outcome::Success);
+    let head = world.primary_head();
+
+    let retry = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_selection_refused_as_late(&world, REQUEST_1, &retry, head, "backup");
+}
+
 /// Row 9 of the design's table, for a selection: a request that changes
 /// nothing, whose result is lost, is a no-op on its retry too, though an
 /// earlier commit holds exactly what it asked for.

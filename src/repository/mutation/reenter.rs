@@ -23,6 +23,10 @@ use super::{
 enum Reentry {
     /// The record is released and the call is run as a new request.
     AsNew,
+    /// As `AsNew`, once the binding has said that the setting the
+    /// request would change has not moved since it was accepted. Where
+    /// it has, the request is settled with the binding's answer.
+    NewUnlessMoved,
     /// The record is kept: the binding reads its evidence, and the request
     /// is continued or answered from what its operation did.
     AsRecorded,
@@ -37,6 +41,7 @@ impl Reentry {
                 checkpointed: false,
             } => match rule {
                 EndedWithoutCheckpoint::DidNothing => Self::AsNew,
+                EndedWithoutCheckpoint::DidNothingToASetting => Self::NewUnlessMoved,
                 // Handled as a row that has its checkpoint step is handled:
                 // the record is kept and the binding re-enters it.
                 EndedWithoutCheckpoint::SaysNothing => Self::AsRecorded,
@@ -111,7 +116,7 @@ impl RepositoryService {
                 return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
             }
         };
-        match Reentry::of(&journal, binding.ended_without_checkpoint()) {
+        let moved = match Reentry::of(&journal, binding.ended_without_checkpoint()) {
             // The operation ended before its checkpoint: it stopped or was
             // refused with nothing in flight. Had that answer not been
             // lost, settling would have deleted the record. It is deleted
@@ -121,13 +126,28 @@ impl RepositoryService {
             // left alone; calling the domain on it again would record a
             // checkpoint on a row that never had one, and a later retry
             // could then take another request's commit for this one's.
-            Reentry::AsNew => {
+            //
+            // A command that changes a setting has no token to guard that
+            // second run, so its binding is asked first whether the
+            // setting has moved since the request was accepted. Where it
+            // has, the request is settled with the binding's answer and
+            // its record is not released: released, the same request
+            // sent once more would put its choice over the later one.
+            Reentry::AsNew => Some(None),
+            Reentry::NewUnlessMoved => Some(binding.moved(self, &accepted)),
+            Reentry::AsRecorded => None,
+        };
+        match moved {
+            Some(Some(ran)) => {
+                return Some(self.settled(&Reply { binding, identity }, &accepted, ran));
+            }
+            Some(None) => {
                 return match self.delete_request(accepted.request_id, accepted.attempt) {
                     Ok(_) => None,
                     Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
                 };
             }
-            Reentry::AsRecorded => {}
+            None => {}
         }
         // The consent the request was accepted with. It is the record's,
         // whatever this call presents: a confirmation is not part of what

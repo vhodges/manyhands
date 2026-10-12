@@ -220,3 +220,57 @@ fn a_ticket_request_that_ended_without_a_checkpoint_is_run_as_new() {
         }
     }
 }
+
+/// A selection has no token of its caller's: its record is released for
+/// the same row a save's is, and only once its binding has been asked
+/// whether the setting moved.
+#[test]
+fn a_selection_that_ended_without_a_checkpoint_is_run_as_new_only_unless_its_setting_moved() {
+    let binding = Mutation::RemoteSelect(crate::repository::RemoteSelectInput {
+        root: PathBuf::from("/nowhere"),
+        name: None,
+    })
+    .into_binding();
+    assert_eq!(
+        binding.ended_without_checkpoint(),
+        EndedWithoutCheckpoint::DidNothingToASetting
+    );
+    for journal in every_row() {
+        let expected = if journal == completed(false, false) {
+            Reentry::NewUnlessMoved
+        } else {
+            Reentry::AsRecorded
+        };
+        assert_eq!(
+            Reentry::of(&journal, binding.ended_without_checkpoint()),
+            expected,
+            "{journal:?}"
+        );
+    }
+}
+
+/// A binding that names the rule and gives no probe is refused, with its
+/// record left: it is not run as new on nothing.
+#[test]
+fn a_binding_that_gives_no_probe_of_its_setting_is_not_released() {
+    let service = RepositoryService::open_at(tempfile::tempdir().expect("a directory").path())
+        .expect("a service");
+    let binding = never_checkpoints();
+    let record_free = Accepted {
+        request_id: crate::repository::RequestId::new(),
+        attempt: 2,
+        scope: crate::repository::mutation::identity::ScopeKey::application(),
+        family: None,
+        operation_id: crate::repository::OperationId::new(),
+        position: Position {
+            base_ref: None,
+            base_oid: None,
+        },
+        expected: None,
+    };
+    let Some(Ran { answer, standing }) = binding.moved(&service, &record_free) else {
+        panic!("the default lets the record go");
+    };
+    assert_eq!(answer.code, ResultCode::InternalError);
+    assert!(matches!(standing, Standing::Stopped { journal: None }));
+}

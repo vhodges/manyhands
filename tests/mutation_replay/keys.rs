@@ -91,7 +91,9 @@ fn named(id: Option<SharedKeyId>) -> KeyMutationDto {
 }
 
 /// Asserts that the request left a finished record of the application
-/// that holds no operation.
+/// that holds no operation. A selection, a clearing and an import record
+/// a digest of the setting their first call observed, for a late retry to
+/// compare; a removal records none.
 fn assert_finished(world: &KeyWorld, request_id: &str, command: &str, target: &str) {
     let record = world.record(request_id).expect("a record");
     assert_eq!(record.state, RequestState::Finished);
@@ -101,7 +103,14 @@ fn assert_finished(world: &KeyWorld, request_id: &str, command: &str, target: &s
     assert_eq!(record.target, target);
     assert!(record.operations.is_empty(), "{:?}", record.operations);
     assert_eq!((record.base_ref, record.base_oid), (None, None));
-    assert_eq!(record.expected_digest, None);
+    assert_eq!(
+        matches!(
+            record.expected_digest,
+            Some(manyhands::repository::ExpectedPathObservation::Blake3(_))
+        ),
+        command != "key remove",
+        "{command}"
+    );
 }
 
 #[test]
@@ -628,14 +637,41 @@ fn lose_the_result(world: &mut KeyWorld, request_id: &str, request: Mutation) {
     world.reopen();
 }
 
-/// A limit, pinned. A registry change has no operation and leaves no
-/// mark of its own: a call that enters its request again knows only what
-/// the registry holds now. When someone else has changed the registry
-/// since the request's own change, the retry cannot tell that its work
-/// was done and undone, and makes the change a second time, over theirs.
+/// Asserts that a retry was refused because the setting it would change
+/// has moved since its request was accepted: nothing is changed, and the
+/// request is finished with that answer, which is given again from then
+/// on.
+fn assert_refused_as_late(
+    world: &KeyWorld,
+    request_id: &str,
+    request: impl Fn() -> Mutation,
+    retry: &Envelope<MutationDataDto>,
+) {
+    let command = request().command();
+    assert_eq!(
+        (retry.outcome, retry.code, retry.failure_class()),
+        (
+            Outcome::Blocked,
+            ResultCode::ExternalChange,
+            Some(FailureClass::Blocked)
+        ),
+        "{command}"
+    );
+    assert_of_the_application(retry);
+    assert!(retry.recovery.is_empty(), "{command}");
+    let record = world.record(request_id).expect("a record");
+    assert_eq!(record.state, RequestState::Finished, "{command}");
+    assert_eq!(&world.execute(request_id, request()), retry, "{command}");
+}
+
+/// A retry of a request that was accepted before does not put an older
+/// choice back over a later one. A registry change has no operation and
+/// leaves no mark of its own, so its record holds a digest of the setting
+/// its first call observed. A retry that finds neither that setting nor
+/// the one it asks for is an external change, and changes nothing.
 #[test]
-fn a_registry_change_retried_after_someone_else_s_change_is_made_again() {
-    // A selection: the key someone else selected since is deselected.
+fn a_registry_change_retried_after_someone_else_s_change_is_an_external_change() {
+    // A selection: the key someone else selected since stays selected.
     let mut world = KeyWorld::new();
     let work = world.register("work", "Work laptop");
     let other = world.register("other", "Other");
@@ -643,36 +679,91 @@ fn a_registry_change_retried_after_someone_else_s_change_is_made_again() {
     assert_eq!(world.selected(), Some(work));
     world.service.select_shared_key(other).unwrap();
     let retry = world.execute(REQUEST_1, select(work));
-    assert_success(&retry);
-    assert_eq!(world.selected(), Some(work));
+    assert_refused_as_late(&world, REQUEST_1, || select(work), &retry);
+    assert_eq!(key_data(&retry), &named(Some(work)));
+    assert_eq!(world.selected(), Some(other));
 
-    // A clearing: the key someone else selected since is cleared.
+    // A clearing: the key someone else selected since stays selected.
+    world.service.select_shared_key(work).unwrap();
     lose_the_result(&mut world, REQUEST_2, clear());
     assert_eq!(world.selected(), None);
     world.service.select_shared_key(other).unwrap();
     let retry = world.execute(REQUEST_2, clear());
-    assert_success(&retry);
-    assert_eq!(world.selected(), None);
+    assert_refused_as_late(&world, REQUEST_2, clear, &retry);
+    assert_eq!(world.selected(), Some(other));
 
-    // An import: the key someone else removed since is registered again,
-    // under a new ID.
+    // An import that found its source registered and changed nothing:
+    // the key someone else removed since is not registered again.
+    let (private, public) = world.key_files("imported");
+    let import_it = || import("Imported", &private, Some(&public));
+    assert_success(&world.execute(REQUEST_3, import_it()));
+    let first = world.keys()[2].0;
+    const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+    lose_the_result(&mut world, REQUEST_4, import_it());
+    world.service.unregister_shared_key(first).unwrap();
+    let retry = world.execute(REQUEST_4, import_it());
+    assert_refused_as_late(&world, REQUEST_4, import_it, &retry);
+    assert_eq!(world.keys().len(), 2);
+
+    // A removal is never made twice: an ID is not registered again.
+    world.service.clear_shared_key_selection().unwrap();
+    const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+    lose_the_result(&mut world, REQUEST_5, remove(other));
+    assert_noop(&world.execute(REQUEST_5, remove(other)));
+}
+
+/// The same for a call that died before its step: it changed nothing,
+/// and its retry does not make its change over one made since.
+#[test]
+fn a_registry_change_that_died_before_its_step_is_not_made_over_a_later_one() {
+    let mut world = KeyWorld::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+    });
+    let work = world.register("work", "Work laptop");
+    let other = world.register("other", "Other");
+    let died = world.execute(REQUEST_1, select(work));
+    assert_eq!(died.code, ResultCode::InternalError);
+    assert_eq!(world.selected(), None);
+    world.reopen();
+    world.service.select_shared_key(other).unwrap();
+
+    let retry = world.execute(REQUEST_1, select(work));
+    assert_refused_as_late(&world, REQUEST_1, || select(work), &retry);
+    assert_eq!(world.selected(), Some(other));
+}
+
+/// What the digest of the observed setting cannot tell, pinned. The
+/// registry keeps no count of its changes, so a setting that was changed
+/// and put back is the setting the first call observed.
+///
+/// An import whose key someone removed since finds its source not
+/// registered, as its first call did, and registers it again under a new
+/// ID. A clearing whose key someone selected again finds that key
+/// selected, as its first call did, and clears it again.
+#[test]
+fn a_registry_change_retried_after_its_setting_was_put_back_is_made_again() {
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
     let (private, public) = world.key_files("imported");
     lose_the_result(
         &mut world,
-        REQUEST_3,
+        REQUEST_1,
         import("Imported", &private, Some(&public)),
     );
-    let first = world.keys()[2].0;
+    let first = world.keys()[1].0;
     world.service.unregister_shared_key(first).unwrap();
-    let retry = world.execute(REQUEST_3, import("Imported", &private, Some(&public)));
+    let retry = world.execute(REQUEST_1, import("Imported", &private, Some(&public)));
     assert_success(&retry);
-    let second = world.keys()[2].0;
+    let second = world.keys()[1].0;
     assert_ne!(second, first);
     assert_eq!(key_data(&retry).id, Some(second.to_string()));
 
-    // A removal is never made twice: an ID is not registered again.
-    lose_the_result(&mut world, "01ARZ3NDEKTSV4RRFFQ69G5FX4", remove(other));
-    assert_noop(&world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX4", remove(other)));
+    world.service.select_shared_key(work).unwrap();
+    lose_the_result(&mut world, REQUEST_2, clear());
+    assert_eq!(world.selected(), None);
+    world.service.select_shared_key(work).unwrap();
+    assert_success(&world.execute(REQUEST_2, clear()));
+    assert_eq!(world.selected(), None);
 }
 
 /// What `request show` gives for a request that has no operation: an

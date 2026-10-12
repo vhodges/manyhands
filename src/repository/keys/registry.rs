@@ -108,6 +108,26 @@ impl RepositoryService {
         Ok(RegisterSharedKeyOutcome::Registered(registration))
     }
 
+    /// The key whose registration names the private key file at
+    /// `private_key_path`, as `register_shared_key` would find it: the
+    /// path is normalized as a registration's is. `None` when no
+    /// registration names it. Nothing is written and no file is opened.
+    pub(crate) fn registered_key_source(
+        &self,
+        private_key_path: &Path,
+    ) -> Result<Option<SharedKeyId>, RepositoryError> {
+        let (normalized, _) = normalize_shared_key_path(
+            private_key_path,
+            RepositoryOperation::ListSharedKeys,
+            self.registry_data_directory(),
+        )?;
+        Ok(self
+            .list_shared_keys()?
+            .into_iter()
+            .find(|registration| registration.private_key_path == normalized)
+            .map(|registration| registration.id))
+    }
+
     pub fn list_shared_keys(&self) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
         let operation = RepositoryOperation::ListSharedKeys;
         let data_directory = self.registry_data_directory();
