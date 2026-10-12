@@ -28,6 +28,7 @@ pub mod mutation;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;
+pub mod records;
 pub mod schema;
 
 pub struct TestRepository {

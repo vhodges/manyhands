@@ -2,7 +2,7 @@
 //! intent digest, the three request tables, the journal lookup and
 //! `show_request`.
 
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use manyhands::{
     repository::{
@@ -12,9 +12,9 @@ use manyhands::{
         RequestState,
         keys::KeyMaterialPhase,
         request_store::{
-            ConfirmationRecord, DigestSalt, FieldValue, FinalKind, InsertRequestOutcome,
-            IntentDigest, JournalRow, NewConfirmation, NewRequest, PendingOperation, RecordedStep,
-            RequestOperation, RequestRecord, RequestResult, ScopeKey,
+            DigestSalt, FieldValue, FinalKind, InsertRequestOutcome, IntentDigest, JournalRow,
+            NewRequest, PendingOperation, RecordedStep, RequestOperation, RequestRecord,
+            RequestResult, ScopeKey,
         },
     },
     results::{
@@ -28,11 +28,10 @@ use serde_json::json;
 mod support;
 
 use support::{
-    EnabledRepository, TestRepository,
     golden::{self, ContractCase},
-    items,
-    mutation::{self, TestClock},
+    items, mutation,
     operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
+    records::*,
     schema,
 };
 
@@ -41,14 +40,6 @@ const REQUEST_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FQ1";
 const REQUEST_ABSENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FQ9";
 const CONFIRMATION_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FN0";
 const CONFIRMATION_ABSENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FN9";
-
-fn request_id(id: &str) -> RequestId {
-    RequestId::parse(id).unwrap()
-}
-
-fn confirmation_id(id: &str) -> ConfirmationId {
-    ConfirmationId::parse(id).unwrap()
-}
 
 #[test]
 fn request_and_confirmation_ids_are_canonical_ulids() {
@@ -325,111 +316,6 @@ fn the_digest_for_repo_create_is_the_same_before_and_after_the_root_exists() {
     assert_eq!(ScopeKey::application().as_str(), "application");
     assert!(ScopeKey::for_new_repository(&parent.path().join("absent").join("new")).is_none());
     assert!(ScopeKey::for_repository(&parent.path().join("absent")).is_none());
-}
-
-/// 2023-11-14T22:13:20Z.
-const T0: i64 = 1_700_000_000;
-const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-/// Planted in what no store may keep.
-const BODY_SENTINEL: &str = "SENTINEL-body-7c1d";
-
-/// One enabled repository, and a service whose records `clock` times.
-struct World {
-    fixture: TestRepository,
-    data: tempfile::TempDir,
-    service: RepositoryService,
-    clock: Arc<TestClock>,
-    scope: ScopeKey,
-}
-
-fn world() -> World {
-    let fixture = support::born_repository();
-    let EnabledRepository {
-        service,
-        data_directory,
-    } = support::enabled_repository(&fixture);
-    drop(service);
-    let clock = TestClock::at(T0);
-    let service = mutation::service_with_clock(data_directory.path(), &clock);
-    let scope = ScopeKey::for_repository(&fixture.root).unwrap();
-    World {
-        fixture,
-        data: data_directory,
-        service,
-        clock,
-        scope,
-    }
-}
-
-impl World {
-    fn index(&self) -> Connection {
-        items::index(self.data.path())
-    }
-
-    fn count(&self, sql: &str) -> i64 {
-        self.index().query_row(sql, [], |row| row.get(0)).unwrap()
-    }
-
-    fn digest(&self, salt: DigestSalt) -> IntentDigest {
-        IntentDigest::builder(salt, "document save", &self.scope, items::DOCUMENT_A)
-            .field("title", FieldValue::Text("Title"))
-            .field("body", FieldValue::Bytes(BODY_SENTINEL.as_bytes()))
-            .finish()
-    }
-
-    fn request(&self, id: &str) -> NewRequest {
-        let request_id = request_id(id);
-        NewRequest {
-            request_id,
-            scope: self.scope.clone(),
-            command: "document save".to_owned(),
-            target: items::DOCUMENT_A.to_owned(),
-            intent_digest: self.digest(DigestSalt::Request(request_id)),
-            confirmation: None,
-            base_ref: Some("refs/heads/main".to_owned()),
-            base_oid: Some(git2::Oid::from_str(COMMIT).unwrap()),
-            expected_digest: Some(ExpectedPathObservation::from_bytes(b"before")),
-            operations: vec![RequestOperation {
-                family: OperationFamily::Local,
-                operation_id: operations::operation_id(OPERATION_A),
-            }],
-        }
-    }
-
-    fn confirmation(&self, id: &str, expires_at: i64) -> NewConfirmation {
-        let confirmation_id = confirmation_id(id);
-        NewConfirmation {
-            confirmation_id,
-            scope: self.scope.clone(),
-            command: "document save".to_owned(),
-            target: items::DOCUMENT_A.to_owned(),
-            intent_digest: self.digest(DigestSalt::Confirmation(confirmation_id)),
-            observation_digest: None,
-            expires_at,
-        }
-    }
-
-    fn record(&self, id: &str) -> Option<RequestRecord> {
-        self.service.request_record(request_id(id)).unwrap()
-    }
-
-    fn confirmation_record(&self, id: &str) -> Option<ConfirmationRecord> {
-        self.service
-            .confirmation_record(confirmation_id(id))
-            .unwrap()
-    }
-
-    /// A domain call that takes the index lock itself.
-    fn add_remote(&self, name: &str) {
-        self.service
-            .add_remote(AddRemoteRequest {
-                root: self.fixture.root.clone(),
-                name: name.to_owned(),
-                url: "https://example.invalid/origin.git".to_owned(),
-                operation_id: OperationId::new(),
-            })
-            .unwrap();
-    }
 }
 
 fn committed() -> RequestResult {
@@ -1052,20 +938,6 @@ fn removing_a_registration_leaves_request_and_confirmation_rows() {
     assert_eq!(world.count("SELECT count(*) FROM request_operations"), 2);
 }
 
-/// A world whose index cannot be read.
-fn degraded_world() -> World {
-    let fixture = support::born_repository();
-    let scope = ScopeKey::for_repository(&fixture.root).unwrap();
-    let (data, service) = items::degraded_service(support::enabled_repository(&fixture));
-    World {
-        fixture,
-        data,
-        service,
-        clock: TestClock::at(T0),
-        scope,
-    }
-}
-
 #[test]
 fn record_access_reports_an_unavailable_database() {
     let world = degraded_world();
@@ -1359,24 +1231,6 @@ fn owing(kind: FinalKind) -> JournalRow {
         kind,
         owes_work: true,
         checkpointed: true,
-    }
-}
-
-impl World {
-    fn journal_row(&self, family: OperationFamily, id: &str) -> JournalRow {
-        self.service
-            .journal_row(family, &self.scope, operations::operation_id(id))
-            .unwrap()
-    }
-
-    fn set_local(&self, id: &str, state: &str, step: Option<&str>) {
-        self.index()
-            .execute(
-                "UPDATE operation_records SET state = ?2, completed_step = ?3
-                  WHERE operation_ulid = ?1",
-                rusqlite::params![id, state, step],
-            )
-            .unwrap();
     }
 }
 
@@ -1916,18 +1770,6 @@ fn the_journal_lookup_reports_what_it_cannot_read() {
 }
 
 const SHOW: &str = "request show";
-
-impl World {
-    /// A request that began a local and a remote operation.
-    fn insert_two_operation_request(&self, id: &str) {
-        let mut request = self.request(id);
-        request.operations.push(RequestOperation {
-            family: OperationFamily::Remote,
-            operation_id: operations::operation_id(OPERATION_B),
-        });
-        self.service.insert_request(&request).unwrap();
-    }
-}
 
 fn case<'a>(
     name: &'a str,
