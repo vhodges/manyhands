@@ -3,9 +3,9 @@
 //! `remote add` changes the repository's own Git configuration. A remote
 //! is no canonical content and no commit, so no effect shows it: the one
 //! effect a result has is its index hand-off, `data` names the remote,
-//! and the outcome says whether anything changed. The remote's location can hold a
-//! credential. It is fed to the request's digest and given to the domain
-//! operation, and is otherwise only ever written redacted.
+//! and the outcome says whether anything changed. The remote's location
+//! can hold a credential. It is fed to the request's digest and given to
+//! the domain operation, and is otherwise only ever written redacted.
 //!
 //! `remote select` writes the publication remote into the Manyhands
 //! configuration file and commits it on primary. That is an authoring
