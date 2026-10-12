@@ -65,6 +65,7 @@ use bind::{
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repo::RepoBinding,
     repo_remove::RepoRemoveBinding,
+    sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
@@ -78,22 +79,23 @@ pub use bind::{
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_remove::RepoRemoveInput,
+    sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    DocumentMutationDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    CancelDto, DocumentMutationDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
     KeyMutationDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
     PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepositoryPreviewDto,
     RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    TicketMutationDto,
+    SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(crate) use observe::absent_token;
-pub use progress::{CancellationToken, NoProgress, ProgressSink};
+pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
@@ -212,6 +214,20 @@ impl RepositoryService {
     ) -> Result<Option<String>, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             recovery::completed_step(connection, scope.as_str(), operation_id)
+        })
+    }
+}
+
+impl RepositoryService {
+    /// What a synchronization recorded of its push; see
+    /// `remote::state::lookup_push`.
+    pub(crate) fn stored_push(
+        &self,
+        scope: &ScopeKey,
+        operation_id: OperationId,
+    ) -> Result<Option<remote::state::StoredPush>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            remote::state::lookup_push(connection, scope.as_str(), operation_id)
         })
     }
 }
@@ -353,6 +369,8 @@ pub enum Mutation {
     RepoRemove(RepoRemoveInput),
     KeyDelete(KeyDeleteInput),
     OperationAbandon(OperationAbandonInput),
+    ItemSync(ItemSyncInput),
+    RepoSync(RepoSyncInput),
 }
 
 impl Mutation {
@@ -384,6 +402,8 @@ impl Mutation {
             Self::RepoRemove(_) => Command::RepoRemove,
             Self::KeyDelete(_) => Command::KeyDelete,
             Self::OperationAbandon(_) => Command::OperationAbandon,
+            Self::ItemSync(_) => Command::ItemSync,
+            Self::RepoSync(_) => Command::RepoSync,
         }
     }
 
@@ -414,7 +434,9 @@ impl Mutation {
             | Self::KeyImport(_)
             | Self::KeySelect(_)
             | Self::KeyClear(_)
-            | Self::KeyRemove(_) => None,
+            | Self::KeyRemove(_)
+            | Self::ItemSync(_)
+            | Self::RepoSync(_) => None,
         }
     }
 
@@ -441,6 +463,8 @@ impl Mutation {
             Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
             Self::KeyDelete(input) => Box::new(KeyDeleteBinding::from(input)),
             Self::OperationAbandon(input) => Box::new(OperationAbandonBinding::from(input)),
+            Self::ItemSync(input) => Box::new(SyncBinding::from(input)),
+            Self::RepoSync(input) => Box::new(SyncBinding::from(input)),
         }
     }
 }

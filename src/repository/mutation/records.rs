@@ -849,6 +849,50 @@ impl RepositoryService {
         self.write_records(|transaction| delete_request(transaction, request_id, attempt))
     }
 
+    /// Sets the record's cancellation flag, if the record is still
+    /// `accepted`. Returns whether it was. The flag asks and settles
+    /// nothing: the request's own call reads it at a safe point.
+    pub(super) fn request_cancellation(&self, request_id: RequestId) -> Result<bool, ReadError> {
+        self.write_records(|transaction| {
+            let asked = transaction.execute(
+                "UPDATE request_records SET cancel_requested = 1
+                  WHERE request_ulid = ?1 AND state = 'accepted'",
+                [request_id.to_string()],
+            )?;
+            Ok(asked == 1)
+        })
+    }
+
+    /// Whether the record's cancellation flag is set, and clears it: the
+    /// caller is the request's own call, at a safe point, and passes the
+    /// cancellation on to its operation. Nothing is written for a flag
+    /// that is not set, which is every safe point of a request nobody
+    /// asked to stop.
+    pub(super) fn take_cancellation(&self, request_id: RequestId) -> Result<bool, ReadError> {
+        let id = request_id.to_string();
+        let asked = self.read_session(RepositoryOperation::Read, |connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT cancel_requested FROM request_records WHERE request_ulid = ?1",
+                    [&id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(false))
+        })?;
+        if !asked {
+            return Ok(false);
+        }
+        self.write_records(|transaction| {
+            let taken = transaction.execute(
+                "UPDATE request_records SET cancel_requested = 0
+                  WHERE request_ulid = ?1 AND cancel_requested = 1",
+                [&id],
+            )?;
+            Ok(taken == 1)
+        })
+    }
+
     /// Records a preview. Returns `false`, with nothing written, when a
     /// record already holds the confirmation ID.
     #[doc(hidden)]

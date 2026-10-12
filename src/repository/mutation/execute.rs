@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::results::{Envelope, ResultCode};
+use crate::results::{Effects, Envelope, ResultCode};
 
 use super::{
     super::{
@@ -23,7 +23,7 @@ use super::{
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
-    progress::{CallSession, Session},
+    progress::{CallSession, ProgressStage, Session, Subject},
     records::{self, ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
@@ -46,14 +46,13 @@ impl RepositoryService {
     pub fn execute<P: SessionCredentialProvider>(
         &self,
         call: MutationCall,
-        // No bound command needs a credential; the commands that do
-        // reach theirs through the call context, as every binding
-        // reaches the sink and the token.
-        _credentials: &mut SessionCredentials<P>,
+        credentials: &mut SessionCredentials<P>,
         progress: &mut dyn ProgressSink,
         cancel: &CancellationToken,
     ) -> Envelope<MutationDataDto> {
-        let session = CallSession::new(progress, cancel);
+        // Everything the call was given reaches a binding through its
+        // session, by way of the call context.
+        let session = CallSession::new(credentials, progress, cancel);
         let envelope = self.execute_call(call, &session);
         self.offering_abandon(envelope)
     }
@@ -349,7 +348,13 @@ impl RepositoryService {
             }
             Err(error) => return Some(reply.read_failure(&error)),
         }
-        Some(self.called(&reply, &accepted, || reply.binding.run(&call, &accepted)))
+        session.report(
+            &Subject::of(reply.binding, &accepted)
+                .event(ProgressStage::Accepted, Effects::not_requested()),
+        );
+        Some(self.called(&reply, &accepted, session, || {
+            reply.binding.run(&call, &accepted)
+        }))
     }
 
     /// What this call gives a binding to work with: the service, the
@@ -373,10 +378,15 @@ impl RepositoryService {
     /// The two fault points stand in for a process that died: at either,
     /// the call ends with its record exactly as it was, and what it
     /// returns is not a result of the request.
+    ///
+    /// The stage the command reports is sent last before the call, so
+    /// that a sink is told of what is about to be done and of nothing
+    /// that is not.
     pub(super) fn called(
         &self,
         reply: &Reply<'_>,
         accepted: &Accepted,
+        session: &dyn Session,
         call: impl FnOnce() -> Ran,
     ) -> Envelope<MutationDataDto> {
         let died = |point| {
@@ -389,6 +399,10 @@ impl RepositoryService {
         // The cache guard is not held here: the record functions release
         // it before they return, and the domain call takes it itself.
         self.run_request_hook();
+        session.report(
+            &Subject::of(reply.binding, accepted)
+                .event(reply.binding.command().stage(), Effects::not_requested()),
+        );
         let ran = call();
         if let Some(envelope) = died(FailurePoint::BeforeRequestSettlement) {
             return envelope;

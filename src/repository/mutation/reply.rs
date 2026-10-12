@@ -121,6 +121,16 @@ impl Reply<'_> {
         } else {
             recovery
         };
+        // The host a result is about is named by its data, and the
+        // action that approves it takes the host.
+        let recovery = outcome::with_host_action(
+            recovery,
+            code,
+            scope.repository.as_deref(),
+            data.as_ref()
+                .and_then(MutationDataDto::authority)
+                .as_deref(),
+        );
         let mut envelope = Envelope::classified_mutation(
             self.binding.command().name(),
             scope,

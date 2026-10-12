@@ -2292,6 +2292,76 @@ pub(in super::super) fn lookup_operation(
     })
 }
 
+/// The columns `lookup_push` reads: the checkpoint, the commit the push
+/// was of, and the kind and the commit of the outcome.
+type PushColumns = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// What a synchronization's row holds of its push.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StoredPush {
+    /// The commit the operation set out to push, or published.
+    pub(crate) commit: Oid,
+    /// Whether the row alone says the remote accepted it.
+    pub(crate) accepted: bool,
+}
+
+/// What the synchronization `operation_id` of the registration at
+/// `root_path` recorded of its push. `None` for no row, and for a row
+/// that had not got as far as a push.
+///
+/// This is the stored checkpoint, which `lookup_operation` does not
+/// carry. The row alone says a push was accepted when the transport
+/// call that made it returned, `push_returned`, or when the operation
+/// ended as `published`. It does not say so at `push_prepared`, which
+/// is the intent recorded before the call: a call that failed there may
+/// or may not have been taken by the remote, and only a call under the
+/// operation's ID that asks the remote can tell. Nor at `push_verified`
+/// without an outcome, which is also what a remote that was already
+/// current is recorded as; the call that saw its own push return knows
+/// which it was. An operation that ended as already current pushed
+/// nothing.
+///
+/// The publication attempts a merging synchronization appends are not
+/// read: the boundary's synchronizations never merge and have none.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_push(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<StoredPush>, ReadError> {
+    let row: Option<PushColumns> = connection
+        .query_row(
+            "SELECT operation.sync_checkpoint, operation.push_oid,
+                    operation.authoritative_kind, operation.authoritative_oid
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((checkpoint, push, authority, authoritative)) = row else {
+        return Ok(None);
+    };
+    let (commit, accepted) = match authority.as_deref() {
+        Some("published") => (authoritative, true),
+        Some(_) => (None, false),
+        None => (push, checkpoint.as_deref() == Some("push_returned")),
+    };
+    commit
+        .map(|oid| {
+            Oid::from_str(&oid)
+                .map(|commit| StoredPush { commit, accepted })
+                .map_err(|_| ReadError::new(ResultCode::InternalError))
+        })
+        .transpose()
+}
+
 /// The remote operations the status reads look at: the one with this ID,
 /// or every one that is not known to be finished. Those are the rows in a
 /// phase that holds the reservation, the synchronizations that stopped

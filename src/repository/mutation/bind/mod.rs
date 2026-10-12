@@ -35,6 +35,7 @@ pub(crate) mod remote;
 pub(crate) mod repo;
 pub(crate) mod repo_remove;
 pub(crate) mod save;
+pub(crate) mod sync;
 pub(crate) mod ticket;
 
 /// The scope of the results of a request that writes the item `id`, of
@@ -98,15 +99,11 @@ pub(crate) fn resolve_root(
 ///
 /// It is the one way anything of the call reaches a binding: what a
 /// command needs of its call is a field here, and no binding is given a
-/// parameter of its own. The session's credentials are the call's as
-/// well, and are added here with the first command that reads them.
+/// parameter of its own.
 pub(crate) struct CallContext<'a> {
     pub(crate) service: &'a RepositoryService,
-    /// The sink the call's progress goes to and the token that stops
-    /// it.
-    // Read by the commands that report stages or can be stopped once
-    // they are accepted, which are not bound yet.
-    #[expect(dead_code)]
+    /// The sink the call's progress goes to, the token that stops it and
+    /// the credentials it authenticates with.
     pub(crate) session: &'a dyn Session,
     /// The consent the request runs with: the confirmation its first
     /// call presents, once the boundary has found it to be this
@@ -761,6 +758,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),
+        Some(Command::ItemSync | Command::RepoSync) => {
+            Recorded::of(sync::recorded_effects(service, &accepted))
+        }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

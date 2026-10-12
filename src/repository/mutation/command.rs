@@ -5,6 +5,8 @@
 //! compile until each of those places has decided about it. A record
 //! stores the command's name; a stored name is read back with `parse`.
 
+use super::progress::ProgressStage;
+
 macro_rules! commands {
     ($($(#[$meta:meta])* $variant:ident => $name:literal),+ $(,)?) => {
         /// A command the boundary binds.
@@ -51,6 +53,8 @@ commands! {
     RepoRemove => "repo remove",
     KeyDelete => "key delete",
     OperationAbandon => "operation abandon",
+    ItemSync => "item sync",
+    RepoSync => "repo sync",
 }
 
 impl Command {
@@ -82,7 +86,13 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
-            | Self::KeyDelete => true,
+            | Self::KeyDelete
+            // One operation, in the remote journal. Its index hand-off
+            // is a row of the local journal under the same ID, which
+            // the remote row answers for: it owes work until the
+            // hand-off is done.
+            | Self::ItemSync
+            | Self::RepoSync => true,
             Self::KeyImport | Self::KeySelect | Self::KeyClear | Self::KeyRemove => false,
             // The operation an abandon names is another request's, and
             // is its target. The abandon itself is one transaction, with
@@ -117,7 +127,9 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
-            | Self::OperationAbandon => false,
+            | Self::OperationAbandon
+            | Self::ItemSync
+            | Self::RepoSync => false,
         }
     }
 
@@ -146,7 +158,71 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
+            | Self::OperationAbandon
+            | Self::ItemSync
+            | Self::RepoSync => false,
+        }
+    }
+
+    /// Whether the command's operation has safe points: places it can
+    /// be stopped at once it is accepted, and a reservation it holds
+    /// from its first one on. Only a synchronization has. Such a
+    /// command honors a cancellation after acceptance and reports a
+    /// stage at each safe point, and a request of it that stopped with
+    /// its reservation held is continued by the same request, whatever
+    /// stopped it.
+    pub(crate) const fn stops_at_safe_points(self) -> bool {
+        match self {
+            Self::ItemSync | Self::RepoSync => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete
             | Self::OperationAbandon => false,
+        }
+    }
+
+    /// The stage a request of the command reports before its domain
+    /// call: what that call is about to do.
+    pub(crate) const fn stage(self) -> ProgressStage {
+        match self {
+            Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
+            Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete
+            | Self::OperationAbandon => ProgressStage::Writing,
         }
     }
 
@@ -177,7 +253,9 @@ impl Command {
             | Self::KeyImport
             | Self::KeySelect
             | Self::KeyClear
-            | Self::KeyRemove => false,
+            | Self::KeyRemove
+            | Self::ItemSync
+            | Self::RepoSync => false,
         }
     }
 }

@@ -85,8 +85,6 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
 ///
 /// `host_mismatch` is not here: it is what the binding of a host approval
 /// reports when the host presents another key than the one approved.
-// Used by the synchronization and host bindings, which are not bound yet.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCode {
     match kind {
         // The remote's location is not one the transport can use.
@@ -118,8 +116,13 @@ pub(crate) fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCo
             presented: _,
         } => ResultCode::HostReplacementRequired,
         SshTransportErrorKind::RegistryUnavailable => ResultCode::IndexUnavailable,
-        SshTransportErrorKind::TransportUnavailable
-        | SshTransportErrorKind::HostVerificationUnavailable => ResultCode::TransportUnavailable,
+        // The host gave no key that could be identified, so there is
+        // none to approve, and sending the request again changes
+        // nothing: not a transient failure, and not one a host approval
+        // answers. Something about the host or the way to it has to be
+        // looked at first.
+        SshTransportErrorKind::HostVerificationUnavailable => ResultCode::RecoveryRequired,
+        SshTransportErrorKind::TransportUnavailable => ResultCode::TransportUnavailable,
         SshTransportErrorKind::RemoteUnavailable => ResultCode::RemoteUnavailable,
         SshTransportErrorKind::PushRejected => ResultCode::PushRejected,
         // The library's own fault, or the server's, with nothing a caller
@@ -170,8 +173,6 @@ pub(crate) fn key_material_error_code(kind: KeyMaterialErrorKind) -> ResultCode 
 ///
 /// `Interrupted` is `recovery_required` here; the binding reports
 /// `cancelled` when the operation's row says it was cancelled.
-// Used by the synchronization bindings, which are not bound yet.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> ResultCode {
     match error {
         SynchronizationError::Repository(error) => repository_error_code(error.kind),
@@ -330,26 +331,30 @@ pub(crate) mod unbound {
             }
         }
     }
+}
 
-    pub(crate) fn synchronization_result_code(result: &SynchronizationResult) -> ResultCode {
-        match result {
-            SynchronizationResult::Complete(outcome) => synchronization_outcome_code(outcome),
-            SynchronizationResult::IndexPending(_) => ResultCode::DiscoveryPending,
-        }
+/// The code of what a synchronization returns without an error. One
+/// whose index hand-off is owed is `discovery_pending`, whatever it
+/// came to before that.
+pub(crate) fn synchronization_result_code(result: &SynchronizationResult) -> ResultCode {
+    match result {
+        SynchronizationResult::Complete(outcome) => synchronization_outcome_code(outcome),
+        SynchronizationResult::IndexPending(_) => ResultCode::DiscoveryPending,
     }
+}
 
-    pub(crate) fn synchronization_outcome_code(outcome: &SynchronizationOutcome) -> ResultCode {
-        match outcome {
-            SynchronizationOutcome::Published { target: _, oid: _ } => ResultCode::Ok,
-            SynchronizationOutcome::AlreadyCurrent { target: _, oid: _ } => {
-                ResultCode::AlreadyApplied
-            }
-            SynchronizationOutcome::PublishPending {
-                target: _,
-                local_oid: _,
-                reason: PublishPendingReason::NoPublicationRemote,
-            } => ResultCode::PublicationRemoteRequired,
-        }
+/// The code of what a synchronization came to. A remote that already
+/// held the commit is a no-op; a repository with no publication remote
+/// has nowhere to publish to.
+pub(crate) fn synchronization_outcome_code(outcome: &SynchronizationOutcome) -> ResultCode {
+    match outcome {
+        SynchronizationOutcome::Published { target: _, oid: _ } => ResultCode::Ok,
+        SynchronizationOutcome::AlreadyCurrent { target: _, oid: _ } => ResultCode::AlreadyApplied,
+        SynchronizationOutcome::PublishPending {
+            target: _,
+            local_oid: _,
+            reason: PublishPendingReason::NoPublicationRemote,
+        } => ResultCode::PublicationRemoteRequired,
     }
 }
 
@@ -533,6 +538,13 @@ const REQUEST_ARGUMENT: &str = "request_id";
 /// an action of its own keeps that one, and `external_change` is never
 /// offered the same request: for a confirmed command it says instead
 /// whether a new preview can be used.
+///
+/// A synchronization that stopped with its record left accepted holds
+/// the repository's reservation, whatever stopped it, and the same
+/// request is what takes the reservation up again: once the cause is
+/// dealt with it goes on, and after `request cancel` it ends cancelled
+/// and lets the reservation go. So such a result always offers the same
+/// request, first, with whatever else its code offers.
 pub(crate) fn recovery(
     code: ResultCode,
     command: Command,
@@ -555,7 +567,7 @@ pub(crate) fn recovery(
             .collect()
     };
     let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
-    match code {
+    let mut actions = match code {
         // The authoritative work is recorded and the hand-off is owed,
         // which needs no input from the caller.
         ResultCode::DiscoveryPending => operation_id
@@ -632,8 +644,13 @@ pub(crate) fn recovery(
             (true, true, None) | (false, _, _) => Vec::new(),
         },
         // Nothing was accepted, or what was accepted is still there:
-        // either way the same request is the one to send.
-        ResultCode::Busy => retry_request(),
+        // either way the same request is the one to send. So it is for
+        // a failure that passes by itself: a poll that is giving way, a
+        // remote or a network that could not be reached.
+        ResultCode::Busy
+        | ResultCode::PollYielding
+        | ResultCode::RemoteUnavailable
+        | ResultCode::TransportUnavailable => retry_request(),
         // The commit exists and the registry write failed: the same
         // request completes the registration.
         ResultCode::RegistrationPending => retry_request(),
@@ -684,6 +701,25 @@ pub(crate) fn recovery(
         // The publication remote is not removed while it is selected:
         // the selection is cleared first, which is the caller's to do.
         | ResultCode::PublicationRemoteInUse
+        // A synchronization with nowhere to publish to: a publication
+        // remote is selected first, which is the caller's to do.
+        | ResultCode::PublicationRemoteRequired
+        // What stops a synchronization once it holds the reservation:
+        // history to merge, a branch deleted or a push refused at the
+        // remote, a key that is missing, refused or locked, a host that
+        // is not trusted. None is answered by an action of the code's
+        // own here. The same request is offered, by the rule for a
+        // synchronization below, and `with_host_action` adds the
+        // approval of a host the result names.
+        | ResultCode::MergeRequired
+        | ResultCode::RemoteBranchDeleted
+        | ResultCode::PushRejected
+        | ResultCode::NoSelectedKey
+        | ResultCode::KeyRejected
+        | ResultCode::UnlockRequired
+        | ResultCode::UnlockFailed
+        | ResultCode::HostApprovalRequired
+        | ResultCode::HostReplacementRequired
         // Not decided: the codes only a command that is not bound yet
         // returns. They share the arm above so that the match is complete,
         // and for no other reason: the design's recovery table gives
@@ -698,27 +734,70 @@ pub(crate) fn recovery(
         | ResultCode::NotRepairable
         | ResultCode::OriginalRequestRequired
         | ResultCode::IdentityAmbiguous
-        | ResultCode::PublicationRemoteRequired
-        | ResultCode::MergeRequired
-        | ResultCode::RemoteBranchDeleted
-        | ResultCode::PushRejected
-        | ResultCode::NoSelectedKey
-        | ResultCode::KeyRejected
-        | ResultCode::UnlockRequired
-        | ResultCode::UnlockFailed
-        | ResultCode::HostApprovalRequired
-        | ResultCode::HostReplacementRequired
-        | ResultCode::HostMismatch
-        | ResultCode::PollYielding
-        | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable => {
+        | ResultCode::HostMismatch => {
             if retry {
                 retry_request()
             } else {
                 Vec::new()
             }
         }
+    };
+    // The rule for a synchronization whose reservation is held. The
+    // hand-off of one that published needs no input from the caller,
+    // and keeps the action that says so.
+    let resumes = code == ResultCode::DiscoveryPending;
+    let offered = actions
+        .iter()
+        .any(|action| action.action == RecoveryActionKind::RequestRetry);
+    if command.stops_at_safe_points() && retry && !resumes && !offered {
+        actions.splice(0..0, retry_request());
     }
+    actions
+}
+
+/// The argument of a recovery action that names a host.
+const AUTHORITY_ARGUMENT: &str = "authority";
+
+/// Adds the approval of a host to what a result offers, when the result
+/// is that a host is not trusted and its data names the host:
+/// `host.approve` for a host with no pin, `host.replace` for one that
+/// presented another key than its pin. `authority` is the host as the
+/// data gives it, and `root` the repository whose remote names it.
+///
+/// The approval comes first: it is what deals with the cause, and the
+/// same request, which the result also offers when its reservation is
+/// held, is what follows it. Nothing is added to a result of another
+/// code, or to one that cannot give the action both its arguments.
+pub(crate) fn with_host_action(
+    mut recovery: Vec<RecoveryAction>,
+    code: ResultCode,
+    root: Option<&str>,
+    authority: Option<&str>,
+) -> Vec<RecoveryAction> {
+    let action = if code == ResultCode::HostApprovalRequired {
+        RecoveryActionKind::HostApprove
+    } else if code == ResultCode::HostReplacementRequired {
+        RecoveryActionKind::HostReplace
+    } else {
+        return recovery;
+    };
+    let (Some(root), Some(authority)) = (root, authority) else {
+        return recovery;
+    };
+    if recovery.iter().any(|offered| offered.action == action) {
+        return recovery;
+    }
+    recovery.insert(
+        0,
+        RecoveryAction::new(
+            action,
+            [
+                (AUTHORITY_ARGUMENT, authority.into()),
+                (ROOT_ARGUMENT, root.into()),
+            ],
+        ),
+    );
+    recovery
 }
 
 /// Adds `operation.abandon` to what a result of a request that stopped

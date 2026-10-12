@@ -59,6 +59,25 @@ pub struct RequestDto {
     pub result: Option<RequestResultDto>,
 }
 
+/// What `request cancel` reports of the request it asked to stop.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CancelDto {
+    pub request_id: String,
+    /// Where the request stood when it was asked.
+    pub state: RequestState,
+    /// Whether the request was asked to stop: it is accepted, and its
+    /// command has a safe point to stop at. False for a request that is
+    /// finished and for one of a command that cannot be stopped once it
+    /// is accepted, neither of which is changed in any way.
+    pub requested: bool,
+    /// Whether the request has stopped for a cancellation: its result
+    /// is `cancelled`, or its operation has ended cancelled and the
+    /// request's next call returns that. A request that was asked and
+    /// has not reached a safe point since is `requested` and not
+    /// `acknowledged`.
+    pub acknowledged: bool,
+}
+
 contract_enum!(
     /// One thing a confirmed command will do, as its preview lists it.
     ///
@@ -301,6 +320,53 @@ pub enum MutationDataDto {
     Remote(RemoteMutationDto),
     Key(KeyMutationDto),
     Operation(OperationMutationDto),
+    Synchronization(SynchronizationMutationDto),
+}
+
+/// What a synchronization that stopped for its host reports: the host
+/// it reached and the key that host presented, which is what a host
+/// approval is given. A synchronization reports no other data: what it
+/// published is in its effects.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SynchronizationMutationDto {
+    /// The host, in lower case.
+    pub host: String,
+    pub port: u16,
+    /// The algorithm of the key the host presented.
+    pub algorithm: String,
+    /// The fingerprint of the key the host presented: `SHA256:` and
+    /// the digest of the public key.
+    pub presented_fingerprint: String,
+    /// The fingerprint the host is pinned to, when the host presented
+    /// another key than its pin. Null for a host that has no pin.
+    pub expected_fingerprint: Option<String>,
+}
+
+impl SynchronizationMutationDto {
+    /// The host as a recovery action names it: `host:port`, with an
+    /// address that holds a colon in brackets.
+    pub(crate) fn authority(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| stored.get(key)?.as_str().map(str::to_owned);
+        Some(Self {
+            host: text("host")?,
+            port: u16::try_from(stored.get("port")?.as_u64()?).ok()?,
+            algorithm: text("algorithm")?,
+            presented_fingerprint: text("presented_fingerprint")?,
+            expected_fingerprint: match stored.get("expected_fingerprint")? {
+                serde_json::Value::Null => None,
+                value => Some(value.as_str()?.to_owned()),
+            },
+        })
+    }
 }
 
 /// What `operation abandon` reports of the operation it closed: where
@@ -574,6 +640,20 @@ impl TicketMutationDto {
 }
 
 impl MutationDataDto {
+    /// The host the data is about, as a recovery action names it. Only
+    /// the data of a synchronization that stopped for its host names
+    /// one.
+    pub(crate) fn authority(&self) -> Option<String> {
+        match self {
+            Self::Synchronization(data) => Some(data.authority()),
+            Self::Document(_)
+            | Self::Ticket(_)
+            | Self::Remote(_)
+            | Self::Key(_)
+            | Self::Operation(_) => None,
+        }
+    }
+
     /// The data a finished record of `command` stored, in the shape of
     /// that command's family. `None` for data that is not of that shape.
     pub(crate) fn from_stored(command: Command, stored: &serde_json::Value) -> Option<Self> {
@@ -595,6 +675,9 @@ impl MutationDataDto {
             | Command::KeyDelete => KeyMutationDto::from_stored(stored).map(Self::Key),
             Command::OperationAbandon => {
                 OperationMutationDto::from_stored(stored).map(Self::Operation)
+            }
+            Command::ItemSync | Command::RepoSync => {
+                SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
             // These report no data, so a record of one stores none.
             Command::IndexRefresh

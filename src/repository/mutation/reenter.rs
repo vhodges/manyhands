@@ -147,7 +147,7 @@ impl RepositoryService {
         let entered = binding.reenter(&call, &accepted, journal);
         let reply = Reply { binding, identity };
         Some(match entered {
-            Ok(entered) => self.called(&reply, &accepted, || {
+            Ok(entered) => self.called(&reply, &accepted, session, || {
                 binding.rerun(&call, &accepted, &entered)
             }),
             Err(ran) => self.settled(&reply, &accepted, ran),

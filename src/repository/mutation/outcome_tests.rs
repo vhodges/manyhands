@@ -367,8 +367,10 @@ fn ssh_kinds() -> Vec<(SshTransportErrorKind, ResultCode)> {
         ),
         (Kind::HostTrustChanged, Code::ExternalChange),
         (
+            // Not a failure that passes by itself: the same request
+            // would meet it again.
             Kind::HostVerificationUnavailable,
-            Code::TransportUnavailable,
+            Code::RecoveryRequired,
         ),
         (Kind::RegistryUnavailable, Code::IndexUnavailable),
         (Kind::RuntimeUninitialized, Code::InternalError),
@@ -1418,10 +1420,17 @@ fn a_request_with_no_usable_consent_is_offered_a_new_preview() {
 fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection() {
     for command in Command::ALL {
         for retry in [false, true] {
-            let expected: &[&str] = match (command.needs_confirmation(), retry) {
-                (true, false) => &["request.prepare"],
-                (true, true) => &["repo.inspect"],
-                (false, _) => &[],
+            let expected: &[&str] = match (
+                command.needs_confirmation(),
+                retry,
+                command.stops_at_safe_points(),
+            ) {
+                (true, false, _) => &["request.prepare"],
+                (true, true, _) => &["repo.inspect"],
+                // A synchronization that stopped with its reservation
+                // held: the same request is what takes it up again.
+                (false, true, true) => &["request.retry"],
+                (false, _, _) => &[],
             };
             assert_eq!(
                 actions_of(command, ResultCode::ExternalChange, retry),
@@ -1430,6 +1439,149 @@ fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_insp
             );
         }
     }
+}
+
+/// A synchronization whose record was left accepted holds the
+/// repository's reservation, whatever stopped it. The same request is
+/// offered first, with whatever the code offers of its own; a hand-off
+/// that is owed keeps the action that needs no input.
+#[test]
+fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_request() {
+    for command in [Command::ItemSync, Command::RepoSync] {
+        for code in ResultCode::ALL {
+            if code.failure_class().is_none() {
+                continue;
+            }
+            let held = actions_of(command, code, true);
+            if code == ResultCode::DiscoveryPending {
+                assert!(!held.contains(&"request.retry"), "{code:?}");
+                continue;
+            }
+            assert_eq!(held.first(), Some(&"request.retry"), "{code:?}");
+            assert_eq!(
+                held.iter()
+                    .filter(|action| **action == "request.retry")
+                    .count(),
+                1,
+                "{code:?}"
+            );
+            // What the code offers when nothing is held follows it.
+            let free: Vec<_> = actions_of(command, code, false)
+                .into_iter()
+                .filter(|action| *action != "request.retry")
+                .collect();
+            assert_eq!(held[1..], free[..], "{code:?}");
+        }
+        // With nothing held, what stops a synchronization offers nothing.
+        for code in [
+            ResultCode::MergeRequired,
+            ResultCode::RemoteBranchDeleted,
+            ResultCode::PushRejected,
+            ResultCode::NoSelectedKey,
+            ResultCode::KeyRejected,
+            ResultCode::UnlockRequired,
+            ResultCode::UnlockFailed,
+            ResultCode::HostApprovalRequired,
+            ResultCode::HostReplacementRequired,
+            ResultCode::PublicationRemoteRequired,
+            ResultCode::ExternalChange,
+        ] {
+            assert!(actions_of(command, code, false).is_empty(), "{code:?}");
+        }
+    }
+    // The rule is a synchronization's: an item write that stopped on an
+    // external change is still offered nothing.
+    assert!(actions_of(Command::TicketSave, ResultCode::ExternalChange, true).is_empty());
+}
+
+/// A poll that is giving way and a remote or a network that could not be
+/// reached pass by themselves: the same request is the one to send,
+/// whether or not anything of it was recorded.
+#[test]
+fn a_failure_that_passes_by_itself_is_offered_the_same_request() {
+    for code in [
+        ResultCode::PollYielding,
+        ResultCode::RemoteUnavailable,
+        ResultCode::TransportUnavailable,
+        ResultCode::Busy,
+    ] {
+        for retry in [false, true] {
+            assert_eq!(
+                actions_of(Command::RepoSync, code, retry),
+                ["request.retry"],
+                "{code:?}"
+            );
+        }
+    }
+}
+
+/// A host that is not trusted is approved first, by the action for
+/// whether it has a pin, and the same request follows. The action needs
+/// the host and the repository: without either nothing is added, and no
+/// other code is given one.
+#[test]
+fn a_host_that_is_not_trusted_is_offered_its_approval_before_the_same_request() {
+    let offered = |code, root, authority| {
+        with_host_action(
+            recovery(
+                code,
+                Command::RepoSync,
+                root,
+                Some(RequestId::new()),
+                None,
+                true,
+            ),
+            code,
+            root,
+            authority,
+        )
+    };
+    let names = |actions: &[RecoveryAction]| -> Vec<&'static str> {
+        actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect()
+    };
+    for (code, action) in [
+        (ResultCode::HostApprovalRequired, "host.approve"),
+        (ResultCode::HostReplacementRequired, "host.replace"),
+    ] {
+        let actions = offered(code, Some("/repository"), Some("example.test:22"));
+        assert_eq!(names(&actions), [action, "request.retry"]);
+        assert_eq!(
+            actions[0]
+                .arguments
+                .get("authority")
+                .and_then(|value| value.as_str()),
+            Some("example.test:22")
+        );
+        assert_eq!(
+            actions[0]
+                .arguments
+                .get("root")
+                .and_then(|value| value.as_str()),
+            Some("/repository")
+        );
+        assert_eq!(
+            names(&offered(code, Some("/repository"), None)),
+            ["request.retry"]
+        );
+        assert_eq!(
+            names(&offered(code, None, Some("example.test:22"))),
+            ["request.retry"]
+        );
+        // Offered once, however often it is asked for.
+        let twice = with_host_action(actions, code, Some("/repository"), Some("example.test:22"));
+        assert_eq!(names(&twice), [action, "request.retry"]);
+    }
+    assert_eq!(
+        names(&offered(
+            ResultCode::MergeRequired,
+            Some("/repository"),
+            Some("example.test:22")
+        )),
+        ["request.retry"]
+    );
 }
 
 /// `repo create` has no repository yet to set an identity on.

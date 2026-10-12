@@ -704,6 +704,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }
 }
 
@@ -715,6 +716,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }
 }
 
@@ -830,6 +832,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }
 }
 
@@ -841,6 +844,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }
 }
 
@@ -852,6 +856,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
+        MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
     }
 }
 
