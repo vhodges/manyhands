@@ -6,6 +6,8 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "support/conformance.rs"]
+mod conformance;
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/schema.rs"]
@@ -295,6 +297,10 @@ const CASES: &[ssh_harness::Case] = &[
     (
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
+    ),
+    (
+        "every_command_of_this_target_keeps_the_rules_of_the_boundary",
+        every_command_of_this_target_keeps_the_rules_of_the_boundary,
     ),
 ];
 
@@ -4195,4 +4201,115 @@ fn a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_no
     assert_eq!(accepted(&w.server), pushes);
     assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
     assert_final(&w, REQUEST_1, &own)
+}
+
+// The conformance table, for the two commands that need a server; see
+// `conformance`.
+
+/// One call of `execute` that presents `confirmation`, scanned as
+/// `call` scans.
+fn presenting(
+    w: &World,
+    id: &str,
+    confirmation: Option<&str>,
+    mutation: Mutation,
+) -> Envelope<MutationDataDto> {
+    let envelope = w.service.execute(
+        MutationCall {
+            request_id: request(id),
+            confirmation: confirmation.map(|id| ConfirmationId::parse(id).unwrap()),
+            mutation,
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    let rendered = serde_json::to_vec(&envelope).expect("an envelope serializes");
+    ssh_privacy::clean(&rendered, &w.probes).expect("redacted envelope");
+    w.privacy().expect("redacted durable state");
+    envelope
+}
+
+/// A world whose host is trusted and whose primary branch and item
+/// branch each hold a commit the server does not, with `rule` driven
+/// through the requests `request` gives of it.
+fn conforming(
+    request: fn(&World, conformance::Ask) -> Mutation,
+    rule: &mut dyn FnMut(&conformance::Subject<'_>),
+) -> Result<(), String> {
+    use conformance::{Ask, NO_SUCH_CONFIRMATION, Recorded, Subject};
+    let built = || -> Result<World, FixtureError> {
+        let mut w = World::new()?;
+        approve(&w)?;
+        w.context()?;
+        advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+        Ok(w)
+    };
+    let w = built().map_err(|_| "a world with a server".to_owned())?;
+    rule(&Subject {
+        call: &|id, ask| {
+            let confirmation = match ask {
+                Ask::Same | Ask::Changed | Ask::Refused => None,
+                Ask::Unconsented => Some(NO_SUCH_CONFIRMATION),
+            };
+            let envelope = presenting(&w, id, confirmation, request(&w, ask));
+            serde_json::to_vec(&envelope).expect("an envelope serializes")
+        },
+        record: &|id| {
+            record(&w, id).map(|record| Recorded {
+                finished: record.state == RequestState::Finished,
+                image: format!("{record:?}"),
+            })
+        },
+        request_rows: &|| {
+            w.db()
+                .expect("the database")
+                .query_row("SELECT COUNT(*) FROM request_records", [], |row| row.get(0))
+                .expect("the request records")
+        },
+    });
+    Ok(())
+}
+
+const CONFORMANCE: [conformance::Row; 2] = [
+    conformance::Row::new("item sync", false, "item_not_found", |rule| {
+        conforming(
+            |w, ask| match ask {
+                conformance::Ask::Same | conformance::Ask::Unconsented => item_sync(w),
+                // Another item, which no fixture holds: a changed input
+                // under a finished request's ID, and a request that is
+                // refused under a new one.
+                conformance::Ask::Changed | conformance::Ask::Refused => {
+                    Mutation::ItemSync(ItemSyncInput {
+                        root: w.root.clone(),
+                        kind: AuthoringKind::Ticket,
+                        id: OTHER_ITEM.parse().unwrap(),
+                    })
+                }
+            },
+            rule,
+        )
+    }),
+    conformance::Row::new("repo sync", false, "not_repository", |rule| {
+        conforming(
+            |w, ask| match ask {
+                conformance::Ask::Same | conformance::Ask::Unconsented => repo_sync(w),
+                // The command has no input but its repository: another
+                // command.
+                conformance::Ask::Changed => item_sync(w),
+                // A directory that is no repository.
+                conformance::Ask::Refused => Mutation::RepoSync(RepoSyncInput { root: w.data() }),
+            },
+            rule,
+        )
+    }),
+];
+
+fn every_command_of_this_target_keeps_the_rules_of_the_boundary() -> Result<(), FixtureError> {
+    conformance::run(
+        conformance::Home::Remote,
+        &request_store::bound_commands(),
+        &CONFORMANCE,
+    );
+    Ok(())
 }
