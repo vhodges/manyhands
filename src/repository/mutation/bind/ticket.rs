@@ -22,8 +22,8 @@ use super::{
             ExpectedPathObservation, FailurePoint, ItemDto, ItemDtoKind, ProposedRelationships,
             ReadError, RelationshipWrite, RepositoryError, RepositoryErrorKind,
             RepositoryOperation, RepositoryService, ResolvedRepository, SaveTicketRequest,
-            TicketDraft, TicketWriteOptions, apply_ticket_write_options, owned_file_bytes,
-            recovery::JournalRow,
+            TicketDraft, TicketWriteOptions, apply_ticket_write_options,
+            bridges::identity::local_initials, owned_file_bytes, recovery::JournalRow,
         },
         command::Command,
         context::{ContextNames, context_names},
@@ -37,10 +37,6 @@ use super::{
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Ran, Standing, resolve_root, save,
 };
-
-/// The key of the initials a user set for this repository, in its local
-/// Git configuration.
-const INITIALS_KEY: &str = "manyhands.initials";
 
 /// The input of `ticket create`. The caller supplies the ticket's ID: the
 /// library never makes one on its behalf. It cannot supply a short code.
@@ -509,7 +505,7 @@ fn compose_slug(
         Ok(initials) => Ok(initials),
         Err(canonical::InitialsProblem::Invalid) => Err(stopped(ResultCode::InitialsRequired)),
     };
-    let initials = match (initials, local_initials(&git)) {
+    let initials = match (initials, local_initials(&git).ok().flatten()) {
         (Some(initials), _) => given(initials)?,
         (None, Some(initials)) => given(&initials)?,
         (None, None) => {
@@ -768,17 +764,6 @@ fn committed_configuration(
         .ok()
         .and_then(|source| canonical::parse_repository_config(source).ok())
         .ok_or(ResultCode::InvalidConfiguration)
-}
-
-/// `manyhands.initials` in the repository's own configuration, and at no
-/// other level: a value a user set for another repository, or for every
-/// one, is not this repository's.
-fn local_initials(repository: &git2::Repository) -> Option<String> {
-    repository
-        .config()
-        .and_then(|config| config.open_level(git2::ConfigLevel::Local))
-        .and_then(|config| config.get_string(INITIALS_KEY))
-        .ok()
 }
 
 impl Binding for TicketBinding {

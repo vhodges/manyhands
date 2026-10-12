@@ -161,12 +161,32 @@ pub struct RepositoryInspectionDto {
     pub remotes: Vec<RemoteDto>,
 }
 
+contract_enum!(
+    /// Where the initials a short code is composed with come from:
+    /// `manyhands.initials` in the repository's own Git configuration, or
+    /// the name of the identity a commit would carry. `none` when neither
+    /// gives two or three ASCII letters or digits.
+    InitialsSource {
+        Repository => "repository",
+        Derived => "derived",
+        None => "none",
+    }
+);
+
 /// `name` and `email` are both set, or `source` is `none` and neither is.
+///
+/// `initials` is what a short code assigned now, with no initials given
+/// for the call, would be composed with, in lower case. It is set, or
+/// `initials_source` is `none`: a `manyhands.initials` that is not two or
+/// three ASCII letters or digits is not used and nothing is derived in
+/// its place, as when a short code is composed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IdentityDto {
     pub name: Option<String>,
     pub email: Option<String>,
     pub source: IdentitySource,
+    pub initials: Option<String>,
+    pub initials_source: InitialsSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

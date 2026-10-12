@@ -9,8 +9,8 @@ use manyhands::{
     repository::{
         Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
-        IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
-        KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
+        IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
+        ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
         KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
         OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
         ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
@@ -761,6 +761,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "identity.schema.json",
             "source",
             IdentitySource::ALL.map(IdentitySource::as_str).to_vec(),
+        ),
+        (
+            "identity.schema.json",
+            "initials_source",
+            InitialsSource::ALL.map(InitialsSource::as_str).to_vec(),
         ),
         (
             "item.schema.json",
