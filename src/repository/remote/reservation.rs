@@ -665,6 +665,35 @@ impl RepositoryService {
         })
     }
 
+    /// Takes back a cancellation asked of a synchronization that has
+    /// recorded its intent to push and not what became of the push, and
+    /// says whether there was one. A restart acknowledges a requested
+    /// cancellation before it does anything else, and for such an
+    /// operation that would end it without the remote having been asked
+    /// whether it took the push. The caller asks for the cancellation
+    /// again once the restart has asked the remote.
+    pub(crate) fn defer_synchronization_cancellation(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let Some(record) = state::read_operation(tx, id, operation_id)? else {
+                return Ok(false);
+            };
+            if !(is_sync(&record.target)
+                && active(record.phase)
+                && record.cancel_requested
+                && record.authority.is_none()
+                && record.sync_evidence.push_oid.is_some())
+            {
+                return Ok(false);
+            }
+            tx.execute("UPDATE remote_operation_records SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
+            Ok(true)
+        })
+    }
+
     /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
     /// these non-transfer boundaries. Returns only after the durable transition.
     pub fn remote_safe_point(
@@ -1671,6 +1700,24 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
+            let record_id = record.id;
+            let write = || {
+                tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?2,expected_oid=?3,local_oid=?4,tracking_oid=?5,primary_tracking_oid=?6,push_oid=?7,push_advertised_oid=?8,updated_at=max(updated_at,?9) WHERE id=?1",
+                    params![record_id,checkpoint.name(),evidence.expected_oid.map(|v|v.to_string()),evidence.local_oid.map(|v|v.to_string()),evidence.tracking_oid.map(|v|v.to_string()),evidence.primary_tracking_oid.map(|v|v.to_string()),evidence.push_oid.map(|v|v.to_string()),evidence.push_advertised_oid.map(|v|v.to_string()),now()]).map_err(|_| state::recovery_required())
+            };
+            // That the push returned is an effect that has happened, and
+            // is recorded before a requested cancellation or yield is
+            // acknowledged: the operation may then end, and its row says
+            // the remote took its push. Every other checkpoint is an
+            // intent or a local step, and a request is honored before it
+            // is written.
+            let record = if checkpoint == C::PushReturned {
+                write()?;
+                state::read_operation(tx, id, owner.operation_id)?
+                    .ok_or_else(state::recovery_required)?
+            } else {
+                record
+            };
             if let Some(point) = record.completed_step {
                 let decision = acknowledge(tx, &record, point)?;
                 if decision != RemoteSafePointOutcome::Continue {
@@ -1679,8 +1726,9 @@ impl RepositoryService {
             } else if record.cancel_requested || record.yield_requested {
                 return acknowledge(tx, &record, RemoteOperationSafePoint::BeforeFetch);
             }
-            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?2,expected_oid=?3,local_oid=?4,tracking_oid=?5,primary_tracking_oid=?6,push_oid=?7,push_advertised_oid=?8,updated_at=max(updated_at,?9) WHERE id=?1",
-                params![record.id,checkpoint.name(),evidence.expected_oid.map(|v|v.to_string()),evidence.local_oid.map(|v|v.to_string()),evidence.tracking_oid.map(|v|v.to_string()),evidence.primary_tracking_oid.map(|v|v.to_string()),evidence.push_oid.map(|v|v.to_string()),evidence.push_advertised_oid.map(|v|v.to_string()),now()]).map_err(|_| state::recovery_required())?;
+            if checkpoint != C::PushReturned {
+                write()?;
+            }
             Ok(RemoteSafePointOutcome::Continue)
         })
     }

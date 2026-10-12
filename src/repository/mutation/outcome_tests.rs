@@ -1457,6 +1457,18 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
                 assert!(!held.contains(&"request.retry"), "{code:?}");
                 continue;
             }
+            // The same request cannot go on from these two: its operation
+            // recorded the branch as it was, so a branch that was merged
+            // or rebased is refused, and a branch deleted at the remote
+            // stays deleted. The way out is `request cancel`, the same
+            // request once more to end it, and a new request.
+            if matches!(
+                code,
+                ResultCode::MergeRequired | ResultCode::RemoteBranchDeleted
+            ) {
+                assert!(held.is_empty(), "{code:?}");
+                continue;
+            }
             assert_eq!(held.first(), Some(&"request.retry"), "{code:?}");
             assert_eq!(
                 held.iter()
@@ -1576,7 +1588,7 @@ fn a_host_that_is_not_trusted_is_offered_its_approval_before_the_same_request() 
     }
     assert_eq!(
         names(&offered(
-            ResultCode::MergeRequired,
+            ResultCode::PushRejected,
             Some("/repository"),
             Some("example.test:22")
         )),

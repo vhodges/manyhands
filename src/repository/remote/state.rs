@@ -2292,6 +2292,37 @@ pub(in super::super) fn lookup_operation(
     })
 }
 
+/// Whether the remote operation `operation_id` of the registration at
+/// `root_path` was begun under another configuration generation than
+/// the registration is at now. A change of the remote's endpoints or of
+/// the selected key raises the generation and interrupts every operation
+/// that held the reservation; nothing takes such an operation up again,
+/// since a restart refuses a row of another generation. `false` for no
+/// row.
+///
+/// The generation is what the domain itself tests. An operation that
+/// ran to its end keeps the generation it ran under and is not fenced
+/// by this: its caller asks only of a row that has not ended.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_fenced(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<bool, ReadError> {
+    Ok(connection
+        .query_row(
+            "SELECT operation.configuration_generation != polling.configuration_generation
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+               JOIN remote_polling_state polling ON polling.repository_id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false))
+}
+
 /// The columns `lookup_push` reads: the checkpoint, the commit the push
 /// was of, and the kind and the commit of the outcome.
 type PushColumns = (
@@ -2315,16 +2346,21 @@ pub(crate) struct StoredPush {
 /// that had not got as far as a push.
 ///
 /// This is the stored checkpoint, which `lookup_operation` does not
-/// carry. The row alone says a push was accepted when the transport
-/// call that made it returned, `push_returned`, or when the operation
+/// carry. The row says the remote holds the commit when the transport
+/// call that pushed it returned, `push_returned`, when the remote was
+/// then asked and advertised it, `push_verified`, or when the operation
 /// ended as `published`. It does not say so at `push_prepared`, which
 /// is the intent recorded before the call: a call that failed there may
-/// or may not have been taken by the remote, and only a call under the
-/// operation's ID that asks the remote can tell. Nor at `push_verified`
-/// without an outcome, which is also what a remote that was already
-/// current is recorded as; the call that saw its own push return knows
-/// which it was. An operation that ended as already current pushed
-/// nothing.
+/// or may not have been taken by the remote, and only asking the remote
+/// can tell. An operation that ended as already current pushed nothing.
+///
+/// `push_verified` without an outcome is also what a remote that was
+/// already current is recorded as, so there the row says the remote
+/// holds the commit and not that this operation put it there. The call
+/// that verified it knows which, and is told by
+/// `SynchronizationObserver::verified`; a later call that has only the
+/// row reads it as the synchronization itself does on a restart, as
+/// published, so that a push is never understated.
 ///
 /// The publication attempts a merging synchronization appends are not
 /// read: the boundary's synchronizations never merge and have none.
@@ -2351,7 +2387,13 @@ pub(in super::super) fn lookup_push(
     let (commit, accepted) = match authority.as_deref() {
         Some("published") => (authoritative, true),
         Some(_) => (None, false),
-        None => (push, checkpoint.as_deref() == Some("push_returned")),
+        None => (
+            push,
+            matches!(
+                checkpoint.as_deref(),
+                Some("push_returned" | "push_verified")
+            ),
+        ),
     };
     commit
         .map(|oid| {

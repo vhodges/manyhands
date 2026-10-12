@@ -314,6 +314,15 @@ pub enum SafePointRequest {
 /// of the repository from here.
 pub trait SynchronizationObserver {
     fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest;
+
+    /// Told once the remote is known to hold `commit` on the target's
+    /// branch, before the safe point that follows verification:
+    /// `published` says a push of this operation put it there, and not
+    /// that the remote held it already. The operation's row does not
+    /// say which until its outcome is recorded, so an observer that is
+    /// about to stop the synchronization at that safe point learns it
+    /// here.
+    fn verified(&mut self, _commit: git2::Oid, _published: bool) {}
 }
 
 /// The observer of a synchronization nothing observes.
@@ -6510,6 +6519,17 @@ impl RepositoryService {
                         &root, &owner, actual, actual, push, ancestor,
                     )?)?;
                 } else {
+                    // The remote, or the local branch, has moved on from
+                    // the push this operation intended. Going on under
+                    // the same operation opens a publication attempt and
+                    // an integration window, which a caller that never
+                    // merges does not begin: it is refused here, before
+                    // either is recorded.
+                    if settings.refuse_divergence {
+                        return Err(SynchronizationError::MergeRequired {
+                            target: request.target.clone(),
+                        });
+                    }
                     decision(self.settle_synchronization_publication(
                         &root,
                         &owner,
@@ -6849,21 +6869,33 @@ impl RepositoryService {
             {
                 return Err(SynchronizationError::ExternalChange);
             }
-            self.with_synchronization_remote(
+            // That the push returned is recorded the moment it does,
+            // before anything can stop the operation: a cancellation or
+            // a yield that is honored at the boundary after the transport
+            // call then ends an operation whose row says the remote took
+            // its push.
+            let mut returned = None;
+            let pushed = self.with_synchronization_remote(
                 transport_request(SshDirection::Push),
                 session,
                 &owner,
                 &plan,
                 &configuration,
-                |r| r.push_exact(&plan, &request.target),
-            )
-            .map_err(unverified_push_error)?;
-            decision(self.checkpoint_synchronization(
-                &root,
-                &owner,
-                Checkpoint::PushReturned,
-                &evidence,
-            )?)?;
+                |r| {
+                    r.push_exact(&plan, &request.target)?;
+                    returned = Some(self.checkpoint_synchronization(
+                        &root,
+                        &owner,
+                        Checkpoint::PushReturned,
+                        &evidence,
+                    ));
+                    Ok(())
+                },
+            );
+            if let Some(recorded) = returned {
+                decision(recorded?)?;
+            }
+            pushed.map_err(unverified_push_error)?;
             self.synchronization_point(
                 &root,
                 &owner,
@@ -6925,6 +6957,10 @@ impl RepositoryService {
         observer: &mut dyn SynchronizationObserver,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let root = &request.root;
+        observer.verified(
+            authority.oid(),
+            matches!(authority, Authority::Published(_)),
+        );
         self.synchronization_point(
             root,
             owner,

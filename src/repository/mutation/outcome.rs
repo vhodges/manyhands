@@ -742,17 +742,35 @@ pub(crate) fn recovery(
             }
         }
     };
+    if never_finished_by_the_same_request(code, command) {
+        actions.retain(|action| action.action != RecoveryActionKind::RequestRetry);
+    }
     // The rule for a synchronization whose reservation is held. The
     // hand-off of one that published needs no input from the caller,
     // and keeps the action that says so.
     let resumes = code == ResultCode::DiscoveryPending;
+    // Two causes the same request cannot go on from, whatever is done
+    // about them. The operation recorded the branch as it was: once
+    // history is merged or rebased the branch is another, and the
+    // operation refuses it; and a branch deleted at the remote stays
+    // deleted. The same request is not offered for what it cannot do.
+    // The reservation is let go by `request cancel` and one more call
+    // of the request, which no action names, and a new request goes on.
+    let never = never_finished_by_the_same_request(code, command);
     let offered = actions
         .iter()
         .any(|action| action.action == RecoveryActionKind::RequestRetry);
-    if command.stops_at_safe_points() && retry && !resumes && !offered {
+    if command.stops_at_safe_points() && retry && !resumes && !never && !offered {
         actions.splice(0..0, retry_request());
     }
     actions
+}
+
+/// Whether `code`, from a synchronization, is one the same request
+/// never gets past; see the closing rule of `recovery`.
+fn never_finished_by_the_same_request(code: ResultCode, command: Command) -> bool {
+    command.stops_at_safe_points()
+        && (code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted)
 }
 
 /// The argument of a recovery action that names a host.

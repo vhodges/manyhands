@@ -24,19 +24,21 @@ use std::{
 
 use serde::{Serialize, Serializer};
 
-use crate::results::{Effects, Envelope, ResultCode, Scope, contract_enum};
+use crate::results::{Effects, Envelope, Outcome, ResultCode, Scope, contract_enum};
 
 use super::{
     super::{
-        OperationFamily, RepositoryService, SynchronizationError, SynchronizationObserver,
-        SynchronizationResult, SynchronizationSettings, SynchronizeRemoteRequest,
+        OperationFamily, ReadError, RepositoryService, SynchronizationError,
+        SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
+        SynchronizeRemoteRequest,
         keys::{SessionCredentialProvider, SessionCredentials},
         recovery::{FinalKind, JournalRow, PendingOperation},
     },
-    bind::{Accepted, Binding},
+    bind::{Accepted, Binding, sync},
     command::Command,
     dto::{CancelDto, RequestState},
     identity::RequestId,
+    records::{RequestRecord, RequestResult},
 };
 
 /// How a caller asks a running request to stop. A request that is
@@ -286,6 +288,33 @@ impl Session for NoSession {
     }
 }
 
+impl RepositoryService {
+    /// Finishes the record of a request whose operation was fenced,
+    /// with the answer `bind::sync::fenced_answer` gives it. `None` for
+    /// a request that is not fenced, which is left exactly as it is.
+    /// The record is changed only if it is still accepted at the
+    /// attempt it was read at, as every settlement is.
+    fn finish_fenced(&self, record: &RequestRecord) -> Option<Result<(), ReadError>> {
+        let accepted = Accepted::of_record(record, record.attempt)?;
+        let journal = accepted.journal_row(self);
+        let answer = sync::fenced_answer(self, &accepted, journal.as_ref())?;
+        let outcome = Outcome::of_mutation(false, answer.code, &answer.effects, false);
+        Some(
+            self.finish_request(
+                record.request_id,
+                record.attempt,
+                &RequestResult {
+                    outcome,
+                    code: answer.code,
+                    effects: answer.effects,
+                    data: None,
+                },
+            )
+            .map(|_| ()),
+        )
+    }
+}
+
 /// The command `cancel_request` answers.
 const REQUEST_CANCEL: &str = "request cancel";
 
@@ -346,6 +375,26 @@ impl RepositoryService {
             ),
             (RequestState::Accepted, false) => dto(false, false),
             (RequestState::Accepted, true) => {
+                // A request whose operation was fenced can reach no
+                // safe point: nothing takes the operation up again. It
+                // is not asked something nobody will answer. Its record
+                // is finished here with the answer its own next call
+                // would give, and that call then returns it.
+                if let Some(finished) = self.finish_fenced(&record) {
+                    return match finished {
+                        Ok(()) => Envelope::read_success(
+                            REQUEST_CANCEL,
+                            scope,
+                            CancelDto {
+                                request_id: request_id.to_string(),
+                                state: RequestState::Finished,
+                                requested: false,
+                                acknowledged: false,
+                            },
+                        ),
+                        Err(error) => error.to_envelope(REQUEST_CANCEL),
+                    };
+                }
                 match self.request_cancellation(request_id) {
                     // Finished or deleted since it was read: nothing is
                     // left to ask.
@@ -363,15 +412,27 @@ impl RepositoryService {
                             );
                             match row {
                                 // The reservation exists: the operation
-                                // is asked directly as well.
+                                // is asked directly as well, unless it
+                                // has recorded its intent to push. From
+                                // then on only the request's own call
+                                // passes a cancellation on, at a safe
+                                // point where what became of the push is
+                                // known: asked directly, the operation
+                                // could be ended by a restart before the
+                                // remote was asked.
                                 Ok(JournalRow::Pending(PendingOperation::Remote { phase: _ })) => {
-                                    // A failure here loses nothing: the
-                                    // record's flag stands, and the next
-                                    // safe point reads it.
-                                    let _ = self.cancel_remote_operation(
-                                        Path::new(record.scope.as_str()),
-                                        operation.operation_id,
-                                    );
+                                    let intends_a_push = self
+                                        .stored_push(&record.scope, operation.operation_id)
+                                        .map_or(true, |stored| stored.is_some());
+                                    if !intends_a_push {
+                                        // A failure here loses nothing:
+                                        // the record's flag stands, and
+                                        // the next safe point reads it.
+                                        let _ = self.cancel_remote_operation(
+                                            Path::new(record.scope.as_str()),
+                                            operation.operation_id,
+                                        );
+                                    }
                                 }
                                 Ok(JournalRow::Final {
                                     kind: FinalKind::Cancelled,

@@ -233,6 +233,20 @@ impl RepositoryService {
 }
 
 impl RepositoryService {
+    /// Whether a remote operation was begun under a configuration the
+    /// registration has since left; see `remote::state::lookup_fenced`.
+    pub(crate) fn fenced(
+        &self,
+        scope: &ScopeKey,
+        operation_id: OperationId,
+    ) -> Result<bool, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            remote::state::lookup_fenced(connection, scope.as_str(), operation_id)
+        })
+    }
+}
+
+impl RepositoryService {
     /// What the registration at `root` holds of polling; see
     /// `remote::state::select_polling_policy`. `None` for a root that is
     /// not registered.
