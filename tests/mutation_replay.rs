@@ -2086,3 +2086,6 @@ fn common_git_lease_child() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+
+#[path = "mutation_replay/not_enabled.rs"]
+mod not_enabled;

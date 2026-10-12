@@ -7,7 +7,7 @@ use crate::{
         keys::{KeyMaterialAction, KeyMaterialPhase, KeyMaterialRecovery},
         transport::{HostKeyIdentity, SshDirection, SshTransportError},
     },
-    results::{CheckpointEffect, DiscoveryEffect, WriteEffect},
+    results::{CheckpointEffect, DiscoveryEffect, FailureClass, WriteEffect},
 };
 
 /// Every repository error kind and the code a mutation reports for it.
@@ -113,7 +113,7 @@ const KINDS: [(RepositoryErrorKind, ResultCode); 36] = [
     ),
     (
         RepositoryErrorKind::RepositoryNotEnabled,
-        ResultCode::RepositoryNotRegistered,
+        ResultCode::RepositoryNotEnabled,
     ),
     (
         RepositoryErrorKind::MissingAuthoringTarget,
@@ -1380,6 +1380,24 @@ fn actions_of(command: Command, code: ResultCode, retry: bool) -> Vec<&'static s
     .into_iter()
     .map(|action| action.action.as_str())
     .collect()
+}
+
+/// A rebuild does not enable a repository, and no registered action
+/// names enabling one: a repository that was never enabled is offered
+/// nothing, whatever command found it so.
+#[test]
+fn a_repository_that_was_never_enabled_is_offered_nothing() {
+    for command in Command::ALL {
+        assert_eq!(
+            actions_of(command, ResultCode::RepositoryNotEnabled, false),
+            [""; 0],
+            "{command:?}"
+        );
+    }
+    assert_eq!(
+        ResultCode::RepositoryNotEnabled.failure_class(),
+        Some(FailureClass::Input)
+    );
 }
 
 #[test]

@@ -848,6 +848,35 @@ fn a_repo_enable_and_its_preview_match_their_schemas_and_goldens() {
     drop(world.fixture);
 }
 
+/// A repository that was never enabled: the rebuild that would have
+/// registered it is refused, and so is a command that needs it enabled.
+/// Neither offers an action.
+#[test]
+fn a_request_of_a_repository_that_was_never_enabled_matches_its_goldens() {
+    let world = Unregistered::new();
+    let rebuild = mutation::execute_with(
+        &world.service,
+        REQUEST_1,
+        Mutation::IndexRebuild(IndexRebuildInput {
+            root: world.root.clone(),
+        }),
+    );
+    assert_eq!(rebuild.code, ResultCode::RepositoryNotEnabled);
+    assert_repository_contract("index_rebuild_not_enabled", &world.root, &rebuild);
+
+    let add = mutation::execute_with(
+        &world.service,
+        REQUEST_2,
+        Mutation::RemoteAdd(RemoteAddInput {
+            root: world.root.clone(),
+            name: "origin".to_owned(),
+            url: "https://example.invalid/team/project.git".to_owned(),
+        }),
+    );
+    assert_eq!(add.code, ResultCode::RepositoryNotEnabled);
+    assert_repository_contract("remote_add_not_enabled", &world.root, &add);
+}
+
 #[test]
 fn a_repo_enable_whose_registration_is_pending_matches_its_golden() {
     let mut world = Unregistered::new();

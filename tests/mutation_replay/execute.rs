@@ -887,10 +887,15 @@ fn a_request_cancelled_before_it_is_accepted_does_nothing() {
     world.assert_nothing_exists(REQUEST_1, TICKET_A);
 }
 
+/// The repository was enabled, and this index holds no registration of
+/// it: the rebuild brings it back. One that was never enabled is another
+/// answer; see `not_enabled.rs`.
 #[test]
 fn a_repository_that_is_not_registered_is_reported_with_its_rebuild() {
     let world = World::new();
     let elsewhere = crate::support::born_repository();
+    // Enabled under another data directory.
+    let _enabled = crate::support::enabled_repository(&elsewhere);
     let root = elsewhere.root.canonicalize().unwrap();
     let envelope = world.execute(
         REQUEST_1,

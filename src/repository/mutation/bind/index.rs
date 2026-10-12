@@ -38,7 +38,8 @@ pub struct IndexRefreshInput {
 }
 
 /// The input of `index rebuild`: the repository to observe from nothing.
-/// It need not be registered: a rebuild registers it.
+/// It need not be registered: a rebuild registers again a repository
+/// that was enabled. One that never was is refused.
 pub struct IndexRebuildInput {
     pub root: PathBuf,
 }
@@ -205,9 +206,10 @@ impl Binding for IndexBinding {
     }
 
     /// A refresh needs the repository to be registered. A rebuild does
-    /// not: it is what registers a repository whose registration went
-    /// with the index, so only the root itself is asked for, and the
-    /// domain operation refuses what is not a repository's root.
+    /// not: it is what registers again a repository whose registration
+    /// went with the index, so the root itself is asked for, and the
+    /// domain operation refuses what is not a repository's root. A
+    /// repository that was never enabled is refused by both.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         let service = call.service;
         match self.verb {
@@ -217,6 +219,16 @@ impl Binding for IndexBinding {
             Verb::Rebuild => {
                 if ScopeKey::for_repository(&self.root).is_none() {
                     return Err(Answer::stopped(ResultCode::InvalidPath));
+                }
+                // A rebuild brings back a registration that was lost. It
+                // does not enable a repository: one that is not
+                // registered and was never enabled is refused, before
+                // anything is recorded for it. Whether it was is asked
+                // of Git only for a repository that is not registered.
+                if let Err(answer) = resolve_root(service, &self.root)
+                    && answer.code == ResultCode::RepositoryNotEnabled
+                {
+                    return Err(answer);
                 }
             }
         }

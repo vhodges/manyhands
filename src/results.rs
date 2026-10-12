@@ -541,6 +541,8 @@ result_codes! {
         "The repository has no working tree.";
     RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),
         "The repository is not enabled in Manyhands.";
+    RepositoryNotEnabled => "repository_not_enabled", Some(FailureClass::Input),
+        "The repository has never been enabled in Manyhands; enable it first.";
     RepositoryInaccessible => "repository_inaccessible", Some(FailureClass::Blocked),
         "The repository cannot be read.";
     InvalidId => "invalid_id", Some(FailureClass::Input),

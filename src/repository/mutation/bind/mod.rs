@@ -8,7 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::results::{Effects, RecoveryAction, ResultCode, Scope, absolute_path_string};
+use crate::{
+    canonical,
+    results::{Effects, RecoveryAction, ResultCode, Scope, absolute_path_string},
+};
 
 use super::{
     super::{
@@ -89,11 +92,68 @@ pub(crate) fn resolve_root(
 ) -> Result<ResolvedRepository, Answer> {
     let repository = service
         .resolve_repository(root)
-        .map_err(|error| Answer::of_read(&error))?;
+        .map_err(|error| not_registered(&error))?;
     if std::fs::canonicalize(root).ok().as_deref() != Some(repository.root()) {
         return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
     }
     Ok(repository)
+}
+
+/// The answer to a repository that could not be resolved. One that is
+/// not registered is asked whether it was ever enabled: a repository
+/// that was and lost its registration is brought back by a rebuild, and
+/// one that never was is not, so it is told apart and offered nothing.
+/// Git is read for that here, on a refusal, and nowhere else.
+fn not_registered(error: &ReadError) -> Answer {
+    let never_enabled = error.code() == ResultCode::RepositoryNotRegistered
+        && error
+            .scope
+            .repository
+            .as_deref()
+            .is_some_and(|root| never_enabled(Path::new(root)));
+    if never_enabled {
+        Answer::stopped(ResultCode::RepositoryNotEnabled)
+    } else {
+        Answer::of_read(error)
+    }
+}
+
+/// Whether the Git repository at `root` was never enabled: it has no
+/// Manyhands configuration, neither in its working tree nor in what its
+/// head commits. Enabling commits the configuration, and a repository
+/// that is being enabled has the file before it has the commit, so
+/// either one says the repository is, or is becoming, enabled.
+///
+/// `false` for anything that cannot be read: only what is seen to be
+/// missing is called so, and a root that is no repository is the
+/// domain's to refuse.
+pub(crate) fn never_enabled(root: &Path) -> bool {
+    let configuration = Path::new(canonical::CONFIG_PATH);
+    match root.join(configuration).symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) | Err(_) => return false,
+    }
+    // Exactly this root, never a repository above it.
+    let Ok(repository) = git2::Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        &[] as &[&std::ffi::OsStr],
+    ) else {
+        return false;
+    };
+    let tree = match repository.head() {
+        Ok(head) => match head.peel_to_tree() {
+            Ok(tree) => tree,
+            Err(_) => return false,
+        },
+        // No commit yet, so none holds a configuration.
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return true,
+        Err(_) => return false,
+    };
+    match tree.get_path(configuration) {
+        Ok(_) => false,
+        Err(error) => error.code() == git2::ErrorCode::NotFound,
+    }
 }
 
 /// What one call of the boundary gives a binding to work with, in each of

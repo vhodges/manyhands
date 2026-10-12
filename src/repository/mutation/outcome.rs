@@ -49,8 +49,10 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         }
         RepositoryErrorKind::ConflictedWorktree => ResultCode::WorktreeConflicted,
         RepositoryErrorKind::InvalidConfiguration => ResultCode::InvalidConfiguration,
-        RepositoryErrorKind::RepositoryNotRegistered
-        | RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotRegistered,
+        RepositoryErrorKind::RepositoryNotRegistered => ResultCode::RepositoryNotRegistered,
+        // The repository has no Manyhands configuration. A rebuild does
+        // not give it one, so this is not the code that offers one.
+        RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotEnabled,
         RepositoryErrorKind::IndexUnavailable => ResultCode::IndexUnavailable,
         RepositoryErrorKind::RepositoryBusy => ResultCode::Busy,
         RepositoryErrorKind::RecoveryRequired
@@ -760,6 +762,11 @@ fn recovery(
         | ResultCode::NotRepository
         | ResultCode::NotRepositoryRoot
         | ResultCode::BareRepository
+        // A repository that was never enabled. Enabling it is the
+        // user's to ask for and needs a confirmation of its own; no
+        // registered action names it, so none is offered, and never the
+        // rebuild: a rebuild does not enable a repository.
+        | ResultCode::RepositoryNotEnabled
         | ResultCode::RepositoryInaccessible
         | ResultCode::ItemNotFound
         | ResultCode::RelationshipCycle

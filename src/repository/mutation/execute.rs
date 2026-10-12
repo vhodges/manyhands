@@ -16,7 +16,7 @@ use super::{
         keys::{SessionCredentialProvider, SessionCredentials},
     },
     CancellationToken, MutationCall, ProgressSink,
-    bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
+    bind::{self, Accepted, Answer, Binding, CallContext, Place, Ran},
     confirm::Consent,
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
@@ -93,6 +93,13 @@ impl RepositoryService {
                         Some(ResultCode::NotConfirmable)
                     } else if session.cancelled() {
                         Some(ResultCode::Cancelled)
+                    } else if let Place::Repository(root) = binding.place()
+                        && std::fs::canonicalize(root).is_ok_and(|root| bind::never_enabled(&root))
+                    {
+                        // A rebuild does not enable a repository, and
+                        // with no index there is no registration to
+                        // ask: Git is.
+                        Some(ResultCode::RepositoryNotEnabled)
                     } else {
                         None
                     };

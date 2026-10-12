@@ -30,13 +30,14 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 /// Every result code with its class: the codes reads return, in their
 /// order, then the mutation codes of the design's Result Mapping table,
 /// class by class in its order.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 67] = [
+const DESIGN_CODES: [(&str, Option<FailureClass>); 68] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
     ("not_repository_root", Some(FailureClass::Input)),
     ("bare_repository", Some(FailureClass::Input)),
     ("repository_not_registered", Some(FailureClass::Blocked)),
+    ("repository_not_enabled", Some(FailureClass::Input)),
     ("repository_inaccessible", Some(FailureClass::Blocked)),
     ("invalid_id", Some(FailureClass::Input)),
     ("item_not_found", Some(FailureClass::Input)),
@@ -155,6 +156,7 @@ fn result_code_messages_are_fixed() {
         "That path is inside a repository but is not its root or a linked worktree root.",
         "The repository has no working tree.",
         "The repository is not enabled in Manyhands.",
+        "The repository has never been enabled in Manyhands; enable it first.",
         "The repository cannot be read.",
         "That ID is not a canonical ULID.",
         "No item has that ID.",

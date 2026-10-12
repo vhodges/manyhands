@@ -54,6 +54,7 @@
             "not_repository_root",
             "bare_repository",
             "repository_not_registered",
+            "repository_not_enabled",
             "repository_inaccessible",
             "invalid_id",
             "item_not_found",

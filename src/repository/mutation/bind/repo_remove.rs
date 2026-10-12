@@ -75,7 +75,12 @@ impl RepoRemoveBinding {
     fn observe(&self, service: &RepositoryService) -> Result<Registered, Answer> {
         let root = match resolve_root(service, &self.root) {
             Ok(resolved) => resolved.root().to_owned(),
-            Err(answer) if answer.code == ResultCode::RepositoryNotRegistered => {
+            // Whether it was ever enabled is not asked: the end state
+            // is the same.
+            Err(answer)
+                if answer.code == ResultCode::RepositoryNotRegistered
+                    || answer.code == ResultCode::RepositoryNotEnabled =>
+            {
                 canonical_repository_root(&self.root, RepositoryOperation::RemoveRegistration)
                     .map_err(refused)?
                     .1
