@@ -35,7 +35,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::results::{
-    DiscoveryEffect, Effects, Outcome, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
+    DiscoveryEffect, Effects, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
 };
 
 use super::{
@@ -51,7 +51,7 @@ use super::{
         identity::{IntentDigestBuilder, RequestId, ScopeKey},
         outcome,
         progress::{ProgressStage, Subject},
-        records::{self, RequestResult},
+        records,
     },
     Accepted, Answer, Binding, CallContext, EndedWithoutCheckpoint, Entered, Place, Prepared, Ran,
     Standing, sync,
@@ -533,28 +533,7 @@ impl OperationResumeBinding {
         else {
             return;
         };
-        let data = match &answer.data {
-            Some(data) => match serde_json::to_value(data) {
-                Ok(data) => Some(data),
-                Err(_) => return,
-            },
-            None => None,
-        };
-        let _ = service.finish_request(
-            request,
-            attempt,
-            &RequestResult {
-                outcome: Outcome::of_mutation(
-                    answer.code == ResultCode::Cancelled,
-                    answer.code,
-                    &answer.effects,
-                    answer.local_change,
-                ),
-                code: answer.code,
-                effects: answer.effects.clone(),
-                data,
-            },
-        );
+        let _ = service.finish(request, attempt, answer);
     }
 
     /// The index hand-off of a local operation: a refresh under the

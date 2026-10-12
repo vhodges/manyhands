@@ -24,7 +24,7 @@ use std::{
 
 use serde::{Serialize, Serializer};
 
-use crate::results::{Effects, Envelope, Outcome, ResultCode, Scope, contract_enum};
+use crate::results::{Effects, Envelope, ResultCode, Scope, contract_enum};
 
 use super::{
     super::{
@@ -38,7 +38,7 @@ use super::{
     command::Command,
     dto::{CancelDto, RequestState},
     identity::RequestId,
-    records::{RequestRecord, RequestResult},
+    records::RequestRecord,
 };
 
 /// How a caller asks a running request to stop. A request that is
@@ -302,19 +302,9 @@ impl RepositoryService {
         let accepted = Accepted::of_record(record, record.attempt)?;
         let journal = accepted.journal_row(self);
         let answer = sync::fenced_answer(self, &accepted, journal.as_ref())?;
-        let outcome = Outcome::of_mutation(false, answer.code, &answer.effects, false);
         Some(
-            self.finish_request(
-                record.request_id,
-                record.attempt,
-                &RequestResult {
-                    outcome,
-                    code: answer.code,
-                    effects: answer.effects,
-                    data: None,
-                },
-            )
-            .map(|_| ()),
+            self.finish(record.request_id, record.attempt, &answer)
+                .map(|_| ()),
         )
     }
 }

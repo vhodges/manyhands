@@ -2,15 +2,16 @@
 //! answer. The record is finished with the result, deleted so that the
 //! request ID is free again, or left accepted for a retry to continue.
 
-use crate::results::Envelope;
+use crate::results::{Envelope, Outcome, ResultCode};
 
 use super::{
     super::{
-        RepositoryService,
+        ReadError, RepositoryService,
         recovery::{FinalKind, JournalRow},
     },
-    bind::{Accepted, Ran, Standing},
+    bind::{Accepted, Answer, Ran, Standing},
     dto::MutationDataDto,
+    identity::RequestId,
     records::RequestResult,
     reply::Reply,
 };
@@ -84,44 +85,66 @@ impl RepositoryService {
     ) -> Envelope<MutationDataDto> {
         let Ran { answer, standing } = ran;
         let settlement = Settlement::of(&standing);
-        let envelope = reply.envelope(answer, Some(accepted), settlement == Settlement::Leave);
-        self.settle(accepted, settlement, &envelope);
-        envelope
+        // 14C: a finish or a delete that did not apply leaves the record
+        // accepted, and the envelope below still says there is nothing
+        // to retry. The envelope is to be built with `retry` set when
+        // `_applied` is false.
+        let _applied = self.settle(accepted, settlement, &answer);
+        reply.envelope(answer, Some(accepted), settlement == Settlement::Leave)
     }
 
-    /// Changes the record as `settlement` says. Every change is
-    /// conditional on the record still being accepted with this call's
-    /// attempt, so a call never settles a record another call has since
-    /// entered. A change that fails leaves the record as it is: the next
-    /// call of the request re-enters it.
-    fn settle(
+    /// Stores `answer` as the result of the request `request_id` and
+    /// marks its record finished, if the record is still accepted with
+    /// `attempt`. This is the one writer of a finished result: what a
+    /// record stores of an answer, and the outcome it stores, are worked
+    /// out here and nowhere else. The outcome is derived from the code
+    /// and the effects exactly as an envelope's is.
+    ///
+    /// Returns whether the record was finished. `Ok(false)` for a record
+    /// that another call has since entered, finished or deleted, and for
+    /// an answer whose data cannot be stored: the record is then as it
+    /// was, and the next call of the request re-enters it.
+    pub(super) fn finish(
         &self,
-        accepted: &Accepted,
-        settlement: Settlement,
-        envelope: &Envelope<MutationDataDto>,
-    ) {
+        request_id: RequestId,
+        attempt: u64,
+        answer: &Answer,
+    ) -> Result<bool, ReadError> {
+        let data = match &answer.data {
+            Some(data) => match serde_json::to_value(data) {
+                Ok(data) => Some(data),
+                Err(_) => return Ok(false),
+            },
+            None => None,
+        };
+        self.finish_request(
+            request_id,
+            attempt,
+            &RequestResult {
+                outcome: Outcome::of_mutation(
+                    answer.code == ResultCode::Cancelled,
+                    answer.code,
+                    &answer.effects,
+                    answer.local_change,
+                ),
+                code: answer.code,
+                effects: answer.effects.clone(),
+                data,
+            },
+        )
+    }
+
+    /// Changes the record as `settlement` says, and returns whether the
+    /// change it asks for was made; a record that is left is as asked.
+    /// Every change is conditional on the record still being accepted
+    /// with this call's attempt, so a call never settles a record another
+    /// call has since entered. A change that fails leaves the record as
+    /// it is: the next call of the request re-enters it.
+    fn settle(&self, accepted: &Accepted, settlement: Settlement, answer: &Answer) -> bool {
         match settlement {
-            Settlement::Finish => {
-                let data = match &envelope.data {
-                    Some(data) => match serde_json::to_value(data) {
-                        Ok(data) => Some(data),
-                        // The record stays accepted and the request is
-                        // answered again by re-entering it.
-                        Err(_) => return,
-                    },
-                    None => None,
-                };
-                let _ = self.finish_request(
-                    accepted.request_id,
-                    accepted.attempt,
-                    &RequestResult {
-                        outcome: envelope.outcome,
-                        code: envelope.code,
-                        effects: envelope.effects.clone(),
-                        data,
-                    },
-                );
-            }
+            Settlement::Finish => self
+                .finish(accepted.request_id, accepted.attempt, answer)
+                .unwrap_or(false),
             // "Nothing in flight" is read from the journal row, and a call
             // of the request that was accepted and has not yet begun its
             // row shows none. A second call that enters in that window and
@@ -132,10 +155,10 @@ impl RepositoryService {
             // request has no record, so it is treated as new and answered
             // by the already-applied rule, which writes nothing and claims
             // no commit.
-            Settlement::Delete => {
-                let _ = self.delete_request(accepted.request_id, accepted.attempt);
-            }
-            Settlement::Leave => {}
+            Settlement::Delete => self
+                .delete_request(accepted.request_id, accepted.attempt)
+                .unwrap_or(false),
+            Settlement::Leave => true,
         }
     }
 }
