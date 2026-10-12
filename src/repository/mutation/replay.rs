@@ -88,13 +88,18 @@ impl RepositoryService {
         // command's is given one here.
         let envelope = match Command::parse(&envelope.command) {
             Some(command) if command.finishes_as_a_synchronization() => {
-                let recovery = outcome::recovery(
-                    envelope.code,
-                    command,
-                    envelope.scope.repository.as_deref(),
-                    Some(accepted.request_id),
-                    accepted.operation().map(|operation| operation.operation_id),
+                let recovery = outcome::offered(
+                    &outcome::Named {
+                        code: envelope.code,
+                        command,
+                        root: envelope.scope.repository.as_deref(),
+                        request_id: Some(accepted.request_id),
+                        operation_id: accepted.operation().map(|operation| operation.operation_id),
+                        retry: false,
+                    },
+                    Vec::new(),
                     false,
+                    None,
                 );
                 envelope.with_recovery(recovery)
             }

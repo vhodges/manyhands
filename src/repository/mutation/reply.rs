@@ -103,33 +103,19 @@ impl Reply<'_> {
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
         let operation = accepted.and_then(Accepted::operation);
-        // A read suggests its action with the root it knows. One that
-        // failed before it knew any, as a read of the request records
-        // does, names none, and this result does: the action is then the
-        // code's own, made with this result's root.
-        let rootless = recovery
-            .iter()
-            .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
-        let recovery = if offers_nothing {
-            Vec::new()
-        } else if recovery.is_empty() || rootless {
-            outcome::recovery(
-                code,
-                self.binding.command(),
-                scope.repository.as_deref(),
-                Some(self.identity.request_id),
-                operation.map(|operation| operation.operation_id),
-                retry,
-            )
-        } else {
-            recovery
-        };
         // The host a result is about is named by its data, and the
         // action that approves it takes the host.
-        let recovery = outcome::with_host_action(
+        let recovery = outcome::offered(
+            &outcome::Named {
+                code,
+                command: self.binding.command(),
+                root: scope.repository.as_deref(),
+                request_id: Some(self.identity.request_id),
+                operation_id: operation.map(|operation| operation.operation_id),
+                retry,
+            },
             recovery,
-            code,
-            scope.repository.as_deref(),
+            offers_nothing,
             data.as_ref()
                 .and_then(MutationDataDto::authority)
                 .as_deref(),

@@ -542,6 +542,72 @@ pub(crate) fn original_request(request_id: String) -> RecoveryAction {
     )
 }
 
+/// What a result names, for the actions it offers.
+pub(crate) struct Named<'a> {
+    pub(crate) code: ResultCode,
+    /// The command the result is of.
+    pub(crate) command: Command,
+    /// The repository the result names, when it names one.
+    pub(crate) root: Option<&'a str>,
+    /// `None` for a result of `prepare`, which has no request.
+    pub(crate) request_id: Option<RequestId>,
+    pub(crate) operation_id: Option<OperationId>,
+    /// Whether the request's record was left accepted.
+    pub(crate) retry: bool,
+}
+
+/// The actions a result offers, from its answer. This and
+/// `RepositoryService::offering` are the two halves of the one place
+/// that decides what a result offers and in what order: this one from
+/// what the call's answer says, that one from what the journal holds
+/// once the call is over.
+///
+/// In order:
+///
+/// 1. An answer that `offers_nothing` offers nothing of its own.
+/// 2. `suggested` is what the binding or a read suggested. It is kept,
+///    unless it is empty or holds an action that lacks the root it
+///    takes: a read suggests its action with the root it knows, and one
+///    that failed before it knew any names none. Then the actions are
+///    the code's own, made with this result's root; see `recovery`.
+/// 3. A host that is not trusted is offered its approval first; see
+///    `with_host_action`. `authority` is the host as the result's data
+///    names it.
+pub(crate) fn offered(
+    named: &Named<'_>,
+    suggested: Vec<RecoveryAction>,
+    offers_nothing: bool,
+    authority: Option<&str>,
+) -> Vec<RecoveryAction> {
+    let rootless = suggested
+        .iter()
+        .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
+    let actions = if offers_nothing {
+        Vec::new()
+    } else if suggested.is_empty() || rootless {
+        recovery(
+            named.code,
+            named.command,
+            named.root,
+            named.request_id,
+            named.operation_id,
+            named.retry,
+        )
+    } else {
+        suggested
+    };
+    with_host_action(actions, named.code, named.root, authority)
+}
+
+/// Whose envelope `RepositoryService::offering` is given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallKind {
+    /// A call of `execute`.
+    Execute,
+    /// A call of `prepare`, which names no request and no operation.
+    Prepare,
+}
+
 /// What a client does about a code that stopped a request. Every code is
 /// named: one added later does not compile until its action is decided.
 ///
@@ -560,7 +626,7 @@ pub(crate) fn original_request(request_id: String) -> RecoveryAction {
 /// dealt with it goes on, and after `request cancel` it ends cancelled
 /// and lets the reservation go. So such a result always offers the same
 /// request, first, with whatever else its code offers.
-pub(crate) fn recovery(
+fn recovery(
     code: ResultCode,
     command: Command,
     root: Option<&str>,
@@ -807,7 +873,7 @@ const AUTHORITY_ARGUMENT: &str = "authority";
 /// same request, which the result also offers when its reservation is
 /// held, is what follows it. Nothing is added to a result of another
 /// code, or to one that cannot give the action both its arguments.
-pub(crate) fn with_host_action(
+fn with_host_action(
     mut recovery: Vec<RecoveryAction>,
     code: ResultCode,
     root: Option<&str>,
@@ -948,7 +1014,7 @@ pub(crate) fn offering_abandon(
 /// Whether a result of `code` that offers `recovery` already says to
 /// look at the repository for something a pending local operation can be
 /// the cause of: the first rule of `offering_abandon`.
-pub(crate) fn abandon_may_be_offered(code: ResultCode, recovery: &[RecoveryAction]) -> bool {
+fn abandon_may_be_offered(code: ResultCode, recovery: &[RecoveryAction]) -> bool {
     let inspects = recovery
         .iter()
         .any(|action| action.action == RecoveryActionKind::RepoInspect);
@@ -959,6 +1025,27 @@ pub(crate) fn abandon_may_be_offered(code: ResultCode, recovery: &[RecoveryActio
 }
 
 impl RepositoryService {
+    /// What an envelope offers once its call is over: the actions its
+    /// answer gave it, see `offered`, corrected and added to from what
+    /// the journal holds now. In order:
+    ///
+    /// 1. For a call of `execute`, `operation.resume` is kept only where
+    ///    a resume would take the operation up; see `offering_resume`.
+    /// 2. `operation.abandon` is added where a pending local operation
+    ///    stands in the way, with `operation.resume` before
+    ///    `repo.inspect` and the abandon after it; see
+    ///    `offering_abandon`.
+    ///
+    /// Every envelope of `execute` and of `prepare` passes through here,
+    /// a replayed one among them.
+    pub(super) fn offering<T>(&self, envelope: Envelope<T>, call: CallKind) -> Envelope<T> {
+        let envelope = match call {
+            CallKind::Execute => self.offering_resume(envelope),
+            CallKind::Prepare => envelope,
+        };
+        self.offering_abandon(envelope)
+    }
+
     /// Keeps `operation.resume` among what an envelope offers only
     /// where a resume of the operation it names would take the
     /// operation up, as things are once the call is over: it is asked
@@ -972,7 +1059,7 @@ impl RepositoryService {
     /// end. The request's own result offers the same request in its
     /// place, which its record, left accepted, is there for. A resume's
     /// own result offers nothing in its place.
-    pub(super) fn offering_resume<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
+    fn offering_resume<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
         let offers = envelope
             .recovery
             .iter()
@@ -1032,7 +1119,7 @@ impl RepositoryService {
     ///
     /// A journal that cannot be read adds nothing: the envelope keeps
     /// what it has.
-    pub(super) fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
+    fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
         if envelope.code.failure_class().is_none() {
             return envelope;
         }

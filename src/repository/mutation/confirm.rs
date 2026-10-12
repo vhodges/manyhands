@@ -97,18 +97,19 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         local_change,
         offers_nothing,
     } = answer;
-    let recovery = if offers_nothing {
-        Vec::new()
-    } else {
-        outcome::recovery(
+    let recovery = outcome::offered(
+        &outcome::Named {
             code,
             command,
-            scope.repository.as_deref(),
-            None,
-            None,
-            false,
-        )
-    };
+            root: scope.repository.as_deref(),
+            request_id: None,
+            operation_id: None,
+            retry: false,
+        },
+        Vec::new(),
+        offers_nothing,
+        None,
+    );
     Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
         .with_recovery(recovery)
 }
@@ -258,7 +259,7 @@ impl RepositoryService {
     /// Git state, and the confirmation ID is how a caller refers to it.
     pub fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
         let envelope = self.prepare_call(mutation);
-        self.offering_abandon(envelope)
+        self.offering(envelope, outcome::CallKind::Prepare)
     }
 
     /// One call of `prepare`, before the journal is asked what its

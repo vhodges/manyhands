@@ -52,8 +52,7 @@ impl RepositoryService {
         // session, by way of the call context.
         let session = CallSession::new(credentials, progress, cancel);
         let envelope = self.execute_call(call, &session);
-        let envelope = self.offering_resume(envelope);
-        self.offering_abandon(envelope)
+        self.offering(envelope, outcome::CallKind::Execute)
     }
 
     /// One call of `execute`, before the journal is asked what its
