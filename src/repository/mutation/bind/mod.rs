@@ -186,6 +186,10 @@ pub(crate) struct Answer {
     /// which is no canonical content and no commit. A request that
     /// stopped after one is `partial`, as after a durable effect.
     pub(crate) local_change: bool,
+    /// Nothing is offered for this answer, whatever its code offers: the
+    /// binding knows that none of the code's actions gets past what
+    /// stopped the request.
+    pub(crate) offers_nothing: bool,
 }
 
 impl Answer {
@@ -197,6 +201,7 @@ impl Answer {
             data: None,
             recovery: Vec::new(),
             local_change: false,
+            offers_nothing: false,
         }
     }
 

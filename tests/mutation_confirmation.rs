@@ -4236,22 +4236,36 @@ fn a_registration_changed_between_preview_and_confirmation_is_external_change() 
 
 /// A key file is replaced after the preview. The registration is what
 /// it was, so the preview's observation holds: it is the domain's own
-/// review of the files that refuses, and nothing is deleted.
+/// review of the files that refuses, and nothing is deleted. A preview
+/// observes the registration and not the files, so a new one is of the
+/// same deletion and its request is refused the same way: no preview is
+/// offered, and nothing else is.
 #[test]
 fn a_key_file_changed_after_the_preview_is_external_change_from_the_domain_s_review() {
     let keyring = Keyring::new();
     let (private, public) = keyring.files();
-    let (confirmation, _) = keyring.preview();
+    let (confirmation, preview) = keyring.preview();
     // Written in place: the file is the store's own still, with its
     // owner and its mode, and holds something else.
     fs::write(&private, "another file\n").unwrap();
 
     let refused = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
 
-    assert_refused(&refused, ResultCode::ExternalChange, &["request.prepare"]);
+    assert_refused(&refused, ResultCode::ExternalChange, &[]);
     keyring.assert_nothing_left(REQUEST_1);
     assert_eq!(fs::read_to_string(&private).unwrap(), "another file\n");
     assert!(public.exists());
+    assert!(keyring.registered());
+
+    // A new preview shows what the first one showed, and a request made
+    // with it gets no further.
+    let (again, shown) = keyring.preview();
+    assert_eq!(shown.effects, preview.effects);
+    assert_eq!(shown.details, preview.details);
+    let refused = keyring.execute(REQUEST_2, &again, keyring.delete_key());
+    assert_refused(&refused, ResultCode::ExternalChange, &[]);
+    keyring.assert_nothing_left(REQUEST_2);
+    assert_eq!(fs::read_to_string(&private).unwrap(), "another file\n");
     assert!(keyring.registered());
 }
 

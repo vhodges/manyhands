@@ -1075,6 +1075,21 @@ impl KeyDeleteBinding {
         Answer::stopped(code).with_data(self.data(None))
     }
 
+    /// The answer to a failure of the review or of the deletion.
+    ///
+    /// A key file that is no longer the one Manyhands wrote is refused
+    /// for as long as the file is what it is. A preview observes the
+    /// registration and not the files, so a new one shows the same
+    /// deletion and its request is refused the same way: the preview
+    /// the code offers a confirmed command is not offered, and nothing
+    /// is.
+    fn refusal(&self, kind: KeyMaterialErrorKind) -> Answer {
+        Answer {
+            offers_nothing: kind == KeyMaterialErrorKind::SourceChanged,
+            ..self.answer(Self::failure_code(kind))
+        }
+    }
+
     /// The code of a failure of the review or of the deletion. A
     /// deletion that says it lacks its review was called without one by
     /// the binding, which is the binding's fault and no state a caller
@@ -1143,7 +1158,7 @@ impl KeyDeleteBinding {
                 ))
             }
             // Only the kind is read.
-            Err(error) => Err(self.answer(Self::failure_code(error.kind))),
+            Err(error) => Err(self.refusal(error.kind)),
         }
     }
 
@@ -1248,11 +1263,10 @@ impl KeyDeleteBinding {
             },
             Err(error) => {
                 // Only the kind is read.
-                let code = Self::failure_code(error.kind);
                 let journal = accepted.journal_row(service);
                 let answer = Answer {
                     local_change: self.removed(journal.as_ref()),
-                    ..self.answer(code)
+                    ..self.refusal(error.kind)
                 };
                 let standing = match journal {
                     // The deletion never began, or has not ended: the
@@ -1320,7 +1334,7 @@ impl Binding for KeyDeleteBinding {
     /// stale as `external_change`. A key that was selected, removed or
     /// replaced since the preview is such a change. A key file that has
     /// changed is refused here by the domain's review, as
-    /// `external_change` too.
+    /// `external_change` too, with nothing offered; see `refusal`.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         let observed = self.observe(call.service)?;
         Ok(Prepared {

@@ -92,15 +92,20 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         // The action is the code's own, made with this result's root.
         recovery: _,
         local_change,
+        offers_nothing,
     } = answer;
-    let recovery = outcome::recovery(
-        code,
-        command,
-        scope.repository.as_deref(),
-        None,
-        None,
-        false,
-    );
+    let recovery = if offers_nothing {
+        Vec::new()
+    } else {
+        outcome::recovery(
+            code,
+            command,
+            scope.repository.as_deref(),
+            None,
+            None,
+            false,
+        )
+    };
     Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
         .with_recovery(recovery)
 }

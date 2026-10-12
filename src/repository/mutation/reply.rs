@@ -98,6 +98,7 @@ impl Reply<'_> {
             data,
             recovery,
             local_change,
+            offers_nothing,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
@@ -109,7 +110,9 @@ impl Reply<'_> {
         let rootless = recovery
             .iter()
             .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
-        let recovery = if recovery.is_empty() || rootless {
+        let recovery = if offers_nothing {
+            Vec::new()
+        } else if recovery.is_empty() || rootless {
             outcome::recovery(
                 code,
                 self.binding.command(),
