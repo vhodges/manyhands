@@ -1474,3 +1474,58 @@ fn a_record_accepted_before_these_commands_had_an_operation_is_still_entered() {
         Some(RequestState::Accepted)
     );
 }
+
+/// A record an earlier build finished for one of these commands holds no
+/// operation either. It is replayed as any finished record is: its stored
+/// result, with nothing run and nothing changed.
+#[test]
+fn a_record_finished_before_these_commands_had_an_operation_is_replayed() {
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let (private, public) = world.key_files("imported");
+    type Request = Box<dyn Fn() -> Mutation>;
+    let requests: [(&str, Request); 3] = [
+        (
+            REQUEST_1,
+            Box::new(move || import("Imported", &private, Some(&public))),
+        ),
+        (REQUEST_2, Box::new(move || select(work))),
+        (REQUEST_3, Box::new(clear)),
+    ];
+    let mut stored = Vec::new();
+    for (request_id, request) in &requests {
+        let first = world.execute(request_id, request());
+        assert_success(&first);
+        stored.push(first);
+    }
+    // What that build left: finished records, and no operation of them.
+    let removed = items::index(world.data.path())
+        .execute("DELETE FROM request_operations", [])
+        .unwrap();
+    assert_eq!(removed, 3);
+    world.reopen();
+    // Whatever the registry holds now.
+    world.service.select_shared_key(work).unwrap();
+    let before = all_but_the_requests(&world);
+
+    for ((request_id, request), first) in requests.iter().zip(&stored) {
+        let command = request().command();
+        let record = world.record(request_id).expect("a record");
+        assert_eq!(record.state, RequestState::Finished, "{command}");
+        assert!(record.operations.is_empty(), "{command}");
+        let replayed = world.execute(request_id, request());
+        // The stored result, naming no operation: the record holds none.
+        assert_eq!(
+            (replayed.outcome, replayed.code, replayed.failure_class()),
+            (Outcome::Success, ResultCode::Ok, None),
+            "{command}"
+        );
+        assert_eq!(replayed.data, first.data, "{command}");
+        assert_eq!(replayed.effects, first.effects, "{command}");
+        assert_eq!(replayed.operation_id, None, "{command}");
+        assert!(replayed.recovery.is_empty(), "{command}");
+        assert_eq!(world.record(request_id), Some(record), "{command}");
+    }
+    assert_eq!(all_but_the_requests(&world), before);
+    assert_eq!(world.selected(), Some(work));
+}
