@@ -1066,9 +1066,12 @@ pub(super) fn pending_rows(
         .collect()
 }
 
-/// The table of the remote journal, and that of the key journal.
+/// The table of the remote journal, that of the key journal, and that of
+/// the recorded key registry changes, whose operations are the key
+/// journal's family too.
 pub(super) const REMOTE_JOURNAL_TABLE: &str = "remote_operation_records";
 pub(super) const KEY_JOURNAL_TABLE: &str = "key_material_operations";
+pub(super) const KEY_REGISTRY_CHANGES_TABLE: &str = "key_registry_changes";
 
 /// Whether the index holds the table `table`. An index that has never
 /// held an operation of the remote journal or of the key journal may
@@ -1082,7 +1085,8 @@ pub(super) fn has_table(connection: &Connection, table: &str) -> rusqlite::Resul
 }
 
 /// Whether the remote journal or the key journal holds an operation of
-/// the ID, in any repository. Such an operation is not a local one even
+/// the ID, in any repository, or a change to the key registry is recorded
+/// against it. Such an operation is not a local one even
 /// when the local journal holds a row under its ID, as it does for the
 /// index hand-off of a synchronization: the row is that operation's to
 /// end, and the operation has its own way out.
@@ -1093,6 +1097,7 @@ pub(super) fn held_by_another_journal(
     for (table, column) in [
         (REMOTE_JOURNAL_TABLE, "operation_ulid"),
         (KEY_JOURNAL_TABLE, "operation_id"),
+        (KEY_REGISTRY_CHANGES_TABLE, "operation_id"),
     ] {
         if !has_table(connection, table)? {
             continue;
@@ -1790,6 +1795,19 @@ mod abandoned_row_tests {
                 "{action} {state} {observed_at}"
             );
         }
+    }
+
+    #[test]
+    fn an_id_a_key_registry_change_is_recorded_against_is_not_a_local_operation_s() {
+        let connection = journal("refresh", "failed", None, 7);
+        connection
+            .execute_batch("CREATE TABLE key_registry_changes (operation_id TEXT);")
+            .unwrap();
+        assert!(!held_by_another_journal(&connection, ID).unwrap());
+        connection
+            .execute("INSERT INTO key_registry_changes VALUES (?1)", [ID])
+            .unwrap();
+        assert!(held_by_another_journal(&connection, ID).unwrap());
     }
 
     #[test]

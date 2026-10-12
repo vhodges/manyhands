@@ -497,6 +497,104 @@ fn the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothin
     support::assert_operation_records_hold_no_content(data.path());
 }
 
+/// The table of recorded key registry changes, and nothing with it.
+const KEY_REGISTRY_CHANGES: &str = "key_registry_changes";
+
+/// A database a build from before the table left behind gains the table,
+/// empty, when it is opened. Its registered keys, its selection, its key
+/// journal, its request records and everything else are as they were, and
+/// opening it again changes nothing.
+#[test]
+fn the_migration_adds_the_key_registry_changes_to_an_older_database_and_changes_nothing_else() {
+    let world = world();
+    operations::insert_key_material(world.data.path(), OPERATION_C, "generate", "reserved", None);
+    let home = tempfile::tempdir().unwrap();
+    let source = home.path().canonicalize().unwrap().join("work");
+    std::fs::write(&source, "not a key\n").unwrap();
+    let registered = world
+        .service
+        .register_shared_key(manyhands::repository::RegisterSharedKeyRequest {
+            label: "Work laptop".to_owned(),
+            ownership: manyhands::repository::SharedKeyOwnership::Imported,
+            private_key_path: source,
+            public_key_path: None,
+        })
+        .unwrap();
+    let manyhands::repository::RegisterSharedKeyOutcome::Registered(registered) = registered else {
+        panic!("a registration: {registered:?}");
+    };
+    world.service.select_shared_key(registered.id).unwrap();
+    assert_eq!(
+        world
+            .service
+            .insert_request(&world.request(REQUEST_A))
+            .unwrap(),
+        InsertRequestOutcome::Inserted
+    );
+    let World { data, service, .. } = world;
+    drop(service);
+    // What a build from before the table left behind.
+    let connection = items::index(data.path());
+    connection
+        .execute_batch(&format!("DROP TABLE IF EXISTS {KEY_REGISTRY_CHANGES}"))
+        .unwrap();
+    let before = dump(&connection);
+    for (table, rows) in [
+        ("shared_ssh_keys", 1),
+        ("key_material_operations", 1),
+        ("request_records", 1),
+    ] {
+        assert!(
+            before
+                .iter()
+                .any(|(name, _, held)| name == table && held.len() == rows),
+            "{table}"
+        );
+    }
+    assert!(
+        !before
+            .iter()
+            .any(|(name, _, _)| name == KEY_REGISTRY_CHANGES)
+    );
+    drop(connection);
+
+    for _ in 0..2 {
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        // The registry is read as it was.
+        let keys = service.list_shared_keys().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].selected);
+        drop(service);
+
+        let connection = items::index(data.path());
+        let after = dump(&connection);
+        let added: Vec<(&str, usize)> = after
+            .iter()
+            .filter(|object| !before.contains(object))
+            .map(|(name, _, rows)| (name.as_str(), rows.len()))
+            .collect();
+        assert_eq!(added, [(KEY_REGISTRY_CHANGES, 0)]);
+        let kept: Vec<_> = after
+            .iter()
+            .filter(|(name, _, _)| name != KEY_REGISTRY_CHANGES)
+            .cloned()
+            .collect();
+        assert_eq!(kept, before);
+        assert_eq!(
+            columns(&connection, KEY_REGISTRY_CHANGES),
+            [
+                "operation_id",
+                "action",
+                "key_id",
+                "label",
+                "public_key_fingerprint",
+                "changed",
+                "recorded_at",
+            ]
+        );
+    }
+}
+
 #[test]
 fn opening_a_database_that_has_the_request_tables_keeps_their_rows() {
     let world = world();

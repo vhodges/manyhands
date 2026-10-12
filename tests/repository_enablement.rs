@@ -591,6 +591,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "item_edges",
             "item_problems",
             "key_material_operations",
+            "key_registry_changes",
             "operation_record_contexts",
             "operation_records",
             "owned_generated_keys",

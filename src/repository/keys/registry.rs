@@ -692,6 +692,39 @@ pub(in super::super) fn migrate_material_schema(
             CREATE UNIQUE INDEX IF NOT EXISTS key_material_operations_one_incomplete_per_key_idx
                 ON key_material_operations(key_id) WHERE phase <> 'completed';",
         )
+        .map_err(RepositoryError::sqlite)?;
+    migrate_registry_changes(transaction)
+}
+
+/// Adds the table of recorded key registry changes to an index that
+/// lacks it, and changes nothing else. A row is one import, selection or
+/// clearing made under an operation ID, written in the transaction that
+/// made it, and never changed afterwards: it is what a retry of the
+/// request that made the change is answered from.
+///
+/// A row holds the operation, what was asked, the key, whether anything
+/// changed, and the label and public key fingerprint the result gave. It
+/// holds no path, no key material and nothing made from a passphrase.
+/// `key_id` is the key that was registered or selected, and NULL for a
+/// clearing, whose result names no key.
+fn migrate_registry_changes(transaction: &Transaction<'_>) -> Result<(), RepositoryError> {
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS key_registry_changes (
+                operation_id TEXT PRIMARY KEY NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('import', 'select', 'clear')),
+                key_id TEXT,
+                label TEXT,
+                public_key_fingerprint TEXT,
+                changed INTEGER NOT NULL CHECK (changed IN (0, 1)),
+                recorded_at INTEGER NOT NULL,
+                CHECK (
+                    (action = 'clear' AND key_id IS NULL AND label IS NULL
+                        AND public_key_fingerprint IS NULL) OR
+                    (action <> 'clear' AND key_id IS NOT NULL)
+                )
+            );",
+        )
         .map_err(RepositoryError::sqlite)
 }
 
