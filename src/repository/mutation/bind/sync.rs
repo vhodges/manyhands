@@ -846,6 +846,49 @@ impl SyncBinding {
     }
 }
 
+/// What a call of the synchronization's own request leaves of its
+/// record, given what the call came to.
+///
+/// A call can stop with an error under a row that has completed: the
+/// row completed beside it, or before it, and the call failed before
+/// the domain read the row, on a repository or an index it could not
+/// read for a moment. The error is no result of the synchronization,
+/// which has one. Nothing is stored and nothing is deleted: were the
+/// record released, the request sent again would be a new one, find the
+/// remote current and be finished as a no-op, for a request that
+/// published. The same request is answered from the row.
+fn kept_for_its_result(ran: Ran) -> Ran {
+    let Ran { answer, standing } = ran;
+    let standing = match standing {
+        Standing::Stopped {
+            journal:
+                Some(JournalRow::Final {
+                    kind: FinalKind::Completed,
+                    owes_work: _,
+                    checkpointed: _,
+                }),
+        } => Standing::Unconfirmed,
+        Standing::Stopped {
+            journal:
+                Some(
+                    JournalRow::Absent
+                    | JournalRow::Pending(_)
+                    | JournalRow::Final {
+                        kind: FinalKind::Cancelled | FinalKind::RetainedForInspection,
+                        owes_work: _,
+                        checkpointed: _,
+                    },
+                )
+                | None,
+        }
+        | Standing::Final
+        | Standing::Owed
+        | Standing::Unconfirmed
+        | Standing::NotRun { journal: _ } => standing,
+    };
+    Ran { answer, standing }
+}
+
 /// What the repository shows of an unfinished synchronization, for a
 /// call that is refused under its request ID: the push the remote is
 /// known to hold.
@@ -934,13 +977,13 @@ impl Binding for SyncBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(
+        kept_for_its_result(self.call(
             call,
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
             false,
-        )
+        ))
     }
 
     /// Nothing is read here and nothing is answered: whatever the row
@@ -967,12 +1010,12 @@ impl Binding for SyncBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(
+        kept_for_its_result(self.call(
             call,
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
             true,
-        )
+        ))
     }
 }

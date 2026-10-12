@@ -63,6 +63,10 @@ const CASES: &[ssh_harness::Case] = &[
         a_push_whose_result_was_lost_is_reconciled_by_the_same_request,
     ),
     (
+        "a_published_synchronization_whose_retry_fails_before_its_row_is_read_keeps_its_result",
+        a_published_synchronization_whose_retry_fails_before_its_row_is_read_keeps_its_result,
+    ),
+    (
         "the_same_request_id_for_another_target_is_a_mismatch",
         the_same_request_id_for_another_target_is_a_mismatch,
     ),
@@ -874,6 +878,80 @@ fn a_push_whose_result_was_lost_is_reconciled_by_the_same_request() -> Result<()
         RequestState::Finished
     );
     assert!(!reserved(&w));
+    Ok(())
+}
+
+fn a_published_synchronization_whose_retry_fails_before_its_row_is_read_keeps_its_result()
+-> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestSettlement,
+    ))?;
+
+    // The call published and died before it recorded its end.
+    let lost = call(
+        &w,
+        &failing,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    let accepted_record = record(&w, REQUEST_1).ok_or(FixtureError)?;
+    assert_eq!(accepted_record.state, RequestState::Accepted);
+    let operation = accepted_record.operations[0].operation_id;
+    assert_eq!(phase(&w, operation)?, "completed");
+
+    // The repository cannot be resolved for a while: its Git directory
+    // is away, so the call stops before it reads the row that completed.
+    let git = w.root.join(".git");
+    let away = w.root.join(".git-away");
+    fixed(std::fs::rename(&git, &away))?;
+    let stopped = call_before_the_stores_hold_anything(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    fixed(std::fs::rename(&away, &git))?;
+    w.privacy()?;
+    assert_ne!(stopped.outcome, Outcome::Success);
+    assert_ne!(stopped.outcome, Outcome::Noop);
+    assert_eq!(stopped.operation_id, Some(operation.to_string()));
+    // The error is no result of the synchronization, which has one: the
+    // record stays, and the same request is what is offered.
+    assert_eq!(
+        record(&w, REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+
+    // The same request is answered with what it published. Nothing is
+    // connected to.
+    let opened = connections(&w);
+    let found = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(found.outcome, Outcome::Success);
+    assert_eq!(found.code, ResultCode::Ok);
+    assert_eq!(found.effects, published(local));
+    assert_eq!(found.operation_id, Some(operation.to_string()));
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(execute(&w, REQUEST_1, repo_sync(&w)), found);
     Ok(())
 }
 
@@ -1973,13 +2051,21 @@ fn a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over(
     // nothing. What it reports is the operation as its row then stands,
     // which the retry has finished: the commit is published, and the
     // call that lost the operation does not know the index is current.
+    // Its error is no result of an operation that has completed, so the
+    // same request is what it offers first: the record answers it.
     hold.release()?;
     let fenced = joined(&w, first)?;
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Partial);
     assert_eq!(fenced.operation_id, retried.operation_id);
     assert_eq!(fenced.effects, published_and_cancelled(local));
-    assert_eq!(actions(&fenced), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&fenced),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
     assert_eq!(accepted(&w.server), pushes + 1);
     assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
     // The record is the retry's, and every later call is answered
