@@ -961,8 +961,11 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
     let blocked = world.execute(REQUEST_2, world.create(TICKET_NEW));
     assert_eq!(blocked.code, ResultCode::Busy);
     assert_eq!(recovery_actions(&blocked), ["request.retry"]);
-    before.assert_unchanged(world, "the busy abandon");
+    // The snapshot reads every file under `.git`, the lease file among
+    // them, and Windows refuses a read of a file another handle has
+    // locked: the holder goes first.
     drop(held);
+    before.assert_unchanged(world, "the busy abandon");
 
     // A creation holds the bootstrap lease of the root, which a save
     // does not take: another request reaches the journal and is refused
@@ -980,8 +983,11 @@ fn an_abandon_is_busy_while_a_call_holds_the_repository_lease() {
     assert_eq!(recovery_actions(&blocked), ["repo.inspect"]);
     let busy = stranded.execute(REQUEST_3, &confirmation);
     assert_eq!(busy.code, ResultCode::Busy);
-    before.assert_unchanged(world, "the busy abandon");
+    // The snapshot reads every file under `.git`, the lease file among
+    // them, and Windows refuses a read of a file another handle has
+    // locked: the holder goes first.
     drop(held);
+    before.assert_unchanged(world, "the busy abandon");
     // With no lease held the same request is offered the abandon.
     assert_blocked_and_offered_the_abandon(&stranded, REQUEST_2);
 
