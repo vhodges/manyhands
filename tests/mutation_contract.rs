@@ -4,11 +4,12 @@
 
 use manyhands::{
     repository::{
-        CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput, IndexRefreshInput,
-        KeyClearInput, KeyDeleteInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
-        MutationDataDto, OperationAbandonInput, OperationId, RelationshipWrite, RemoteAddInput,
-        RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
-        SharedKeyId, TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        AuthoringKind, CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput,
+        IndexRefreshInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyImportInput,
+        KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, OperationAbandonInput,
+        OperationId, RelationshipWrite, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepoSyncInput, SharedKeyId,
+        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -425,6 +426,38 @@ fn a_failed_index_refresh_matches_the_envelope_schema_and_its_golden() {
     let failed = world.execute(REQUEST_1, index_refresh(&world));
     assert_eq!(failed.outcome, Outcome::Error);
     assert_contract("index_refresh_failed", &world, &failed);
+}
+
+/// A synchronization needs a server for every result but one: a
+/// repository with no publication remote is refused before anything is
+/// recorded. The results a server gives are checked against the schemas
+/// by the test target `mutation_remote`, where no fixture can be kept:
+/// each names a host, a port and a commit that differ from run to run.
+#[test]
+fn a_synchronization_with_no_publication_remote_matches_the_envelope_schema_and_its_goldens() {
+    let world = World::new();
+    let repository = world.execute(
+        REQUEST_1,
+        Mutation::RepoSync(RepoSyncInput {
+            root: world.root.clone(),
+        }),
+    );
+    assert_eq!(repository.outcome, Outcome::Blocked);
+    assert_eq!(repository.code, ResultCode::PublicationRemoteRequired);
+    assert_contract("repo_sync_publication_remote_required", &world, &repository);
+
+    let item = world.execute(
+        REQUEST_2,
+        Mutation::ItemSync(ItemSyncInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: support::items::item_id(TICKET_A),
+        }),
+    );
+    assert_eq!(item.code, ResultCode::PublicationRemoteRequired);
+    assert_contract("item_sync_publication_remote_required", &world, &item);
+    assert!(world.record(REQUEST_1).is_none());
+    assert!(world.record(REQUEST_2).is_none());
 }
 
 const REMOTE_SCHEMA: &str = "remote_mutation.schema.json";

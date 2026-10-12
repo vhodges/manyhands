@@ -8,6 +8,8 @@ mod production;
 pub use production::*;
 #[path = "support/remote_world.rs"]
 mod remote_world;
+#[path = "support/schema.rs"]
+mod schema;
 #[path = "support/ssh_harness.rs"]
 mod ssh_harness;
 #[path = "support/ssh_privacy.rs"]
@@ -466,6 +468,15 @@ fn call(
     );
     let rendered = serde_json::to_vec(&envelope).expect("an envelope serializes");
     ssh_privacy::clean(&rendered, &w.probes).expect("redacted envelope");
+    // No fixture can be kept of an envelope that names a port and a
+    // commit: each is checked against the published schemas instead.
+    let value = serde_json::to_value(&envelope).expect("an envelope serializes");
+    schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
+    let synchronization = matches!(envelope.command.as_str(), "item sync" | "repo sync");
+    if synchronization && !value["data"].is_null() {
+        schema::check_published("synchronization_mutation.schema.json", &value["data"])
+            .expect("the synchronization data schema");
+    }
     ssh_privacy::clean(format!("{envelope:?}").as_bytes(), &w.probes).expect("redacted envelope");
     w.privacy().expect("redacted durable state");
     envelope
@@ -1320,6 +1331,11 @@ fn the_events_of_a_synchronization_arrive_in_safe_point_order_and_hold_nothing_p
         ]
     );
     for event in &events.0 {
+        let value = fixed(serde_json::to_value(event))?;
+        fixed(schema::check_published(
+            "progress_event.schema.json",
+            &value,
+        ))?;
         assert_eq!(event.request_id, REQUEST_2);
         assert_eq!(event.operation_id, pushed.operation_id);
         assert_eq!(event.command, "repo sync");

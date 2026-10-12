@@ -2178,6 +2178,9 @@ fn the_mutation_goldens_are_exactly_the_registered_cases() {
 #[path = "mutation_replay/execute.rs"]
 mod execute;
 
+#[path = "mutation_replay/progress.rs"]
+mod progress;
+
 #[path = "mutation_replay/cache_loss.rs"]
 mod cache_loss;
 

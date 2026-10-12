@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 synchronization mutation data",
+  "description": "The data of an item sync or repo sync envelope that stopped because its host is not trusted: the host it reached and the key that host presented, which is what a host approval is given. A synchronization reports no other data: what it published is in its effects, and every other result of one carries null.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "port", "algorithm", "presented_fingerprint", "expected_fingerprint"],
+  "properties": {
+    "host": {
+      "description": "The host, in lower case.",
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "algorithm": {
+      "description": "The algorithm of the key the host presented.",
+      "type": "string"
+    },
+    "presented_fingerprint": {
+      "description": "The fingerprint of the key the host presented: SHA256: and the digest of the public key.",
+      "type": "string"
+    },
+    "expected_fingerprint": {
+      "description": "The fingerprint the host is pinned to, when the host presented another key than its pin. Null for a host that has no pin.",
+      "type": ["string", "null"]
+    }
+  }
+}

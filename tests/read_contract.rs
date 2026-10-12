@@ -13,9 +13,10 @@ use manyhands::{
         KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
         KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
         OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
-        ProblemDto, ProposedRelationships, ReadinessFilter, ReadinessReasonCode, ReadinessState,
-        RelationshipRejectionDto, RepositoryService, RequestState, ResolvedRepository, SharedKeyId,
-        TicketFilter, UnplannableReasonCode, transport::SshAuthority,
+        ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
+        ReadinessState, RelationshipRejectionDto, RepositoryService, RequestState,
+        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
+        transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -963,6 +964,16 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             PreviewIdentitySource::ALL
                 .map(PreviewIdentitySource::as_str)
                 .to_vec(),
+        ),
+        (
+            "progress_event.schema.json",
+            "stage",
+            ProgressStage::ALL.map(ProgressStage::as_str).to_vec(),
+        ),
+        (
+            "cancel.schema.json",
+            "state",
+            RequestState::ALL.map(RequestState::as_str).to_vec(),
         ),
     ]
 }
