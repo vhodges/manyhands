@@ -8,23 +8,21 @@
 
 use std::path::Path;
 
-use crate::results::{Effects, Envelope, RecoveryActionKind, ResultCode};
+use crate::results::{Effects, Envelope, ResultCode};
 
 use super::{
     super::{
         FailurePoint, OperationId, RepositoryOperation, RepositoryService,
-        bridges::abandon::stale_heartbeat,
         keys::{SessionCredentialProvider, SessionCredentials},
-        leases_are_free, recovery,
     },
     CancellationToken, MutationCall, ProgressSink,
-    bind::{Accepted, Answer, Binding, CallContext, Place, Ran, resume},
+    bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
     confirm::Consent,
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
     outcome,
     progress::{CallSession, ProgressStage, Session, Subject},
-    records::{self, ConfirmationRecord, InsertRequestOutcome, NewRequest},
+    records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Reply, RequestIdentity},
 };
 
@@ -56,156 +54,6 @@ impl RepositoryService {
         let envelope = self.execute_call(call, &session);
         let envelope = self.offering_resume(envelope);
         self.offering_abandon(envelope)
-    }
-
-    /// Keeps `operation.resume` among what an envelope offers only
-    /// where a resume of the operation it names would take the
-    /// operation up, as things are once the call is over: it is asked
-    /// with the question a resume itself asks; see `resume::takes_up`.
-    ///
-    /// An index hand-off can be owed by a row a resume leaves to its
-    /// request: one that reached its hand-off without recording the
-    /// step that says its own work is done, as an enablement or a
-    /// selection does when it is taken up after its commit. A resume of
-    /// it is `original_request_required`, so the action would be a dead
-    /// end. The request's own result offers the same request in its
-    /// place, which its record, left accepted, is there for. A resume's
-    /// own result offers nothing in its place.
-    fn offering_resume<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
-        let offers = envelope
-            .recovery
-            .iter()
-            .any(|action| action.action == RecoveryActionKind::OperationResume);
-        if !offers {
-            return envelope;
-        }
-        let root = envelope.scope.repository.clone();
-        let own = envelope.operation_id.clone();
-        let request_id = envelope.request_id.clone();
-        let mut offered = Vec::with_capacity(envelope.recovery.len());
-        for action in std::mem::take(&mut envelope.recovery) {
-            if action.action != RecoveryActionKind::OperationResume {
-                offered.push(action);
-                continue;
-            }
-            let taken_up = root
-                .as_deref()
-                .zip(action.operation_id.as_deref())
-                .and_then(|(root, operation_id)| {
-                    Some((root, OperationId::parse(operation_id).ok()?))
-                })
-                .is_some_and(|(root, operation_id)| resume::takes_up(self, root, operation_id));
-            if taken_up {
-                offered.push(action);
-            } else if own.is_some()
-                && action.operation_id == own
-                && let Some(request_id) = request_id.clone()
-            {
-                offered.push(outcome::original_request(request_id));
-            }
-        }
-        envelope.recovery = offered;
-        envelope
-    }
-
-    /// Adds `operation.abandon` to an envelope of a request that
-    /// stopped, where a pending local operation is what stands in the way;
-    /// see `outcome::offering_abandon` for the two rules.
-    ///
-    /// The journal and the records are read only for an envelope either
-    /// rule can apply to, after everything the call did, so the action
-    /// names what is pending now. That is also so for a result given
-    /// again from a finished record: its stored actions are none, and
-    /// what it is offered is what is true when it is read.
-    ///
-    /// An operation is offered only when the lookup can see nothing
-    /// against abandoning it: it is an operation of the local journal
-    /// alone, no call is at work under it with a heartbeat, and no call
-    /// holds the repository's lease or its bootstrap lease, which is
-    /// looked at without waiting and let go at once. The look is taken
-    /// last, and only when there is something to offer.
-    ///
-    /// An operation offered so that is another request's is asked, with
-    /// the question a resume itself asks, whether a resume would take
-    /// it up: where it would, the resume is offered before the abandon.
-    ///
-    /// A journal that cannot be read adds nothing: the envelope keeps
-    /// what it has.
-    pub(super) fn offering_abandon<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
-        if envelope.code.failure_class().is_none() {
-            return envelope;
-        }
-        let Some(root) = envelope.scope.repository.clone() else {
-            return envelope;
-        };
-        let inspects = outcome::abandon_may_be_offered(envelope.code, &envelope.recovery);
-        // The request's own operation, when its envelope names one.
-        let own = envelope
-            .operation_id
-            .as_deref()
-            .and_then(|operation_id| OperationId::parse(operation_id).ok())
-            .zip(envelope.request_id.clone());
-        if !inspects && own.is_none() {
-            return envelope;
-        }
-        let read = self.read_session(RepositoryOperation::Read, |connection| {
-            let stale_before = stale_heartbeat();
-            let mut pending = Vec::new();
-            for (operation_id, row) in recovery::pending_rows(connection, &root)? {
-                if !row.has_live_heartbeat(stale_before)
-                    && !recovery::held_by_another_journal(connection, &operation_id)?
-                {
-                    pending.push(operation_id);
-                }
-            }
-            // Whether the request's record was left accepted, holding
-            // that operation as a local one.
-            let own = match &own {
-                Some((operation_id, request_id)) => {
-                    let owner = records::operation_owner(connection, &root, *operation_id)?;
-                    (owner.as_deref() == Some(request_id.as_str()))
-                        .then(|| operation_id.to_string())
-                }
-                None => None,
-            };
-            Ok((pending, own))
-        });
-        let Ok((pending, own)) = read else {
-            return envelope;
-        };
-        if pending.is_empty() {
-            return envelope;
-        }
-        let data_directory = self
-            .registry_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
-        if !leases_are_free(data_directory, Path::new(&root)) {
-            return envelope;
-        }
-        // Asked only under the rule that offers another's operation.
-        let resumable: Vec<String> = if inspects {
-            pending
-                .iter()
-                .filter(|pending| envelope.operation_id.as_ref() != Some(*pending))
-                .filter(|pending| {
-                    OperationId::parse(pending)
-                        .is_ok_and(|operation_id| resume::takes_up(self, &root, operation_id))
-                })
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        };
-        envelope.recovery = outcome::offering_abandon(
-            std::mem::take(&mut envelope.recovery),
-            envelope.code,
-            Some(&root),
-            &pending,
-            &resumable,
-            own.as_deref(),
-        );
-        envelope
     }
 
     /// One call of `execute`, before the journal is asked what its
