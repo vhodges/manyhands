@@ -737,6 +737,81 @@ fn a_selection_that_failed_before_its_commit_leaves_nothing_and_can_be_made_agai
     assert_selected(&world, &selected, Some("origin"), world.primary_head());
 }
 
+/// Where a remote that can be published to is: a selection is given the
+/// remote's name, and gives and keeps nothing of its location.
+const LOCATION_SENTINEL: &str = "SENTINEL-LOCATION-4c0d";
+
+/// A selection is given a remote's name and reads the remote: its
+/// location, and in one that cannot be published to, the password the
+/// location holds. Nothing it returns or records holds either: not when
+/// it commits, stops with its hand-off owed, is taken up again, changes
+/// nothing, clears the selection or is refused.
+#[test]
+fn nothing_of_a_selection_holds_the_location_it_read() {
+    let sentinels = [LOCATION_SENTINEL, SECRET, OTHER_SECRET];
+    let world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    git_remote(
+        &world,
+        "origin",
+        &format!("git@example.invalid:team/{LOCATION_SENTINEL}.git"),
+    );
+    git_remote(
+        &world,
+        "guarded",
+        &format!("ssh://git:{SECRET}@example.invalid/team/project.git"),
+    );
+    git_remote(&world, "web", &location(OTHER_SECRET));
+    // Each really is in what a selection reads, so the scans can fail.
+    for (name, sentinel) in [
+        ("origin", LOCATION_SENTINEL),
+        ("guarded", SECRET),
+        ("web", OTHER_SECRET),
+    ] {
+        assert!(remote_url(&world, name).unwrap().contains(sentinel));
+    }
+    let scanned = |request_id: &str, name: Option<&str>| {
+        let envelope = world.execute(request_id, select(&world, name));
+        let text = serde_json::to_string(&envelope).unwrap();
+        for sentinel in sentinels {
+            assert!(
+                !text.contains(sentinel),
+                "the envelope holds {sentinel}: {text}"
+            );
+        }
+        mutation::assert_request_stores_exclude(world.data.path(), &sentinels);
+        envelope
+    };
+
+    let pending = scanned(REQUEST_1, Some("origin"));
+    assert_eq!(
+        (pending.outcome, pending.code),
+        (Outcome::Partial, ResultCode::DiscoveryPending)
+    );
+    let selected = scanned(REQUEST_1, Some("origin"));
+    assert_eq!(
+        (selected.outcome, selected.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(scanned(REQUEST_1, Some("origin")), selected);
+    assert_selection_unchanged(&scanned(REQUEST_2, Some("origin")));
+    // A remote that cannot be published to is read and refused.
+    for name in ["guarded", "web"] {
+        let refused = scanned(REQUEST_3, Some(name));
+        assert_eq!(refused.code, ResultCode::InvalidRemote, "{name}");
+    }
+    let cleared = scanned(REQUEST_3, None);
+    assert_eq!(
+        (cleared.outcome, cleared.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    // The scans read the records of the three requests that were
+    // accepted, and the rows of their operations.
+    assert_eq!(world.request_rows(), 3);
+    assert!(operation_rows(&world) >= 3);
+}
+
 #[test]
 fn a_selection_that_is_refused_leaves_nothing() {
     let world = world_with_origin(plain);

@@ -699,3 +699,68 @@ fn a_registry_change_is_shown_with_no_operations() {
         assert_eq!(value["scope"]["repository"], serde_json::Value::Null);
     }
 }
+
+/// What a private key file holds and nothing but the file may: the key.
+const KEY_SENTINEL: &str = "SENTINEL-KEYBYTES-8e2c";
+
+/// A selection, a clearing and a removal name a key by its ID and read
+/// its registration, which says where the key's files are. Nothing they
+/// return or record holds where the files are or what they hold: not
+/// when they change the registry, change nothing, are refused or are
+/// given again from their records.
+#[test]
+fn nothing_of_a_selection_a_clearing_or_a_removal_holds_the_key_or_where_it_is() {
+    let sentinels = [PATH_SENTINEL, KEY_SENTINEL];
+    let world = KeyWorld::new();
+    let (private, public) = world.key_files(PATH_SENTINEL);
+    std::fs::write(&private, format!("{KEY_SENTINEL}\n")).unwrap();
+    let registered = execute_import(
+        &world,
+        REQUEST_1,
+        import("Work laptop", &private, Some(&public)),
+    );
+    assert_success(&registered);
+    let id = SharedKeyId::parse(key_data(&registered).id.as_deref().unwrap()).unwrap();
+    // Both really are in what the commands read, so the scans can fail:
+    // the registration names the file, and the file holds the key.
+    let registration = world.service.show_key(id).unwrap();
+    assert!(format!("{registration:?}").contains(PATH_SENTINEL));
+    assert!(
+        std::fs::read_to_string(&private)
+            .unwrap()
+            .contains(KEY_SENTINEL)
+    );
+    let scanned = |request_id: &str, request: Mutation| {
+        let envelope = world.execute(request_id, request);
+        assert_eq!(
+            golden::find_sentinel(&serde_json::to_value(&envelope).unwrap(), &sentinels),
+            None
+        );
+        mutation::assert_request_stores_exclude(world.data.path(), &sentinels);
+        envelope
+    };
+    const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+    const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+    const REQUEST_6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX6";
+
+    let selected = scanned(REQUEST_2, select(id));
+    assert_success(&selected);
+    assert_eq!(scanned(REQUEST_2, select(id)), selected);
+    assert_noop(&scanned(REQUEST_3, select(id)));
+    // Refused: the key is selected.
+    let refused = scanned(REQUEST_4, remove(id));
+    assert_eq!(refused.code, ResultCode::SelectedKeyInUse);
+    assert_success(&scanned(REQUEST_4, clear()));
+    assert_noop(&scanned(REQUEST_5, clear()));
+    let removed = scanned(REQUEST_6, remove(id));
+    assert_success(&removed);
+    assert_eq!(scanned(REQUEST_6, remove(id)), removed);
+    // The scans read the records the six requests left.
+    assert_eq!(world.request_rows(), 6);
+    // The file is where it was, and holds what it held.
+    assert!(
+        std::fs::read_to_string(&private)
+            .unwrap()
+            .contains(KEY_SENTINEL)
+    );
+}

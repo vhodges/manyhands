@@ -2040,6 +2040,74 @@ fn a_create_interrupted_after_initialization_is_partial_and_its_retry_completes(
     );
 }
 
+/// The name and the address of the identity a create is given, which
+/// its preview shows and its commit is authored by.
+const NAME_SENTINEL: &str = "SENTINEL-IDENTITY-NAME-2a9f";
+const EMAIL_SENTINEL: &str = "sentinel-identity-email-6d0b@example.invalid";
+
+/// The identity is shown to the caller who confirms it and written to
+/// the repository it authors. No record keeps it, and no result of the
+/// request gives it again: not the one of a create that is interrupted,
+/// not the one of its retry, and not the one given again from its record.
+#[test]
+fn no_record_and_no_result_of_repo_create_holds_the_identity_it_was_given() {
+    let sentinels = [NAME_SENTINEL, EMAIL_SENTINEL];
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let create = || {
+        Mutation::RepoCreate(RepoCreateInput {
+            identity: Some(CommitIdentity {
+                name: NAME_SENTINEL.to_owned(),
+                email: EMAIL_SENTINEL.to_owned(),
+            }),
+            ..site.input()
+        })
+    };
+    let scan = |desk: &Desk, what: &str, envelope: &Envelope<MutationDataDto>| {
+        let value = serde_json::to_value(envelope).unwrap();
+        assert_eq!(golden::find_sentinel(&value, &sentinels), None, "{what}");
+        mutation::assert_request_stores_exclude(desk.data.path(), &sentinels);
+    };
+
+    // The preview is where the identity is shown: the request handles
+    // both sentinels, so the scans below can fail.
+    let (confirmation, preview) = desk.preview(&create());
+    let shown = &repository_preview(&preview).identity;
+    assert_eq!(
+        (shown.name.as_str(), shown.email.as_str()),
+        (NAME_SENTINEL, EMAIL_SENTINEL)
+    );
+    mutation::assert_request_stores_exclude(desk.data.path(), &sentinels);
+    assert_eq!(desk.confirmation_rows(), 1);
+
+    desk.fail_once_at(FailurePoint::AfterRepositoryInitialization);
+    let partial = desk.execute(REQUEST_1, &confirmation, create());
+    assert_eq!(partial.outcome, Outcome::Partial);
+    scan(&desk, "interrupted", &partial);
+    // The scan read the rows the request left: its record, accepted,
+    // and the row of its operation, pending.
+    assert_eq!(desk.request_rows(), 1);
+    assert_eq!(desk.pending_journal_rows(), 1);
+
+    desk.reopen();
+    let finished = desk.execute(REQUEST_1, &confirmation, create());
+    assert_enabled(&finished, &site.root);
+    scan(&desk, "finished", &finished);
+    let replayed = desk.execute(REQUEST_1, &confirmation, create());
+    assert_eq!(replayed, finished);
+    scan(&desk, "replayed", &replayed);
+
+    // The repository is the one place the identity was written.
+    assert_eq!(
+        local_config(&site.root, "user.name").as_deref(),
+        Some(NAME_SENTINEL)
+    );
+    assert_eq!(
+        local_config(&site.root, "user.email").as_deref(),
+        Some(EMAIL_SENTINEL)
+    );
+}
+
 /// The retry of a create whose first call never began observes again.
 #[test]
 fn a_retry_of_a_create_before_any_effect_observes_again() {

@@ -17,7 +17,10 @@ use manyhands::{
 use crate::support::{
     FailOnce,
     items::{self, TICKET_A},
-    mutation::{REQUEST_1, REQUEST_2, REQUEST_3, World, recovery_actions},
+    mutation::{
+        self, BODY, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_NEW, TITLE, World,
+        recovery_actions,
+    },
 };
 
 type Request = fn(&World) -> Mutation;
@@ -512,6 +515,86 @@ fn a_rebuild_of_a_corrupt_database_that_fails_is_finished_by_its_retry() {
     assert_eq!(retry.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(world.pending_journal_rows(), 0);
     assert_registered_again(&world);
+}
+
+/// Commits a ticket on primary whose title and body hold the sentinels:
+/// a refresh and a rebuild read it. They really are in the file, so a
+/// scan of what the command returned and recorded can fail.
+fn commit_a_ticket_holding_the_sentinels(world: &World) {
+    let path = items::ticket_path(TICKET_NEW);
+    world.commit_on_primary(
+        &path,
+        &format!("{}{BODY}", items::ticket_source(TICKET_NEW, TITLE, "")),
+    );
+    let source = world.primary_source(TICKET_NEW);
+    for sentinel in SENTINELS {
+        assert!(source.contains(sentinel), "{sentinel}");
+    }
+}
+
+/// The ticket holding the sentinels is indexed: the command read it.
+fn assert_the_sentinels_were_read(world: &World) {
+    let ticket = world
+        .service
+        .show_item(&world.resolved(), &items::item_id(TICKET_NEW))
+        .unwrap();
+    assert_eq!(ticket.title.as_deref(), Some(TITLE));
+}
+
+/// A refresh or a rebuild reads every item of the repository. One that
+/// fails keeps none of what it read, in what it returns, which
+/// `World::execute` scans, or in a request store; nor does the retry
+/// that finishes it, or a refresh that is refused.
+#[test]
+fn a_refresh_or_a_rebuild_that_fails_keeps_nothing_of_what_it_read() {
+    for (command, request, _) in COMMANDS {
+        let world = World::with_service(|data| {
+            FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+        });
+        commit_a_ticket_holding_the_sentinels(&world);
+
+        let failed = world.execute(REQUEST_1, request(&world));
+        assert_eq!(
+            (failed.outcome, failed.code),
+            (Outcome::Error, ResultCode::InternalError),
+            "{command}"
+        );
+        mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
+        // The scan read the rows the failure left: the request's record,
+        // accepted, and the row of its operation, pending.
+        assert_eq!(world.request_rows(), 1, "{command}");
+        assert_eq!(world.pending_journal_rows(), 1, "{command}");
+
+        let retry = world.execute(REQUEST_1, request(&world));
+        assert_current(&world, command, &retry);
+        mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
+        assert_the_sentinels_were_read(&world);
+    }
+
+    // A rebuild of a corrupt database that fails after the database was
+    // replaced, and its retry.
+    let mut world = World::new();
+    commit_a_ticket_holding_the_sentinels(&world);
+    corrupt_index(&mut world, |data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let failed = world.execute(REQUEST_1, rebuild(&world));
+    assert_eq!(failed.code, ResultCode::InternalError);
+    mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
+    assert_eq!(world.request_rows(), 1);
+    assert_current(
+        &world,
+        "index rebuild",
+        &world.execute(REQUEST_1, rebuild(&world)),
+    );
+    mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
+    assert_the_sentinels_were_read(&world);
+
+    // A refresh that is refused: the repository is not registered.
+    world.lose_cache();
+    let refused = world.execute(REQUEST_2, refresh(&world));
+    assert_eq!(refused.code, ResultCode::RepositoryNotRegistered);
+    assert_eq!(world.request_rows(), 0);
 }
 
 const KILLED_ROOT: &str = "MANYHANDS_KILLED_INDEX_ROOT";
