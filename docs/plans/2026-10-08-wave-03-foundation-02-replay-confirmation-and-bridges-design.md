@@ -1092,8 +1092,16 @@ and calls the binding for steps 4 to 8, in this order.
    binding cannot use that reading. It supplies its own evidence that its
    work is done and answers from `reenter` with standing `Final`.
 4. **Set up the domain call** without `prepare`'s checks (`resume`). The
-   relationships are read again only to list the targets nothing holds;
-   neither a rejection nor a failed read stops the retry. A create passes
+   relationships are checked again. A rejection (`relationship_cycle` or
+   `invalid_relationship`) answers the request with no domain call, unless
+   a commit of the request's own already holds the content it intends; the
+   domain checks no cycle, and another request may have closed one since
+   the first call. When the rejection stands and the operation has no
+   journal row, the record is deleted and nothing is left: no branch,
+   worktree, row or record, and no action is offered. When the row is
+   pending, the record stays `accepted`, as for any re-entry that stops
+   before its domain call with a row in flight. A check that cannot be
+   read does not stop the retry. A create passes
    the short code the file in the editing context holds, if it holds one,
    and composes one only if it does not: the initials or the prefix may
    have changed to something no short code can be composed from. If this
@@ -1191,7 +1199,7 @@ still the plan.
 | `remove_remote` | Deletes whatever remote has the name, also under a row that already recorded its removal. | A completed removal whose result was lost is `ok`. Under a row that recorded the removal, a remote of the name that is there again was added by someone else: `external_change`, the record is kept and the new remote is not touched. |
 | `generate_shared_key` | Returns already created. After an interruption, a key pair that was written is verified and registered on the next call; one that was not is retained for inspection, and that is final. | A completed generation row is a registered key: the record is finished as `ok` from the row, naming the key, whatever has happened to the key since. Otherwise the domain is called; "already created" under the request's own operation ID is `ok`. "Retained for inspection" finishes the record. An error on a retry that finds no row leaves the record `accepted` and does not delete it, because deleting it could let a second key be made. |
 | `delete_generated_key` | Returns already deleted. After an interruption it completes under the same operation ID with a fresh review; a missing file is skipped. | With the row completed, calls it with no review: `already_applied`. With the row pending, calls it with a fresh review and compares nothing. With no row, observes again and compares with the preview. |
-| `synchronize_remote_observed` | Replays its recorded outcome, doing the index hand-off the row still owes; says of a cancelled row that it was. | Every re-entry makes the domain call, except for a fenced row. A result is `cancelled` only when the row's phase is cancelled. |
+| `synchronize_remote_observed` | Replays its recorded outcome, doing the index hand-off the row still owes; says of a cancelled row that it was. | Every re-entry makes the domain call, except for a fenced row. A result is `cancelled` only when the row's phase is cancelled. A call of the synchronization's own request (`run`, `rerun`) that ends with an error while the operation's row has completed leaves the record `accepted`, standing `Unconfirmed`, and offers `request.retry`; the next call replays the row, `ok` with the published commit, stored and given again identically. A first call that comes back fenced after a retry finished the operation offers `request.retry`, then `repo.inspect`. `operation resume` taking up a synchronization is unchanged. |
 | `synchronize_remote_observed`, interrupted | Returns recovery required unless `restart` is set. | Sets `restart` on every re-entry. A restart asks the remote what it holds before it pushes anything, and fences any executor still running under that ID, which is Wave 02's own takeover and pushes nothing twice. |
 | Key registry changes | No operation ID; idempotent. | Run again. A retry knows only what the registry holds now, so `key select`, `key clear` and `key import` are made again over whatever someone else has changed since; see the known limits. |
 | Identity, host approval, folders | No operation ID; idempotent. | Planned: runs again; reports a no-op if the state is already as requested. |
@@ -1241,7 +1249,7 @@ The places below were changed while Tasks 8 to 14 and 12A were built.
 | A request with no operation | Every accepted record holds one operation. | The key registry commands, an abandon and a resume have no journal row of their own. | A request may be accepted with no operation; its results carry a null `operation_id`. |
 | A retry of a key generation that finds no row | Settled like any stop: the record is deleted. | Two calls of one `key generate` at once could each make a key. | On a retry, an error with no row leaves the record `accepted`. |
 | The observation of a confirmed command | One digest. | A stepped retry of `repo create` could commit under an identity the preview never showed. | Two digests, of the state and of the identity. The identity is compared on a retry until the step `initialization_committed` is recorded. |
-| `external_change` on a confirmed command whose record stays `accepted` | `request.prepare`. | A new preview is a dead end while the request's own pending row refuses a new request. | `repo.inspect`, and `operation.abandon`. |
+| `external_change` on a confirmed command whose record stays `accepted` | `request.prepare`. | A new preview is a dead end while the request's own pending row refuses a new request. | `repo.inspect`, `operation.resume` for each other pending local operation a resume would take up now, and `operation.abandon`. A key deletion refused for a key file that is not the one Manyhands wrote offers no action. |
 | `remote remove` | The preview shows publication and polling effects. | A confirmed removal of a mirror remote left a repository with no references; see the known limits and ticket `01M4PB7WZN9WNAQ3KXZ19J28KM`. | The binding observes the remote's refspecs and refuses a removal that would take what the preview cannot name. |
 | `operation.abandon` | Offered on `recovery_required` when a pending local operation is the cause. | Ruling: a request stuck behind its own pending row must always be shown a way out; a stranded enablement's retry and an overtaken save's retry were shown none. | Also offered on any failure that left the request's own local operation pending. |
 | Abandoning a live operation | The preview binds the row's state and step. | A running rebuild could be abandoned and then reopen its row. | Every journal write refuses an abandoned row, and a heartbeat makes the abandon of a live rebuild `busy`. |
@@ -1329,6 +1337,12 @@ code that predates this Cycle; each names its ticket.
   current, complete index in every index-backed read, the relationship
   check included. It is accepted because detecting it is a product
   decision outside this Cycle.
+- **A re-entered ticket write whose relationship check cannot be read is
+  let through.** A first call fails closed. A retry does not, so if the
+  index read fails once on the retry of a request that was accepted and
+  died before its domain call, and another request has since closed a
+  cycle, the domain, which checks none, writes the edge. It needs both
+  that interleaving and a failed index read in the same call.
 
 *Documents, moves and short-code assignment.*
 
@@ -1406,6 +1420,20 @@ code that predates this Cycle; each names its ticket.
   repair it; the way out is to remove the index file by hand. Widening
   what counts as corrupt decides when a database is replaced and is a
   change to the existing library: ticket `01M4PB82G07RZSQMNJZN672S3W`.
+- **A ticket or document create on a Git repository that was never
+  enabled answers `repository_not_registered` offering `index.rebuild`.**
+  Taking the action registers the repository, and the create then repeats
+  the same answer, because the repository has no Manyhands configuration.
+  This is open: it waits for a product ruling on whether an index rebuild
+  may register a repository that was never enabled; see the open
+  questions.
+- **The discovery effect of `remote add` and `remote remove` says
+  `not_requested` in two cases where a hand-off was owed or made.** When
+  an error follows a change to the remote, the result is `partial` with
+  `request.retry` and the hand-off is owed, but the effect does not say
+  `pending`. When a retry finds the remote in place under a pending row
+  that recorded no change, the hand-off runs and the answer is
+  `already_applied` with `not_requested`.
 - **`repo remove` drops the repository's whole local journal,** the rows
   of other requests included. An old `remote remove` request whose record
   is still `accepted` can then run again on an identical remote that was
@@ -1446,7 +1474,8 @@ code that predates this Cycle; each names its ticket.
   `key delete` that finds a new file at a key path is refused with every
   file intact and the record `accepted`. The code depends on the file:
   `internal_error` when its mode, owner or link count is not what a key
-  file's must be, `external_change` when only its identity differs.
+  file's must be, `external_change` when only its identity differs. The
+  `external_change` offers no action: no new preview clears it.
 - **The privacy scan looks for the literal secret.** The test that scans
   every record, journal, envelope and event would not catch an encoded
   copy of a passphrase.
@@ -1527,6 +1556,10 @@ code that predates this Cycle; each names its ticket.
   remote may have held the commit already. The call that verified it
   knows which and says so. This errs on the side the rule prefers, and is
   how the domain itself reads the row on a restart.
+- **The kept answer of a published synchronization whose later call
+  failed says `discovery: pending`.** The row has completed and owes
+  nothing, so the hand-off ran; the answer is stored nowhere, and the
+  replay that `request.retry` brings says `current`.
 - **A cancel flag that cannot be read before the push ends that call**
   with `recovery_required`, where a transient failure could have been
   ridden out.
@@ -1597,6 +1630,14 @@ behavior is stated first, then the alternative.
    confirmed and `repo.inspect`. The alternative is to answer `cancelled`
    with the publication marked unknown, which the frozen effect values
    cannot express.
+8. **Should an index rebuild register a Git repository that was never
+   enabled?** Today a ticket or document create on such a repository
+   answers `repository_not_registered` offering `index.rebuild`; the
+   rebuild registers the repository and the create then repeats the same
+   answer. The alternatives: the rebuild registers it and creates then
+   work, or the rebuild is not offered and the result names enabling the
+   repository. The second may need a result code of its own for a
+   repository never enabled, which is a contract addition.
 
 **What the next binding must do.** Nothing is left to decide before it.
 Task 7c made the structural changes the checkpoint asked for: the ticket
@@ -1973,7 +2014,8 @@ change neither.
 | `repo create`, `repo enable` | `write` (the configuration file), `checkpoint` (the initialization commit), `discovery`. |
 | `remote select` | `write`, `checkpoint`, `discovery`, as it commits the configuration file. |
 | `index refresh`, `index rebuild`, `folder create` | `discovery` only. A failed refresh or rebuild has made no durable effect: it is an error with its code, not `partial`, and its record stays `accepted` while its journal row is pending. |
-| Identity, remotes added or removed, keys, host trust, registration removal | Every effect `not_requested`. What changed is in `data`, and `outcome` distinguishes `success` from `noop`. |
+| `remote add`, `remote remove` | `discovery` only, because the remote change itself is in `data`. It is `current` when the operation changed the remote and ended, also when that is answered from a completed row; `pending` when the code is `discovery_pending`; `not_requested` for `already_applied` and for every refusal or error. `write`, `checkpoint` and `publication` are `not_requested`. |
+| Identity, keys, host trust, registration removal | Every effect `not_requested`. What changed is in `data`, and `outcome` distinguishes `success` from `noop`. |
 
 For the last row, `partial` is decided by the domain outcome and described
 in `data`, since no effect can show it: a key deletion that removed one file
@@ -2099,7 +2141,7 @@ leave the request's record `accepted`; see Settling.
 | Codes | Recovery action offered | Otherwise |
 | --- | --- | --- |
 | `confirmation_required`, `confirmation_expired`, `confirmation_not_found` | `request.prepare` | |
-| `external_change` on a confirmed command, with no record left | `request.prepare` | What was previewed is no longer what is there; a new preview shows what is. |
+| `external_change` on a confirmed command, with no record left | `request.prepare` | What was previewed is no longer what is there; a new preview shows what is. Not offered when a key deletion is refused for a key file that is not the one Manyhands wrote (`external_change` from `SourceChanged`): no new preview clears that, on a first call, on a retry with no row, or when the deletion itself refuses. A registration that differs from the preview still offers it. |
 | `external_change` on a confirmed command, left `accepted` | `repo.inspect` | The request's own pending operation refuses every other request, a new one with a new preview among them. With what was previewed put back, the same request goes on. No action is offered when the result names no repository, as for an interrupted key deletion. |
 | `external_change` on any other command | none | Read the item again and submit a new request. A synchronization left `accepted` is offered `request.retry` by the synchronization rule below. |
 | `discovery_pending` | `operation.resume` naming the operation, where a resume would take it up; otherwise `request.retry` | `index.refresh` for `folder create` is the plan for that binding. |
@@ -2120,7 +2162,7 @@ leave the request's record `accepted`; see Settling.
 | `publication_remote_required`, `publication_remote_in_use`, `ticket_closed`, `slug_already_assigned`, `remote_name_conflict`, `invalid_remote`, the key codes outside a synchronization, and the Input codes not named above | none, unless left `accepted` | The code and message say what is missing. Actions for these belong with the commands that resolve them and are added when a front end needs them. |
 | Any code with no action of its own, `external_change` excepted, on a result left `accepted` | `request.retry`, naming the request | The same request finishes the work. Not offered when the record stays `accepted` only because a record read or change failed. |
 | Any failure that left the request's record `accepted` with the request's own local operation pending, whatever its code | `repo.inspect` if not already offered, then `operation.abandon` naming that operation, after every other action | The same request may still finish the work; where it cannot, this is the way out, and the result is where the caller learns the operation ID. This includes `discovery_pending` and `registration_pending`; see the open questions. |
-| `recovery_required`, or `external_change` on a confirmed command, that already offers `repo.inspect` | `operation.abandon` for each pending local operation of the repository, oldest first, after `repo.inspect` | Offered whatever caused the result: a pending local operation does refuse the repository's other operations, and the preview of the abandon says what it is. |
+| `recovery_required`, or `external_change` on a confirmed command, that already offers `repo.inspect` | `operation.resume` for each pending local operation of the repository that is not the request's own and that a resume would take up now, before `repo.inspect`; `operation.abandon` for each pending local operation, oldest first, after it | The request that owns an operation is not offered its resume here. The same list is made for `prepare` and for a result given again from a record, as true when it is read. The abandons are offered whatever caused the result: a pending local operation does refuse the repository's other operations, and the preview of the abandon says what it is. |
 
 `operation.abandon` is offered under either of the last two rows only for
 an operation nothing is seen against abandoning; see
@@ -2135,7 +2177,7 @@ A result replayed from a finished record carries no stored action. Two
 kinds of action are made again when it is read: the action its code has,
 for a finished synchronization or a finished resume, so that a
 `recovery_required` with its push not confirmed offers `repo.inspect`
-each time it is given; and `operation.abandon`, which names what is
+each time it is given; and `operation.resume` and `operation.abandon`, which name what is
 pending when the result is read.
 
 ### Recovery actions
@@ -3091,7 +3133,8 @@ New test targets: `mutation_replay`, `mutation_confirmation`,
 `mutation_contract`, `mutation_bridges`, `mutation_relationships`, and, on
 the SSH harness, `mutation_remote`. They run without the `desktop` feature.
 All but `mutation_bridges`, which comes with the bridges, exist and are in
-the native workflow's test list.
+the native workflow's test list. `journal_rejection` is in that list too and runs
+on the five native targets; it has not yet run there.
 
 The scenarios the Wave's exit evidence names, and where each is proven:
 
