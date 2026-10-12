@@ -306,6 +306,50 @@ fn found_local(
     })
 }
 
+/// How the operation `operation_id` stands for the repository at
+/// `root`, the root as its journal rows name it. One read of the three
+/// journals; see `OperationResumeBinding::observe`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn named(
+    service: &RepositoryService,
+    root: &str,
+    operation_id: OperationId,
+) -> Result<Named, ReadError> {
+    service.read_session(RepositoryOperation::Read, |connection| {
+        // An index that has never held an operation of a journal may
+        // lack that journal's table.
+        if recovery::has_table(connection, recovery::REMOTE_JOURNAL_TABLE)?
+            && let Some(found) = found_remote(connection, root, operation_id)?
+        {
+            return Ok(found);
+        }
+        if recovery::has_table(connection, recovery::KEY_JOURNAL_TABLE)?
+            && let Some(found) = found_key(connection, operation_id)?
+        {
+            return Ok(found);
+        }
+        found_local(connection, root, operation_id)
+    })
+}
+
+/// Whether a resume of the operation would take it up now: the one
+/// question that decides both what a resume does and whether a result
+/// offers one. `false` for an operation it would refuse, and when the
+/// journals cannot be read: a resume is not offered on a guess.
+pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: OperationId) -> bool {
+    match named(service, root, operation_id) {
+        Ok(Named::HandOff | Named::Synchronization(_)) => true,
+        Ok(
+            Named::NotFound
+            | Named::Abandoned
+            | Named::Ended { synchronization: _ }
+            | Named::LeftToInspect { synchronization: _ }
+            | Named::OriginalRequest { request: _ },
+        )
+        | Err(_) => false,
+    }
+}
+
 /// The index brought up to date, and nothing else: what a hand-off does.
 fn current() -> Answer {
     Answer {
@@ -337,24 +381,7 @@ impl OperationResumeBinding {
         let scope = self
             .scope_key()
             .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
-        let operation_id = self.operation_id;
-        let found = service
-            .read_session(RepositoryOperation::Read, |connection| {
-                let root = scope.as_str();
-                // An index that has never held an operation of a
-                // journal may lack that journal's table.
-                if recovery::has_table(connection, recovery::REMOTE_JOURNAL_TABLE)?
-                    && let Some(found) = found_remote(connection, root, operation_id)?
-                {
-                    return Ok(found);
-                }
-                if recovery::has_table(connection, recovery::KEY_JOURNAL_TABLE)?
-                    && let Some(found) = found_key(connection, operation_id)?
-                {
-                    return Ok(found);
-                }
-                found_local(connection, root, operation_id)
-            })
+        let found = named(service, scope.as_str(), self.operation_id)
             .map_err(|error| Answer::of_read(&error))?;
         Ok((scope, found))
     }

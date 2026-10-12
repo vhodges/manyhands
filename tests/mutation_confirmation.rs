@@ -2650,6 +2650,105 @@ fn a_row_that_completed_without_its_checkpoint_step_still_reports_its_commit() {
     );
 }
 
+/// The review's I1. An enablement cut off after its commit and before
+/// the step that records it is taken up by its own request, whose index
+/// hand-off then fails. The hand-off is owed, and the row holds no step
+/// that says the operation's work is done: a resume leaves such a row
+/// to its request. The result offers what will be accepted, the same
+/// request, and that request finishes the enablement.
+#[test]
+fn a_hand_off_owed_by_a_row_without_its_commit_step_offers_the_request_and_not_a_resume() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::AfterInitializationCommit);
+    let cut_off = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(cut_off.outcome, Outcome::Partial, "{}", cut_off.message);
+    let commit = plain.head();
+
+    desk.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+    let owed = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(owed.code, ResultCode::DiscoveryPending);
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE state = 'failed' AND completed_step = 'configuration_written'"
+        ),
+        1
+    );
+    let operation_id = owed
+        .operation_id
+        .clone()
+        .expect("the enablement's operation");
+    let resume = || {
+        Mutation::OperationResume(manyhands::repository::OperationResumeInput {
+            root: plain.root.clone(),
+            operation_id: manyhands::repository::OperationId::parse(&operation_id).unwrap(),
+        })
+    };
+
+    // What is offered is what will be accepted.
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&owed),
+        ["request.retry"]
+    );
+    assert_eq!(owed.recovery[0].arguments["request_id"], REQUEST_1);
+    // A resume, which is not offered, is refused and says the same.
+    let refused = execute_with(&desk.service, REQUEST_2, resume());
+    assert_eq!(refused.code, ResultCode::OriginalRequestRequired);
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(refused.recovery[0].arguments["request_id"], REQUEST_1);
+
+    // The offered action, taken, succeeds.
+    let finished = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(assert_enabled(&finished, &plain.root), commit.to_string());
+    assert_eq!(plain.initializations(), 1);
+    assert_eq!(desk.pending_journal_rows(), 0);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
+
+/// The other side of the same rule: where the row does hold its commit
+/// step, the resume that is offered is accepted, and the enablement's
+/// own request is then finished with its commit.
+#[test]
+fn the_resume_offered_for_an_enablement_whose_hand_off_failed_succeeds() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+    let owed = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(owed.code, ResultCode::DiscoveryPending);
+    let commit = plain.head();
+    assert_eq!(
+        mutation::recovery_before_own_abandon(&owed),
+        ["operation.resume"]
+    );
+    let operation_id = owed.recovery[0]
+        .operation_id
+        .clone()
+        .expect("the operation");
+
+    let resumed = execute_with(
+        &desk.service,
+        REQUEST_2,
+        Mutation::OperationResume(manyhands::repository::OperationResumeInput {
+            root: plain.root.clone(),
+            operation_id: manyhands::repository::OperationId::parse(&operation_id).unwrap(),
+        }),
+    );
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(desk.pending_journal_rows(), 0);
+    let finished = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(assert_enabled(&finished, &plain.root), commit.to_string());
+    assert_eq!(plain.initializations(), 1);
+}
+
 /// An enablement is killed after it wrote the configuration and before
 /// it committed it, and someone commits the file by hand. The row shows
 /// the operation wrote the file; the commit that holds it is not the

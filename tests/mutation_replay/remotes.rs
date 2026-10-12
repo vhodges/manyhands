@@ -1241,3 +1241,69 @@ fn a_selection_another_request_committed_first_is_not_reported_as_this_request_s
     assert_eq!(record.result.unwrap().effects.commit_oid, None);
     assert_eq!(world.pending_journal_rows(), 0);
 }
+
+/// The review's I1, for a selection. It dies between its commit and the
+/// step that records it; its own request takes it up, finds the
+/// configuration as it intended, and its index hand-off fails. The row
+/// owes its hand-off and holds no commit step, so a resume leaves it to
+/// its request: the result offers that request, which finishes it.
+#[test]
+fn a_selection_whose_hand_off_is_owed_without_its_commit_step_offers_the_request() {
+    let mut world = world_with_origin(plain);
+    // The step that records the commit cannot be written.
+    let index = items::index(world.data.path());
+    index
+        .execute_batch(
+            "CREATE TRIGGER lose_the_step BEFORE UPDATE ON operation_records
+              WHEN NEW.state = 'publication_committed'
+             BEGIN SELECT RAISE(ABORT, 'fixed failure'); END",
+        )
+        .unwrap();
+    let cut_off = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert!(cut_off.code.failure_class().is_some());
+    let commit = world.primary_head();
+    assert_eq!(selected_at(&world, commit).as_deref(), Some("origin"));
+    index.execute_batch("DROP TRIGGER lose_the_step").unwrap();
+    drop(index);
+
+    world.service =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let owed = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(owed.code, ResultCode::DiscoveryPending);
+    let operation_id = owed
+        .operation_id
+        .clone()
+        .expect("the selection's operation");
+    let step: Option<String> = items::index(world.data.path())
+        .query_row(
+            "SELECT completed_step FROM operation_records WHERE operation_ulid = ?1",
+            [&operation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(step.as_deref(), Some("publication_committed"));
+
+    assert_eq!(
+        crate::support::mutation::recovery_before_own_abandon(&owed),
+        ["request.retry"]
+    );
+    assert_eq!(owed.recovery[0].arguments["request_id"], REQUEST_1);
+    let refused = world.execute(
+        REQUEST_2,
+        Mutation::OperationResume(manyhands::repository::OperationResumeInput {
+            root: world.root.clone(),
+            operation_id: manyhands::repository::OperationId::parse(&operation_id).unwrap(),
+        }),
+    );
+    assert_eq!(refused.code, ResultCode::OriginalRequestRequired);
+
+    // The offered action, taken, succeeds, and makes no second commit.
+    let finished = world.execute(REQUEST_1, select(&world, Some("origin")));
+    assert_eq!(finished.outcome, Outcome::Success);
+    assert_eq!(world.primary_head(), commit);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+}

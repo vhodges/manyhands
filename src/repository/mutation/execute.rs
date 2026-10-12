@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::results::{Effects, Envelope, ResultCode};
+use crate::results::{Effects, Envelope, RecoveryActionKind, ResultCode};
 
 use super::{
     super::{
@@ -18,7 +18,7 @@ use super::{
         leases_are_free, recovery,
     },
     CancellationToken, MutationCall, ProgressSink,
-    bind::{Accepted, Answer, Binding, CallContext, Place, Ran},
+    bind::{Accepted, Answer, Binding, CallContext, Place, Ran, resume},
     confirm::Consent,
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
@@ -54,7 +54,58 @@ impl RepositoryService {
         // session, by way of the call context.
         let session = CallSession::new(credentials, progress, cancel);
         let envelope = self.execute_call(call, &session);
+        let envelope = self.offering_resume(envelope);
         self.offering_abandon(envelope)
+    }
+
+    /// Keeps `operation.resume` among what an envelope offers only
+    /// where a resume of the operation it names would take the
+    /// operation up, as things are once the call is over: it is asked
+    /// with the question a resume itself asks; see `resume::takes_up`.
+    ///
+    /// An index hand-off can be owed by a row a resume leaves to its
+    /// request: one that reached its hand-off without recording the
+    /// step that says its own work is done, as an enablement or a
+    /// selection does when it is taken up after its commit. A resume of
+    /// it is `original_request_required`, so the action would be a dead
+    /// end. The request's own result offers the same request in its
+    /// place, which its record, left accepted, is there for. A resume's
+    /// own result offers nothing in its place.
+    fn offering_resume<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
+        let offers = envelope
+            .recovery
+            .iter()
+            .any(|action| action.action == RecoveryActionKind::OperationResume);
+        if !offers {
+            return envelope;
+        }
+        let root = envelope.scope.repository.clone();
+        let own = envelope.operation_id.clone();
+        let request_id = envelope.request_id.clone();
+        let mut offered = Vec::with_capacity(envelope.recovery.len());
+        for action in std::mem::take(&mut envelope.recovery) {
+            if action.action != RecoveryActionKind::OperationResume {
+                offered.push(action);
+                continue;
+            }
+            let taken_up = root
+                .as_deref()
+                .zip(action.operation_id.as_deref())
+                .and_then(|(root, operation_id)| {
+                    Some((root, OperationId::parse(operation_id).ok()?))
+                })
+                .is_some_and(|(root, operation_id)| resume::takes_up(self, root, operation_id));
+            if taken_up {
+                offered.push(action);
+            } else if own.is_some()
+                && action.operation_id == own
+                && let Some(request_id) = request_id.clone()
+            {
+                offered.push(outcome::original_request(request_id));
+            }
+        }
+        envelope.recovery = offered;
+        envelope
     }
 
     /// Adds `operation.abandon` to an envelope of a request that
