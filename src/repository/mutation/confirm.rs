@@ -127,7 +127,8 @@ pub(crate) enum Row {
     /// The operation has recorded that it began its work. The request's
     /// own work has changed what would be observed, so nothing is
     /// compared, and the confirmation is the request's however old it
-    /// is: the domain is called.
+    /// is: the domain is called. A row there is, then: this answer for
+    /// a request with no row is `internal_error`, and nothing is run.
     Recorded,
     /// Nothing of the request's is known to be done: the state is
     /// observed again and compared with what was previewed.
@@ -167,7 +168,8 @@ pub(crate) enum Seen {
 /// 1. The row is read; see `Row`. A row that answers the request, or
 ///    that no operation of the command has, ends the call here. A row
 ///    that has recorded the request's work is taken up by the domain
-///    call with nothing compared.
+///    call with nothing compared. That is never said of a request with
+///    no row: a binding that says it is answered `internal_error`.
 /// 2. Otherwise the binding observes; see `Seen`. When the command's
 ///    end state holds and no row stands, the request is a no-op and is
 ///    finished; with a pending row the domain is called to end it.
@@ -191,7 +193,19 @@ pub(crate) fn reenter<B: Confirmed + ?Sized>(
             });
         }
         Row::Answers(ran) => return Err(*ran),
-        Row::Recorded => return Ok(Entered::Unfinished),
+        Row::Recorded => {
+            // A request that has no row has recorded nothing. A binding
+            // that says otherwise is wrong, and it is the one answer on
+            // which nothing would be compared: the domain is not called
+            // and the record is left as it is.
+            if journal == JournalRow::Absent {
+                return Err(Ran {
+                    answer: Answer::stopped(ResultCode::InternalError),
+                    standing: Standing::Stopped { journal: None },
+                });
+            }
+            return Ok(Entered::Unfinished);
+        }
         Row::Unrecorded => {}
     }
     match binding.observe_again(call, accepted, &journal)? {
@@ -395,6 +409,10 @@ impl RepositoryService {
         Ok(Consent::Given(Box::new(record)))
     }
 }
+
+#[cfg(test)]
+#[path = "confirm_tests.rs"]
+mod reenter_tests;
 
 #[cfg(test)]
 mod tests {
