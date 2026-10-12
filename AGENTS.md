@@ -27,6 +27,28 @@
 - Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
 - Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 
+## Native CI
+
+- The Build workflow (`.github/workflows/build.yml`) runs only when dispatched
+  by hand. Ask the product owner before dispatching it; approval for one run
+  does not carry over to the next piece of work.
+- Dispatch it on a pushed branch with
+  `gh workflow run build.yml --ref <branch>`. A full run covers five targets
+  (Linux x86_64 and aarch64, Windows x86_64 and aarch64, macOS aarch64) and can
+  take close to an hour.
+- When a platform fails:
+  1. Narrow the workflow matrix to the failing platform only, in a commit of
+     its own.
+  2. Fix the failure.
+  3. Run the affected tests locally through Devenv, only those, not the whole
+     suite.
+  4. Push and dispatch the workflow again.
+  5. When the narrowed run is green, restore the matrix to all five targets in
+     a commit of its own and run the full set once more, so that a fix for one
+     platform does not break another.
+- A new integration test target is not run on the native targets until it is
+  added to the test list in the workflow.
+
 ## Dogfooding Workflow
 
 - For every Cycle in a Wave, create one Manyhands ticket before creating its
