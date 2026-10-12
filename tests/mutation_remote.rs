@@ -3286,6 +3286,19 @@ fn a_resume_does_not_take_up_a_fenced_synchronization() -> Result<(), FixtureErr
     let fenced = execute(&w, REQUEST_1, repo_sync(&w));
     assert_fenced_before_a_push(&w, REQUEST_1, &fenced)?;
     assert_eq!(fenced.operation_id, held.operation_id);
+
+    // The review's I2. Its request is finished now, and sending it
+    // again only replays that answer: a resume no longer says a request
+    // must be sent. It says what the request was told, and offers
+    // nothing, since nothing goes on with this operation.
+    let after = execute(&w, REQUEST_2, resume(&w, &operation));
+    assert_eq!(after.outcome, fenced.outcome);
+    assert_eq!(after.code, ResultCode::ExternalChange);
+    assert_eq!(after.effects, Effects::not_requested());
+    assert!(after.recovery.is_empty());
+    assert_no_record_of(&w, REQUEST_2, &after);
+    assert_eq!(phase(&w, OperationId::parse(&operation).unwrap())?, before);
+    assert_eq!(connections(&w), opened);
     Ok(())
 }
 

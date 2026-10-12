@@ -907,14 +907,16 @@ fn a_resume_of_a_fenced_synchronization_is_not_taken_up_and_names_its_request() 
         .unwrap();
     let before = stored_remote(&world, OPERATION_A);
 
-    // No record holds it: there is no request to name.
+    // No unfinished record holds it: there is no request that could go
+    // on, and the answer does not say one must be sent. It says what
+    // the row is, as the request that began it was told.
     let unowned = world.execute(REQUEST_2, resume(&world, OPERATION_A));
     assert_refused(
         &world,
         REQUEST_2,
         &unowned,
         Outcome::Blocked,
-        ResultCode::OriginalRequestRequired,
+        ResultCode::ExternalChange,
     );
     assert!(unowned.recovery.is_empty());
     assert_eq!(stored_remote(&world, OPERATION_A), before);
@@ -945,14 +947,15 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     let before = stored_remote(&world, OPERATION_A);
 
     let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    // No request begins a poll, and nothing takes one up under its ID:
+    // the ID is not one this command is for.
     assert_refused(
         &world,
         REQUEST_1,
         &refused,
-        Outcome::Blocked,
-        ResultCode::OriginalRequestRequired,
+        Outcome::Error,
+        ResultCode::InvalidInput,
     );
-    // No request begins a poll.
     assert!(refused.recovery.is_empty());
     assert_eq!(stored_remote(&world, OPERATION_A), before);
 }
@@ -998,4 +1001,83 @@ fn a_resume_of_another_repository_s_operation_is_not_found() {
     );
     assert!(world.record(REQUEST_1).is_none());
     assert_eq!(stored_remote(&world, OPERATION_A), before);
+}
+
+/// The review's I2. A pending local row no request record holds: there
+/// is no request to send again, and the answer does not say there is.
+/// The repository is what is looked at, and the row is offered to be
+/// abandoned, which is the way out and which succeeds.
+#[test]
+fn a_resume_of_a_pending_local_row_no_request_holds_offers_its_abandon() {
+    use manyhands::repository::OperationAbandonInput;
+
+    let world = World::new();
+    operations::insert_local(
+        world.data.path(),
+        Some(OPERATION_A),
+        "save_ticket",
+        "worktree_observed",
+        Some("worktree_observed"),
+    );
+    let before = stored(&world, OPERATION_A);
+
+    let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &refused,
+        Outcome::Blocked,
+        ResultCode::RecoveryRequired,
+    );
+    assert_eq!(
+        recovery_actions(&refused),
+        ["repo.inspect", "operation.abandon"]
+    );
+    for action in &refused.recovery {
+        assert_eq!(
+            action.arguments.get("root").and_then(|root| root.as_str()),
+            world.root.to_str()
+        );
+    }
+    assert_eq!(
+        refused.recovery[1].operation_id.as_deref(),
+        Some(OPERATION_A)
+    );
+    assert_eq!(stored(&world, OPERATION_A), before);
+
+    // The offered abandon, taken, closes the row.
+    let abandon = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: world.root.clone(),
+            operation_id: OperationId::parse(OPERATION_A).unwrap(),
+        })
+    };
+    let preview = world.service.prepare(&abandon());
+    assert_eq!(preview.outcome, Outcome::Success);
+    let confirmation = preview.data.unwrap().confirmation_id;
+    let abandoned =
+        mutation::execute_confirmed(&world.service, REQUEST_2, &confirmation, abandon());
+    assert_eq!(abandoned.outcome, Outcome::Success);
+    assert_eq!(world.pending_journal_rows(), 0);
+    // And the row, abandoned, is then refused as one.
+    let after = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_eq!(after.code, ResultCode::ExternalChange);
+}
+
+/// The same for a key operation no request record holds: the answer
+/// does not say a request must be sent again.
+#[test]
+fn a_resume_of_a_pending_key_operation_no_request_holds_names_no_request() {
+    let world = World::new();
+    operations::insert_key_material(world.data.path(), OPERATION_A, "generate", "reserved", None);
+
+    let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &refused,
+        Outcome::Blocked,
+        ResultCode::RecoveryRequired,
+    );
+    assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
 }

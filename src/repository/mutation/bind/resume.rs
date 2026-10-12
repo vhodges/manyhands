@@ -12,16 +12,25 @@
 //!   would take it up: the remote is asked what it holds before anything
 //!   is pushed, and nothing is merged.
 //!
-//! Anything else is `original_request_required`, and the operation's row
-//! is left exactly as it was: a save that stopped before or after its
-//! write, whose body no record holds, a key generation, an enablement
-//! that has not registered its repository. The result names the request
-//! to send, when a record still holds it.
+//! Anything else that is pending is left exactly as it was: a save that
+//! stopped before or after its write, whose body no record holds, a key
+//! generation, an enablement that has not registered its repository, a
+//! synchronization that was fenced. While the request that began it has
+//! an unfinished record, the answer is `original_request_required` and
+//! names that request, which is what goes on. With no such record no
+//! request can be sent again, and the answer says what the row is: a
+//! fenced synchronization is `external_change`, as its request was
+//! told; a local or key operation is `recovery_required`, with the
+//! abandon of a local one offered; a poll, a promotion or a closure is
+//! `invalid_input`.
 //!
 //! An operation that has ended owes nothing, and resuming it is a no-op.
-//! One that was abandoned is refused as every repeat of its ID is. One
-//! that was fenced is never taken up: its own request, sent again, is
-//! given its final answer.
+//! One that was abandoned is refused as every repeat of its ID is.
+//!
+//! A resume answers to the request that owns the operation it takes up.
+//! A cancellation asked of that request stops the resume, and the
+//! owner's record is entered when the operation is taken over, so that
+//! a call of the owner that was still running settles nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -146,9 +155,43 @@ enum Named {
     Synchronization(SynchronizationTarget),
     /// The operation is pending and only the request that began it goes
     /// on with it: it needs that request's input, or was fenced and has
-    /// a final answer for that request alone. `request` is the request,
-    /// when a record that is not finished holds the operation.
-    OriginalRequest { request: Option<String> },
+    /// a final answer for that request alone. `request` is that
+    /// request, whose record holds the operation and is not finished:
+    /// sent again, it is what goes on. Without such a record there is
+    /// no request to name, and the operation stands as one of the three
+    /// below.
+    OriginalRequest { request: String },
+    /// A synchronization that was fenced, with no unfinished record
+    /// that holds it: its request has been given its final answer, or
+    /// never was the boundary's. Nothing goes on with it.
+    Fenced,
+    /// A pending operation of the local journal or of the key journal
+    /// that needs its request's input, and that no unfinished record
+    /// holds: there is no request to send again. It is looked at, and a
+    /// local one can be abandoned.
+    Unowned,
+    /// A poll, a promotion or a closure that has not ended. No request
+    /// of the boundary begins one and nothing takes one up under its
+    /// ID: it is no operation this command is for.
+    NotResumable,
+}
+
+/// The standing of a pending operation that only its own request goes
+/// on with: that request, when an unfinished record of `family` in
+/// `scope` holds the operation, and `otherwise` when none does.
+fn left_to_its_request(
+    connection: &rusqlite::Connection,
+    family: OperationFamily,
+    scope: &str,
+    operation_id: OperationId,
+    otherwise: Named,
+) -> rusqlite::Result<Named> {
+    Ok(
+        match records::operation_holder(connection, family, scope, operation_id)? {
+            Some(request) => Named::OriginalRequest { request },
+            None => otherwise,
+        },
+    )
 }
 
 /// A row that is not what any call of this build writes: nothing is
@@ -212,14 +255,13 @@ fn found_remote(
         (JournalRow::Pending(PendingOperation::Remote { phase: _ }), Some(Some(target))) => {
             // The domain takes a fenced operation up for nobody.
             if remote::state::lookup_fenced(connection, root, operation_id)? {
-                Named::OriginalRequest {
-                    request: records::operation_holder(
-                        connection,
-                        OperationFamily::Remote,
-                        root,
-                        operation_id,
-                    )?,
-                }
+                left_to_its_request(
+                    connection,
+                    OperationFamily::Remote,
+                    root,
+                    operation_id,
+                    Named::Fenced,
+                )?
             } else {
                 Named::Synchronization(target)
             }
@@ -227,7 +269,7 @@ fn found_remote(
         // A poll, a promotion or a closure: no request of the boundary
         // begins one, and nothing takes one up under its ID.
         (JournalRow::Pending(PendingOperation::Remote { phase: _ }), Some(None)) => {
-            Named::OriginalRequest { request: None }
+            Named::NotResumable
         }
         // The remote journal holds remote operations.
         (
@@ -252,14 +294,13 @@ fn found_key(
             JournalRow::Absent => return Ok(None),
             // A generation or a deletion is taken up by its own request,
             // which holds the passphrase or the consent it needs.
-            JournalRow::Pending(_) => Named::OriginalRequest {
-                request: records::operation_holder(
-                    connection,
-                    OperationFamily::KeyMaterial,
-                    ScopeKey::application().as_str(),
-                    operation_id,
-                )?,
-            },
+            JournalRow::Pending(_) => left_to_its_request(
+                connection,
+                OperationFamily::KeyMaterial,
+                ScopeKey::application().as_str(),
+                operation_id,
+                Named::Unowned,
+            )?,
             // Completed, or kept for inspection: nothing continues
             // either.
             JournalRow::Final {
@@ -295,14 +336,13 @@ fn found_local(
         // The refresh a resume runs would complete any pending row it
         // was given, also one whose write never happened.
         LocalStanding::Pending if row.owes_only_its_hand_off() => Named::HandOff,
-        LocalStanding::Pending => Named::OriginalRequest {
-            request: records::operation_holder(
-                connection,
-                OperationFamily::Local,
-                root,
-                operation_id,
-            )?,
-        },
+        LocalStanding::Pending => left_to_its_request(
+            connection,
+            OperationFamily::Local,
+            root,
+            operation_id,
+            Named::Unowned,
+        )?,
     })
 }
 
@@ -344,7 +384,10 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
             | Named::Abandoned
             | Named::Ended { synchronization: _ }
             | Named::LeftToInspect { synchronization: _ }
-            | Named::OriginalRequest { request: _ },
+            | Named::OriginalRequest { request: _ }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable,
         )
         | Err(_) => false,
     }
@@ -402,17 +445,22 @@ impl OperationResumeBinding {
             Named::LeftToInspect { synchronization: _ } => {
                 Answer::stopped(ResultCode::RecoveryRequired)
             }
-            // The request to send is the one that began the operation.
-            // With no record of it nothing is offered: the caller has
-            // the request, or the operation is abandoned.
+            // The request to send is the one that began the operation,
+            // and it is there to be sent: its record is not finished.
             Named::OriginalRequest { request } => Answer {
-                recovery: request
-                    .clone()
-                    .map(outcome::original_request)
-                    .into_iter()
-                    .collect(),
+                recovery: vec![outcome::original_request(request.clone())],
                 ..Answer::stopped(ResultCode::OriginalRequestRequired)
             },
+            // What the request that began it was, or would be, told:
+            // the configuration it was begun under is no longer the
+            // repository's. Nothing is offered, since nothing goes on.
+            Named::Fenced => Answer::stopped(ResultCode::ExternalChange),
+            // No request can be sent again for it. The repository is
+            // what is looked at; `execute` adds the abandon of a pending
+            // row of the local journal alone that no call is at work
+            // under, by the rule every result that says so follows.
+            Named::Unowned => Answer::stopped(ResultCode::RecoveryRequired),
+            Named::NotResumable => Answer::stopped(ResultCode::InvalidInput),
         })
     }
 
@@ -713,7 +761,10 @@ impl OperationResumeBinding {
             | Named::Abandoned
             | Named::Ended { synchronization: _ }
             | Named::LeftToInspect { synchronization: _ }
-            | Named::OriginalRequest { request: _ } => Ran {
+            | Named::OriginalRequest { request: _ }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable => Ran {
                 // It moved between this call's two reads of it.
                 answer: Self::refusal(&found)
                     .unwrap_or_else(|| Answer::stopped(ResultCode::InternalError)),
@@ -788,7 +839,10 @@ impl Binding for OperationResumeBinding {
             | Named::Ended { synchronization: _ }
             | Named::LeftToInspect { synchronization: _ }
             | Named::HandOff
-            | Named::OriginalRequest { request: _ } => Position {
+            | Named::OriginalRequest { request: _ }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable => Position {
                 base_ref: None,
                 base_oid: None,
             },
@@ -862,7 +916,10 @@ impl Binding for OperationResumeBinding {
             | Named::LeftToInspect {
                 synchronization: None,
             }
-            | Named::OriginalRequest { request: _ } => Err(Ran {
+            | Named::OriginalRequest { request: _ }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable => Err(Ran {
                 answer: Self::refusal(&found)
                     .unwrap_or_else(|| Answer::stopped(ResultCode::InternalError)),
                 standing: Standing::NotRun { journal: NO_ROW },
