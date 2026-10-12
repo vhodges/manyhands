@@ -766,6 +766,86 @@ fn a_registry_change_retried_after_its_setting_was_put_back_is_made_again() {
     assert_eq!(world.selected(), None);
 }
 
+/// Every table of the index that holds `text` in any column of any row.
+fn tables_holding(world: &KeyWorld, text: &str) -> Vec<String> {
+    let connection = items::index(world.data.path());
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut holding = Vec::new();
+    for table in tables {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM \"{table}\""))
+            .unwrap();
+        let columns = statement.column_count();
+        let mut rows = statement.query([]).unwrap();
+        let mut found = false;
+        while let Some(row) = rows.next().unwrap() {
+            for column in 0..columns {
+                let bytes = match row.get_ref(column).unwrap() {
+                    rusqlite::types::ValueRef::Text(bytes)
+                    | rusqlite::types::ValueRef::Blob(bytes) => bytes,
+                    rusqlite::types::ValueRef::Null
+                    | rusqlite::types::ValueRef::Integer(_)
+                    | rusqlite::types::ValueRef::Real(_) => continue,
+                };
+                found |= String::from_utf8_lossy(bytes).contains(text);
+            }
+        }
+        if found {
+            holding.push(table);
+        }
+    }
+    holding
+}
+
+/// Why the limit above stands: a registry change has no evidence of its
+/// own for a retry to answer from. `remote select` answers a first call
+/// that committed from the checkpointed row of its own operation. An
+/// import, a selection and a clearing have no operation: the accepted
+/// record names none, the key journal gains no row, and once the key an
+/// import registered is removed, nothing the index holds names it. A
+/// retry is left with the registry as it is now.
+#[test]
+fn a_lost_registry_change_leaves_no_evidence_of_its_own_to_answer_a_retry_from() {
+    let mut world = KeyWorld::new();
+    let work = world.register("work", "Work laptop");
+    let (private, public) = world.key_files("imported");
+    const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+
+    lose_the_result(
+        &mut world,
+        REQUEST_1,
+        import("Imported", &private, Some(&public)),
+    );
+    let imported_key = world.keys()[1].0;
+    let imported = imported_key.to_string();
+    lose_the_result(&mut world, REQUEST_2, select(work));
+    lose_the_result(&mut world, REQUEST_3, clear());
+    lose_the_result(&mut world, REQUEST_4, select(work));
+
+    for request in [REQUEST_1, REQUEST_2, REQUEST_3, REQUEST_4] {
+        let record = world.record(request).expect("a record");
+        assert_eq!(record.state, RequestState::Accepted, "{}", record.command);
+        // No operation of its own, in any journal.
+        assert!(record.operations.is_empty(), "{}", record.command);
+        assert_eq!(record.result, None, "{}", record.command);
+    }
+    assert_eq!(world.key_operations(), 0);
+    // The key the import registered is named by its registration alone:
+    // no record, journal or other table holds its ID.
+    assert_eq!(tables_holding(&world, &imported), ["shared_ssh_keys"]);
+    world.service.unregister_shared_key(imported_key).unwrap();
+    assert_eq!(tables_holding(&world, &imported), [""; 0]);
+    // A selection is one column of the registration, and a clearing
+    // leaves nothing: neither says which request made it.
+    assert_eq!(world.selected(), Some(work));
+}
+
 /// What `request show` gives for a request that has no operation: an
 /// empty list, which its schema allows.
 #[test]
