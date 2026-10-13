@@ -225,3 +225,65 @@ pub fn insert_key_material(
         .unwrap();
     key_id
 }
+
+/// A call that is indexing under an operation's row with no lease held,
+/// stood in for by the row itself: claimed for indexing, with a heartbeat
+/// that is fresh. No hook runs a second call inside the first's refresh,
+/// and two threads would race.
+pub struct LiveIndexOwner {
+    index: Connection,
+    operation: String,
+    claimed: (String, Option<String>, i64),
+}
+
+impl LiveIndexOwner {
+    /// Stands the owner on the pending row of `operation`.
+    pub fn on(data_directory: &Path, operation: &str) -> Self {
+        let index = items::index(data_directory);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let changed = index
+            .execute(
+                "UPDATE operation_records SET state = 'indexing', observed_at = ?2
+                  WHERE operation_ulid = ?1 AND state != 'completed'",
+                params![operation, now + 60],
+            )
+            .unwrap();
+        assert_eq!(changed, 1, "the pending row of the operation");
+        let mut owner = Self {
+            index,
+            operation: operation.to_owned(),
+            claimed: (String::new(), None, 0),
+        };
+        owner.claimed = owner.row();
+        assert_eq!(owner.claimed.0, "indexing");
+        owner
+    }
+
+    /// The row's state, step and heartbeat.
+    pub fn row(&self) -> (String, Option<String>, i64) {
+        self.index
+            .query_row(
+                "SELECT state, completed_step, observed_at FROM operation_records
+                  WHERE operation_ulid = ?1",
+                [&self.operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    /// The row is as the owner's claim left it: nothing was recorded on
+    /// it and no one else claimed it.
+    pub fn assert_left_alone(&self) {
+        assert_eq!(self.row(), self.claimed);
+    }
+
+    /// The owner died: its heartbeat is old.
+    pub fn die(&self) {
+        self.index
+            .execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE operation_ulid = ?1",
+                [&self.operation],
+            )
+            .unwrap();
+    }
+}

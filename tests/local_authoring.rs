@@ -4803,6 +4803,87 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     );
 }
 
+/// Two calls under one operation ID can run at once. A comment whose
+/// first call has handed off and is indexing, with no lease held, is
+/// left to that call by a second: nothing is recorded on the row, and
+/// the second says the index is pending.
+#[test]
+fn a_comment_s_row_another_call_is_indexing_under_is_left_as_it_is() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let operation_id = support::new_operation_id();
+    let request = || {
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
+        .open_service(enabled.data_directory.path());
+    let CommentSubmissionOutcome::IndexPending {
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+        ..
+    } = failing.submit_comment(request()).unwrap()
+    else {
+        panic!("the comment is committed and its hand-off is owed");
+    };
+    let owner = support::operations::LiveIndexOwner::on(
+        enabled.data_directory.path(),
+        &operation_id.to_string(),
+    );
+
+    let beside = enabled.service.submit_comment(request()).unwrap();
+
+    assert!(matches!(
+        beside,
+        CommentSubmissionOutcome::IndexPending {
+            checkpoint: LocalCheckpoint::NoChange,
+            ..
+        }
+    ));
+    owner.assert_left_alone();
+    assert_eq!(
+        support::head_commit(&Repository::open(&context.worktree).unwrap()),
+        Some(commit_oid)
+    );
+
+    // The other call died: the same operation takes the hand-off up.
+    owner.die();
+    assert!(matches!(
+        enabled.service.submit_comment(request()).unwrap(),
+        CommentSubmissionOutcome::Saved {
+            checkpoint: LocalCheckpoint::NoChange,
+            ..
+        }
+    ));
+    assert_eq!(owner.row().0, "completed");
+    assert_eq!(
+        support::head_commit(&Repository::open(&context.worktree).unwrap()),
+        Some(commit_oid)
+    );
+}
+
 #[test]
 fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     let fixture = support::born_repository();

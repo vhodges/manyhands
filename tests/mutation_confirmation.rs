@@ -4863,6 +4863,121 @@ fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
 }
 
 // ---------------------------------------------------------------------
+// Two live calls of one request
+// ---------------------------------------------------------------------
+
+/// What a second live call of a request is answered while the first is
+/// indexing under the request's row with no lease held: the hand-off is
+/// pending, the operation is the request's, and the first call is not
+/// fenced, so it is never told to recover a request that finishes `ok`.
+fn assert_left_to_its_index_owner(
+    beside: &Envelope<MutationDataDto>,
+    pending: &Envelope<MutationDataDto>,
+) {
+    assert_eq!(
+        (beside.outcome, beside.code),
+        (Outcome::Partial, ResultCode::DiscoveryPending),
+        "{}",
+        beside.message
+    );
+    assert_eq!(beside.operation_id, pending.operation_id);
+    assert_eq!(beside.effects, pending.effects);
+    // A row a call is at work under is not offered to be abandoned.
+    assert_eq!(recovery_actions(beside), ["operation.resume"]);
+}
+
+#[test]
+fn a_remote_removal_s_row_another_call_is_indexing_under_is_left_as_it_is() {
+    let mut home = Home::new();
+    home.add_remote("backup", BACKUP);
+    let (confirmation, _) = home.preview(&home.remove_remote("backup"));
+    home.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+    let pending = home.execute(REQUEST_1, &confirmation, home.remove_remote("backup"));
+    assert_eq!(pending.code, ResultCode::DiscoveryPending);
+    let owner = support::operations::LiveIndexOwner::on(
+        home.world.data.path(),
+        pending.operation_id.as_deref().unwrap(),
+    );
+    home.reopen();
+
+    let beside = home.retry(REQUEST_1, home.remove_remote("backup"));
+
+    assert_left_to_its_index_owner(&beside, &pending);
+    owner.assert_left_alone();
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Accepted));
+
+    owner.die();
+    let finished = home.retry(REQUEST_1, home.remove_remote("backup"));
+    assert_removed(&finished);
+    assert_eq!(owner.row().0, "completed");
+    assert_eq!(home.state(REQUEST_1), Some(RequestState::Finished));
+}
+
+#[test]
+fn a_repo_enable_s_row_another_call_is_indexing_under_is_left_as_it_is() {
+    let mut desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+    let pending = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(pending.code, ResultCode::DiscoveryPending);
+    let commit = plain.head();
+    let owner = support::operations::LiveIndexOwner::on(
+        desk.data.path(),
+        pending.operation_id.as_deref().unwrap(),
+    );
+    desk.reopen();
+
+    let beside = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_left_to_its_index_owner(&beside, &pending);
+    owner.assert_left_alone();
+    assert_eq!(plain.head(), commit);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    owner.die();
+    let finished = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(assert_enabled(&finished, &plain.root), commit.to_string());
+    assert_eq!(owner.row().0, "completed");
+    assert_eq!(plain.initializations(), 1);
+}
+
+#[test]
+fn a_repo_create_s_row_another_call_is_indexing_under_is_left_as_it_is() {
+    let mut desk = Desk::new();
+    let site = Site::new();
+    let (confirmation, _) = desk.preview(&site.create());
+    desk.fail_once_at(FailurePoint::BeforeIndexTransactionCommit);
+    let pending = desk.execute(REQUEST_1, &confirmation, site.create());
+    assert_eq!(pending.code, ResultCode::DiscoveryPending);
+    let commit = site.head();
+    let owner = support::operations::LiveIndexOwner::on(
+        desk.data.path(),
+        pending.operation_id.as_deref().unwrap(),
+    );
+    desk.reopen();
+
+    let beside = desk.execute(REQUEST_1, &confirmation, site.create());
+
+    assert_left_to_its_index_owner(&beside, &pending);
+    owner.assert_left_alone();
+    assert_eq!(site.head(), commit);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    owner.die();
+    let finished = desk.execute(REQUEST_1, &confirmation, site.create());
+    assert_eq!(assert_enabled(&finished, &site.root), commit.to_string());
+    assert_eq!(owner.row().0, "completed");
+    assert_eq!(initializations(&site.root), 1);
+}
+
+// ---------------------------------------------------------------------
 // `operation abandon`
 // ---------------------------------------------------------------------
 

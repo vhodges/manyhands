@@ -2613,6 +2613,23 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        // As for a save: a row a call is indexing under is that call's
+        // to finish, and the comment is committed or it would not have
+        // handed off.
+        if record.is_pending
+            && self.is_being_indexed(&root, operation, request.target.operation_id)?
+        {
+            drop(lease);
+            return Ok(CommentSubmissionOutcome::IndexPending {
+                context: item_context(&root, request.target.kind, request.target.item_id),
+                checkpoint: LocalCheckpoint::NoChange,
+                publication: comment_publication_state(
+                    read_configuration_for(&root, operation)?,
+                    operation,
+                    &root,
+                )?,
+            });
+        }
         let effects = CallEffects::default();
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
@@ -3692,6 +3709,12 @@ impl RepositoryService {
                 Some(&request.url),
             ),
         )?;
+        if record.is_pending
+            && self.is_being_indexed(&root, RepositoryOperation::AddRemote, request.operation_id)?
+        {
+            drop(lease);
+            return Ok(remote_left_to_its_index_owner(record));
+        }
         let mut lease = Some(lease);
         let effects = CallEffects::default();
         let result = self.add_remote_recorded(
@@ -3816,6 +3839,16 @@ impl RepositoryService {
             request.operation_id,
             &remote_target_matcher(RepositoryOperation::RemoveRemote, name, None),
         )?;
+        if record.is_pending
+            && self.is_being_indexed(
+                &root,
+                RepositoryOperation::RemoveRemote,
+                request.operation_id,
+            )?
+        {
+            drop(lease);
+            return Ok(remote_left_to_its_index_owner(record));
+        }
         let mut lease = Some(lease);
         let effects = CallEffects::default();
         let result = self.remove_remote_recorded(
@@ -3944,6 +3977,12 @@ impl RepositoryService {
             request.operation_id,
             request.name.as_deref().unwrap_or(""),
         )?;
+        // The commit, where the operation made one, is found by the
+        // caller from the row's step: the head may have moved since.
+        if record.is_pending && self.is_being_indexed(&root, operation, request.operation_id)? {
+            drop(lease);
+            return Ok(PublicationRemoteOutcome::IndexPending { commit_oid: None });
+        }
         let mut lease = Some(lease);
         let effects = CallEffects::default();
         let result = self.set_publication_remote_recorded(
@@ -4535,6 +4574,24 @@ impl RepositoryService {
             request.operation_id,
             &request.primary_branch,
         )?;
+        // A creation that is taken up again comes through here too. The
+        // commit named is the one checked out, as for a pending row that
+        // is taken up.
+        if record.is_pending
+            && self.is_being_indexed(&root, RepositoryOperation::Enable, request.operation_id)?
+        {
+            let commit_oid = repository
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(|error| {
+                    RepositoryError::git(RepositoryOperation::Enable, Some(root.clone()), error)
+                })?
+                .id();
+            drop(lease);
+            return Ok(EnableRepositoryOutcome::IndexPending(IndexPending::new(
+                commit_oid,
+            )));
+        }
         let mut lease = Some(lease);
         let effects = CallEffects::default();
         let result = self.enable_recorded(
@@ -5252,6 +5309,19 @@ impl CallEffects {
 
     fn leave_nothing_behind(&self, record: RecoveryRecord) -> bool {
         record.is_new && !self.0.get()
+    }
+}
+
+/// What an `add_remote` or a `remove_remote` answers for a row another
+/// call is indexing under: the hand-off is that call's, and the row's
+/// step says whether the operation changed the remote.
+fn remote_left_to_its_index_owner(record: RecoveryRecord) -> RemoteOutcome {
+    RemoteOutcome::IndexPending {
+        authoritative: if record.completed_step == Some(LocalStep::RemoteChanged) {
+            RemoteChange::Changed
+        } else {
+            RemoteChange::NoChange
+        },
     }
 }
 
