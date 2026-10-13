@@ -1,5 +1,6 @@
 mod merge;
 mod observation;
+mod poll;
 mod refs;
 mod sync;
 pub use merge::{
@@ -8,6 +9,7 @@ pub use merge::{
     ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+pub use poll::{AutomaticPollEligibility, PollIneligibility};
 pub use sync::{
     EphemeralSynchronizationConflictSides, PublishPendingReason, SynchronizationConflictInspection,
     SynchronizationConflictPath, SynchronizationError, SynchronizationOutcome,

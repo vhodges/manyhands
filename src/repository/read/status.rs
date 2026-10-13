@@ -570,17 +570,18 @@ impl RepositoryService {
     /// The registration's stored polling policy, how the latest attempt to
     /// observe its remote ended, and the remote operation under way.
     ///
-    /// Nothing is contacted and no process is looked for. When the next
-    /// attempt is due is not stored, so `next_eligible_at` is null.
+    /// Nothing is contacted and no process is looked for. The stored next
+    /// eligibility deadline is returned without clamping or otherwise changing it.
     pub fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let registration = repo.registration_id();
             // Only the policy row and the current batch's time are read, so
             // an observation this read does not report cannot fail it.
-            let (polling, latest_outcome) = state::select_polling_status(connection, registration)?
-                .ok_or_else(invalid_stored_data)?
-                .map_err(|_| invalid_stored_data())?;
+            let (polling, latest_outcome, next_eligible_at) =
+                state::select_polling_status(connection, registration)?
+                    .ok_or_else(invalid_stored_data)?
+                    .map_err(|_| invalid_stored_data())?;
             let observed_at: Option<i64> = connection
                 .query_row(
                     "SELECT observed_at FROM remote_observation_batches
@@ -601,7 +602,9 @@ impl RepositoryService {
                 latest_outcome: latest_outcome.map(polling_outcome),
                 latest_observed_at: observed_at.map(stored_time).transpose()?,
                 active_operation_id: active.map(|operation| operation.operation_id.to_string()),
-                next_eligible_at: None,
+                next_eligible_at: next_eligible_at
+                    .map(|time| stored_time(time.unix_timestamp()))
+                    .transpose()?,
             })
         })
         .map_err(|error| repo.failure(error))

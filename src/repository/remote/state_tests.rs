@@ -9,6 +9,161 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
     fixture_in(&std::env::temp_dir())
 }
 
+fn remove_attempt_columns(connection: &Connection) {
+    let columns = connection
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for column in ["latest_attempt_at", "next_eligible_at"] {
+        if columns.iter().any(|name| name == column) {
+            connection
+                .execute_batch(&format!(
+                    "ALTER TABLE remote_polling_state DROP COLUMN {column}"
+                ))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn attempt_migration_preserves_existing_rows_and_is_a_no_op_on_second_start() {
+    let (data, root, service) = fixture();
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)
+    })
+    .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+    })
+    .unwrap();
+    service
+        .set_remote_polling(
+            root.path(),
+            false,
+            true,
+            PollingInterval::from_seconds(600).unwrap(),
+        )
+        .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    connection.execute_batch("UPDATE remote_polling_state SET automatic_backoff_seconds=120; INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES('/second-registration',124,'inaccessible',0)").unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    remove_attempt_columns(&connection);
+    let schema_version: i64 = connection
+        .query_row("PRAGMA schema_version", [], |row| row.get(0))
+        .unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(reopened.remote_snapshot(root.path()).unwrap(), before);
+    let times: Vec<(Option<i64>, Option<i64>)> = connection.prepare("SELECT latest_attempt_at,next_eligible_at FROM remote_polling_state ORDER BY repository_id").unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(times, vec![(None, None), (None, None)]);
+    let upgraded_version: i64 = connection
+        .query_row("PRAGMA schema_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(upgraded_version, schema_version + 2);
+    let _again = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        upgraded_version
+    );
+    let mut audit = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    audit_registry(&mut audit).unwrap();
+}
+
+#[test]
+fn half_migrated_attempt_columns_require_recovery_without_repair() {
+    for column in ["latest_attempt_at", "next_eligible_at"] {
+        let (data, _root, _service) = fixture();
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        remove_attempt_columns(&connection);
+        connection
+            .execute_batch(&format!(
+                "ALTER TABLE remote_polling_state ADD COLUMN {column} INTEGER"
+            ))
+            .unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            matches!(RepositoryService::open_at(data.path()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
+fn attempt_columns_reject_non_integer_negative_and_unrenderable_timestamps() {
+    let (data, _root, _service) = fixture();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    for column in ["latest_attempt_at", "next_eligible_at"] {
+        for value in [
+            "-1",
+            "253402300800",
+            "1.5",
+            "'PRIVATE_RESPONSE_SENTINEL'",
+            "x'ff'",
+        ] {
+            assert!(
+                connection
+                    .execute_batch(&format!("UPDATE remote_polling_state SET {column}={value}"))
+                    .is_err()
+            );
+        }
+        connection
+            .execute_batch(&format!(
+                "UPDATE remote_polling_state SET {column}=253402300799"
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn finishing_attempt_timestamps_commit_and_roll_back_with_the_outcome() {
+    let (_data, root, service) = fixture();
+    let at = |seconds| time::OffsetDateTime::from_unix_timestamp(seconds).unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        record_outcome(tx, id, RemoteOutcomeCategory::Completed, None)?;
+        record_poll_attempt(tx, id, at(1000), Some(at(1300)))
+    })
+    .unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    assert_eq!(before.latest_attempt_at(), Some(at(1000)));
+    assert_eq!(before.next_eligible_at(), Some(at(1300)));
+    let result: Result<(), RepositoryError> = with_transaction(&service, root.path(), |tx, id| {
+        record_outcome(
+            tx,
+            id,
+            RemoteOutcomeCategory::TransportUnavailable,
+            Some(AutomaticBackoff::from_seconds(60).unwrap()),
+        )?;
+        record_poll_attempt(tx, id, at(1100), Some(at(1160)))?;
+        Err(recovery_required())
+    });
+    assert!(result.is_err());
+    assert_eq!(service.remote_snapshot(root.path()).unwrap(), before);
+    with_transaction(&service, root.path(), |tx, id| {
+        record_outcome(tx, id, RemoteOutcomeCategory::TransportUnavailable, None)?;
+        record_poll_attempt(tx, id, at(1200), None)
+    })
+    .unwrap();
+    let after = service.remote_snapshot(root.path()).unwrap();
+    assert_eq!(after.latest_attempt_at(), Some(at(1200)));
+    assert_eq!(after.next_eligible_at(), Some(at(1300)));
+    assert_eq!(
+        after.latest_outcome(),
+        Some(RemoteOutcomeCategory::TransportUnavailable)
+    );
+}
+
 fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
     // Match canonical registry lookups, including Windows verbatim prefixes and
     // macOS /var aliases, before creating either fixture directory.
@@ -1094,6 +1249,26 @@ fn task2_evidence_schema_has_no_content_or_transport_columns_and_wal_stays_redac
             !schema.to_ascii_lowercase().contains(forbidden),
             "persisted forbidden column {forbidden}"
         );
+    }
+    let polling_columns = connection
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for name in ["latest_attempt_at", "next_eligible_at"] {
+        assert!(polling_columns.contains(&(name.to_owned(), "INTEGER".to_owned())));
+    }
+    for (name, _) in polling_columns {
+        for forbidden in ["body", "credential", "server", "path", "request", "session"] {
+            assert!(
+                !name.contains(forbidden),
+                "persisted forbidden column {name}"
+            );
+        }
     }
     let backup = data.path().join("task2-backup.sqlite3");
     connection

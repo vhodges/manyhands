@@ -3,6 +3,7 @@ use std::{fmt, time::Duration};
 use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::Path;
+use time::OffsetDateTime;
 
 use super::{
     RemoteRefClassification, RemoteRefPlan, RemoteRefTarget,
@@ -52,6 +53,8 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
             endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
             remote_name TEXT, primary_branch TEXT,
             latest_outcome TEXT CHECK(latest_outcome IN ('completed','configuration_required','selected_key_unavailable','unlock_required','host_approval_required','transport_unavailable','protocol_rejected','cancelled','repository_unavailable')),
+            latest_attempt_at INTEGER CHECK(latest_attempt_at IS NULL OR (typeof(latest_attempt_at)='integer' AND latest_attempt_at BETWEEN 0 AND 253402300799)),
+            next_eligible_at INTEGER CHECK(next_eligible_at IS NULL OR (typeof(next_eligible_at)='integer' AND next_eligible_at BETWEEN 0 AND 253402300799)),
             CHECK ((remote_name IS NULL) = (primary_branch IS NULL))
         );
         CREATE TRIGGER IF NOT EXISTS remote_policy_on_registration AFTER INSERT ON repositories BEGIN
@@ -164,7 +167,47 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         transaction.execute_batch("ALTER TABLE remote_polling_state ADD COLUMN endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32))")
             .map_err(|_| recovery_required())?;
     }
+    migrate_poll_attempt_times(transaction)?;
     Ok(())
+}
+
+fn migrate_poll_attempt_times(transaction: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let columns = transaction
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    let names = ["latest_attempt_at", "next_eligible_at"];
+    let present = names
+        .iter()
+        .filter(|name| columns.iter().any(|column| column == **name))
+        .count();
+    if present == 1 {
+        return Err(recovery_required());
+    }
+    if present == 0 {
+        for name in names {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE remote_polling_state ADD COLUMN {name} INTEGER CHECK({name} IS NULL OR (typeof({name})='integer' AND {name} BETWEEN 0 AND 253402300799))"
+            )).map_err(|_| recovery_required())?;
+        }
+    }
+    Ok(())
+}
+
+/// UTC seconds that can also be rendered by the existing RFC 3339 read contract.
+fn poll_time(seconds: Option<i64>) -> Result<Option<OffsetDateTime>, RepositoryError> {
+    seconds
+        .map(|seconds| {
+            if !(0..=253402300799).contains(&seconds) {
+                return Err(recovery_required());
+            }
+            OffsetDateTime::from_unix_timestamp(seconds).map_err(|_| recovery_required())
+        })
+        .transpose()
 }
 
 const REMOTE_OPERATION_SCHEMA: &str = r#"        CREATE TABLE IF NOT EXISTS remote_operation_records (
@@ -1471,8 +1514,11 @@ impl RemoteContextSnapshot {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteSnapshot {
-    polling: RemotePollingConfiguration,
+    // Keep the snapshot compact inside public result enums as attempt state grows.
+    polling: Box<RemotePollingConfiguration>,
     latest_outcome: Option<RemoteOutcomeCategory>,
+    latest_attempt_at: Option<OffsetDateTime>,
+    next_eligible_at: Option<OffsetDateTime>,
     observations: Vec<RemoteRefObservation>,
     contexts: Vec<RemoteContextSnapshot>,
     history_unknown: bool,
@@ -1487,8 +1533,10 @@ impl RemoteSnapshot {
         contexts: Vec<RemoteContextSnapshot>,
     ) -> Self {
         Self {
-            polling,
+            polling: Box::new(polling),
             latest_outcome,
+            latest_attempt_at: None,
+            next_eligible_at: None,
             observations,
             contexts,
             history_unknown: false,
@@ -1501,6 +1549,14 @@ impl RemoteSnapshot {
 
     pub fn latest_outcome(&self) -> Option<RemoteOutcomeCategory> {
         self.latest_outcome
+    }
+
+    pub fn latest_attempt_at(&self) -> Option<OffsetDateTime> {
+        self.latest_attempt_at
+    }
+
+    pub fn next_eligible_at(&self) -> Option<OffsetDateTime> {
+        self.next_eligible_at
     }
 
     pub fn observations(&self) -> &[RemoteRefObservation] {
@@ -1677,6 +1733,30 @@ pub(in super::super) fn record_outcome(
     read_snapshot(transaction, repository_id)?;
     transaction.execute("UPDATE remote_polling_state SET latest_outcome=?2,automatic_backoff_seconds=?3 WHERE repository_id=?1",
         params![repository_id,outcome_name(category),backoff.map(|value| value.duration().as_secs())]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+/// Called alongside the outcome/phase writes inside the finishing transaction.
+/// `None` preserves the existing deadline (explicit failure or cancellation).
+/// Retry backoff remains owned by reservation finish, not this timestamp writer.
+#[allow(dead_code)] // Integrated into reservation finish in Cycle 08 Task 2.
+pub(super) fn record_poll_attempt(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    completed_at: OffsetDateTime,
+    next_eligible_at: Option<OffsetDateTime>,
+) -> Result<(), RepositoryError> {
+    let completed_at = completed_at.unix_timestamp();
+    let next = next_eligible_at.map(OffsetDateTime::unix_timestamp);
+    poll_time(Some(completed_at))?;
+    poll_time(next)?;
+    let changed = transaction.execute(
+        "UPDATE remote_polling_state SET latest_attempt_at=?2,next_eligible_at=coalesce(?3,next_eligible_at) WHERE repository_id=?1",
+        params![repository_id, completed_at, next],
+    ).map_err(|_| recovery_required())?;
+    if changed != 1 {
+        return Err(recovery_required());
+    }
     Ok(())
 }
 
@@ -2275,12 +2355,21 @@ pub(in super::super) fn select_polling_status(
     connection: &Connection,
     repository_id: i64,
 ) -> rusqlite::Result<
-    Option<Result<(RemotePollingConfiguration, Option<RemoteOutcomeCategory>), RepositoryError>>,
+    Option<
+        Result<
+            (
+                RemotePollingConfiguration,
+                Option<RemoteOutcomeCategory>,
+                Option<OffsetDateTime>,
+            ),
+            RepositoryError,
+        >,
+    >,
 > {
     let values = connection
         .query_row(
             "SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,
-                    recovery_suspended,latest_outcome
+                    recovery_suspended,latest_outcome,next_eligible_at
                FROM remote_polling_state WHERE repository_id=?1",
             [repository_id],
             |row| {
@@ -2291,12 +2380,13 @@ pub(in super::super) fn select_polling_status(
                     row.get::<_, Option<i64>>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
                 ))
             },
         )
         .optional()?;
-    Ok(
-        values.map(|(enabled, paused, interval, backoff, suspended, latest)| {
+    Ok(values.map(
+        |(enabled, paused, interval, backoff, suspended, latest, next)| {
             let seconds = |value: i64| u64::try_from(value).map_err(|_| recovery_required());
             Ok((
                 RemotePollingConfiguration::new(
@@ -2313,9 +2403,10 @@ pub(in super::super) fn select_polling_status(
                     flag(suspended)?,
                 ),
                 latest.as_deref().map(outcome).transpose()?,
+                poll_time(next)?,
             ))
-        }),
-    )
+        },
+    ))
 }
 
 pub(super) fn generation(
@@ -4264,14 +4355,16 @@ struct StoredPolicy {
     generation: i64,
     plan: Option<RemoteRefPlan>,
     latest_outcome: Option<RemoteOutcomeCategory>,
+    latest_attempt_at: Option<OffsetDateTime>,
+    next_eligible_at: Option<OffsetDateTime>,
 }
 
 fn read_policy(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<StoredPolicy, RepositoryError> {
-    let values = connection.query_row("SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,recovery_suspended,history_unknown,configuration_generation,remote_name,primary_branch,latest_outcome,endpoint_digest FROM remote_polling_state WHERE repository_id=?1", [repository_id], |row| {
-        Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<i64>>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?))
+    let values = connection.query_row("SELECT enabled,paused,interval_seconds,automatic_backoff_seconds,recovery_suspended,history_unknown,configuration_generation,remote_name,primary_branch,latest_outcome,endpoint_digest,latest_attempt_at,next_eligible_at FROM remote_polling_state WHERE repository_id=?1", [repository_id], |row| {
+        Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<i64>>(3)?,row.get::<_,i64>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,Option<String>>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?,row.get::<_,Option<Vec<u8>>>(10)?,row.get::<_,Option<i64>>(11)?,row.get::<_,Option<i64>>(12)?))
     }).map_err(|_| recovery_required())?;
     let (
         enabled,
@@ -4285,6 +4378,8 @@ fn read_policy(
         primary,
         latest,
         endpoint_digest,
+        latest_attempt,
+        next,
     ) = values;
     if generation < 0
         || endpoint_digest
@@ -4321,6 +4416,8 @@ fn read_policy(
         generation,
         plan,
         latest_outcome: latest.as_deref().map(outcome).transpose()?,
+        latest_attempt_at: poll_time(latest_attempt)?,
+        next_eligible_at: poll_time(next)?,
     })
 }
 
@@ -4397,6 +4494,8 @@ fn read_snapshot_rows(
         Vec::new(),
     );
     snapshot.history_unknown = policy.history_unknown;
+    snapshot.latest_attempt_at = policy.latest_attempt_at;
+    snapshot.next_eligible_at = policy.next_eligible_at;
     let query = if audit_history {
         "SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 ORDER BY id"
     } else {

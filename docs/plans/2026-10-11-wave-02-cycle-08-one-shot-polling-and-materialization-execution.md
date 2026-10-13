@@ -412,3 +412,122 @@ comment `01M4P8XCDN3ZBFEXBJ3W865M7N` records the review results and pause.
 The bookkeeping base is `11f7dbd6b99ee7f0a838c0faa972cb0c794c763f`; only the
 ticket, this ledger and that comment are included in the local checkpoint.
 No Rust tree change or broad baseline repeat is needed for this bookkeeping.
+
+## Task 1 Execution Resumed — 2026-10-13
+
+The controller conveyed the owner's authorization to resume remaining execution
+and assigned this fresh implementer **Task 1 only**, inline, no subagents, with
+one local task commit and canonical bookkeeping, then return for independent spec
+and quality review. The controller (not the owner) reported the approved Task 0
+reviews and performed the resume fetch/rebase. Task 0's five characterizations
+and historical baseline are trusted and were not replayed.
+
+- All operations use the assigned ticket worktree and branch.
+- Controller's fresh fetch of origin main and ticket rebase were a clean no-op:
+  main `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`; before/after HEAD
+  `4c1590d73b9dbab17030670989bd8825328f1f55` (also Task 1 base).
+- Implementer confirmed that exact HEAD and clean branch status. No further
+  fetch/rebase is required per task. D1–D4 and the approved design remain settled.
+- Current AGENTS, Task 1 plan/design, ledger, ticket and latest comments read.
+  The CLI has no ticket/comment commands; canonical files remain the supported
+  bookkeeping path. No publication, native dispatch or lifecycle closure authority.
+
+### Test-First Red Evidence (Before Production Behavior)
+
+All Rust commands use Devenv, sequentially to avoid the previously recorded
+shell-setup race:
+
+| Command | Observed red result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::state` | exit 101; 42 passed, 3 failed, 463 filtered. Missing `latest_attempt_at` on migration/range queries; startup wrongly accepted a half-migrated table. |
+| `devenv shell -- cargo test --locked --lib read::status` | exit 101; 9 passed, 1 failed, 498 filtered. Stored deadline expected `2026-01-01T00:00:00Z`, got `None`. |
+| `devenv shell -- cargo test --locked --lib remote::poll` | exit 101; compile-red for missing eligibility types/functions/service method and snapshot accessors. Initial trial also omitted imports of existing policy types; corrected those test imports and reran: 45 missing-new-API errors, including the additional transaction-writer test. No runtime poll-test pass is claimed. |
+
+The new tests precede production behavior. Poll module initially contains only
+its test registration. Pure table tests cross all nine existing outcome
+categories with automatic/explicit, including cancellation and capped retries;
+transaction tests count writes, verify persisted countdown and policy precedence,
+and exercise timestamp/outcome rollback. Busy/yield/interrupted/conflict/not-eligible
+have no stored outcome category and must bypass the finishing writer in Task 2.
+
+After recording compile-red, added API signatures with `todo!` bodies (no policy
+behavior) so poll assertions could execute: the same `remote::poll` command
+reported **0 passed, 8 failed, 509 filtered**, exit 101, at the eligibility,
+next-deadline and persisted-clamp placeholders. This runtime red is recorded
+before replacing those bodies with behavior. The export warning identifies the
+necessary public wiring: `repository::remote` is private, so Task 1 also needs
+two type re-exports in `src/repository.rs`, with no other change to that file.
+
+### Implementation And Integration Boundary
+
+- Fresh schemas and additive migration install both nullable integer UTC-second
+  columns with checks for `0..=253402300799` (RFC 3339 through year 9999). Missing
+  both upgrades to null; missing just one fails closed, transactionally. Snapshot
+  and status readers validate stored times; startup audit continues to pass.
+- Snapshot exposes both times as `Option<OffsetDateTime>`. The existing versioned
+  status DTO's deadline field renders RFC 3339 UTC; no schema/other DTO change.
+- Pure eligibility enforces Disabled → Paused → RecoverySuspended before due
+  time. The service checks only the policy row inside `with_transaction`, before
+  any endpoint/reservation work; its sole write is the bounded rollback clamp.
+  Counted SQL writes prove one clamp, an unchanged second check, and eventual due.
+- Pure `next_eligible` consumes **pre-finish** policy and returns a replacement
+  deadline, or `None` to preserve it. Automatic network/protocol deadlines use
+  60-second doubling capped at 900; attention failures use the interval; explicit
+  failures and cancellation retain the stored deadline. Reservation finish still
+  owns backoff writes. The transaction-only `record_poll_attempt` writer updates
+  attempt time and optionally deadline alongside existing outcome/phase writes;
+  atomicity/preservation is tested. Task 2 will wire it into finish and cancellation.
+- No request/session debugging, endpoint, content, credential or path column is
+  introduced. The existing schema/privacy scan now covers the polling columns.
+- Two public type re-exports in `src/repository.rs` are necessary API wiring.
+  No other behavior there was changed. All CLI/desktop/schema files, dependencies,
+  lockfiles and synchronization/merge/comment suites are unchanged.
+
+### Green Evidence And Lint Investigation
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | PASS; formatted intended Rust files |
+| `devenv shell -- cargo test --locked --lib remote::poll` | PASS; 8 passed, 0 failed, 509 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state` | PASS; 46 passed, 0 failed, 471 filtered |
+| `devenv shell -- cargo test --locked --lib read::status` | PASS; 10 passed, 0 failed, 507 filtered |
+| `devenv shell -- cargo check --all-features --locked` | PASS on final Rust tree |
+| `devenv shell -- cargo fmt --check` | PASS on final Rust tree |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS on final Rust tree |
+| `devenv shell -- cargo test --all-features --locked` | PASS on final Rust tree; 1,581 passed, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS; exit 0, no window |
+| `timeout --signal=TERM 90s devenv shell -- cargo run --locked --features desktop --bin manyhands` | Built in 1m 18s, reached `Running target/debug/manyhands`, no startup diagnostic; stopped by the smoke-test timeout. No visual window interaction claimed. |
+
+The first check/fmt passed, then Clippy failed on a collapsible clamp `if` and
+`large_enum_variant` in existing `RefreshOutcome`: adding the inline timestamps
+grew its snapshot payload to 280 bytes versus 48 for the next variant. Traced the
+growth to `RemoteSnapshot`; boxed only its private polling-policy storage, keeping
+the accessor and public result shape intact, and collapsed the condition. Re-ran
+check/fmt/Clippy successfully, then ran the full suite on this final Rust tree.
+No lint suppression or public result-enum change was used.
+
+Full-test breakdown: **517 library** (13 new Task 1 tests), **775 ordinary
+integration**, **280 real-SSH** (comment publication 41, merge recovery 25,
+observation 15, synchronization 63, SSH fixture 31, SSH transport 105), **9
+compile-fail doctests**. Both binary test targets have zero tests; the one ignored
+test remains the thousand-item read characterization. The untouched sync/merge/
+comment suites passed. This is verification of the changed Task 1 tree, not a
+replay of Task 0's throwaway characterizations or its original-tree baseline.
+Display inspection found `DISPLAY=:1` and `WAYLAND_DISPLAY=wayland-1`, so the
+bounded desktop launch was attempted. Native matrix remains unexecuted.
+
+### Task 1 Review Handoff — 2026-10-13T14:51:10Z
+
+Reviewed the production and test diffs against Task 1 and the settled result
+table; no Task 1 blocker found. No later task implementation was started. Skill
+review handoff is to the controller's independent reviewers, with no subagent
+dispatch by this implementer. The ticket remains open, Task 1 is ticked, both
+Task 1 review gates are pending. Canonical comment `01M4TVXXYRWN0MSPHSM83A0F8E`
+records the resume, red/green evidence and review readiness.
+
+Task 1 base: `4c1590d73b9dbab17030670989bd8825328f1f55`; the local commit head
+and exact base-to-head range are reported after commit in the implementer handoff,
+avoiding a self-referential SHA in committed content. Final status/diff/recent-log
+inspection, `git diff --check` and `scripts/show-ticket` validation precede staging
+only Task 1 source and canonical bookkeeping. No push, PR, native dispatch, merge,
+closure or worktree cleanup is performed.

@@ -28,6 +28,9 @@ discovered conforming shared contexts.
 - [x] Explicit implementation authorization (2026-10-11): Tasks 0–8, rebase,
   local commits and canonical ticket/comment/ledger updates; execute Task 0
   only in this session, then return for independent spec and quality reviews.
+- [x] Owner resume authorization conveyed by controller (2026-10-13): remaining
+  execution resumed; this implementer assigned Task 1 only, inline, no subagents,
+  local task commit and bookkeeping, then independent spec and quality review.
 
 The owner approved the planning documents and D1–D4 on 2026-10-11, then
 separately authorized implementation and local commits. The
@@ -53,11 +56,19 @@ and the baseline.
   `ses_ed4470e17ffeiE6Bsc6av876RR`; spec compliant, no blockers.
 - [x] Independent Task 0 quality review (2026-10-11):
   `ses_ed443ab4effebJy3h12aBe4kYO`; approved, zero Critical/Important/Minor issues.
+- [x] Task 1: nullable UTC attempt/deadline migration and accessors, pure policy
+  and retry-deadline functions, transactional persisted rollback clamp, existing
+  status deadline field and privacy scan. Red recorded before behavior; focused
+  tests and all four required Rust checks passed (1,581 tests, 1 existing ignored).
+- [ ] Independent Task 1 spec review.
+- [ ] Independent Task 1 quality review.
 
-Task 0 is completed and independently reviewed. **Paused after Task 0 and
-before Task 1**, per owner instruction on 2026-10-11. Task 1 has not started;
-wait for owner direction to resume. Ticket remains open. Native matrix evidence
-remains pending separate authorization.
+Task 0 is completed and independently reviewed. The owner resumed execution on
+2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`, before/after ticket HEAD
+`4c1590d73b9dbab17030670989bd8825328f1f55`. Task 1 is implemented and ready for
+independent spec then quality review. Tasks 2–8 have not started. Ticket remains
+open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence
 
