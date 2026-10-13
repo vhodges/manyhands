@@ -10,6 +10,104 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 4 Spec P1 Correction — 2026-10-13T22:01:48Z
+
+Controller conveys independent spec review `ses_ec8bd9b3effeS3OD0g7achFQNy`:
+**BLOCKED, P1**, before quality review. The incoming-path preflight skips any
+path present in the old tree, including a tracked directory replaced by an
+incoming file/symlink. Ignored descendants can then obstruct checkout after
+unrelated tracked paths were already changed. Authorized fix is poll-only;
+shared helper bodies and the approved contract/amendment remain unchanged.
+
+Verified clean assigned worktree/branch at fix base
+`e08d42d8cfdbc1aa5798c30a94d554d4b7f175e9`. Controller preflight/Task 0 evidence
+remain trusted; no fetch/rebase. Cumulative spec re-review base remains
+`961b3c21db11f797e5bd1cdac0bf85d748cd1dec`. Quality has not started; ticket open,
+no later task or subagents. Deferred Task 2 direct-SQL kind-immutability minor
+still goes to final Cycle review.
+
+### Meaningful Regression RED Before Production
+
+Added real local repository regression
+`poll_retiring_directory_ignored_descendants_are_dirty_before_any_checkout`:
+tracked `dir/child`, tracked `afile`, status clean with ignored
+`dir/local.ignored`; incoming descendant replaces `dir` with a file and changes
+`afile`. It asserts the complete before/after snapshot first, then Dirty.
+Snapshot includes worktree bytes/directories/symlinks, index bytes, status,
+HEAD, refs and registrations. Additional matrix variants cover nested retiring
+directories, incoming symlinks, ignored nested files/empty directories/symlinks;
+clean controls include noncolliding ignored state. Matrix stops at first RED.
+
+Initial compile trial needed an explicit drop of a shadowed fixture TreeBuilder;
+corrected without production changes. Correct behavioral command:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::poll_retiring_directory_ignored_descendants`
+exits 101: **0 passed, 1 failed, 547 filtered**. The snapshot proves `afile`
+changed and `dir/child` was deleted, while HEAD/index/refs stayed old and the
+ignored sentinel survived; result was `Err(RecoveryRequired)` instead of Dirty.
+This reproduces the P1 independently, not merely its category. No transport,
+fake, sleeps, developer key or global Git configuration. Recorded before any
+production correction in canonical comment `01M4VMJE8B5XZAF6KRT7YYRSBY`.
+
+### Poll-Only Correction And GREEN — 2026-10-13T22:38:26Z
+
+Incoming paths whose old entry is a directory now distinguish directory-to-
+file/symlink replacement from ordinary tracked updates. Before the shared
+updater, the poll validates tracked directory ancestors are actual non-symlink
+directories, then examines only the retiring subtree's entry names/types against
+the old Git tree. An extra entry (including an ignored empty directory), foreign
+type or opaque nested state returns Dirty. Unreadable filesystem/tree evidence
+returns Inaccessible, never a clean guess. Tracked symlinks are treated as leaves;
+no file body is read and no local symlink is traversed. Normal tracked-file-to-
+directory transitions keep the existing path. No discovery refresh, transport
+or prompt occurs in this targeted local-state preflight.
+
+The shared `sync::fast_forward` body and all other synchronization/ref/discovery
+helpers remain byte-for-byte the fix base; no rollback, forced ref, deletion or
+new testing hook is introduced. Approved Cycle/design/plan and one-way agreement
+are unchanged. This repairs implementation of the existing preservation contract.
+
+Two new tests execute **20 obstructed cases** on Linux: root/nested retiring
+directory × incoming regular file/symlink × ignored file, ignored nested file,
+ignored descendant under deeper tracked directories, ignored empty directory,
+ignored symlink. Every case proves complete snapshot equality, Dirty and an
+unchanged outside symlink-target sentinel. **Four clean controls** still advance
+HEAD/index/worktree while preserving a noncolliding ignored file. Windows omits
+symlink variants rather than changing permissions; no native run is claimed.
+Initial GREEN passed all 25 poll tests; deeper tracked-descendant hardening then
+passed in the final focused and full runs. No failed production fix trial or
+duplicate broad run for this correction.
+
+All final Rust commands ran sequentially through Devenv in the assigned worktree:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **25 passed**, 523 filtered; obstruction and clean-control matrices green |
+| `devenv shell -- cargo test --locked --lib remote::` | **322 passed**, 226 filtered |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,625 passed, 0 failed, 1 existing ignored** |
+
+Full log `tool_1374f3fe8001N5kMGAMMp9qtK8`: **548 library**, **779 ordinary
+integration**, **289 real-SSH** (41 comment, 25 merge, 15 observation, 63
+synchronization, 31 fixture, 114 transport), **9 compile-fail doctests**. Existing
+SSH/shared suites and tests are unchanged; no transport claim comes from the
+new local tests. Task 0 trusted evidence not replayed; no native dispatch.
+
+Only `poll.rs`, `poll_tests.rs`, ledger, open ticket and the two correction
+comments belong to this new local fix commit. Git diff confirms shared helpers,
+repository.rs, acceptance tests, dependencies and lockfiles are unchanged. Source
+and recent log inspected; canonical comments/schema and whitespace validated
+with scripts/show-ticket and git diff --check before staging intended files.
+
+Technically corrected P1 awaits **spec re-review** by
+`ses_ec8bd9b3effeS3OD0g7achFQNy`; no approval is inferred, **quality not started**.
+Incremental fix base `e08d42d8cfdbc1aa5798c30a94d554d4b7f175e9`; cumulative Task 4
+spec range starts `961b3c21db11f797e5bd1cdac0bf85d748cd1dec` and ends at the new
+commit head returned after commit. Canonical GREEN/re-review comment
+`01M4VPNGXTADT2ASHG97ZQH66Q`. Ticket remains open, Task 5 unstarted, no subagents.
+Deferred Task 2 SQL kind-immutability minor remains for final review.
+
 ## Task 4 Owner Amendment And Resume — 2026-10-13T20:09:05Z
 
 The controller conveyed the owner's **"Yes"** approving the focused amendment:

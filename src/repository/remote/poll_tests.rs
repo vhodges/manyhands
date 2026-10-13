@@ -1332,3 +1332,241 @@ fn poll_fast_forward_allows_clean_tracked_file_to_directory_transition() {
     index.read(true).unwrap(); // Reobserve disk after the updater's separate handle.
     assert_eq!(index.write_tree().unwrap(), tree.id());
 }
+
+fn retiring_directory_fixture(
+    nested: bool,
+    incoming_mode: i32,
+) -> (LocalFixture, PathBuf, git2::Oid) {
+    let mut f = LocalFixture::new();
+    let child_path = if nested { "dir/sub/child" } else { "dir/child" };
+    let deep_child = if nested {
+        "dir/sub/tracked/deep/child"
+    } else {
+        "dir/tracked/deep/child"
+    };
+    let dirs = f
+        .repository
+        .find_tree(fixture_tree(
+            &f.repository,
+            &[
+                (child_path, b"tracked child\n".to_vec(), 0o100644),
+                (deep_child, b"deep tracked child\n".to_vec(), 0o100644),
+            ],
+        ))
+        .unwrap();
+    let parent = f.repository.find_commit(f.old).unwrap();
+    let mut builder = f
+        .repository
+        .treebuilder(Some(&parent.tree().unwrap()))
+        .unwrap();
+    builder
+        .insert("dir", dirs.get_name("dir").unwrap().id(), 0o040000)
+        .unwrap();
+    builder
+        .insert(
+            "afile",
+            f.repository.blob(b"old afile\n").unwrap(),
+            0o100644,
+        )
+        .unwrap();
+    builder
+        .insert(
+            ".gitignore",
+            f.repository
+                .blob(b".manyhands/worktrees/\nignored\n*.ignored\n")
+                .unwrap(),
+            0o100644,
+        )
+        .unwrap();
+    let tree = f.repository.find_tree(builder.write().unwrap()).unwrap();
+    let sig =
+        git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(2, 0)).unwrap();
+    f.old = f
+        .repository
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "tracked directory",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    drop(builder);
+    f.repository
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let incoming = f
+        .repository
+        .blob(if incoming_mode == 0o120000 {
+            b"file"
+        } else {
+            b"incoming file\n"
+        })
+        .unwrap();
+    let mut builder = f.repository.treebuilder(Some(&tree)).unwrap();
+    if nested {
+        let old_dir = f
+            .repository
+            .find_tree(tree.get_name("dir").unwrap().id())
+            .unwrap();
+        let mut dir = f.repository.treebuilder(Some(&old_dir)).unwrap();
+        dir.insert("sub", incoming, incoming_mode).unwrap();
+        builder
+            .insert("dir", dir.write().unwrap(), 0o040000)
+            .unwrap();
+    } else {
+        builder.insert("dir", incoming, incoming_mode).unwrap();
+    }
+    builder
+        .insert(
+            "afile",
+            f.repository.blob(b"changed afile\n").unwrap(),
+            0o100644,
+        )
+        .unwrap();
+    let incoming_tree = f.repository.find_tree(builder.write().unwrap()).unwrap();
+    let incoming = f
+        .repository
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "directory transition",
+            &incoming_tree,
+            &[&f.repository.find_commit(f.old).unwrap()],
+        )
+        .unwrap();
+    f.tracking(&SynchronizationTarget::Primary, incoming);
+    let retiring = f.root.join(if nested { "dir/sub" } else { "dir" });
+    drop((builder, incoming_tree, tree, parent, dirs));
+    (f, retiring, incoming)
+}
+
+#[test]
+fn poll_retiring_directory_ignored_descendants_are_dirty_before_any_checkout() {
+    let modes: &[i32] = if cfg!(unix) {
+        &[0o100644, 0o120000]
+    } else {
+        &[0o100644]
+    };
+    let obstructions: &[&str] = if cfg!(unix) {
+        &[
+            "file",
+            "nested_file",
+            "tracked_descendant",
+            "empty_directory",
+            "symlink",
+        ]
+    } else {
+        &[
+            "file",
+            "nested_file",
+            "tracked_descendant",
+            "empty_directory",
+        ]
+    };
+    for nested in [false, true] {
+        for &mode in modes {
+            for &obstruction in obstructions {
+                let (f, retiring, incoming) = retiring_directory_fixture(nested, mode);
+                let outside = f._data.path().join("outside-sentinel");
+                fs::write(&outside, b"outside sentinel\n").unwrap();
+                let ignored = retiring.join("local.ignored");
+                match obstruction {
+                    "file" => fs::write(&ignored, b"ignored sentinel\n").unwrap(),
+                    "nested_file" => {
+                        fs::create_dir(&ignored).unwrap();
+                        fs::write(ignored.join("sentinel"), b"ignored nested sentinel\n").unwrap();
+                    }
+                    "tracked_descendant" => fs::write(
+                        retiring.join("tracked/deep/local.ignored"),
+                        b"deep ignored sentinel\n",
+                    )
+                    .unwrap(),
+                    "empty_directory" => fs::create_dir(&ignored).unwrap(),
+                    #[cfg(unix)]
+                    "symlink" => std::os::unix::fs::symlink(&outside, &ignored).unwrap(),
+                    _ => unreachable!(),
+                }
+                let expected = f
+                    .service
+                    .observation_configuration(&f.root, &f.plan)
+                    .unwrap();
+                let before = snapshot(&f.root, &f.repository);
+                assert!(before.statuses.is_empty());
+                let result = f.service.poll_fast_forward(
+                    &f.root,
+                    &f.plan,
+                    &expected,
+                    &PollFastForward {
+                        target: SynchronizationTarget::Primary,
+                        before: f.old,
+                        after: incoming,
+                    },
+                );
+                assert_eq!(
+                    snapshot(&f.root, &f.repository),
+                    before,
+                    "checkout mutated state: nested={nested}, mode={mode:o}, obstruction={obstruction}, result={result:?}"
+                );
+                assert_eq!(result.unwrap(), PollDisposition::Dirty);
+                assert_eq!(fs::read(&outside).unwrap(), b"outside sentinel\n");
+            }
+        }
+    }
+}
+
+#[test]
+fn poll_clean_retiring_directories_still_fast_forward_with_noncolliding_ignored_state() {
+    let modes: &[i32] = if cfg!(unix) {
+        &[0o100644, 0o120000]
+    } else {
+        &[0o100644]
+    };
+    for nested in [false, true] {
+        for &mode in modes {
+            let (f, retiring, incoming) = retiring_directory_fixture(nested, mode);
+            fs::write(f.root.join("ignored"), b"noncolliding ignored\n").unwrap();
+            let expected = f
+                .service
+                .observation_configuration(&f.root, &f.plan)
+                .unwrap();
+            assert_eq!(
+                f.service
+                    .poll_fast_forward(
+                        &f.root,
+                        &f.plan,
+                        &expected,
+                        &PollFastForward {
+                            target: SynchronizationTarget::Primary,
+                            before: f.old,
+                            after: incoming
+                        }
+                    )
+                    .unwrap(),
+                PollDisposition::FastForwarded
+            );
+            assert_eq!(f.repository.head().unwrap().target(), Some(incoming));
+            assert_eq!(fs::read(f.root.join("afile")).unwrap(), b"changed afile\n");
+            assert_eq!(
+                fs::read(f.root.join("ignored")).unwrap(),
+                b"noncolliding ignored\n"
+            );
+            assert!(!retiring.join("child").exists());
+            if mode == 0o100644 {
+                assert_eq!(fs::read(&retiring).unwrap(), b"incoming file\n");
+            }
+            #[cfg(unix)]
+            if mode == 0o120000 {
+                assert_eq!(fs::read_link(&retiring).unwrap(), Path::new("file"));
+            }
+            let mut index = f.repository.index().unwrap();
+            index.read(true).unwrap();
+            assert_eq!(
+                index.write_tree().unwrap(),
+                f.repository.find_commit(incoming).unwrap().tree_id()
+            );
+        }
+    }
+}

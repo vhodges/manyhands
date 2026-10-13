@@ -251,6 +251,28 @@ impl RepositoryService {
                 .collect::<Vec<_>>();
             for ancestor in ancestors.into_iter().rev() {
                 if let Ok(entry) = old_tree.get_path(ancestor) {
+                    if entry.kind() == Some(git2::ObjectType::Tree) {
+                        let local = workdir.join(ancestor);
+                        match std::fs::symlink_metadata(&local) {
+                            Ok(metadata)
+                                if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                            Ok(_) => return Ok(PollDisposition::Dirty),
+                            Err(_) => return Ok(PollDisposition::Inaccessible),
+                        }
+                        if ancestor == path
+                            && new_tree.get_path(path).ok().and_then(|e| e.kind())
+                                == Some(git2::ObjectType::Blob)
+                        {
+                            // An old tracked directory is not automatically
+                            // disposable: ignored descendants can obstruct its
+                            // replacement after checkout has changed other paths.
+                            match poll_retiring_directory_obstructed(&linked, &local, entry.id()) {
+                                Ok(true) => return Ok(PollDisposition::Dirty),
+                                Ok(false) => {}
+                                Err(_) => return Ok(PollDisposition::Inaccessible),
+                            }
+                        }
+                    }
                     // A clean tracked file/symlink becoming a directory is an
                     // authorized checkout transition. Do not inspect children
                     // through it; they do not exist locally before checkout.
@@ -285,6 +307,51 @@ impl RepositoryService {
         Ok(PollDisposition::FastForwarded)
     }
 }
+
+/// Inspect only directories a pending file/symlink replacement must retire.
+/// Never follow local symlinks or read file bodies; every on-disk entry must be
+/// accounted for by the old tracked tree. Extra entries (even empty ignored
+/// directories) are local obstructions, and unreadable state is never clean.
+fn poll_retiring_directory_obstructed(
+    repository: &git2::Repository,
+    directory: &Path,
+    tree_oid: git2::Oid,
+) -> Result<bool, SynchronizationError> {
+    let mut pending = vec![(directory.to_owned(), tree_oid)];
+    while let Some((path, oid)) = pending.pop() {
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|_| SynchronizationError::RecoveryRequired)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Ok(true);
+        }
+        let tree = repository
+            .find_tree(oid)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        for child in std::fs::read_dir(&path).map_err(|_| SynchronizationError::RecoveryRequired)? {
+            let child = child.map_err(|_| SynchronizationError::RecoveryRequired)?;
+            let name = child.file_name();
+            let Some(entry) = tree.get_name_bytes(name.as_encoded_bytes()) else {
+                return Ok(true);
+            };
+            let child_path = child.path();
+            let metadata = std::fs::symlink_metadata(&child_path)
+                .map_err(|_| SynchronizationError::RecoveryRequired)?;
+            match (entry.kind(), entry.filemode()) {
+                (Some(git2::ObjectType::Tree), _)
+                    if metadata.is_dir() && !metadata.file_type().is_symlink() =>
+                {
+                    pending.push((child_path, entry.id()))
+                }
+                (Some(git2::ObjectType::Blob), 0o120000) if metadata.file_type().is_symlink() => {}
+                (Some(git2::ObjectType::Blob), 0o100644 | 0o100755)
+                    if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+                _ => return Ok(true),
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[allow(dead_code)]
 pub(super) fn conforming_context_tree(
     repository: &git2::Repository,
