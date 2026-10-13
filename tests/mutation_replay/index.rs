@@ -324,6 +324,7 @@ fn a_refresh_of_a_repository_that_is_not_registered_is_refused_and_leaves_nothin
     );
     assert_eq!(recovery_actions(&refused), ["index.rebuild"]);
     assert_eq!(refused.operation_id, None);
+    world.assert_golden("index_refresh_repository_not_registered", &refused);
     assert_eq!(world.request_rows(), 0);
     assert_eq!(operation_rows(&world), 0);
 }
@@ -378,6 +379,13 @@ fn a_rebuild_with_a_corrupt_database_is_recorded_and_registers_the_repository() 
             world.root.to_str().unwrap()
         );
         assert_eq!(refused.operation_id, None);
+        world.assert_golden(
+            &format!(
+                "{}_index_unavailable",
+                refused.command.replace([' ', '-'], "_")
+            ),
+            &refused,
+        );
     }
 
     // Those refusals replaced nothing: the index is still not a database.

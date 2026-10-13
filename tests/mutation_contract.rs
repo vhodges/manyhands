@@ -212,6 +212,23 @@ fn a_ticket_request_stopped_before_it_is_accepted_carries_no_data() {
     assert_ticket_contract("ticket_save_external_change", &world, &envelope);
 }
 
+/// A save of a ticket nothing holds, and a document made at a path that
+/// is not written as one: refused before anything is accepted.
+#[test]
+fn a_request_that_names_no_item_or_no_path_matches_its_golden() {
+    let world = World::new();
+    let absent = world.execute(REQUEST_1, world.save(TICKET_NEW, "v1:any"));
+    assert_eq!(absent.code, ResultCode::ItemNotFound);
+    assert_ticket_contract("ticket_save_item_not_found", &world, &absent);
+
+    let nowhere = world.execute(
+        REQUEST_2,
+        world.document_create(DOCUMENT_NEW, "docs/../new.md"),
+    );
+    assert_eq!(nowhere.code, ResultCode::InvalidPath);
+    assert_document_contract("document_create_invalid_path", &world, &nowhere);
+}
+
 #[test]
 fn a_re_entered_ticket_save_matches_its_schema_and_golden() {
     let mut world = World::with_service(|data| {
@@ -1631,6 +1648,48 @@ fn code_differences(
         }
     }
     problems
+}
+
+/// The result codes no golden of the mutation boundary has, each with the
+/// reason: a code only a read returns, or one no fixture of a mutation
+/// can produce. Every other code is the code of a golden under
+/// `tests/fixtures/mutation_v1`, so that a front end can see what the
+/// boundary's own envelope of it looks like, with the actions it offers.
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 5] = [
+    (
+        ResultCode::RemoteUnavailable,
+        "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
+    ),
+    (
+        ResultCode::InvalidId,
+        "a read's code: an ID that is not written as one. A mutation takes its IDs as typed          values, and no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::PublicKeyUnavailable,
+        "a read's code, of key public: no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::AuthorityNotFound,
+        "a read's code, of host inspect: no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::RepositoryInaccessible,
+        "a mutation returns it where Git or a file of the repository cannot be opened for a          reason other than what is at the path, as for a file its user may not read; no          fixture holds that on every platform, and a registered root that is gone, which          gives a read this code, is invalid_path to a mutation",
+    ),
+];
+
+#[test]
+fn every_result_code_has_a_mutation_golden_or_a_reason_none_has_it() {
+    let mutation_codes: BTreeSet<String> = golden_envelopes()
+        .iter()
+        .filter(|(name, _)| name.starts_with(MUTATION_GOLDENS))
+        .map(|(_, envelope)| envelope["code"].as_str().unwrap().to_owned())
+        .collect();
+
+    assert_eq!(
+        code_differences(&mutation_codes, &CODES_NO_MUTATION_GOLDEN_HAS),
+        [""; 0]
+    );
 }
 
 #[test]

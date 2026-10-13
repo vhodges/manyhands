@@ -414,6 +414,9 @@ fn a_bare_repository_and_a_directory_that_is_none_are_refused_as_what_they_are()
                 (Outcome::Error, code),
                 "corrupt {corrupt}"
             );
+            if database.is_none() {
+                world.assert_golden(&format!("index_rebuild_{}", code.as_str()), &refused);
+            }
             if let Some(database) = &database {
                 // Refused before anything is replaced or accepted for it.
                 assert_eq!(refused.operation_id, None);

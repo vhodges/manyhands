@@ -1511,6 +1511,18 @@ mod boundary {
             ResultCode::PathNotFound,
             "an absent file",
         );
+        assert_golden(
+            "document_repair_path_not_found",
+            &shelf,
+            PREVIEW_SCHEMA,
+            &shelf.prepare(&outside("docs/absent.md")),
+        );
+        assert_golden(
+            "document_repair_invalid_path",
+            &shelf,
+            PREVIEW_SCHEMA,
+            &shelf.prepare(&outside("docs/../a.md")),
+        );
     }
 
     /// Unix only: a symbolic link is made.

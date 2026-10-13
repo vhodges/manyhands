@@ -625,6 +625,7 @@ fn a_rejected_request_leaves_nothing_and_its_id_can_be_used_again() {
         FailureClass::Transient,
     );
     assert_eq!(recovery_actions(&busy), ["request.retry"]);
+    world.assert_golden_with_data("ticket_save_busy", "ticket_mutation.schema.json", &busy);
     holder.release();
     world.assert_nothing_exists(REQUEST_1, TICKET_A);
     assert_eq!(world.request_rows(), 0);
@@ -1275,6 +1276,9 @@ fn a_mutation_addressed_below_or_beside_the_repository_root_is_not_repository_ro
             );
             assert_eq!(envelope.effects, Effects::not_requested(), "{what}");
             assert_eq!(envelope.operation_id, None, "{what}");
+            if what == "a save at a subdirectory" {
+                world.assert_golden("ticket_save_not_repository_root", &envelope);
+            }
             // Nothing was accepted and nothing was done.
             assert!(world.record(REQUEST_1).is_none(), "{what}");
             assert_eq!(world.request_rows(), rows, "{what}");
