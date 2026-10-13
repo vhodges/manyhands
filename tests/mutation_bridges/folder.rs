@@ -1375,6 +1375,47 @@ mod boundary {
         assert_eq!(made.code, ResultCode::Ok, "{made:?}");
     }
 
+    /// A call that enters a record another call accepted and stops
+    /// with no row cannot know that the other has stopped: it may still
+    /// be making directories. The record is kept, as the key commands
+    /// keep theirs, and the same request is what goes on.
+    #[test]
+    fn a_retry_that_stops_with_no_row_keeps_the_request_s_record() {
+        git_home::isolated();
+        let mut world = World::with_service(|data| {
+            super::super::support::FailOnce::at(FailurePoint::BeforeRequestDomainCall)
+                .open_service(data)
+        });
+        let died = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(died.code, ResultCode::InternalError);
+        assert_eq!(
+            world.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Accepted)
+        );
+        world.reopen();
+        let held = RepositoryService::hold_lease_for_testing(
+            &world.root,
+            world.data.path(),
+            LeaseKind::Repository,
+        )
+        .unwrap();
+
+        let busy = world.execute(REQUEST_1, create(&world, "docs/a"));
+
+        assert_eq!(busy.code, ResultCode::Busy, "{busy:?}");
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        let record = world.record(REQUEST_1).expect("the record is kept");
+        assert_eq!((record.state, record.attempt), (RequestState::Accepted, 2));
+        assert!(!world.root.join("docs/a").exists());
+        drop(held);
+        let made = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+        assert_eq!(
+            world.record(REQUEST_1).map(|record| record.state),
+            Some(RequestState::Finished)
+        );
+    }
+
     #[test]
     fn a_repository_that_is_not_enabled_or_a_root_that_is_not_one_is_refused() {
         git_home::isolated();

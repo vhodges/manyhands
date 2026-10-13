@@ -107,9 +107,7 @@ impl FolderCreateBinding {
         let Ok(path) = DocumentFolderPath::parse(&self.path) else {
             return Ran {
                 answer: Answer::stopped(ResultCode::InvalidInput),
-                standing: Standing::Stopped {
-                    journal: accepted.journal_row(service),
-                },
+                standing: Self::left(service, accepted),
             };
         };
         let result = service.create_folder(CreateFolderRequest {
@@ -121,9 +119,7 @@ impl FolderCreateBinding {
         // refused: its row says, and a first call has none.
         let stopped = |answer| Ran {
             answer,
-            standing: Standing::Stopped {
-                journal: accepted.journal_row(service),
-            },
+            standing: Self::left(service, accepted),
         };
         match result {
             Ok(CreateFolderOutcome::Created(discovery)) => {
@@ -154,6 +150,34 @@ impl FolderCreateBinding {
                 },
                 standing: Standing::Owed,
             },
+        }
+    }
+
+    /// What is left of a request that made nothing or was refused: its
+    /// row says.
+    ///
+    /// No row, on a call that entered a record another call accepted,
+    /// does not say that nothing is in flight: the call it entered
+    /// beside may hold the lease and be making directories, with its
+    /// refresh's row not yet begun. Were the record released under it,
+    /// that call's row would belong to no record, and where its refresh
+    /// then stayed pending no request could take it up. The record is
+    /// kept, whatever the failure, as the key commands and the confirmed
+    /// commands with no row keep theirs: the same request is its way
+    /// out.
+    fn left(service: &RepositoryService, accepted: &Accepted) -> Standing {
+        match accepted.journal_row(service) {
+            Some(JournalRow::Absent) if accepted.attempt > 1 => Standing::Unconfirmed,
+            journal @ (Some(
+                JournalRow::Absent
+                | JournalRow::Pending(_)
+                | JournalRow::Final {
+                    kind: _,
+                    owes_work: _,
+                    checkpointed: _,
+                },
+            )
+            | None) => Standing::Stopped { journal },
         }
     }
 
