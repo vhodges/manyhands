@@ -69,7 +69,10 @@ use super::{
             RepositoryError, RepositoryOperation, RepositoryService, ResolvedRepository,
             bridges::{
                 folder::is_listed_file,
-                repair::{Refusal, against_current, corrected_id, held_elsewhere},
+                repair::{
+                    Refusal, against_current, corrected_id, held_anywhere,
+                    repaired_under_another_id,
+                },
             },
             owned_file_bytes,
             read::{is_plain_relative, observe_in_context},
@@ -203,11 +206,12 @@ struct Observed {
     /// The index holds a duplicate-ID problem for the path.
     duplicate: bool,
     /// The corrected ID is held by something that is not this path's
-    /// file: an item the index holds, or a file on primary.
+    /// file: an item the index holds, or a file where the operation
+    /// looks for one.
     held: bool,
-    /// The index holds an item at the path, in some context, under
-    /// another ID than the corrected one: the file was repaired before,
-    /// and has its identity there.
+    /// An item is at the path, in some context, under another ID than
+    /// the corrected one, by the index or by the contexts' own files:
+    /// the file was repaired before, and has its identity there.
     occupied: bool,
     /// The file is the blob at primary's head.
     committed: bool,
@@ -359,13 +363,14 @@ impl RepairBinding {
             AuthoringKind::Ticket => ItemDtoKind::Ticket,
         };
         // An item of the index, in any context, that is not this path's;
-        // or a file on primary that holds the ID, which the index lists as
-        // no item when two of them do.
+        // or what the operation itself asks: a file that holds the ID on
+        // primary, in the commit the item's context is cut from, or in
+        // that context. The index lists two files of one ID as no item.
         let held = match service.show_item(repository, id) {
             Ok(item) => item.path != path || item.kind != kind,
             Err(error) if error.code() == ResultCode::ItemNotFound => false,
             Err(error) => return Err(read(error)),
-        } || held_elsewhere(root, Path::new(path), id, root)
+        } || held_anywhere(root, self.kind, Path::new(path), id)
             .map_err(|error| self.about(super::refused(error)))?;
         // A document's path is no part of its identity, so the index is
         // asked whether one is at this path already under another ID. A
@@ -381,7 +386,8 @@ impl RepairBinding {
                         && item.id.as_ref().is_some_and(|held| *held != id.to_string())
                 }),
             AuthoringKind::Ticket => false,
-        };
+        } || repaired_under_another_id(root, Path::new(path), id)
+            .map_err(|error| self.about(super::refused(error)))?;
         Ok(Observed {
             occupied,
             duplicate: shown

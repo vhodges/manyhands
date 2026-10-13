@@ -981,6 +981,76 @@ mod boundary {
     }
 
     #[test]
+    fn a_path_an_abandoned_repair_committed_is_not_repaired_under_another_id() {
+        git_home::isolated();
+        let mut shelf = Shelf::failing_once_at(FailurePoint::BeforeIndexTransactionCommit);
+        let first = document(ADOPTED);
+        // The repair commits, its hand-off fails, and it is abandoned:
+        // no row is pending and the index has not seen the item.
+        let pending = shelf.repair(REQUEST_1, || shelf.document_repair(MARKER_PATH, &first));
+        assert_eq!(pending.code, ResultCode::DiscoveryPending);
+        let operation = OperationId::parse(pending.operation_id.as_deref().unwrap()).unwrap();
+        shelf.reopen();
+        let abandoned = shelf.repair(REQUEST_2, || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: shelf.root.clone(),
+                operation_id: operation,
+            })
+        });
+        assert_eq!(abandoned.code, ResultCode::Ok);
+        assert_eq!(shelf.pending_journal_rows(), 0);
+        let listed = shelf.service.list_documents(&shelf.resolved()).unwrap();
+        assert!(
+            listed
+                .items
+                .iter()
+                .all(|item| item.id.as_deref() != Some(ADOPTED))
+        );
+        let tip = shelf.branch_tip(ADOPTED);
+        let rows = shelf.journal_rows();
+        let confirmations = shelf.confirmation_rows();
+
+        let refused = shelf.prepare(&shelf.document_repair(MARKER_PATH, &document(UNHELD)));
+
+        assert_eq!(refused.code, ResultCode::NotRepairable);
+        assert!(refused.data.is_none());
+        assert_eq!(shelf.contexts(), [ADOPTED]);
+        assert_eq!(shelf.item_branches(), [World::document_branch(ADOPTED)]);
+        assert_eq!(shelf.branch_tip(ADOPTED), tip);
+        assert_eq!(shelf.journal_rows(), rows);
+        assert_eq!(shelf.confirmation_rows(), confirmations);
+        // The domain, asked directly, refuses it too and makes nothing.
+        let direct = shelf.service.repair_item(request(
+            &shelf,
+            AuthoringKind::Document,
+            MARKER_PATH,
+            &document(UNHELD),
+        ));
+        assert_eq!(kind_of(direct), RepositoryErrorKind::NotRepairable);
+        assert_eq!(shelf.contexts(), [ADOPTED]);
+        assert_eq!(shelf.item_branches(), [World::document_branch(ADOPTED)]);
+        assert_eq!(shelf.pending_journal_rows(), 0);
+    }
+
+    #[test]
+    fn an_id_held_where_only_the_domain_looked_is_ambiguous_at_the_preview() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        // The document is committed on primary and deleted there, not
+        // committed: neither the index nor primary's worktree shows who
+        // holds its ID, and the commit a context is cut from does.
+        std::fs::remove_file(shelf.root.join(mutation::DOCUMENT_PATH)).unwrap();
+        let rows = shelf.journal_rows();
+
+        let refused =
+            shelf.prepare(&shelf.document_repair(MARKER_PATH, &document(mutation::DOCUMENT)));
+
+        assert_eq!(refused.code, ResultCode::IdentityAmbiguous);
+        assert!(refused.data.is_none());
+        assert_nothing_made(&shelf, rows, "a holder at HEAD");
+    }
+
+    #[test]
     fn a_second_repair_of_a_path_made_after_the_preview_is_an_external_change() {
         git_home::isolated();
         let shelf = Shelf::new();

@@ -2133,6 +2133,9 @@ mod slug_assign;
 #[path = "mutation_replay/documents.rs"]
 mod documents;
 
+#[path = "mutation_replay/live_calls.rs"]
+mod live_calls;
+
 #[path = "mutation_replay/bindings.rs"]
 mod bindings;
 

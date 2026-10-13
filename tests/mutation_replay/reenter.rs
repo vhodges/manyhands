@@ -1243,6 +1243,15 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
                 assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
                 assert_eq!(envelope["recovery"][0]["action"], "request.retry", "{what}");
             }
+            // The other process had handed off and was indexing: its
+            // row is left to it, and the commit is reported.
+            "discovery_pending" => {
+                succeeded += 1;
+                assert_eq!(envelope["outcome"], "partial", "{what}");
+                assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
+                assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
+                assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
+            }
             other => panic!("neither a result nor busy: {other}: {what}"),
         }
     }
@@ -1333,7 +1342,28 @@ fn a_retry_completes_a_save_whose_process_was_killed_at_each_fault_point() {
 
         // The retry, with the same body, completes.
         world.reopen();
-        let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        let mut retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        if retry.code == ResultCode::DiscoveryPending {
+            // The process died while it was indexing, and its heartbeat
+            // is not yet old: nothing tells it from a call at work, so
+            // its row is left to it and the commit is reported. Once the
+            // heartbeat is old the same request takes the hand-off up.
+            // It is made old here: a test does not wait.
+            assert!(committed, "{what}");
+            assert_eq!(retry.outcome, Outcome::Partial, "{what}");
+            assert_eq!(
+                retry.effects.commit_oid,
+                world.branch_tip(TICKET_A).map(|tip| tip.to_string()),
+                "{what}"
+            );
+            crate::support::items::index(world.data.path())
+                .execute(
+                    "UPDATE operation_records SET observed_at = 0 WHERE operation_ulid = ?1",
+                    [&operation_id],
+                )
+                .unwrap();
+            retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+        }
         assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, &what);
         assert_eq!(retry.operation_id, Some(operation_id), "{what}");
     }

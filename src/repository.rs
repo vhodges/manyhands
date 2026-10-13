@@ -1856,6 +1856,18 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &paths),
         )?;
+        // The row is another call's to finish while that call is
+        // indexing under it: the save's own work is committed, or it
+        // would not have handed off.
+        if record.is_pending
+            && self.is_being_indexed(&root, operation, request.target.operation_id)?
+        {
+            drop(lease);
+            return Ok(SaveOutcome::IndexPending {
+                context: item_context(&root, request.target.kind, request.target.item_id),
+                checkpoint: LocalCheckpoint::NoChange,
+            });
+        }
         let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
@@ -2266,6 +2278,17 @@ impl RepositoryService {
             request.target.operation_id,
             &authoring_write_target(&request.target, &[]),
         )?;
+        // As for a document's save: a row a call is indexing under is
+        // that call's to finish.
+        if record.is_pending
+            && self.is_being_indexed(&root, operation, request.target.operation_id)?
+        {
+            drop(lease);
+            return Ok(SaveOutcome::IndexPending {
+                context: item_context(&root, request.target.kind, request.target.item_id),
+                checkpoint: LocalCheckpoint::NoChange,
+            });
+        }
         let effects = CallEffects::default();
         let result = (|| {
             let intent = request.target.intent;
@@ -2866,6 +2889,38 @@ impl RepositoryService {
                 self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
             }
         }
+    }
+
+    /// Whether a call is indexing under the pending row of
+    /// `operation_id`, with no lease held: the row's heartbeat is an
+    /// index owner's and is fresh. Nothing is written.
+    ///
+    /// Two calls under one operation ID can run at once. One that finds
+    /// the row so leaves it to the call at work: every step it would
+    /// record sets the row's state, which takes the row out of
+    /// `indexing` under its owner.
+    fn is_being_indexed(
+        &self,
+        root: &Path,
+        operation: RepositoryOperation,
+        operation_id: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        let Some(root_path) = root.to_str() else {
+            return Ok(false);
+        };
+        // With no cache there is no row, as for the row's own beginning.
+        if self.registry_path.is_dir() {
+            return Ok(false);
+        }
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let connection = open_registry_read_only(&self.registry_path)
+            .map_err(|error| error.for_operation(operation, root))?;
+        let row = recovery::local_row(&connection, root_path, operation_id)
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        Ok(row.is_some_and(|row| {
+            row.standing() == recovery::LocalStanding::Pending
+                && row.has_live_heartbeat(bridges::abandon::stale_heartbeat())
+        }))
     }
 
     fn check_failure(
@@ -6830,6 +6885,18 @@ fn default_data_directory() -> Result<PathBuf, RepositoryError> {
         directories::ProjectDirs::from("com", "manyhands", "Manyhands")
             .map(|directories| directories.data_local_dir().to_owned()),
     )
+}
+
+/// The editing context of the item `item_id`, by the names every
+/// context is given. Neither its branch nor its worktree is looked at.
+fn item_context(root: &Path, kind: AuthoringKind, item_id: canonical::ItemId) -> ItemContext {
+    ItemContext {
+        root: root.to_owned(),
+        kind,
+        branch: format!("manyhands/{}/{item_id}", authoring_kind_segment(&kind)),
+        worktree: root.join(".manyhands/worktrees").join(item_id.to_string()),
+        item_id,
+    }
 }
 
 fn authoring_kind_segment(kind: &AuthoringKind) -> &'static str {

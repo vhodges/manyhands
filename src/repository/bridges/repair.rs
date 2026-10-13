@@ -52,15 +52,13 @@ use crate::canonical::{self, CanonicalItem, ItemId, ItemKind};
 use super::super::{
     AuthoringKind, AuthoringTarget, CallEffects, CheckpointSpec, ContextIntent,
     ContextProvisionOutcome, ExpectedPathObservation, ExternalChangeDiagnostic,
-    ExternalChangeExpectation, FailurePoint, ItemContext, LocalCheckpoint, OperationId,
-    RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService, SaveOutcome,
-    authoring_kind_segment, authoring_write_target,
-    bridges::{abandon::stale_heartbeat, folder::is_listed_file},
-    cache_read_guard, canonical_repository_root, checkpoint_after_refresh,
-    collect_canonical_sources, ensure_replayed_owned_destination, ensure_safe_owned_parent,
-    observe_owned_regular_file, open_registry_read_only, owned_file_bytes,
-    recovery::{self, LocalStanding, LocalStep},
-    resolve_identity, validate_safe_owned_parent, write_owned_document,
+    ExternalChangeExpectation, FailurePoint, LocalCheckpoint, OperationId, RepositoryError,
+    RepositoryErrorKind, RepositoryOperation, RepositoryService, SaveOutcome,
+    authoring_kind_segment, authoring_write_target, bridges::folder::is_listed_file,
+    canonical_repository_root, checkpoint_after_refresh, collect_canonical_sources,
+    ensure_replayed_owned_destination, ensure_safe_owned_parent, item_context,
+    observe_owned_regular_file, owned_file_bytes, recovery::LocalStep, resolve_identity,
+    validate_safe_owned_parent, write_owned_document,
 };
 
 const OPERATION: RepositoryOperation = RepositoryOperation::RepairItem;
@@ -327,7 +325,7 @@ fn held_in_commit(
 /// `path` holds `id`; see `holds`. Such a file need not be an item the
 /// index holds: two files that hold one ID are a problem there, and
 /// neither is listed as an item, and a nonconforming file is none.
-pub(crate) fn held_elsewhere(
+fn held_elsewhere(
     directory: &Path,
     path: &Path,
     id: &ItemId,
@@ -339,6 +337,72 @@ pub(crate) fn held_elsewhere(
     Ok(sources
         .iter()
         .any(|(other, source)| other != path && holds(other, source, id)))
+}
+
+/// Whether anything but the file at `path` holds `id`: another file of
+/// primary's worktree, one in the commit the item's context is cut from
+/// or stands at (the tip of the item's branch, or primary's head), or
+/// one in the item's context when it is there. This is the one question
+/// a preview and the operation both ask, so that a preview is given
+/// only of a repair the operation would not refuse for it.
+pub(crate) fn held_anywhere(
+    root: &Path,
+    kind: AuthoringKind,
+    path: &Path,
+    id: &ItemId,
+) -> Result<bool, RepositoryError> {
+    let git = |error| RepositoryError::git(OPERATION, Some(root.to_owned()), error);
+    let repository = Repository::open(root).map_err(git)?;
+    let branch = format!("manyhands/{}/{id}", authoring_kind_segment(&kind));
+    let base = match repository.find_branch(&branch, git2::BranchType::Local) {
+        Ok(branch) => branch.get().peel_to_commit().map_err(git)?,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => repository
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(git)?,
+        Err(error) => return Err(git(error)),
+    };
+    let worktree = root.join(".manyhands/worktrees").join(id.to_string());
+    Ok(held_elsewhere(root, path, id, root)?
+        || held_in_commit(&repository, &base, path, id, root)?
+        || (worktree.is_dir() && held_elsewhere(&worktree, path, id, root)?))
+}
+
+/// Whether some item's editing context holds, at `path`, a conforming
+/// item under another ID than `id`: the file was repaired before, and
+/// has its identity there. The contexts are the worktrees Git has
+/// registered under an item's ID, and each file is read as it is on
+/// disk, so a repair is seen whether or not the index has seen it: one
+/// whose hand-off is owed, and one that was abandoned after it
+/// committed.
+pub(crate) fn repaired_under_another_id(
+    root: &Path,
+    path: &Path,
+    id: &ItemId,
+) -> Result<bool, RepositoryError> {
+    let git = |error| RepositoryError::git(OPERATION, Some(root.to_owned()), error);
+    let repository = Repository::open(root).map_err(git)?;
+    let worktrees = repository.worktrees().map_err(git)?;
+    Ok(worktrees
+        .iter()
+        .flatten()
+        .filter(|name| name.parse::<ItemId>().is_ok())
+        .any(|name| {
+            let worktree = root.join(".manyhands/worktrees").join(name);
+            // A worktree that is not there, or a path in it that cannot
+            // be read as a file, holds no item.
+            let file = owned_file_bytes(&worktree, path, OPERATION, root)
+                .ok()
+                .flatten();
+            file.as_deref()
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .and_then(|source| canonical::parse_item(path, source).ok())
+                .is_some_and(|item| match item {
+                    CanonicalItem::Document(document) => document.id != *id,
+                    CanonicalItem::Ticket(ticket) => ticket.id != *id,
+                    CanonicalItem::Comment(comment) => comment.id != *id,
+                })
+        }))
 }
 
 fn external_change(root: &Path, id: &ItemId, context: &Path, path: &Path) -> RepositoryError {
@@ -353,27 +417,6 @@ fn external_change(root: &Path, id: &ItemId, context: &Path, path: &Path) -> Rep
 }
 
 impl RepositoryService {
-    /// Whether a call is indexing under the pending row of
-    /// `operation_id`: the row's heartbeat is an index owner's and is
-    /// fresh. Nothing is written.
-    fn is_being_indexed(
-        &self,
-        root: &Path,
-        operation_id: OperationId,
-    ) -> Result<bool, RepositoryError> {
-        let Some(root_path) = root.to_str() else {
-            return Ok(false);
-        };
-        let _cache_guard = cache_read_guard(&self.registry_path, root, OPERATION)?;
-        let connection = open_registry_read_only(&self.registry_path)
-            .map_err(|error| error.for_operation(OPERATION, root))?;
-        let row = recovery::local_row(&connection, root_path, operation_id)
-            .map_err(|error| RepositoryError::sqlite(error).for_operation(OPERATION, root))?;
-        Ok(row.is_some_and(|row| {
-            row.standing() == LocalStanding::Pending && row.has_live_heartbeat(stale_heartbeat())
-        }))
-    }
-
     /// Replaces the nonconforming file at `request.path` with the
     /// corrected source, in the editing context of the item the source
     /// makes, and checkpoints it there with the ordinary subject for its
@@ -428,16 +471,10 @@ impl RepositoryService {
         // row claimed by a call that is indexing under it, with no lease
         // held, leaves the row to that call: the operation's own work is
         // committed, or it would not have handed off.
-        if record.is_pending && self.is_being_indexed(&root, operation_id)? {
+        if record.is_pending && self.is_being_indexed(&root, OPERATION, operation_id)? {
             drop(lease);
             return Ok(SaveOutcome::IndexPending {
-                context: ItemContext {
-                    root: root.clone(),
-                    kind,
-                    worktree: root.join(".manyhands/worktrees").join(id.to_string()),
-                    branch: format!("manyhands/{}/{id}", authoring_kind_segment(&kind)),
-                    item_id: id,
-                },
+                context: item_context(&root, kind, id),
                 checkpoint: LocalCheckpoint::NoChange,
             });
         }
@@ -465,27 +502,15 @@ impl RepositoryService {
                     .ok_or_else(|| external_change(&root, &id, &root, &path))?;
                 against_current(kind, path_text, &current, &source, &id)
                     .map_err(|refusal| refusal.error(&root))?;
-                // Nothing else holds the ID: no other file of primary's
-                // worktree, none in the commit the item's context is cut
-                // from or stands at, and none in a context that is there
-                // already. All three are asked before a context is made,
-                // so that a refusal leaves none.
-                let branch = format!("manyhands/{}/{id}", authoring_kind_segment(&kind));
-                let git = |error| RepositoryError::git(OPERATION, Some(root.clone()), error);
-                let base = match root_repository.find_branch(&branch, git2::BranchType::Local) {
-                    Ok(branch) => branch.get().peel_to_commit().map_err(git)?,
-                    Err(error) if error.code() == git2::ErrorCode::NotFound => root_repository
-                        .head()
-                        .and_then(|head| head.peel_to_commit())
-                        .map_err(git)?,
-                    Err(error) => return Err(git(error)),
-                };
-                let worktree = root.join(".manyhands/worktrees").join(id.to_string());
-                if held_elsewhere(&root, &path, &id, &root)?
-                    || held_in_commit(&root_repository, &base, &path, &id, &root)?
-                    || (worktree.is_dir() && held_elsewhere(&worktree, &path, &id, &root)?)
-                {
+                // Nothing else holds the ID, and the file has not been
+                // given another in some item's context. Both are asked
+                // before a context is made, so that a refusal leaves
+                // none.
+                if held_anywhere(&root, kind, &path, &id)? {
                     return Err(Refusal::AmbiguousIdentity.error(&root));
+                }
+                if repaired_under_another_id(&root, &path, &id)? {
+                    return Err(Refusal::NotRepairable.error(&root));
                 }
             }
             let context = match self.prepare_context_unlocked(target, Some(record), &effects)? {
