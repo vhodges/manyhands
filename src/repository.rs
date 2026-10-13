@@ -44,6 +44,10 @@ pub use bridges::abandon::{
     AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationRemains,
     PendingStanding,
 };
+pub use bridges::folder::{
+    CreateFolderError, CreateFolderOutcome, CreateFolderRequest, DocumentFolderPath,
+    DocumentFolderPathProblem, FolderDiscovery,
+};
 pub use bridges::identity::{
     InitialsChange, LocalIdentity, SetLocalIdentityOutcome, SetLocalIdentityRequest,
 };
@@ -876,6 +880,15 @@ pub enum FailurePoint {
     /// write and before the email is: the call fails there, with the
     /// repository's configuration file never touched.
     AfterLocalIdentityName,
+    /// `create_folder`, after its directories are made and before the
+    /// index is told of them: the call fails there, with the
+    /// directories on disk and no refresh begun.
+    AfterFolderCreation,
+    /// `create_folder`, where it closes the row of a refresh that did
+    /// not complete: the write fails there, as the index being held
+    /// past the wait would have it fail, and the row is left as the
+    /// refresh left it.
+    BeforeFolderRefreshClose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -906,6 +919,7 @@ pub enum RepositoryOperation {
     Read,
     AbandonOperation,
     SetLocalIdentity,
+    CreateFolder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

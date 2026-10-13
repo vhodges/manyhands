@@ -1128,6 +1128,43 @@ fn collect_documents(
     folders.sort_by(|left, right| left.path.cmp(&right.path));
 }
 
+/// How many entries the walk of `collect_documents` reads under
+/// `docs/` of the worktree at `root`, counted as that walk counts
+/// them: every entry of `docs` and of each directory under it that the
+/// walk goes into, whatever the entry is. `None` when the walk meets
+/// its limit: the tree already holds more than a refresh reads.
+///
+/// This is what says whether one more directory would be the entry
+/// that crosses the limit, so it shares the walk's own reading of a
+/// directory and its own rules for which it goes into.
+pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
+    let docs = root.join("docs");
+    let mut problems = Vec::new();
+    if !directory_exists(&docs, &mut problems) {
+        return Some(0);
+    }
+    let mut directories = vec![(docs, 0)];
+    let mut entries = 0;
+    while let Some((directory, depth)) = directories.pop() {
+        let listing = read_document_directory(&directory, &mut entries, &mut problems);
+        if listing.overflowed {
+            return None;
+        }
+        for entry in listing.entries {
+            let path = entry.path();
+            let goes_into = entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                && !is_excluded_directory(&path)
+                && depth < MAX_DOCUMENT_DIRECTORY_DEPTH;
+            if goes_into {
+                directories.push((path, depth + 1));
+            }
+        }
+    }
+    Some(entries)
+}
+
 /// A directory's path as the index stores it: relative to the worktree,
 /// its native components joined with forward slashes. `None` for one
 /// that is not under `root` or has a component that is not UTF-8.

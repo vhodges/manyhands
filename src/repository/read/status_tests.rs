@@ -204,6 +204,7 @@ fn repository_operations() -> Vec<RepositoryOperation> {
         Read,
         AbandonOperation,
         SetLocalIdentity,
+        CreateFolder,
     ];
     for operation in &all {
         match operation {
@@ -231,7 +232,8 @@ fn repository_operations() -> Vec<RepositoryOperation> {
             | RepositorySnapshot
             | Read
             | AbandonOperation
-            | SetLocalIdentity => {}
+            | SetLocalIdentity
+            | CreateFolder => {}
         }
     }
     all

@@ -224,7 +224,10 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::Read
         | RepositoryOperation::AbandonOperation
         // An identity is Git configuration too, and is set under no row.
-        | RepositoryOperation::SetLocalIdentity => Writes::Nothing,
+        | RepositoryOperation::SetLocalIdentity
+        // A folder is a directory, which is no file, and is made under
+        // no row: the row of its request is its refresh's.
+        | RepositoryOperation::CreateFolder => Writes::Nothing,
     }
 }
 
