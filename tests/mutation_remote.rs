@@ -8,8 +8,14 @@ mod production;
 pub use production::*;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[allow(dead_code)]
+#[path = "support/golden.rs"]
+mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[allow(dead_code)]
+#[path = "support/mutation_golden.rs"]
+mod mutation_golden;
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/schema.rs"]
@@ -115,6 +121,10 @@ const CASES: &[ssh_harness::Case] = &[
     (
         "a_server_that_takes_the_client_without_its_key_is_key_rejected",
         a_server_that_takes_the_client_without_its_key_is_key_rejected,
+    ),
+    (
+        "a_selected_key_whose_file_is_gone_is_key_unavailable",
+        a_selected_key_whose_file_is_gone_is_key_unavailable,
     ),
     (
         "a_stalled_connection_is_transport_unavailable",
@@ -746,6 +756,59 @@ fn execute(w: &World, id: &str, mutation: Mutation) -> Envelope<MutationDataDto>
     )
 }
 
+const SYNCHRONIZATION_SCHEMA: &str = "synchronization_mutation.schema.json";
+const HOST_SCHEMA: &str = "host_mutation.schema.json";
+
+/// Checks an envelope against its golden fixture under
+/// `tests/fixtures/mutation_v1`, as every target of the boundary does.
+/// `data_schema` is the schema of the data it carries, and `None` says it
+/// carries none.
+///
+/// What differs from run to run is replaced: the root, the operation, the
+/// commit, the server's address and the fingerprints of the keys in play.
+/// The server's port is also a number of the data, which no placeholder
+/// replaces: it is checked to be the server's, and the fixture holds 0.
+fn assert_golden(
+    w: &World,
+    name: &str,
+    data_schema: Option<&str>,
+    envelope: &Envelope<MutationDataDto>,
+) {
+    let mut value = serde_json::to_value(envelope).unwrap();
+    let port = w.server.address().port();
+    if let Some(found) = value.pointer_mut("/data/port") {
+        assert_eq!(*found, serde_json::json!(port), "{name}");
+        *found = serde_json::json!(0);
+    }
+    let authority = format!("127.0.0.1:{port}");
+    let mut replaced = vec![(authority, "<authority>")];
+    for pointer in [
+        "/data/fingerprint",
+        "/data/presented_fingerprint",
+        "/data/expected_fingerprint",
+    ] {
+        if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {
+            let placeholder = match pointer {
+                "/data/fingerprint" => "<fingerprint>",
+                "/data/presented_fingerprint" => "<presented>",
+                _ => "<expected>",
+            };
+            replaced.push((found.to_owned(), placeholder));
+        }
+    }
+    let replaced: Vec<(&str, &str)> = replaced
+        .iter()
+        .map(|(found, placeholder)| (found.as_str(), *placeholder))
+        .collect();
+    mutation_golden::assert_contract_at(
+        name,
+        w.root.to_str().unwrap(),
+        data_schema,
+        &replaced,
+        &value,
+    );
+}
+
 fn record(w: &World, id: &str) -> Option<request_store::RequestRecord> {
     w.service.request_record(request(id)).unwrap()
 }
@@ -1271,6 +1334,7 @@ fn a_divergent_remote_is_merge_required_and_holds_its_reservation() -> Result<()
             retry: false,
         },
     )?;
+    assert_golden(&w, "repo_sync_merge_required", None, &first);
     assert!(first.data.is_none());
     // No merge commit, integration window or conflict exists, and
     // neither side's branches moved.
@@ -1312,7 +1376,7 @@ fn a_remotely_deleted_item_branch_is_remote_branch_deleted_and_holds_its_reserva
     assert_eq!(published.outcome, Outcome::Success);
     fixed(fixed(w.bare()?.find_reference(CONTEXT))?.delete())?;
 
-    pin_a_held_reservation(
+    let first = pin_a_held_reservation(
         &w,
         &Stopped {
             mutation: item_sync,
@@ -1321,6 +1385,7 @@ fn a_remotely_deleted_item_branch_is_remote_branch_deleted_and_holds_its_reserva
             retry: false,
         },
     )?;
+    assert_golden(&w, "item_sync_remote_branch_deleted", None, &first);
     // The branch is not published again.
     assert!(w.bare()?.find_reference(CONTEXT).is_err());
     Ok(())
@@ -1344,6 +1409,7 @@ fn a_rejected_push_is_push_rejected_and_holds_its_reservation() -> Result<(), Fi
             retry: true,
         },
     )?;
+    assert_golden(&w, "repo_sync_push_rejected", None, &first);
     assert_eq!(actions(&first), [RecoveryActionKind::RequestRetry]);
     assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, old);
     // The same request does go on from a rejection, once the server
@@ -1412,6 +1478,12 @@ fn an_unknown_host_is_host_approval_required_and_holds_its_reservation() -> Resu
             retry: true,
         },
     )?;
+    assert_golden(
+        &w,
+        "repo_sync_host_approval_required",
+        Some(SYNCHRONIZATION_SCHEMA),
+        &first,
+    );
     let data = synchronization_data(&first)?;
     let presented = w.server.host_identity();
     assert_eq!(data.host, "127.0.0.1");
@@ -1441,6 +1513,12 @@ fn a_rotated_host_key_is_host_replacement_required_with_both_fingerprints()
     let envelope = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(envelope.code, ResultCode::HostReplacementRequired);
     assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert_golden(
+        &w,
+        "repo_sync_host_replacement_required",
+        Some(SYNCHRONIZATION_SCHEMA),
+        &envelope,
+    );
     let data = synchronization_data(&envelope)?;
     assert_eq!(data.presented_fingerprint, presented.sha256);
     assert_eq!(
@@ -1480,6 +1558,7 @@ fn a_locked_key_with_no_passphrase_is_unlock_required_and_holds_its_reservation(
             retry: true,
         },
     )?;
+    assert_golden(&w, "repo_sync_unlock_required", None, &first);
     assert_eq!(actions(&first), [RecoveryActionKind::RequestRetry]);
     assert!(first.data.is_none());
     Ok(())
@@ -1498,6 +1577,7 @@ fn a_client_the_server_rejects_is_unlock_failed_or_unlock_required() -> Result<(
 
     let supplied = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(supplied.code, ResultCode::UnlockFailed);
+    assert_golden(&w, "repo_sync_unlock_failed", None, &supplied);
     assert_eq!(supplied.outcome, Outcome::Blocked);
     assert_eq!(actions(&supplied), [RecoveryActionKind::RequestRetry]);
     assert!(supplied.data.is_none());
@@ -1532,9 +1612,27 @@ fn a_server_that_takes_the_client_without_its_key_is_key_rejected() -> Result<()
     w.server.accept_anonymous();
     let envelope = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(envelope.code, ResultCode::KeyRejected);
+    assert_golden(&w, "repo_sync_key_rejected", None, &envelope);
     assert_eq!(envelope.outcome, Outcome::Blocked);
     assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
     assert!(reserved(&w));
+    Ok(())
+}
+
+fn a_selected_key_whose_file_is_gone_is_key_unavailable() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    approve(&w)?;
+    let opened = connections(&w);
+    fixed(std::fs::remove_file(w.server.client_key_path()))?;
+
+    let envelope = execute(&w, REQUEST_1, repo_sync(&w));
+
+    assert_eq!(envelope.code, ResultCode::KeyUnavailable);
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert!(envelope.data.is_none());
+    assert_golden(&w, "repo_sync_key_unavailable", None, &envelope);
+    // Nothing was sent to the server without the key.
+    assert_eq!(connections(&w), opened);
     Ok(())
 }
 
@@ -1548,6 +1646,7 @@ fn a_stalled_connection_is_transport_unavailable() -> Result<(), FixtureError> {
     );
     let envelope = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(envelope.code, ResultCode::TransportUnavailable);
+    assert_golden(&w, "repo_sync_transport_unavailable", None, &envelope);
     assert_eq!(envelope.outcome, Outcome::Error);
     assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
     // It stopped after it reserved, and the same request takes it up.
@@ -1578,6 +1677,7 @@ fn a_poll_holding_the_reservation_is_poll_yielding_and_leaves_no_record() -> Res
 
     let envelope = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(envelope.code, ResultCode::PollYielding);
+    assert_golden(&w, "repo_sync_poll_yielding", None, &envelope);
     assert_eq!(envelope.outcome, Outcome::Error);
     assert_eq!(envelope.effects, Effects::not_requested());
     assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
@@ -2168,6 +2268,7 @@ fn a_synchronization_retried_after_the_cache_is_lost_is_blocked_until_each_piece
     // that out.
     let keyless = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(keyless.code, ResultCode::NoSelectedKey);
+    assert_golden(&w, "repo_sync_no_selected_key", None, &keyless);
     assert_eq!(keyless.outcome, Outcome::Blocked);
     assert_eq!(actions(&keyless), [RecoveryActionKind::RequestRetry]);
     assert!(keyless.operation_id.is_some());

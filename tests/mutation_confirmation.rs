@@ -80,6 +80,12 @@ fn assert_enabled(envelope: &Envelope<MutationDataDto>, root: &Path) -> String {
 }
 
 /// A request that was refused before it was accepted.
+/// Checks a refusal that carries no data against its golden fixture, with
+/// the root replaced.
+fn assert_golden(name: &str, root: &Path, envelope: &impl serde::Serialize) {
+    mutation::assert_contract_at(name, root.to_str().unwrap(), None, &[], envelope);
+}
+
 fn assert_refused(envelope: &Envelope<MutationDataDto>, code: ResultCode, recovery: &[&str]) {
     assert_eq!(envelope.code, code, "{}", envelope.message);
     assert!(
@@ -280,6 +286,7 @@ fn a_confirmation_that_no_record_holds_is_confirmation_not_found() {
         ResultCode::ConfirmationNotFound,
         &["request.prepare"],
     );
+    assert_golden("repo_enable_confirmation_not_found", &plain.root, &refused);
     desk.assert_nothing_left(REQUEST_1);
     assert_eq!(plain.configuration(), None);
 }
@@ -361,6 +368,9 @@ fn another_input_another_repository_and_another_command_are_confirmation_mismatc
     for (what, mutation) in changed {
         let refused = desk.execute(REQUEST_1, &confirmation, mutation);
         assert_refused(&refused, ResultCode::ConfirmationMismatch, &[]);
+        if what == "a prefix" {
+            assert_golden("repo_enable_confirmation_mismatch", &plain.root, &refused);
+        }
         assert_eq!(refused.outcome, Outcome::Error, "{what}");
         desk.assert_nothing_left(REQUEST_1);
     }
@@ -406,6 +416,9 @@ fn a_confirmation_lasts_ten_minutes_and_a_clock_set_back_does_not_extend_it() {
             &["request.prepare"],
         );
         assert_eq!(refused.outcome, Outcome::Blocked, "at {now}");
+        if now == START + CONFIRMATION_LIFETIME_SECONDS {
+            assert_golden("repo_enable_confirmation_expired", &plain.root, &refused);
+        }
         desk.assert_nothing_left(REQUEST_1);
         assert_eq!(tree(&plain.root), before, "at {now}");
     }
@@ -424,6 +437,7 @@ fn a_second_request_presenting_an_accepted_confirmation_is_confirmation_used() {
 
     assert_refused(&refused, ResultCode::ConfirmationUsed, &[]);
     assert_eq!(desk.record(REQUEST_2), None);
+    assert_golden("repo_enable_confirmation_used", &plain.root, &refused);
     assert_eq!(desk.request_rows(), 1);
     assert_eq!(tree(&plain.root), after);
     assert_eq!(plain.initializations(), 1);
@@ -881,6 +895,7 @@ fn repo_enable_on_a_wrong_branch_is_wrong_branch() {
     let refused = desk.prepare(&wrong);
 
     assert_eq!(refused.code, ResultCode::WrongBranch);
+    assert_golden("repo_enable_wrong_branch", &plain.root, &refused);
     assert_eq!(refused.outcome, Outcome::Blocked);
     assert_eq!(refused.data, None);
     assert!(refused.recovery.is_empty());
@@ -924,6 +939,9 @@ fn prepare_refuses_what_the_command_would_be_refused_for() {
         let refused = desk.prepare(&plain.enable());
         assert_eq!(refused.code, code, "{what}");
         assert_eq!(refused.data, None, "{what}");
+        if code == ResultCode::InvalidConfiguration {
+            assert_golden("repo_enable_invalid_configuration", &plain.root, &refused);
+        }
     }
     for (what, input) in [
         (
@@ -2956,6 +2974,11 @@ fn prepare_for_the_publication_remote_is_publication_remote_in_use_with_no_confi
     let refused = home.prepare(&home.remove_remote("backup"));
 
     assert_eq!(refused.code, ResultCode::PublicationRemoteInUse);
+    assert_golden(
+        "remote_remove_publication_remote_in_use",
+        &home.world.root,
+        &refused,
+    );
     assert_eq!(refused.outcome, Outcome::Blocked);
     assert_eq!(refused.data, None);
     assert!(refused.recovery.is_empty());
@@ -3621,6 +3644,15 @@ fn prepare_refuses_a_key_that_is_imported_selected_or_not_registered() {
 
     let refused = keyring.prepare(&keyring.delete(imported));
     assert_eq!(refused.code, ResultCode::KeyNotDeletable);
+    mutation::assert_contract(
+        &golden::ContractCase {
+            name: "key_delete_key_not_deletable",
+            data_schema: None,
+            placeholders: &[],
+            sentinels: &[],
+        },
+        &refused,
+    );
     assert_eq!(refused.outcome, Outcome::Error);
     assert_eq!(refused.data, None);
     assert!(refused.recovery.is_empty());

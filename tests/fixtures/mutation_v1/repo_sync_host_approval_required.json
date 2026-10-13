@@ -1,0 +1,49 @@
+{
+  "code": "host_approval_required",
+  "command": "repo sync",
+  "data": {
+    "algorithm": "ssh-ed25519",
+    "expected_fingerprint": null,
+    "host": "127.0.0.1",
+    "port": 0,
+    "presented_fingerprint": "<presented>"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The host must be approved before connecting.",
+  "operation_id": "<operation>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "host.approve",
+      "arguments": {
+        "authority": "<authority>",
+        "root": "<root>"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

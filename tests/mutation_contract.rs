@@ -854,6 +854,21 @@ fn a_repo_enable_and_its_preview_match_their_schemas_and_goldens() {
     drop(world.fixture);
 }
 
+/// A repository whose worktree is in a merge that conflicted: its
+/// enablement is not previewed, and nothing is offered.
+#[test]
+fn a_repo_enable_of_a_conflicted_worktree_matches_its_golden() {
+    let world = Unregistered::new();
+    support::conflict_primary_worktree(&world.fixture);
+
+    let refused = world.service.prepare(&world.enable());
+
+    assert_eq!(refused.code, ResultCode::WorktreeConflicted);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_repository_contract("repo_enable_worktree_conflicted", &world.root, &refused);
+    drop(world.fixture);
+}
+
 /// A repository that was never enabled: the rebuild that would have
 /// registered it is refused, and so is a command that needs it enabled.
 /// Neither offers an action.

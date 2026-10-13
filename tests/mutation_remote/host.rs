@@ -592,6 +592,12 @@ fn a_fingerprint_the_host_does_not_present_is_host_mismatch_and_pins_nothing()
 
     let envelope = confirmed(&w, REQUEST_1, &confirmation, approve);
     assert_eq!(envelope.code, ResultCode::HostMismatch);
+    assert_golden(
+        &w,
+        "host_approve_host_mismatch",
+        Some(HOST_SCHEMA),
+        &envelope,
+    );
     assert_eq!(envelope.outcome, Outcome::Blocked);
     let data = host_data(&envelope)?;
     assert_eq!(data.fingerprint, wrong.sha256);

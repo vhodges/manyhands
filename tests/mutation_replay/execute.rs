@@ -161,6 +161,7 @@ fn a_create_that_cannot_compose_a_short_code_leaves_nothing() {
         ResultCode::InitialsRequired,
         FailureClass::Blocked,
     );
+    world.assert_golden("ticket_create_initials_required", &envelope);
     assert_eq!(recovery_actions(&envelope), ["repo.identity_set"]);
     assert_eq!(envelope.operation_id, None);
     world.assert_nothing_exists(REQUEST_1, TICKET_NEW);
@@ -191,6 +192,7 @@ fn a_create_that_cannot_compose_a_short_code_leaves_nothing() {
         ResultCode::InvalidSlugConfiguration,
         FailureClass::Blocked,
     );
+    world.assert_golden("ticket_create_invalid_slug_configuration", &envelope);
     assert_eq!(recovery_actions(&envelope), ["repo.inspect"]);
     world.assert_nothing_exists(REQUEST_1, TICKET_NEW);
     assert_eq!(world.request_rows(), 0);
@@ -280,6 +282,7 @@ fn a_relationship_cycle_is_rejected_before_anything_exists() {
         ResultCode::InvalidRelationship,
         FailureClass::Input,
     );
+    world.assert_golden("ticket_save_invalid_relationship", &envelope);
     world.assert_nothing_exists(REQUEST_2, TICKET_A);
 }
 
@@ -667,6 +670,7 @@ fn an_uncommitted_edit_on_primary_is_not_saved_over() {
         ResultCode::WorktreeNotClean,
         FailureClass::Blocked,
     );
+    world.assert_golden("ticket_save_worktree_not_clean", &envelope);
     world.assert_nothing_exists(REQUEST_1, TICKET_A);
     assert_eq!(world.primary_source(TICKET_A), edited);
 }
@@ -742,6 +746,7 @@ fn a_lifecycle_closed_ticket_is_not_saved_and_a_status_of_closed_is() {
         ResultCode::TicketClosed,
         FailureClass::Blocked,
     );
+    world.assert_golden("ticket_save_ticket_closed", &envelope);
     world.assert_nothing_exists(REQUEST_1, TICKET_CLOSED);
 
     // `status` is text; only the closure metadata closes a ticket.
@@ -884,6 +889,7 @@ fn a_request_cancelled_before_it_is_accepted_does_nothing() {
         ResultCode::Cancelled,
         FailureClass::Cancelled,
     );
+    world.assert_golden("ticket_save_cancelled", &envelope);
     world.assert_nothing_exists(REQUEST_1, TICKET_A);
 }
 
@@ -1143,6 +1149,11 @@ fn a_save_with_no_identity_is_blocked_and_its_request_id_is_free() {
         ResultCode::IdentityRequired,
         FailureClass::Blocked,
     );
+    world.assert_golden_with_data(
+        "ticket_save_identity_required",
+        "ticket_mutation.schema.json",
+        &envelope,
+    );
     assert_eq!(recovery_actions(&envelope), ["repo.identity_set"]);
     // The domain ran and completed its row: nothing is in flight, so the
     // record is deleted. The editing context it made stays.
@@ -1197,6 +1208,9 @@ fn a_confirmation_presented_to_a_command_that_takes_none_is_not_confirmable() {
             ResultCode::NotConfirmable,
             FailureClass::Input,
         );
+        if what == "a save" {
+            world.assert_golden("ticket_save_not_confirmable", &envelope);
+        }
         assert_eq!(envelope.request_id.as_deref(), Some(REQUEST_1), "{what}");
         assert_eq!(envelope.operation_id, None, "{what}");
         assert!(recovery_actions(&envelope).is_empty(), "{what}");
