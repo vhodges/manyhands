@@ -460,7 +460,11 @@ Smaller rulings the design makes. None was overruled at approval:
 
 ## Implementation Outcome (2026-10-13)
 
-Status: **review-ready, awaiting the product owner.** The Cycle is built on
+Status: **accepted by the product owner on 2026-10-13; ticket closed on its
+branch, pull request opened, not merged.** The branch was cut from main at
+`f87ce81`; main has since gained Wave 02 Cycle 07 (comment publication), and
+the branch does not yet contain it. Bringing main into the branch, and
+verifying the result, is owed before the merge. The Cycle is built on
 the ticket branch at code head `765e43a`. This section records what was
 built, what is still owed and what was found. The execution ledger holds
 the rulings behind it and the
