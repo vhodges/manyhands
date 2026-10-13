@@ -31,7 +31,7 @@ use super::{
         Accepted, Answer, Binding, CallContext, Confirmed, Entered, Place, Previewed, Ran, Standing,
     },
     command::Command,
-    dto::{HostReplacementDto, MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
+    dto::{MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
     observe::ObservationDigest,
     outcome,
@@ -102,7 +102,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
     } = answer;
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.
-    let authority = host_replacement.as_ref().map(HostReplacementDto::authority);
+    let authority = host_replacement.as_ref().map(|data| data.authority());
     let recovery = outcome::offered(
         &outcome::Named {
             code,
@@ -121,7 +121,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
             .with_recovery(recovery);
     match host_replacement {
-        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(data)),
+        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
         None => envelope,
     }
 }
@@ -355,7 +355,7 @@ impl RepositoryService {
             Effects::not_requested(),
             false,
         )
-        .with_data(PrepareDataDto::Preview(PreviewDto {
+        .with_data(PrepareDataDto::Preview(Box::new(PreviewDto {
             confirmation_id: confirmation_id.to_string(),
             expires_at: expires,
             command: command.name().to_owned(),
@@ -365,7 +365,7 @@ impl RepositoryService {
                 .map(|effect| PreviewEffectDto { effect })
                 .collect(),
             details,
-        }))
+        })))
     }
 
     /// The consent a request no record holds runs with: the confirmation

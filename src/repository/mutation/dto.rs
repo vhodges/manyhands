@@ -494,7 +494,7 @@ pub(crate) fn authority_text(host: &str, port: u16) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum PrepareDataDto {
-    Preview(PreviewDto),
+    Preview(Box<PreviewDto>),
     /// Of `host approve`, refused as `host_replacement_required`.
     HostReplacement(HostReplacementDto),
 }
@@ -511,7 +511,7 @@ impl PrepareDataDto {
     /// The preview, when the data is one.
     pub fn into_preview(self) -> Option<PreviewDto> {
         match self {
-            Self::Preview(preview) => Some(preview),
+            Self::Preview(preview) => Some(*preview),
             Self::HostReplacement(_) => None,
         }
     }

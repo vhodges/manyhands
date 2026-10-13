@@ -789,14 +789,14 @@ impl Confirmed for HostBinding {
             // connected to, so no key the host presents is known.
             (None, Some(pin)) => {
                 return Err(Answer {
-                    host_replacement: Some(HostReplacementDto {
+                    host_replacement: Some(Box::new(HostReplacementDto {
                         host: host.authority.host.clone(),
                         port: host.authority.port,
                         algorithm: self.algorithm.clone(),
                         fingerprint: self.fingerprint.clone(),
                         pinned_algorithm: pin.algorithm.clone(),
                         pinned_fingerprint: pin.sha256.clone(),
-                    }),
+                    })),
                     ..Answer::stopped(ResultCode::HostReplacementRequired)
                 });
             }

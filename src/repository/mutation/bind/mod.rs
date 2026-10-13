@@ -282,7 +282,7 @@ pub(crate) struct Answer {
     /// What a preview of `host approve` is refused with for a host that
     /// has a pin: the one data a `prepare` gives that is no preview. No
     /// answer of `execute` holds it.
-    pub(crate) host_replacement: Option<HostReplacementDto>,
+    pub(crate) host_replacement: Option<Box<HostReplacementDto>>,
 }
 
 impl Answer {
