@@ -60,6 +60,8 @@ commands! {
     HostApprove => "host approve",
     HostReplace => "host replace",
     FolderCreate => "folder create",
+    DocumentRepair => "document repair",
+    TicketRepair => "ticket repair",
 }
 
 impl Command {
@@ -102,6 +104,10 @@ impl Command {
             // directory records nothing, and the refresh's row is the
             // request's one row.
             | Self::FolderCreate
+            // One operation of the local journal: the repair, with its
+            // context, its write, its checkpoint and its hand-off.
+            | Self::DocumentRepair
+            | Self::TicketRepair
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
@@ -166,7 +172,9 @@ impl Command {
             | Self::RepoIdentitySet
             | Self::HostApprove
             | Self::HostReplace
-            | Self::FolderCreate => false,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
         }
     }
 
@@ -203,7 +211,9 @@ impl Command {
             | Self::RepoIdentitySet
             | Self::HostApprove
             | Self::HostReplace
-            | Self::FolderCreate => false,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
         }
     }
 
@@ -239,7 +249,9 @@ impl Command {
             | Self::RepoIdentitySet
             | Self::HostApprove
             | Self::HostReplace
-            | Self::FolderCreate => false,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
         }
     }
 
@@ -277,7 +289,9 @@ impl Command {
             | Self::RepoIdentitySet
             | Self::HostApprove
             | Self::HostReplace
-            | Self::FolderCreate => false,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -323,7 +337,9 @@ impl Command {
             | Self::RepoIdentitySet
             | Self::HostApprove
             | Self::HostReplace
-            | Self::FolderCreate => false,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
         }
     }
 
@@ -360,7 +376,9 @@ impl Command {
             | Self::OperationAbandon
             | Self::RepoIdentitySet
             // What a folder creation does first is make the directory.
-            | Self::FolderCreate => ProgressStage::Writing,
+            | Self::FolderCreate
+            | Self::DocumentRepair
+            | Self::TicketRepair => ProgressStage::Writing,
         }
     }
 
@@ -399,7 +417,11 @@ impl Command {
             | Self::OperationResume
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            // A repair's hand-off is its own operation's to owe, as a
+            // save's is.
+            | Self::DocumentRepair
+            | Self::TicketRepair => false,
         }
     }
 
@@ -418,7 +440,12 @@ impl Command {
             | Self::OperationAbandon
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => true,
+            | Self::HostReplace
+            // A repair gives a file its identity, or writes a whole
+            // file over one that could not be read: its caller is shown
+            // the ID, and whether it is being assigned, first.
+            | Self::DocumentRepair
+            | Self::TicketRepair => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -483,6 +510,8 @@ mod tests {
         assert_eq!(Command::HostApprove.name(), "host approve");
         assert_eq!(Command::HostReplace.name(), "host replace");
         assert_eq!(Command::FolderCreate.name(), "folder create");
+        assert_eq!(Command::DocumentRepair.name(), "document repair");
+        assert_eq!(Command::TicketRepair.name(), "ticket repair");
     }
 
     #[test]
@@ -538,6 +567,8 @@ mod tests {
                         | Command::RepoIdentitySet
                         | Command::HostApprove
                         | Command::HostReplace
+                        | Command::DocumentRepair
+                        | Command::TicketRepair
                 ),
                 "{command:?}"
             );

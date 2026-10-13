@@ -38,6 +38,7 @@ pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod remote;
+pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
@@ -955,6 +956,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // the request's path may have been there before it, so none is
         // claimed for it.
         Some(Command::FolderCreate) => Recorded::nothing(),
+        Some(Command::DocumentRepair | Command::TicketRepair) => {
+            Recorded::of(repair::recorded_effects(record, &accepted))
+        }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

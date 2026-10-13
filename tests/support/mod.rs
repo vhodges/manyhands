@@ -30,6 +30,7 @@ pub mod mutation;
 pub mod open_watch;
 pub mod operations;
 pub mod records;
+pub mod repair;
 pub mod schema;
 
 pub struct TestRepository {

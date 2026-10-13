@@ -163,6 +163,13 @@ pub const CASES: &[&str] = &[
     "document_create_occupied",
     "document_move",
     "document_move_external_change",
+    "document_repair",
+    "document_repair_discovery_pending",
+    "document_repair_external_change",
+    "document_repair_identity_ambiguous",
+    "document_repair_partial",
+    "document_repair_preview",
+    "document_repair_preview_noop",
     "document_save",
     "document_save_invalid_input",
     "failure_request_not_found",
@@ -246,6 +253,9 @@ pub const CASES: &[&str] = &[
     "request_show_finished",
     "ticket_create",
     "ticket_create_already_applied",
+    "ticket_repair",
+    "ticket_repair_not_repairable",
+    "ticket_repair_preview",
     "ticket_save",
     "ticket_save_cycle",
     "ticket_save_discovery_pending",
@@ -745,6 +755,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 
@@ -759,6 +770,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 
@@ -877,6 +889,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 
@@ -891,6 +904,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 
@@ -905,6 +919,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 
@@ -919,6 +934,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
+        MutationDataDto::Repair(_) => panic!("a repair's data"),
     }
 }
 

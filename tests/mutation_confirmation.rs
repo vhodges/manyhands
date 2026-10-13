@@ -4841,3 +4841,6 @@ mod abandon;
 
 #[path = "mutation_confirmation/conformance.rs"]
 mod conformance;
+
+#[path = "mutation_confirmation/repair.rs"]
+mod repair;

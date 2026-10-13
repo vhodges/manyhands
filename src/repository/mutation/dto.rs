@@ -120,6 +120,16 @@ contract_enum!(
     /// `host_pin_replaced` is a host's pin changed to the key the
     /// request names, likewise. Neither publishes or fetches anything,
     /// and neither moves a reference.
+    ///
+    /// The last four are a repair's. `context_created` is the editing
+    /// context of the repaired item made from the primary branch: its
+    /// branch and its worktree, listed when the item has none.
+    /// `id_adopted` is an ID assigned to a file that holds no valid one:
+    /// the ID the corrected source carries, which the preview's details
+    /// name. `source_written` is the corrected source written over the
+    /// nonconforming file in that context, and `checkpoint_committed`
+    /// the commit of it there. None of the four writes the primary
+    /// worktree or moves the primary branch.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -143,6 +153,10 @@ contract_enum!(
         RequestReleased => "request_released",
         HostPinned => "host_pinned",
         HostPinReplaced => "host_pin_replaced",
+        ContextCreated => "context_created",
+        IdAdopted => "id_adopted",
+        SourceWritten => "source_written",
+        CheckpointCommitted => "checkpoint_committed",
     }
 );
 
@@ -201,6 +215,30 @@ pub enum PreviewDetailsDto {
     OperationAbandon(OperationAbandonPreviewDto),
     Identity(IdentityPreviewDto),
     Host(HostPreviewDto),
+    Repair(RepairPreviewDto),
+}
+
+/// What a preview of `document repair` or `ticket repair` shows: the
+/// file that will be corrected, and the identity the corrected source
+/// gives it. It holds a path and an ID and nothing the file or the
+/// source holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RepairPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// The file, relative to the repository, with forward slashes.
+    pub path: String,
+    /// The ID the corrected source carries: the item's identity once
+    /// the repair is made, and what names its editing context.
+    pub id: String,
+    /// Whether the ID is being assigned: the file holds no valid ID,
+    /// and the source's becomes the item's. False for a file that holds
+    /// this ID already, which the repair keeps.
+    pub adoption: bool,
+    /// Whether the command writes the primary worktree or moves the
+    /// primary branch. It never does: this is false. The file stays on
+    /// primary as it is until the item's context is merged.
+    pub primary_changed: bool,
 }
 
 /// What a preview of `host approve` or `host replace` shows: the host,
@@ -422,6 +460,36 @@ pub enum MutationDataDto {
     Synchronization(SynchronizationMutationDto),
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
+    Repair(RepairMutationDto),
+}
+
+/// What `document repair` and `ticket repair` report about the item the
+/// corrected source makes. It never holds the source or anything the
+/// nonconforming file held.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RepairMutationDto {
+    /// The ID the corrected source carries.
+    pub id: String,
+    /// The file the request corrects, relative to the item's context,
+    /// with forward slashes: the path it has on primary too.
+    pub path: String,
+    /// Whether the ID was assigned to a file that held no valid one.
+    /// Null when the request stopped before the file was read.
+    pub adopted: Option<bool>,
+}
+
+impl RepairMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            id: stored.get("id")?.as_str()?.to_owned(),
+            path: stored.get("path")?.as_str()?.to_owned(),
+            adopted: match stored.get("adopted")? {
+                serde_json::Value::Null => None,
+                adopted => Some(adopted.as_bool()?),
+            },
+        })
+    }
 }
 
 /// What `host approve` and `host replace` report: the host and the key
@@ -826,7 +894,8 @@ impl MutationDataDto {
             | Self::Identity(_)
             // A host command is itself the approval: its results offer
             // none.
-            | Self::Host(_) => None,
+            | Self::Host(_)
+            | Self::Repair(_) => None,
         }
     }
 
@@ -857,6 +926,9 @@ impl MutationDataDto {
             }
             Command::HostApprove | Command::HostReplace => {
                 HostMutationDto::from_stored(stored).map(Self::Host)
+            }
+            Command::DocumentRepair | Command::TicketRepair => {
+                RepairMutationDto::from_stored(stored).map(Self::Repair)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for.

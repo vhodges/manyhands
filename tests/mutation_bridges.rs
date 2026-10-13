@@ -21,3 +21,6 @@ mod host;
 
 #[path = "mutation_bridges/identity.rs"]
 mod identity;
+
+#[path = "mutation_bridges/repair.rs"]
+mod repair;

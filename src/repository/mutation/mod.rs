@@ -65,6 +65,7 @@ use bind::{
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
+    repair::RepairBinding,
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
@@ -83,6 +84,7 @@ pub use bind::{
         KeySelectInput,
     },
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
+    repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
@@ -98,9 +100,9 @@ pub use dto::{
     KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
     OperationAbandonPreviewDto, OperationMutationDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
     PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
-    RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationMutationDto,
-    TicketMutationDto,
+    RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
+    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -413,6 +415,8 @@ pub enum Mutation {
     HostApprove(HostApproveInput),
     HostReplace(HostReplaceInput),
     FolderCreate(FolderCreateInput),
+    DocumentRepair(DocumentRepairInput),
+    TicketRepair(TicketRepairInput),
 }
 
 impl Mutation {
@@ -451,6 +455,8 @@ impl Mutation {
             Self::HostApprove(_) => Command::HostApprove,
             Self::HostReplace(_) => Command::HostReplace,
             Self::FolderCreate(_) => Command::FolderCreate,
+            Self::DocumentRepair(_) => Command::DocumentRepair,
+            Self::TicketRepair(_) => Command::TicketRepair,
         }
     }
 
@@ -472,6 +478,8 @@ impl Mutation {
             }
             Self::HostApprove(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
+            Self::DocumentRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
+            Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -524,6 +532,8 @@ impl Mutation {
             Self::HostApprove(input) => Box::new(HostBinding::from(input)),
             Self::HostReplace(input) => Box::new(HostBinding::from(input)),
             Self::FolderCreate(input) => Box::new(FolderCreateBinding::from(input)),
+            Self::DocumentRepair(input) => Box::new(RepairBinding::from(input)),
+            Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
         }
     }
 }
