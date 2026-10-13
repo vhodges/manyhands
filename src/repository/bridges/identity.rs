@@ -14,19 +14,25 @@
 //!
 //! 1. `config.lock` is made, and the call fails as `RepositoryBusy` if
 //!    it is there already. It is given the configuration file's mode.
+//!    A `config` that is a symbolic link is followed first, as Git
+//!    follows it: the lock is beside the file the link names, and that
+//!    file is what is replaced.
 //! 2. The configuration file is read, now that no program that keeps to
-//!    the lock can change it, and copied to a scratch file beside it.
-//!    Git sets the keys in the scratch file. The scratch file and not
+//!    the lock can change it, and copied to a scratch file. Git sets
+//!    the keys in the scratch file. The scratch file and not
 //!    `config.lock` itself, because Git edits a configuration file by
 //!    making `<file>.lock` beside it and renaming that over the file:
 //!    done to `config.lock`, that would replace the lock this call
-//!    holds with a file of Git's making and mode.
+//!    holds with a file of Git's making and mode. The scratch file is
+//!    in a directory of this call's own, in the Git directory, that
+//!    only this user can enter: Git gives what it writes the process's
+//!    default mode, and the copy holds all the configuration does.
 //! 3. What the scratch file then holds is written to `config.lock`,
 //!    which is renamed over the configuration file.
 //!
 //! So every key is set by one rename, or none is: an identity is never
 //! half set, in this process or after it is killed. Nothing is ever put
-//! back: a call that fails removes its lock and its scratch file, and
+//! back: a call that fails removes its lock and its scratch directory, and
 //! the configuration file is as it was because it was never touched. A
 //! lock left by a process that died is not removed here; it is its
 //! owner's, and Git itself asks the user to remove one.
@@ -195,13 +201,17 @@ impl ValidIdentity {
     }
 
     /// Whether the identity, written to a Git configuration file, reads
-    /// from it again as it was written. The file is a scratch one of
-    /// this call's own, outside any repository, and is removed.
+    /// from it again as it was written. The file is a scratch one in a
+    /// directory of this call's own, outside any repository, that only
+    /// this user can enter, and both are removed.
     fn round_trips(&self) -> Result<bool, RepositoryError> {
         let io = |error| RepositoryError::io(OPERATION, None, error);
         let git = |error| RepositoryError::git(OPERATION, None, error);
-        // The handle is let go before Git replaces the file by name.
-        let scratch = tempfile::NamedTempFile::new().map_err(io)?.into_temp_path();
+        // In a directory only this user can enter: Git makes the file
+        // with the process's default mode, and it holds a name and an
+        // email. The directory goes, with the file, when this returns.
+        let private = private_directory(&std::env::temp_dir()).map_err(io)?;
+        let scratch = private.path().join("config");
         let mut config = Config::open(&scratch).map_err(git)?;
         let nothing = LocalIdentity::default();
         // A value Git cannot write at all is one it does not give back.
@@ -351,6 +361,60 @@ impl LocalIdentity {
     }
 }
 
+/// A new directory in `parent` that only this user can enter, removed
+/// with what it holds when the value is dropped. Git gives the files it
+/// writes the process's default mode, whatever mode the file they copy
+/// has: what is made in here is closed to others all the same.
+fn private_directory(parent: &Path) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("manyhands-identity-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir_in(parent)
+}
+
+/// The bytes of the file at `path`, or none for a file that is not
+/// there: Git reads a configuration file that is missing as an empty one.
+fn bytes_or_none(path: &Path) -> std::io::Result<Vec<u8>> {
+    match std::fs::read(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        read => read,
+    }
+}
+
+/// The file the repository's own configuration is in, under `directory`,
+/// the repository's common Git directory.
+///
+/// A `config` that is a symbolic link is followed to what it names, as
+/// Git follows it: the lock is taken beside that file and that file is
+/// replaced, so the link stays a link and locks out the programs that
+/// write through it. A link that names nothing is refused as
+/// `RecoveryRequired`: there is no file to lock, and making one where a
+/// broken link points is the user's to decide. A `config` that is not
+/// there at all is where one will be made.
+fn config_file(directory: &Path, root: &Path) -> Result<PathBuf, RepositoryError> {
+    let io = |error| RepositoryError::io(OPERATION, Some(root.to_owned()), error);
+    let path = directory.join("config");
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(path),
+        Err(error) => return Err(io(error)),
+        Ok(_) => {}
+    }
+    match std::fs::canonicalize(&path) {
+        Ok(resolved) => Ok(resolved),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(RepositoryError::new(
+            OPERATION,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RecoveryRequired,
+            "the repository's Git configuration is a link to a file that is not there",
+        )),
+        Err(error) => Err(io(error)),
+    }
+}
+
 /// Git's lock on a configuration file: `<file>.lock` beside it, which
 /// only one program can make. Whoever holds it is the one writer of the
 /// file, and writes by renaming the lock over it.
@@ -365,7 +429,9 @@ struct ConfigLock {
 }
 
 impl ConfigLock {
-    /// Makes the lock of `config`, with the mode `config` has.
+    /// Makes the lock of `config`, the file itself and no link to it,
+    /// with the mode `config` has, or the process's default mode for a
+    /// `config` that is not there.
     /// `RepositoryBusy` when the lock is there already: another program
     /// is writing the file, or one died and left it.
     fn take(config: &Path, root: &Path) -> Result<Self, RepositoryError> {
@@ -373,7 +439,11 @@ impl ConfigLock {
         let mut name = config.as_os_str().to_owned();
         name.push(".lock");
         let lock = PathBuf::from(name);
-        let permissions = std::fs::metadata(config).map_err(io)?.permissions();
+        let permissions = match std::fs::metadata(config) {
+            Ok(metadata) => Some(metadata.permissions()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(io(error)),
+        };
         let file = match File::options().write(true).create_new(true).open(&lock) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -397,7 +467,9 @@ impl ConfigLock {
         // replaces may be more open or more closed than that. Only Unix
         // has a mode to keep.
         #[cfg(unix)]
-        std::fs::set_permissions(&held.lock, permissions).map_err(io)?;
+        if let Some(permissions) = permissions {
+            std::fs::set_permissions(&held.lock, permissions).map_err(io)?;
+        }
         #[cfg(not(unix))]
         let _ = permissions;
         Ok(held)
@@ -487,19 +559,6 @@ impl RepositoryService {
         if identity.held_by(&current) {
             return Ok(SetLocalIdentityOutcome::Unchanged(current));
         }
-        // Asked again under the lock. Here it spares a request that is
-        // refused anyway from waiting on one.
-        if expected
-            .as_ref()
-            .is_some_and(|expected| *expected != current)
-        {
-            return Err(RepositoryError::new(
-                OPERATION,
-                Some(root),
-                RepositoryErrorKind::ExternalChange,
-                "the repository's local identity is not the one that was observed",
-            ));
-        }
         let changed = || {
             RepositoryError::new(
                 OPERATION,
@@ -510,29 +569,32 @@ impl RepositoryService {
         };
         let io = |error| RepositoryError::io(OPERATION, Some(root.clone()), error);
         let directory = repository.commondir();
-        let path = directory.join("config");
+        let path = config_file(directory, &root)?;
         let lock = ConfigLock::take(&path, &root)?;
         // No program that keeps to the lock changes the file from here
         // on. What it holds now is what is edited: a change to any other
         // key that landed before the lock is kept.
-        let source = std::fs::read(&path).map_err(io)?;
-        // Beside the file, so that what it includes is found from the
-        // copy as it is from the file. The handle is let go before Git
-        // replaces the copy by name.
-        let scratch = tempfile::Builder::new()
-            .prefix("manyhands-identity-")
-            .tempfile_in(directory)
-            .map_err(io)?
-            .into_temp_path();
-        std::fs::write(&scratch, &source).map_err(io)?;
-        let mut config = Config::open(&scratch).map_err(git)?;
-        let locked = LocalIdentity::said_once(&config, &root)?;
+        let source = bytes_or_none(&path).map_err(io)?;
+        // The file itself is asked what it holds and whether it says
+        // each key once: what it includes is found from where it is.
+        let locked = LocalIdentity::said_once(&Config::open(&path).map_err(git)?, &root)?;
         if identity.held_by(&locked) {
             return Ok(SetLocalIdentityOutcome::Unchanged(locked));
         }
+        // The one compare with what the caller saw, made where the file
+        // can no longer change.
         if expected.is_some_and(|expected| expected != locked) {
             return Err(changed());
         }
+        // Git sets the keys in a copy, in a directory of this call's own
+        // that only this user can enter: the copy holds everything the
+        // file does, and Git gives it the process's default mode. The
+        // directory is in the Git directory, and goes with the copy on
+        // every way out of here.
+        let private = private_directory(directory).map_err(io)?;
+        let scratch = private.path().join("config");
+        std::fs::write(&scratch, &source).map_err(io)?;
+        let mut config = Config::open(&scratch).map_err(git)?;
         identity.write(&mut config, &locked, || {
             self.run_identity_lock_hook();
             self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)
@@ -551,7 +613,7 @@ impl RepositoryService {
         let edited = std::fs::read(&scratch).map_err(io)?;
         // Immediately before the rename: a program that does not keep to
         // the lock has not written the file meanwhile.
-        if std::fs::read(&path).map_err(io)? != source {
+        if bytes_or_none(&path).map_err(io)? != source {
             return Err(changed());
         }
         lock.replace(&edited)?;

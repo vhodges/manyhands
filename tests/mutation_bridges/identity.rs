@@ -1723,3 +1723,213 @@ mod atomic {
         assert_eq!(git_directory(&plain.root), before.1);
     }
 }
+
+/// Where the lock is taken and what the write leaves beside the
+/// configuration file.
+mod placement {
+    use std::sync::{Arc, Mutex};
+
+    use manyhands::results::ResultCode;
+
+    use super::{
+        super::support::{confirmation::Desk, mutation::REQUEST_1},
+        boundary::{EMAIL, NAME, assert_set, set},
+        *,
+    };
+
+    /// A symbolic link is a Unix thing here: the test is Unix only.
+    ///
+    /// Git locks a configuration file that is a link beside what the
+    /// link names, and replaces that: the link stays a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_configuration_file_that_is_a_link_is_locked_and_written_where_it_points() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let shared = tempfile::tempdir().unwrap();
+        let target = shared.path().canonicalize().unwrap().join("config");
+        let link = plain.root.join(".git/config");
+        fs::rename(&link, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let before = fs::read(&target).unwrap();
+
+        // A lock beside the target is the one Git takes: busy.
+        let beside_target = shared.path().join("config.lock");
+        fs::write(&beside_target, "held").unwrap();
+        let busy = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+        assert_eq!(busy.code, ResultCode::Busy);
+        assert_eq!(fs::read(&target).unwrap(), before);
+        assert_eq!(fs::read(&beside_target).unwrap(), b"held");
+        fs::remove_file(&beside_target).unwrap();
+
+        // A file of that name beside the link locks nothing.
+        let beside_link = plain.root.join(".git/config.lock");
+        fs::write(&beside_link, "nobody's").unwrap();
+        let done = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+
+        assert_set(&done, None);
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link is still a link"
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), target);
+        let written = git2::Config::open(&target).unwrap();
+        assert_eq!(written.get_string("user.name").unwrap(), NAME);
+        assert_eq!(written.get_string("user.email").unwrap(), EMAIL);
+        assert_eq!(fs::read(&beside_link).unwrap(), b"nobody's");
+        assert!(!beside_target.exists());
+    }
+
+    /// A link that names nothing is refused: the file is the user's to
+    /// put right. Unix only, as above.
+    #[cfg(unix)]
+    #[test]
+    fn a_configuration_link_that_names_nothing_is_refused() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let link = plain.root.join(".git/config");
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(plain.root.join("nowhere"), &link).unwrap();
+        let (service, _data) = service();
+
+        let error = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap_err();
+
+        assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!plain.root.join("nowhere").exists());
+    }
+
+    #[test]
+    fn a_repository_with_no_configuration_file_gets_one() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let path = plain.root.join(".git/config");
+        fs::remove_file(&path).unwrap();
+        let (service, _data) = service();
+
+        let outcome = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            SetLocalIdentityOutcome::Changed(held(NAME, EMAIL, None))
+        );
+        assert_eq!(local(&plain.root), held(NAME, EMAIL, None));
+        assert!(!plain.root.join(".git/config.lock").exists());
+    }
+
+    /// The entries of the repository's Git directory, each with whether
+    /// it can be read or entered by anyone but its owner.
+    #[cfg(unix)]
+    fn entries(root: &Path) -> std::collections::BTreeMap<String, bool> {
+        use std::os::unix::fs::PermissionsExt;
+        fs::read_dir(root.join(".git"))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let mode = entry.metadata().unwrap().permissions().mode();
+                (entry.file_name().into_string().unwrap(), mode & 0o077 != 0)
+            })
+            .collect()
+    }
+
+    /// Modes are a Unix thing: the test is Unix only.
+    ///
+    /// A configuration file only its owner can read holds what only its
+    /// owner may read. Nothing the write makes beside it is open to
+    /// anyone else, while it runs or after.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_the_write_makes_is_open_to_anyone_but_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        git_home::isolated();
+        for fail in [false, true] {
+            let plain = Plain::new();
+            let path = plain.root.join(".git/config");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let service = if fail {
+                RepositoryService::open_at_with_failure_point_for_testing(
+                    data.path(),
+                    FailurePoint::AfterLocalIdentityName,
+                )
+                .unwrap()
+            } else {
+                RepositoryService::open_at(data.path()).unwrap()
+            };
+            // The lease's file is there before, so that the listings compare.
+            drop(
+                RepositoryService::hold_lease_for_testing(
+                    &plain.root,
+                    data.path(),
+                    manyhands::repository::LeaseKind::Repository,
+                )
+                .unwrap(),
+            );
+            let before = entries(&plain.root);
+            let during = Arc::new(Mutex::new(None));
+            {
+                let (during, root) = (during.clone(), plain.root.clone());
+                // With the lock held, and the name set in the copy.
+                service.set_local_identity_lock_hook_for_testing(move || {
+                    *during.lock().unwrap() = Some(entries(&root));
+                });
+            }
+
+            let result = service.set_local_identity(request(&plain.root, NAME, EMAIL));
+
+            assert_eq!(result.is_err(), fail);
+            let during = during.lock().unwrap().take().expect("the hook ran");
+            let made: Vec<_> = during
+                .iter()
+                .filter(|(name, _)| !before.contains_key(*name))
+                .collect();
+            // The lock, and what the copy is made in.
+            assert_eq!(made.len(), 2, "{made:?}");
+            assert!(made.iter().all(|(_, open)| !**open), "{made:?}");
+            assert_eq!(entries(&plain.root), before, "nothing is left");
+        }
+    }
+
+    /// The compare of the file's bytes before it is replaced: a program
+    /// that does not keep to Git's lock wrote the file while this one
+    /// held it.
+    #[test]
+    fn a_file_rewritten_by_a_program_that_ignores_the_lock_is_not_written_over() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let (service, _data) = service();
+        let path = plain.root.join(".git/config");
+        let mut rewritten = local_file(&plain.root);
+        rewritten
+            .extend_from_slice(b"[remote \"origin\"]\n\turl = https://example.invalid/x.git\n");
+        {
+            let (path, rewritten) = (path.clone(), rewritten.clone());
+            service.set_local_identity_lock_hook_for_testing(move || {
+                fs::write(path, rewritten).unwrap();
+            });
+        }
+
+        let error = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap_err();
+
+        assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
+        assert_eq!(local_file(&plain.root), rewritten, "the other write stands");
+        assert!(!plain.root.join(".git/config.lock").exists());
+    }
+}
