@@ -80,6 +80,7 @@ use super::{
         identity::{FieldValue, IntentDigestBuilder},
         observe::{Observation, ObservationDigest},
         outcome,
+        records::RequestRecord,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Previewed, Ran, Standing, refused, resolve_root,
@@ -120,6 +121,57 @@ const NO_ROW: JournalRow = JournalRow::Absent;
 /// The host as a record's target names it.
 fn authority_text(authority: &SshAuthority) -> String {
     dto::authority_text(&authority.host, authority.port)
+}
+
+/// The host a record's target names: what `authority_text` wrote.
+fn authority_of(target: &str) -> Option<SshAuthority> {
+    let (host, port) = target.rsplit_once(':')?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    Some(SshAuthority {
+        host: host.to_owned(),
+        port: port.parse().ok()?,
+    })
+}
+
+/// Whether the accepted request `record` holds, of `command`, may have
+/// stored its pin: what a reuse of its request ID with another input is
+/// told.
+///
+/// The commands have no operation, so no row says that an attempt ran,
+/// and a call that stored the pin and then failed keeps its record
+/// accepted. What says nothing was done is the pin store: the host shows
+/// what the request's preview showed, which the confirmation the record
+/// accepted holds the digest of. Anything else is taken as a change:
+/// another pin, a remote that no longer names the host, or a store or a
+/// confirmation that cannot be read, as a row that cannot be read is
+/// taken to be there.
+///
+/// This cannot tell the request's own pin from one another actor stored
+/// while the record was accepted: either way the host is not as the
+/// request found it, and the result does not say that nothing changed.
+pub(crate) fn may_have_pinned(
+    service: &RepositoryService,
+    record: &RequestRecord,
+    command: Command,
+) -> bool {
+    let Some(confirmation) = record.confirmation else {
+        // Not accepted through a confirmation: nothing ran.
+        return false;
+    };
+    let Some(authority) = authority_of(&record.target) else {
+        return false;
+    };
+    let Ok(Some(consented)) = service.confirmation_record(confirmation) else {
+        return true;
+    };
+    let root = PathBuf::from(record.scope.as_str());
+    match Host::read(service, &root, Some(&authority)) {
+        Ok(host) => Some(host.digest(command).to_stored()) != consented.observation_digest,
+        Err(_) => true,
+    }
 }
 
 /// Whether `fingerprint` is one a pin can hold: `SHA256:` and a digest,

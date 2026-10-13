@@ -885,6 +885,18 @@ impl Recorded {
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
 pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
+    // A host approval has no operation, so no row says an attempt of it
+    // ran, and it keeps its record accepted when it stored the pin and
+    // then failed: the pin store is asked instead. A pin is shown by no
+    // effect.
+    if let Some(command @ (Command::HostApprove | Command::HostReplace)) =
+        Command::parse(&record.command)
+    {
+        return Recorded {
+            effects: Effects::not_requested(),
+            local_change: host::may_have_pinned(service, record, command),
+        };
+    }
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
         return Recorded::nothing();
     };
@@ -951,9 +963,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An identity has no operation either: this is not reached, and
         // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
-        // Nor has a host approval: this is not reached, and nothing is
-        // claimed. A pin is stored whole or not at all, and no effect
-        // shows it.
+        // Answered above, from the pin store: this is not reached.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
         // A directory is shown by no effect, and nothing records that
         // the request made one: its one row is its refresh's, and a

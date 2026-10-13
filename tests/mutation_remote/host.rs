@@ -1022,6 +1022,20 @@ fn a_call_that_fails_after_the_pin_was_stored_says_so_and_its_retry_is_a_no_op()
         Some(RequestState::Accepted)
     );
 
+    // The request ID with another input, while its record is accepted
+    // and the pin is stored: a mismatch that does not say nothing was
+    // changed. The request has no operation, so no row says an attempt
+    // ran; the pin store, which no longer shows what was previewed, does.
+    let changed = confirmed(
+        &w,
+        REQUEST_1,
+        &confirmation,
+        approve_of(&w, &w.server, &another_key()?),
+    );
+    assert_eq!(changed.code, ResultCode::RequestMismatch);
+    assert_eq!(changed.outcome, Outcome::Partial);
+    assert_eq!(pins(&w), [pinned_to(&w.server, &key)]);
+
     let (connected, opened) = (connections(&w), sockets(&w));
     let retried = confirmed(&w, REQUEST_1, &confirmation, approval(&w));
     assert_eq!(retried.code, ResultCode::AlreadyApplied);
