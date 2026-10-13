@@ -60,6 +60,7 @@ use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
     document::DocumentBinding,
+    folder::FolderCreateBinding,
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
@@ -74,6 +75,7 @@ use bind::{
 pub use bind::{
     abandon::OperationAbandonInput,
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
+    folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{
@@ -410,6 +412,7 @@ pub enum Mutation {
     RepoIdentitySet(RepoIdentitySetInput),
     HostApprove(HostApproveInput),
     HostReplace(HostReplaceInput),
+    FolderCreate(FolderCreateInput),
 }
 
 impl Mutation {
@@ -447,6 +450,7 @@ impl Mutation {
             Self::RepoIdentitySet(_) => Command::RepoIdentitySet,
             Self::HostApprove(_) => Command::HostApprove,
             Self::HostReplace(_) => Command::HostReplace,
+            Self::FolderCreate(_) => Command::FolderCreate,
         }
     }
 
@@ -485,7 +489,8 @@ impl Mutation {
             | Self::KeyRemove(_)
             | Self::ItemSync(_)
             | Self::RepoSync(_)
-            | Self::OperationResume(_) => None,
+            | Self::OperationResume(_)
+            | Self::FolderCreate(_) => None,
         }
     }
 
@@ -518,6 +523,7 @@ impl Mutation {
             Self::RepoIdentitySet(input) => Box::new(RepoIdentityBinding::from(input)),
             Self::HostApprove(input) => Box::new(HostBinding::from(input)),
             Self::HostReplace(input) => Box::new(HostBinding::from(input)),
+            Self::FolderCreate(input) => Box::new(FolderCreateBinding::from(input)),
         }
     }
 }

@@ -84,10 +84,18 @@ impl RepositoryService {
         // true of the result given again as of the result first given,
         // so the action is made again from the code. So it is for the
         // result of a resume that took a synchronization up. No other
-        // finished result of either has an action, and no other
-        // command's is given one here.
+        // finished result of either has an action.
+        //
+        // A folder creation whose refresh failed is finished too, with
+        // nothing pending that the journal could offer a resume of: its
+        // result says the index is behind and offers a refresh, and
+        // says so again here. No other command's finished result is
+        // given an action.
         let envelope = match Command::parse(&envelope.command) {
-            Some(command) if command.finishes_as_a_synchronization() => {
+            Some(command)
+                if command.finishes_as_a_synchronization()
+                    || command.hands_off_to_any_refresh() =>
+            {
                 let recovery = outcome::offered(
                     &outcome::Named {
                         code: envelope.code,

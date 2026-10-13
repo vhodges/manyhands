@@ -47,7 +47,7 @@ pub enum Home {
 /// Where the row of every bound command is. `run` fails when this is
 /// not exactly the bound commands, so a command that is built and has
 /// no home here fails all four targets.
-pub const HOMES: [(&str, Home); 27] = [
+pub const HOMES: [(&str, Home); 28] = [
     ("document create", Home::Replay),
     ("document save", Home::Replay),
     ("document move", Home::Replay),
@@ -75,6 +75,7 @@ pub const HOMES: [(&str, Home); 27] = [
     ("host approve", Home::Remote),
     ("host replace", Home::Remote),
     ("repo identity-set", Home::Bridges),
+    ("folder create", Home::Bridges),
 ];
 
 /// The request IDs the rules use. No fixture uses them.

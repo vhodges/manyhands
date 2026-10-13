@@ -868,7 +868,8 @@ impl MutationDataDto {
             | Command::IndexRebuild
             | Command::RepoCreate
             | Command::RepoEnable
-            | Command::RepoRemove => None,
+            | Command::RepoRemove
+            | Command::FolderCreate => None,
         }
     }
 }

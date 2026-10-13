@@ -59,6 +59,7 @@ commands! {
     RepoIdentitySet => "repo identity-set",
     HostApprove => "host approve",
     HostReplace => "host replace",
+    FolderCreate => "folder create",
 }
 
 impl Command {
@@ -97,6 +98,10 @@ impl Command {
             | Self::RemoteRemove
             | Self::RepoRemove
             | Self::KeyDelete
+            // The refresh that puts the folder in the index: making the
+            // directory records nothing, and the refresh's row is the
+            // request's one row.
+            | Self::FolderCreate
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
@@ -160,7 +165,8 @@ impl Command {
             | Self::OperationResume
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            | Self::FolderCreate => false,
         }
     }
 
@@ -196,7 +202,8 @@ impl Command {
             | Self::OperationResume
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            | Self::FolderCreate => false,
         }
     }
 
@@ -231,7 +238,8 @@ impl Command {
             | Self::OperationResume
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            | Self::FolderCreate => false,
         }
     }
 
@@ -268,7 +276,8 @@ impl Command {
             | Self::OperationAbandon
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            | Self::FolderCreate => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -313,7 +322,8 @@ impl Command {
             | Self::OperationAbandon
             | Self::RepoIdentitySet
             | Self::HostApprove
-            | Self::HostReplace => false,
+            | Self::HostReplace
+            | Self::FolderCreate => false,
         }
     }
 
@@ -348,7 +358,48 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete
             | Self::OperationAbandon
-            | Self::RepoIdentitySet => ProgressStage::Writing,
+            | Self::RepoIdentitySet
+            // What a folder creation does first is make the directory.
+            | Self::FolderCreate => ProgressStage::Writing,
+        }
+    }
+
+    /// Whether the command's index hand-off is no operation's to owe:
+    /// when it fails, nothing is left pending under the request's
+    /// operation ID, the registration is marked stale and the request
+    /// is over. What then brings the index up to date is any refresh,
+    /// and `discovery_pending` offers that in place of a resume, which
+    /// would find nothing to take up.
+    pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
+        match self {
+            Self::FolderCreate => true,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::RemoteAdd
+            | Self::RemoteSelect
+            | Self::IndexRefresh
+            | Self::IndexRebuild
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::RepoCreate
+            | Self::RepoEnable
+            | Self::RemoteRemove
+            | Self::RepoRemove
+            | Self::KeyDelete
+            | Self::OperationAbandon
+            | Self::ItemSync
+            | Self::RepoSync
+            | Self::OperationResume
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
         }
     }
 
@@ -385,6 +436,9 @@ impl Command {
             | Self::KeyRemove
             | Self::ItemSync
             | Self::RepoSync
+            // A directory that holds nothing is made and nothing else:
+            // there is nothing to show first.
+            | Self::FolderCreate
             // A resume does only what an operation already owes and
             // was consented to when it began.
             | Self::OperationResume => false,
@@ -428,6 +482,7 @@ mod tests {
         assert_eq!(Command::RepoIdentitySet.name(), "repo identity-set");
         assert_eq!(Command::HostApprove.name(), "host approve");
         assert_eq!(Command::HostReplace.name(), "host replace");
+        assert_eq!(Command::FolderCreate.name(), "folder create");
     }
 
     #[test]
@@ -536,6 +591,22 @@ mod tests {
                 assert!(!command.needs_confirmation(), "{command:?}");
             }
         }
+    }
+
+    #[test]
+    fn only_a_folder_creation_hands_off_to_any_refresh() {
+        for command in Command::ALL {
+            assert_eq!(
+                command.hands_off_to_any_refresh(),
+                command == Command::FolderCreate,
+                "{command:?}"
+            );
+        }
+        // Its one operation is that refresh, and it shows nothing first.
+        assert!(Command::FolderCreate.has_operation());
+        assert!(!Command::FolderCreate.needs_confirmation());
+        assert!(!Command::FolderCreate.stops_at_safe_points());
+        assert_eq!(Command::FolderCreate.stage(), ProgressStage::Writing);
     }
 
     #[test]

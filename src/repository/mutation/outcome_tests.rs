@@ -1403,6 +1403,55 @@ fn a_repository_that_was_never_enabled_is_offered_nothing() {
     );
 }
 
+/// A hand-off that an operation owes is offered as a resume of that
+/// operation. A folder creation's is no operation's: its refresh's row
+/// is closed when the refresh fails, so what it offers is a refresh,
+/// which takes a root and names no operation. While its record is left
+/// accepted, the row could not be closed, and the same request is what
+/// takes it up.
+#[test]
+fn a_hand_off_no_operation_owes_is_offered_as_a_refresh() {
+    let operation = OperationId::new();
+    let offered = |command, retry| {
+        recovery(
+            ResultCode::DiscoveryPending,
+            command,
+            Some("/repository"),
+            Some(RequestId::new()),
+            Some(operation),
+            retry,
+        )
+    };
+    for command in Command::ALL {
+        let actions = offered(command, false);
+        if command == Command::FolderCreate {
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].action, RecoveryActionKind::IndexRefresh);
+            assert_eq!(actions[0].operation_id, None);
+            assert_eq!(
+                actions[0]
+                    .arguments
+                    .get("root")
+                    .and_then(|root| root.as_str()),
+                Some("/repository")
+            );
+        } else {
+            assert_eq!(actions.len(), 1, "{command:?}");
+            assert_eq!(
+                actions[0].action,
+                RecoveryActionKind::OperationResume,
+                "{command:?}"
+            );
+            assert_eq!(actions[0].operation_id, Some(operation.to_string()));
+        }
+    }
+    let kept: Vec<_> = offered(Command::FolderCreate, true)
+        .into_iter()
+        .map(|action| action.action)
+        .collect();
+    assert_eq!(kept, [RecoveryActionKind::RequestRetry]);
+}
+
 #[test]
 fn a_request_with_no_usable_consent_is_offered_a_new_preview() {
     for code in [

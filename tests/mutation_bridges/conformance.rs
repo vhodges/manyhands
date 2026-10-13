@@ -5,44 +5,72 @@
 //! a confirmation no preview gave, and the one with the wrong consent
 //! presents none. A refusal by the binding itself, for a preview that is
 //! stale, is in `identity::boundary`.
+//!
+//! `folder create` needs none. The request that is refused is one the
+//! domain refuses, for a file at its path: it was accepted first, and
+//! the rule is that nothing of it is left.
 
-use manyhands::repository::{InitialsChange, Mutation, RepoIdentitySetInput};
+use manyhands::repository::{FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput};
 
 use super::support::{
     confirmation::{Desk, Plain},
     conformance::{Ask, Home as Target, Row, run},
     git_home,
-    mutation::drive_confirmed,
+    mutation::{World, drive_confirmed, drive_plain},
 };
 
-const ROWS: [Row; 1] = [Row::new(
-    "repo identity-set",
-    true,
-    "confirmation_not_found",
-    |rule| {
+const ROWS: [Row; 2] = [
+    Row::new("folder create", false, "occupied_path", |rule| {
         git_home::isolated();
-        let desk = Desk::new();
-        let plain = Plain::new();
-        let set = |name: &str| {
-            Mutation::RepoIdentitySet(RepoIdentitySetInput {
-                root: plain.root.clone(),
-                name: name.to_owned(),
-                email: "ada@example.invalid".to_owned(),
-                initials: InitialsChange::Unchanged,
+        let world = World::new();
+        let create = |path: &str| {
+            Mutation::FolderCreate(FolderCreateInput {
+                root: world.root.clone(),
+                path: path.to_owned(),
             })
         };
-        drive_confirmed(
-            &desk.service,
-            desk.data.path(),
+        drive_plain(
+            &world.service,
+            world.data.path(),
             &|ask| match ask {
-                Ask::Same | Ask::Refused | Ask::Unconsented => set("Ada Example"),
-                Ask::Changed => set("Ada Other"),
+                Ask::Same | Ask::Unconsented => create("docs/notes"),
+                Ask::Changed => create("docs/other"),
+                // The file `docs/guide.md`.
+                Ask::Refused => create("docs/guide.md"),
             },
             rule,
         );
         Ok(())
-    },
-)];
+    }),
+    Row::new(
+        "repo identity-set",
+        true,
+        "confirmation_not_found",
+        |rule| {
+            git_home::isolated();
+            let desk = Desk::new();
+            let plain = Plain::new();
+            let set = |name: &str| {
+                Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                    root: plain.root.clone(),
+                    name: name.to_owned(),
+                    email: "ada@example.invalid".to_owned(),
+                    initials: InitialsChange::Unchanged,
+                })
+            };
+            drive_confirmed(
+                &desk.service,
+                desk.data.path(),
+                &|ask| match ask {
+                    Ask::Same | Ask::Refused | Ask::Unconsented => set("Ada Example"),
+                    Ask::Changed => set("Ada Other"),
+                },
+                rule,
+            );
+            Ok(())
+        },
+    ),
+];
 
 #[test]
 fn every_command_of_this_target_keeps_the_rules_of_the_boundary() {

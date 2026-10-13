@@ -33,6 +33,7 @@ use super::{
 
 pub(crate) mod abandon;
 pub(crate) mod document;
+pub(crate) mod folder;
 pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
@@ -948,6 +949,12 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // claimed. A pin is stored whole or not at all, and no effect
         // shows it.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
+        // A directory is shown by no effect, and nothing records that
+        // the request made one: its one row is its refresh's, and a
+        // refresh in flight has made no durable effect. A directory at
+        // the request's path may have been there before it, so none is
+        // claimed for it.
+        Some(Command::FolderCreate) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

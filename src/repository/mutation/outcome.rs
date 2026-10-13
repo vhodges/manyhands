@@ -679,6 +679,18 @@ fn recovery(
     };
     let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
     let mut actions = match code {
+        // A hand-off that is no operation's to owe: nothing is pending
+        // under the request's operation ID, and any refresh brings the
+        // index up to date. Not so while the request's record is left
+        // accepted: its refresh's row could not be closed, and refuses
+        // every other refresh, so the same request is what takes it up.
+        ResultCode::DiscoveryPending if command.hands_off_to_any_refresh() => {
+            if retry {
+                retry_request()
+            } else {
+                vec![at_root(RecoveryActionKind::IndexRefresh)]
+            }
+        }
         // The authoritative work is recorded and the hand-off is owed,
         // which needs no input from the caller.
         ResultCode::DiscoveryPending => operation_id
