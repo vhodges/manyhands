@@ -764,7 +764,8 @@ pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str
         Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
     let mut statement = connection
         .prepare(
-            "SELECT COALESCE(operation_ulid, ''), action, target, state, completed_step, \
+            "SELECT COALESCE(operation_ulid, ''), action, COALESCE(target, ''), state, \
+                    COALESCE(completed_step, ''), \
                     COALESCE(item_id, ''), COALESCE(context_path, ''), \
                     CAST(observed_at AS TEXT), CAST(persisted_context_count AS TEXT), \
                     COALESCE(redacted_error, '') \
