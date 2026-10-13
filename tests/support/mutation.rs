@@ -993,7 +993,7 @@ impl Drop for KeyWorld {
 }
 
 /// The names of the recovery actions an envelope suggests.
-pub fn recovery_actions(envelope: &Envelope<MutationDataDto>) -> Vec<&'static str> {
+pub fn recovery_actions<T>(envelope: &Envelope<T>) -> Vec<&'static str> {
     envelope
         .recovery
         .iter()

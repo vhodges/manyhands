@@ -4862,6 +4862,35 @@ fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
     assert_eq!(fs::read(git_home.join(".gitconfig")).unwrap(), global);
 }
 
+/// A read that fails suggests its own recovery: for a path below a
+/// repository's root, to inspect the root the path lies in, which the
+/// action names. `prepare` keeps what the read suggested, as `execute`
+/// does for a command that needs no confirmation: it is where the caller of
+/// a confirmed command meets it first.
+#[test]
+fn a_preview_keeps_the_recovery_its_read_suggested() {
+    let home = Home::new();
+    let below = home.root().join(".manyhands");
+    assert!(below.is_dir());
+    let remove = || {
+        Mutation::RepoRemove(RepoRemoveInput {
+            root: below.clone(),
+        })
+    };
+
+    let previewed = home.prepare(&remove());
+
+    assert_eq!(previewed.code, ResultCode::NotRepositoryRoot);
+    assert_eq!(previewed.data, None);
+    assert_eq!(recovery_actions(&previewed), ["repo.inspect"]);
+    assert_eq!(
+        previewed.recovery[0].arguments["root"].as_str(),
+        home.root().to_str()
+    );
+    home.assert_nothing_left(REQUEST_1);
+    assert_eq!(home.confirmation_rows(), 0);
+}
+
 // ---------------------------------------------------------------------
 // Two live calls of one request
 // ---------------------------------------------------------------------

@@ -92,8 +92,9 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         effects,
         // A preview is the only data `prepare` gives.
         data: _,
-        // The action is the code's own, made with this result's root.
-        recovery: _,
+        // What the binding or a read suggested is kept, as `execute`
+        // keeps it; `outcome::offered` decides.
+        recovery,
         local_change,
         offers_nothing,
     } = answer;
@@ -107,7 +108,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
             retry: false,
             unsettled: false,
         },
-        Vec::new(),
+        recovery,
         offers_nothing,
         None,
     );
