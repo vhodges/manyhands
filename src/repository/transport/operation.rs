@@ -311,6 +311,8 @@ impl RepositoryService {
             prepared.approval.as_ref(),
         )
         .map_err(|kind| context.with_kind(kind))?;
+        #[cfg(test)]
+        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
             self,

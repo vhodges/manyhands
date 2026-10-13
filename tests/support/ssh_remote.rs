@@ -123,6 +123,8 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
+    /// Every socket the listener accepted, whatever became of it.
+    pub sockets: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
     pub commands: Mutex<Vec<Vec<u8>>>,
@@ -281,6 +283,7 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
+            sockets: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
             commands: Mutex::new(Vec::new()),
@@ -454,6 +457,12 @@ impl SshRemoteFixture {
     }
     pub fn allow_client_public_key(&self, key: PublicKey) {
         *self.shared.allowed.lock().unwrap() = key;
+    }
+    /// How many connections the server has accepted: every socket, also
+    /// one whose client went away before it authenticated, as a client
+    /// that refuses the host's key does.
+    pub fn accepted_sockets(&self) -> usize {
+        self.shared.sockets.load(Ordering::SeqCst)
     }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()

@@ -435,8 +435,58 @@ impl HostBinding {
 
     /// The one domain call, and what it came to: the host is connected
     /// to in the direction the remote uses it for, and pinned to the
-    /// key the request names if that is the key it presents.
+    /// key the request names if that is the key it presents. A call
+    /// that did not end well is answered by `stored_all_the_same`.
     fn call(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        let ran = self.attempt(call, accepted);
+        match ran.standing {
+            Standing::Final => ran,
+            Standing::Owed
+            | Standing::Stopped { journal: _ }
+            | Standing::Unconfirmed
+            | Standing::NotRun { journal: _ } => self.stored_all_the_same(call, accepted, ran),
+        }
+    }
+
+    /// The answer to a call that failed, once the pin store is asked
+    /// what the call left. The verification stores the pin and then
+    /// still has work that can fail: it reads what the host advertises,
+    /// and checks once more that the key, the remote and its location
+    /// are what it began with. A call that failed there has pinned the
+    /// host all the same, and no answer may say that nothing changed.
+    ///
+    /// Where the host is now pinned to the key the request names, the
+    /// answer keeps the code of what stopped the call and says the rest:
+    /// a durable change was made, so the outcome is `partial`; the data
+    /// names the host and the key; the record is kept, and the same
+    /// request, which then finds its end state and is a no-op, is what
+    /// is offered. Otherwise `ran` is the answer as it is. A pin store
+    /// that cannot be read says nothing, and `ran` stands.
+    fn stored_all_the_same(&self, call: &CallContext<'_>, accepted: &Accepted, ran: Ran) -> Ran {
+        let Some(authority) = stored_authority(&self.authority) else {
+            return ran;
+        };
+        let stored = call
+            .service
+            .read_host_trust(&authority)
+            .is_ok_and(|trust| trust.pin.as_ref() == Some(&self.approved()));
+        if !stored {
+            return ran;
+        }
+        Ran {
+            answer: Answer {
+                data: Some(self.data(&authority, None)),
+                recovery: vec![outcome::same_request(accepted.request_id)],
+                local_change: true,
+                ..Answer::stopped(ran.answer.code)
+            },
+            standing: Standing::Unconfirmed,
+        }
+    }
+
+    /// One connection to the host, and what it came to, before the pin
+    /// store is asked what it left; see `call`.
+    fn attempt(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         // Not observed: nothing is known of the pin the approval is
         // for, and nothing is connected to on that.
         let Some(Sighting {
@@ -527,15 +577,32 @@ impl HostBinding {
             // or the marker moved. So where neither has moved, the host
             // presented its pin and not the key the request names: a
             // replacement by a key the host does not present.
+            //
+            // That is said only of the host the request names. A remote
+            // that was given another location meanwhile had another host
+            // connected to, and nothing is known of what this one
+            // presents.
+            //
+            // The inference has two edges. A host that presents two
+            // keys within one connection is refused with the same kind,
+            // and is reported here as presenting its pin. And a pin
+            // changed and put back between this call's two reads is
+            // reported as the key presented, whatever was.
             SshTransportErrorKind::HostTrustChanged => {
-                match call.service.read_host_trust(&authority) {
-                    Ok(now) if now.pin == pin && now.reapproval_required == reapproval_required => {
-                        match &pin {
-                            Some(pinned) if *pinned != approved => mismatch(pinned),
-                            Some(_) | None => changed(),
+                if reached.as_ref() != Some(&authority) {
+                    changed()
+                } else {
+                    match call.service.read_host_trust(&authority) {
+                        Ok(now)
+                            if now.pin == pin && now.reapproval_required == reapproval_required =>
+                        {
+                            match &pin {
+                                Some(pinned) if *pinned != approved => mismatch(pinned),
+                                Some(_) | None => changed(),
+                            }
                         }
+                        Ok(_) | Err(_) => changed(),
                     }
-                    Ok(_) | Err(_) => changed(),
                 }
             }
             SshTransportErrorKind::EndpointChanged => changed(),
@@ -825,7 +892,34 @@ impl RepositoryService {
                     expected,
                     presented,
                 } => (error.authority, presented, Some(expected)),
-                kind => return failure(scope, outcome::ssh_transport_error_code(&kind)),
+                // Every other kind is a failure of the read, with its
+                // code. Each is named: a kind added later that holds a
+                // key the host presented is placed here, and is not
+                // made a failure by default.
+                kind @ (SshTransportErrorKind::ConfigurationInvalid
+                | SshTransportErrorKind::PublicationRemoteMissing
+                | SshTransportErrorKind::UsernameRequired
+                | SshTransportErrorKind::NoSelectedKey
+                | SshTransportErrorKind::KeyMissing
+                | SshTransportErrorKind::KeyUnreadable
+                | SshTransportErrorKind::KeySourceChanged
+                | SshTransportErrorKind::SelectionChanged
+                | SshTransportErrorKind::EndpointChanged
+                | SshTransportErrorKind::KeyInvalidOrUnsupported
+                | SshTransportErrorKind::KeyRejected
+                | SshTransportErrorKind::UnlockCancelled
+                | SshTransportErrorKind::ProviderUnavailable
+                | SshTransportErrorKind::UnlockFailed
+                | SshTransportErrorKind::HostTrustChanged
+                | SshTransportErrorKind::HostVerificationUnavailable
+                | SshTransportErrorKind::RegistryUnavailable
+                | SshTransportErrorKind::RuntimeUninitialized
+                | SshTransportErrorKind::TransportUnavailable
+                | SshTransportErrorKind::RemoteUnavailable
+                | SshTransportErrorKind::PushRejected
+                | SshTransportErrorKind::ProtocolFailure) => {
+                    return failure(scope, outcome::ssh_transport_error_code(&kind));
+                }
             },
         };
         // The remote was given another location while it was read.

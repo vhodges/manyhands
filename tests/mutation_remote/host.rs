@@ -51,6 +51,14 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         a_pin_changed_between_the_observation_and_the_connection_is_not_written_over,
     ),
     (
+        "a_remote_repointed_at_another_pinned_host_is_an_external_change_naming_no_key",
+        a_remote_repointed_at_another_pinned_host_is_an_external_change_naming_no_key,
+    ),
+    (
+        "a_call_that_fails_after_the_pin_was_stored_says_so_and_its_retry_is_a_no_op",
+        a_call_that_fails_after_the_pin_was_stored_says_so_and_its_retry_is_a_no_op,
+    ),
+    (
         "an_approval_with_a_locked_key_and_no_passphrase_is_unlock_required_and_pins_nothing",
         an_approval_with_a_locked_key_and_no_passphrase_is_unlock_required_and_pins_nothing,
     ),
@@ -151,11 +159,37 @@ fn key_path(w: &World) -> Vec<u8> {
         .to_vec()
 }
 
+/// The path of the selected key in every form a result could hold it
+/// in: as it is, as JSON writes it and as `Debug` writes it. Where a
+/// path holds backslashes the last two double them, and a scan for the
+/// path as it is would miss it there.
+fn key_path_forms(w: &World) -> Vec<Vec<u8>> {
+    let raw = key_path(w);
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let json = serde_json::to_string(&text).expect("a path serializes");
+    let debug = format!("{text:?}");
+    let mut forms = vec![raw];
+    for quoted in [json, debug] {
+        let inner = quoted[1..quoted.len() - 1].as_bytes().to_vec();
+        if !forms.contains(&inner) {
+            forms.push(inner);
+        }
+    }
+    forms
+}
+
+/// How many connections the world's server has accepted, whatever
+/// became of them: one the client gave up at the host's key is counted,
+/// which the count of clients that authenticated does not see.
+fn sockets(w: &World) -> usize {
+    w.server.accepted_sockets()
+}
+
 /// Scans what a call returned, and what the stores hold after it, for
 /// the world's private material and the path of the selected key.
 fn scanned<T: serde::Serialize + std::fmt::Debug>(w: &World, envelope: &T) -> serde_json::Value {
     let mut private = w.probes.clone();
-    private.push(key_path(w));
+    private.extend(key_path_forms(w));
     // The case's output is scanned for the path as well.
     ssh_privacy::save(&private).expect("the probes");
     let rendered = serde_json::to_vec(envelope).expect("an envelope serializes");
@@ -362,7 +396,13 @@ fn observing_a_host_reports_what_it_presents_and_its_pin_and_pins_nothing()
     let presented = w.server.host_identity();
 
     // A host that was never approved: what it presents, and no pin.
+    // The observation does connect, and the count of sockets sees it
+    // although the client gave the connection up at the host's key and
+    // never authenticated.
+    let (opened, authenticated) = (sockets(&w), connections(&w));
     let unknown = observe(&w)?;
+    assert!(sockets(&w) > opened);
+    assert_eq!(connections(&w), authenticated);
     assert_eq!(unknown.host, "127.0.0.1");
     assert_eq!(unknown.port, w.server.address().port());
     assert!(unknown.fetch && unknown.push);
@@ -399,9 +439,11 @@ fn observing_a_host_reports_what_it_presents_and_its_pin_and_pins_nothing()
         host: "127.0.0.1".into(),
         port: 9,
     };
+    let opened = sockets(&w);
     let refused = observe_as(&w, Some(&elsewhere), Provider);
     assert_eq!(refused.code, ResultCode::InvalidInput);
     assert!(refused.data.is_none());
+    assert_eq!(sockets(&w), opened);
 
     // With no key selected nothing can authenticate.
     fixed(w.service.clear_shared_key_selection())?;
@@ -431,8 +473,10 @@ fn approving_the_observed_fingerprint_stores_the_pin_and_publishes_nothing()
 
     // The preview is made without a connection.
     let connected = connections(&w);
+    let opened = sockets(&w);
     let (confirmation, shown) = preview(&w, &approve)?;
     assert_eq!(connections(&w), connected);
+    assert_eq!(sockets(&w), opened);
     assert_eq!(shown.host, "127.0.0.1");
     assert_eq!(shown.port, w.server.address().port());
     assert!(shown.fetch && shown.push);
@@ -468,8 +512,10 @@ fn approving_the_observed_fingerprint_stores_the_pin_and_publishes_nothing()
     // a host that is not: a replacement by a key the host does not
     // present is previewed all the same.
     let connected = connections(&w);
+    let opened = sockets(&w);
     preview(&w, &replacement(&w, &key.sha256, &another_key()?))?;
     assert_eq!(connections(&w), connected);
+    assert_eq!(sockets(&w), opened);
     Ok(())
 }
 
@@ -613,8 +659,10 @@ fn a_rotated_host_key_is_replaced_by_naming_the_old_and_the_new_fingerprint()
 
     let replace = replacement(&w, &old.sha256, &new);
     let connected = connections(&w);
+    let opened = sockets(&w);
     let (confirmation, shown) = preview(&w, &replace)?;
     assert_eq!(connections(&w), connected);
+    assert_eq!(sockets(&w), opened);
     assert_eq!(shown.current_fingerprint, Some(old.sha256.clone()));
     assert_eq!(shown.current_algorithm, Some(old.algorithm.clone()));
     assert_eq!(shown.fingerprint, new.sha256);
@@ -842,6 +890,106 @@ fn a_pin_changed_between_the_observation_and_the_connection_is_not_written_over(
     assert_eq!(actions(&envelope), [RecoveryActionKind::RequestPrepare]);
     assert!(record(&w, REQUEST_1).is_none());
     assert_eq!(pins(&w), [pinned_to(&w.server, &other)]);
+    Ok(())
+}
+
+/// The remote is given another location after the request observed it
+/// and before the verification reads it: a host that is pinned and
+/// presents its pin. The verification authenticates there and pins
+/// nothing. The host the request names was never connected to, so
+/// nothing is said of what it presented.
+fn a_remote_repointed_at_another_pinned_host_is_an_external_change_naming_no_key()
+-> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    let other = SshRemoteFixture::start()?;
+    other.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &w.server.allowed_client_public_key(),
+    ))?);
+    w.probes.push(other.url().into_bytes());
+    ssh_privacy::save(&w.probes)?;
+    let pinned = w.server.host_identity();
+    approve_by_hand(&w)?;
+    fixed(
+        w.service
+            .approve_host_pin_for_testing(&authority(&other), &other.host_identity()),
+    )?;
+    let mut held = pins(&w);
+    held.sort();
+    let replace = replacement(&w, &pinned.sha256, &another_key()?);
+    let (confirmation, _) = preview(&w, &replace)?;
+
+    let (root, location) = (w.root.clone(), other.url());
+    w.service.set_request_hook_for_testing(move || {
+        git2::Repository::open(&root)
+            .and_then(|repository| repository.remote_set_url("origin", &location))
+            .expect("the remote, pointed elsewhere");
+    });
+    let (here, there) = (sockets(&w), other.accepted_sockets());
+    let envelope = confirmed(&w, REQUEST_1, &confirmation, replace);
+    // It went to the other host, and not to the one the request names.
+    assert!(other.accepted_sockets() > there);
+    assert_eq!(sockets(&w), here);
+    assert_eq!(envelope.code, ResultCode::ExternalChange);
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert!(envelope.data.is_none());
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestPrepare]);
+    assert!(record(&w, REQUEST_1).is_none());
+    // Neither host's pin was written or changed.
+    let mut after = pins(&w);
+    after.sort();
+    assert_eq!(after, held);
+    Ok(())
+}
+
+/// The pin is stored, and the call fails all the same: the remote is
+/// given another location once the host's trust is finalized, which
+/// the verification finds before it returns. The answer does not say
+/// that nothing changed.
+fn a_call_that_fails_after_the_pin_was_stored_says_so_and_its_retry_is_a_no_op()
+-> Result<(), FixtureError> {
+    use repository::transport::operation_tests::{Checkpoint, install_hook};
+    let w = World::new()?;
+    let key = w.server.host_identity();
+    let (confirmation, _) = preview(&w, &approval(&w))?;
+    let root = w.root.clone();
+    let mut once = true;
+    let hook = install_hook(move |point| {
+        if point == Checkpoint::HostTrustFinalized && std::mem::take(&mut once) {
+            git2::Repository::open(&root)
+                .and_then(|repository| {
+                    repository.remote_set_url("origin", "ssh://fixture@127.0.0.1:9/elsewhere.git")
+                })
+                .expect("the remote, pointed elsewhere");
+        }
+    });
+    let failed = confirmed(&w, REQUEST_1, &confirmation, approval(&w));
+    drop(hook);
+    assert_eq!(pins(&w), [pinned_to(&w.server, &key)]);
+    // What stopped it is its code; that it left a pin is its outcome
+    // and its data.
+    assert_eq!(failed.code, ResultCode::ExternalChange);
+    assert_eq!(failed.outcome, Outcome::Partial);
+    let data = host_data(&failed)?;
+    assert_eq!(data.fingerprint, key.sha256);
+    assert_eq!(data.presented_fingerprint, None);
+    // The request is not over: the same request is what ends it.
+    assert_eq!(actions(&failed), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        record(&w, REQUEST_1).map(|record| record.state),
+        Some(RequestState::Accepted)
+    );
+
+    let (connected, opened) = (connections(&w), sockets(&w));
+    let retried = confirmed(&w, REQUEST_1, &confirmation, approval(&w));
+    assert_eq!(retried.code, ResultCode::AlreadyApplied);
+    assert_eq!(retried.outcome, Outcome::Noop);
+    assert_eq!(host_data(&retried)?.fingerprint, key.sha256);
+    assert_eq!(
+        record(&w, REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!((connections(&w), sockets(&w)), (connected, opened));
+    assert_eq!(pins(&w), [pinned_to(&w.server, &key)]);
     Ok(())
 }
 
