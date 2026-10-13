@@ -103,6 +103,13 @@ pub enum RemoteReservationOutcome {
     Busy,
 }
 
+/// Internal full-poll gate; the public poll result belongs to Task 6.
+#[derive(Debug)]
+pub(crate) enum RemotePollReservationOutcome {
+    Reservation(RemoteReservationOutcome),
+    ConflictPending,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemoteSafePointOutcome {
     Continue,
@@ -419,6 +426,12 @@ fn acknowledge(
             match point {
                 RemoteOperationSafePoint::BeforeTransport
                 | RemoteOperationSafePoint::AfterAdvertisement => "advertising",
+                RemoteOperationSafePoint::BeforeLocalMutation
+                | RemoteOperationSafePoint::BeforeDiscovery
+                    if record.poll_kind == Some(state::PollKind::Update) =>
+                {
+                    "local_prepared"
+                }
                 _ => "persisting",
             },
             None,
@@ -435,6 +448,20 @@ fn acknowledge(
     if result == RemoteSafePointOutcome::Cancelled && !is_sync(&record.target) {
         tx.execute("UPDATE remote_polling_state SET latest_outcome='cancelled' WHERE repository_id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
             [record.id]).map_err(|_| state::recovery_required())?;
+        let id = tx
+            .query_row(
+                "SELECT repository_id FROM remote_operation_records WHERE id=?1",
+                [record.id],
+                |row| row.get(0),
+            )
+            .map_err(|_| state::recovery_required())?;
+        state::record_poll_attempt(
+            tx,
+            id,
+            time::OffsetDateTime::from_unix_timestamp(now())
+                .map_err(|_| state::recovery_required())?,
+            None,
+        )?;
     }
     Ok(result)
 }
@@ -477,7 +504,7 @@ pub(in super::super) fn commit_observation_batch(
         if decision != RemoteSafePointOutcome::Continue {
             return Ok(decision);
         }
-        if synchronization {
+        if synchronization || record.poll_kind == Some(state::PollKind::Update) {
             state::persist_complete_advertisement(
                 tx,
                 id,
@@ -514,8 +541,22 @@ fn finish(
     };
     // Persist future automatic retry policy, without scheduling or delaying this
     // call. Attention states and explicit failures retain the existing policy.
+    let completed_at =
+        time::OffsetDateTime::from_unix_timestamp(now()).map_err(|_| state::recovery_required())?;
     if !is_sync(&record.target) {
-        let previous = state::read_snapshot(tx, id)?.polling().automatic_backoff();
+        let snapshot = state::read_snapshot(tx, id)?;
+        let policy = snapshot.polling();
+        let previous = policy.automatic_backoff();
+        let next = super::poll::next_eligible(
+            category,
+            if record.priority == RemoteOperationPriority::Poll {
+                super::RemotePollInvocation::Automatic
+            } else {
+                super::RemotePollInvocation::Explicit
+            },
+            completed_at,
+            policy,
+        );
         let delay = match category {
             RemoteOutcomeCategory::Completed => None,
             RemoteOutcomeCategory::TransportUnavailable
@@ -531,13 +572,47 @@ fn finish(
             .transpose()
             .map_err(|_| state::recovery_required())?;
         state::record_outcome(tx, id, category, backoff)?;
+        state::record_poll_attempt(tx, id, completed_at, next)?;
     }
     tx.execute("UPDATE remote_operation_records SET phase=?2,outcome=?3,updated_at=max(updated_at,?4) WHERE id=?1",
-        params![record.id,phase,state::outcome_name(category),now()]).map_err(|_| state::recovery_required())?;
+        params![record.id,phase,state::outcome_name(category),completed_at.unix_timestamp()]).map_err(|_| state::recovery_required())?;
     Ok(())
 }
 
 impl RepositoryService {
+    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
+    pub(crate) fn reserve_remote_poll(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        priority: RemoteOperationPriority,
+    ) -> Result<RemotePollReservationOutcome, RepositoryError> {
+        if target.action() != RemoteOperationAction::Poll {
+            return Err(mismatch());
+        }
+        self.reserve_remote_operation_kind(
+            root,
+            operation_id,
+            target,
+            priority,
+            Some(state::PollKind::Update),
+        )
+    }
+
+    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
+    pub(crate) fn restart_remote_poll(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        if target.action() != RemoteOperationAction::Poll {
+            return Err(mismatch());
+        }
+        self.restart_remote_operation_kind(root, operation_id, target, state::PollKind::Update)
+    }
+
     /// Reserves an already-preflighted, validated target. Configuration is supplied
     /// to the state layer by the caller; this method performs no Git/transport work.
     pub fn reserve_remote_operation(
@@ -563,6 +638,22 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         priority: RemoteOperationPriority,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        let kind =
+            (target.action() == RemoteOperationAction::Poll).then_some(state::PollKind::Observe);
+        match self.reserve_remote_operation_kind(root, operation_id, target, priority, kind)? {
+            RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
+            RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
+        }
+    }
+
+    fn reserve_remote_operation_kind(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        priority: RemoteOperationPriority,
+        poll_kind: Option<state::PollKind>,
+    ) -> Result<RemotePollReservationOutcome, RepositoryError> {
         if priority == RemoteOperationPriority::Poll
             && target.action() != RemoteOperationAction::Poll
         {
@@ -606,7 +697,10 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             if let Some(record) = state::read_operation(tx, repository_id, operation_id)? {
-                if &record.target != target || record.priority != priority {
+                if &record.target != target
+                    || record.priority != priority
+                    || record.poll_kind != poll_kind
+                {
                     return Err(mismatch());
                 }
                 if record.authority.is_some()
@@ -617,14 +711,23 @@ impl RepositoryService {
                 } else if local_id {
                     return Err(mismatch());
                 }
-                return Ok(RemoteReservationOutcome::Replay(record.into()));
+                return Ok(RemotePollReservationOutcome::Reservation(
+                    RemoteReservationOutcome::Replay(record.into()),
+                ));
             }
             if local_id {
                 return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            if poll_kind == Some(state::PollKind::Update)
+                && state::has_pending_conflict(tx, repository_id)?
+            {
+                return Ok(RemotePollReservationOutcome::ConflictPending);
+            }
             if is_sync(target) && state::has_pending_conflict(tx, repository_id)? {
-                return Ok(RemoteReservationOutcome::Busy);
+                return Ok(RemotePollReservationOutcome::Reservation(
+                    RemoteReservationOutcome::Busy,
+                ));
             }
             state::read_snapshot(tx, repository_id)?;
             if let Some(record) = state::read_operation_rows(tx, repository_id, true)?
@@ -635,18 +738,32 @@ impl RepositoryService {
                     && record.priority == RemoteOperationPriority::Poll
                 {
                     tx.execute("UPDATE remote_operation_records SET yield_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
-                    return Ok(RemoteReservationOutcome::PollYielding);
+                    return Ok(RemotePollReservationOutcome::Reservation(
+                        RemoteReservationOutcome::PollYielding,
+                    ));
                 }
-                return Ok(RemoteReservationOutcome::Busy);
+                return Ok(RemotePollReservationOutcome::Reservation(
+                    RemoteReservationOutcome::Busy,
+                ));
             }
-            state::insert_operation(tx, repository_id, operation_id, target, priority, now())?;
+            if poll_kind == Some(state::PollKind::Update) {
+                state::insert_operation_with_kind(
+                    tx,
+                    repository_id,
+                    operation_id,
+                    target,
+                    priority,
+                    poll_kind,
+                    now(),
+                )?;
+            } else {
+                state::insert_operation(tx, repository_id, operation_id, target, priority, now())?;
+            }
             let record = state::read_operation(tx, repository_id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
-            Ok(RemoteReservationOutcome::Reserved(token(
-                self,
-                repository_id,
-                &record,
-            )))
+            Ok(RemotePollReservationOutcome::Reservation(
+                RemoteReservationOutcome::Reserved(token(self, repository_id, &record)),
+            ))
         })
     }
 
@@ -727,6 +844,27 @@ impl RepositoryService {
                 } else {
                     validate_sync_point(&record, point)?;
                 }
+            } else if record.poll_kind == Some(state::PollKind::Update) {
+                use RemoteOperationSafePoint as P;
+                let valid = match point {
+                    P::BeforeTransport
+                    | P::AfterAdvertisement
+                    | P::BetweenObservations
+                    | P::BeforeBatchCommit => true,
+                    P::AfterBatchCommit => record.completed_step == Some(P::AfterBatchCommit),
+                    P::BeforeLocalMutation => matches!(
+                        record.completed_step,
+                        Some(P::AfterBatchCommit | P::BeforeLocalMutation)
+                    ),
+                    P::BeforeDiscovery => matches!(
+                        record.completed_step,
+                        Some(P::AfterBatchCommit | P::BeforeLocalMutation)
+                    ),
+                    _ => false,
+                };
+                if !valid {
+                    return Err(state::recovery_required());
+                }
             } else if matches!(
                 point,
                 RemoteOperationSafePoint::BeforeFetch
@@ -762,10 +900,23 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.restart_remote_operation_kind(root, operation_id, target, state::PollKind::Observe)
+    }
+
+    fn restart_remote_operation_kind(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        poll_kind: state::PollKind,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
-            if &record.target != target {
+            if &record.target != target
+                || target.action() == RemoteOperationAction::Poll
+                    && record.poll_kind != Some(poll_kind)
+            {
                 return Err(mismatch());
             }
             if matches!(
@@ -777,7 +928,8 @@ impl RepositoryService {
             crate::repository::recovery::require_no_pending_local(tx, id)?;
             if record.generation != state::generation(tx, id)?
                 || target.action() != RemoteOperationAction::Poll
-                || record.completed_step == Some(RemoteOperationSafePoint::BeforeLocalMutation)
+                || poll_kind == state::PollKind::Observe
+                    && record.completed_step == Some(RemoteOperationSafePoint::BeforeLocalMutation)
             {
                 return Err(state::recovery_required());
             }
@@ -798,7 +950,9 @@ impl RepositoryService {
                         .completed_step
                         .unwrap_or(RemoteOperationSafePoint::BeforeTransport),
                 )?;
-            } else if record.completed_step == Some(RemoteOperationSafePoint::AfterBatchCommit) {
+            } else if poll_kind == state::PollKind::Observe
+                && record.completed_step == Some(RemoteOperationSafePoint::AfterBatchCommit)
+            {
                 finish(tx, id, &record, RemoteOutcomeCategory::Completed)?;
             } else {
                 let epoch = record
@@ -830,10 +984,14 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
+            let completion_point = if record.poll_kind == Some(state::PollKind::Update) {
+                RemoteOperationSafePoint::BeforeDiscovery
+            } else {
+                RemoteOperationSafePoint::AfterBatchCommit
+            };
             if !(record.target.action() == RemoteOperationAction::Poll || is_sync(&record.target))
                 || category == RemoteOutcomeCategory::Completed
-                    && (is_sync(&record.target)
-                        || point != RemoteOperationSafePoint::AfterBatchCommit)
+                    && (is_sync(&record.target) || point != completion_point)
             {
                 return Err(state::recovery_required());
             }

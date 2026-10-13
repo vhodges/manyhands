@@ -149,6 +149,24 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     }
     migrate_synchronization(transaction)?;
     migrate_merge_evidence(transaction)?;
+    // Legacy poll envelopes have no kind. Null remains readable as observe for
+    // old writers; service-created polls always store an explicit kind.
+    let has_poll_kind = transaction
+        .prepare("PRAGMA table_info(remote_operation_records)")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?
+        .iter()
+        .any(|name| name == "poll_kind");
+    if !has_poll_kind {
+        transaction.execute_batch("ALTER TABLE remote_operation_records ADD COLUMN poll_kind TEXT CHECK((action='poll' AND poll_kind IN ('observe','update')) OR (action!='poll' AND poll_kind IS NULL)); UPDATE remote_operation_records SET poll_kind='observe' WHERE action='poll';")
+            .map_err(|_| recovery_required())?;
+    }
+    transaction.execute_batch("CREATE TRIGGER IF NOT EXISTS remote_poll_kind_immutable BEFORE UPDATE OF poll_kind ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable poll kind'); END;")
+        .map_err(|_| recovery_required())?;
     transaction
         .execute_batch(REMOTE_OPERATION_INDEXES)
         .map_err(|_| recovery_required())?;
@@ -1739,7 +1757,6 @@ pub(in super::super) fn record_outcome(
 /// Called alongside the outcome/phase writes inside the finishing transaction.
 /// `None` preserves the existing deadline (explicit failure or cancellation).
 /// Retry backoff remains owned by reservation finish, not this timestamp writer.
-#[allow(dead_code)] // Integrated into reservation finish in Cycle 08 Task 2.
 pub(super) fn record_poll_attempt(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -1961,6 +1978,12 @@ pub(super) struct IntegrationStepEvidence {
     pub conflict_digest: Option<[u8; 32]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum PollKind {
+    Observe,
+    Update,
+}
+
 #[allow(dead_code)] // Mirrors the whole envelope row; some columns are read only by tests.
 #[derive(Clone, Debug)]
 pub(in super::super) struct StoredRemoteOperation {
@@ -1969,6 +1992,7 @@ pub(in super::super) struct StoredRemoteOperation {
     pub generation: i64,
     pub target: RemoteOperationTarget,
     pub priority: RemoteOperationPriority,
+    pub poll_kind: Option<PollKind>,
     pub phase: RemoteOperationPhase,
     pub completed_step: Option<RemoteOperationSafePoint>,
     pub local_oid: Option<Oid>,
@@ -2059,6 +2083,12 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         "reconciling" => RemoteOperationPhase::Reconciling,
         _ => return Err(recovery_required()),
     };
+    let poll_kind = match (target.action(), optional("poll_kind")?.as_deref()) {
+        (RemoteOperationAction::Poll, None | Some("observe")) => Some(PollKind::Observe),
+        (RemoteOperationAction::Poll, Some("update")) => Some(PollKind::Update),
+        (_, None) => None,
+        _ => return Err(recovery_required()),
+    };
     let priority = match text("priority")?.as_str() {
         "poll" => RemoteOperationPriority::Poll,
         "manual" => RemoteOperationPriority::Manual,
@@ -2129,17 +2159,31 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         target.action(),
         RemoteOperationAction::SynchronizePrimary | RemoteOperationAction::SynchronizeContext
     );
-    let sync_phase = matches!(
-        phase,
-        RemoteOperationPhase::FetchPrepared
-            | RemoteOperationPhase::FetchObserved
-            | RemoteOperationPhase::LocalPrepared
-            | RemoteOperationPhase::LocalFastForwarded
-            | RemoteOperationPhase::PushPrepared
-            | RemoteOperationPhase::PushReturned
-            | RemoteOperationPhase::PushVerified
-            | RemoteOperationPhase::Reconciling
-    );
+    let poll_local_phase =
+        poll_kind == Some(PollKind::Update) && phase == RemoteOperationPhase::LocalPrepared;
+    if poll_local_phase
+        && !matches!(
+            completed_step,
+            Some(
+                RemoteOperationSafePoint::BeforeLocalMutation
+                    | RemoteOperationSafePoint::BeforeDiscovery
+            )
+        )
+    {
+        return Err(recovery_required());
+    }
+    let sync_phase = !poll_local_phase
+        && matches!(
+            phase,
+            RemoteOperationPhase::FetchPrepared
+                | RemoteOperationPhase::FetchObserved
+                | RemoteOperationPhase::LocalPrepared
+                | RemoteOperationPhase::LocalFastForwarded
+                | RemoteOperationPhase::PushPrepared
+                | RemoteOperationPhase::PushReturned
+                | RemoteOperationPhase::PushVerified
+                | RemoteOperationPhase::Reconciling
+        );
     let checkpoint_phase = sync_checkpoint.map(|checkpoint| match checkpoint {
         SynchronizationCheckpoint::FetchPrepared => RemoteOperationPhase::FetchPrepared,
         SynchronizationCheckpoint::FetchObserved => RemoteOperationPhase::FetchObserved,
@@ -2217,6 +2261,7 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
         generation,
         target,
         priority,
+        poll_kind,
         phase,
         completed_step,
         local_oid,
@@ -4318,6 +4363,26 @@ pub(in super::super) fn insert_operation(
     priority: RemoteOperationPriority,
     created_at: i64,
 ) -> Result<i64, RepositoryError> {
+    insert_operation_with_kind(
+        transaction,
+        repository_id,
+        operation_id,
+        target,
+        priority,
+        (target.action() == RemoteOperationAction::Poll).then_some(PollKind::Observe),
+        created_at,
+    )
+}
+
+pub(super) fn insert_operation_with_kind(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+    poll_kind: Option<PollKind>,
+    created_at: i64,
+) -> Result<i64, RepositoryError> {
     read_snapshot(transaction, repository_id)?;
     let policy = read_policy(transaction, repository_id)?;
     let plan = policy.plan.as_ref().ok_or_else(recovery_required)?;
@@ -4338,7 +4403,11 @@ pub(in super::super) fn insert_operation(
         RemoteOperationPriority::Poll => "poll",
         RemoteOperationPriority::Manual => "manual",
     };
-    transaction.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,phase,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'reserved',?15,?15)",params![repository_id,operation_id.to_string(),policy.generation,target.remote_name(),plan.primary_branch(),target.primary_ref().remote_ref(),target.primary_ref().tracking_ref(),target.context_ref().map(RemoteRefTarget::remote_ref),target.context_ref().map(RemoteRefTarget::tracking_ref),target.item().map(|(kind,_)|match kind {AuthoringKind::Document=>"document",AuthoringKind::Ticket=>"ticket"}),target.item().map(|(_,id)|id.to_string()),target.local_branch(),action,priority,created_at]).map_err(|_| recovery_required())?;
+    let poll_kind = poll_kind.map(|kind| match kind {
+        PollKind::Observe => "observe",
+        PollKind::Update => "update",
+    });
+    transaction.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,phase,created_at,updated_at,poll_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'reserved',?15,?15,?16)",params![repository_id,operation_id.to_string(),policy.generation,target.remote_name(),plan.primary_branch(),target.primary_ref().remote_ref(),target.primary_ref().tracking_ref(),target.context_ref().map(RemoteRefTarget::remote_ref),target.context_ref().map(RemoteRefTarget::tracking_ref),target.item().map(|(kind,_)|match kind {AuthoringKind::Document=>"document",AuthoringKind::Ticket=>"ticket"}),target.item().map(|(_,id)|id.to_string()),target.local_branch(),action,priority,created_at,poll_kind]).map_err(|_| recovery_required())?;
     let record_id = transaction.last_insert_rowid();
     if matches!(
         target.action(),

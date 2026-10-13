@@ -14,6 +14,152 @@ use manyhands::repository::{
 mod support;
 use support::comment_publication::TestCommentSession;
 
+#[test]
+fn local_actions_yield_automatic_poll_without_journal_and_retry_after_acknowledgement() {
+    use manyhands::repository::{
+        OperationId, REGISTRY_FILE, RemoteOperationPriority, RemoteOperationSafePoint,
+        RemoteOperationTarget, RemoteRefPlan, RemoteReservationOutcome, RemoteSafePointOutcome,
+    };
+    for priority in [
+        RemoteOperationPriority::Poll,
+        RemoteOperationPriority::Manual,
+    ] {
+        for action in 0..3 {
+            let fixture = support::born_repository();
+            let enabled = support::enabled_repository(&fixture);
+            clean_configuration_index(&fixture);
+            // A real canonical document/context makes the comment and save
+            // requests valid independently of reservation arbitration.
+            enabled
+                .service
+                .save_document(document_request(
+                    &fixture.root,
+                    ContextIntent::Create,
+                    None,
+                    "docs/poll.md",
+                    "Poll",
+                    "initial",
+                ))
+                .unwrap();
+            let db = rusqlite::Connection::open(enabled.data_directory.path().join(REGISTRY_FILE))
+                .unwrap();
+            db.execute_batch(
+                "UPDATE remote_polling_state SET remote_name='origin',primary_branch='main'",
+            )
+            .unwrap();
+            let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+            let owner = match enabled
+                .service
+                .reserve_remote_operation_with_priority(
+                    &fixture.root,
+                    OperationId::new(),
+                    &RemoteOperationTarget::for_poll(&plan),
+                    priority,
+                )
+                .unwrap()
+            {
+                RemoteReservationOutcome::Reserved(owner) => owner,
+                other => panic!("{other:?}"),
+            };
+            let request_id = OperationId::new();
+            let rows = || {
+                db.query_row("SELECT count(*) FROM operation_records", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap()
+            };
+            let before_rows = rows();
+            let before = support::repository_and_worktree_snapshot(&fixture);
+            let attempt = || -> Result<(), RepositoryErrorKind> {
+                match action {
+                    0 => enabled
+                        .service
+                        .save_document(document_request_with_operation_id(
+                            &fixture.root,
+                            ContextIntent::Edit,
+                            Some("docs/poll.md"),
+                            "docs/poll.md",
+                            "Poll",
+                            "updated",
+                            request_id,
+                        ))
+                        .map(drop)
+                        .map_err(|error| error.kind),
+                    1 => enabled
+                        .service
+                        .prepare_context(target_with_operation_id(
+                            &fixture.root,
+                            AuthoringKind::Document,
+                            support::document_id(),
+                            ContextIntent::Edit,
+                            request_id,
+                        ))
+                        .map(drop)
+                        .map_err(|error| error.kind),
+                    _ => {
+                        let mut request = comment_request(
+                            &fixture.root,
+                            AuthoringKind::Document,
+                            support::document_id(),
+                            ContextIntent::Edit,
+                            support::root_comment_id(),
+                            None,
+                            "comment",
+                        );
+                        request.target.operation_id = request_id;
+                        enabled
+                            .service
+                            .submit_comment_with_test_session(request)
+                            .map(drop)
+                            .map_err(|error| error.kind)
+                    }
+                }
+            };
+            assert_eq!(
+                attempt().unwrap_err(),
+                if priority == RemoteOperationPriority::Poll {
+                    RepositoryErrorKind::RepositoryBusy
+                } else {
+                    RepositoryErrorKind::RecoveryRequired
+                }
+            );
+            assert_eq!(rows(), before_rows);
+            assert!(support::repository_and_worktree_snapshot(&fixture) == before);
+            assert_eq!(
+                enabled
+                    .service
+                    .active_remote_operation(&fixture.root)
+                    .unwrap()
+                    .unwrap()
+                    .yield_requested(),
+                priority == RemoteOperationPriority::Poll
+            );
+            if priority == RemoteOperationPriority::Manual {
+                enabled
+                    .service
+                    .cancel_remote_operation(&fixture.root, owner.operation_id())
+                    .unwrap();
+            }
+            assert_eq!(
+                enabled
+                    .service
+                    .remote_safe_point(
+                        &fixture.root,
+                        &owner,
+                        RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .unwrap(),
+                if priority == RemoteOperationPriority::Poll {
+                    RemoteSafePointOutcome::Interrupted
+                } else {
+                    RemoteSafePointOutcome::Cancelled
+                }
+            );
+            attempt().unwrap();
+        }
+    }
+}
+
 #[cfg(unix)]
 static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
     std::sync::OnceLock::new();

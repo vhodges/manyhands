@@ -391,14 +391,27 @@ fn polling_status_reports_the_stored_policy_and_the_latest_outcome() {
     );
     assert_eq!(failed.backoff_seconds, Some(60));
     assert_eq!(failed.active_operation_id, None);
-    // The attempt observed nothing, and no time is stored for an outcome.
+    // The attempt observed nothing; finish stores a retry deadline separately
+    // from the last successful advertisement time.
     assert_eq!(failed.latest_observed_at, None);
-    assert_eq!(failed.next_eligible_at, None);
+    let attempt = service
+        .remote_snapshot(root)
+        .unwrap()
+        .latest_attempt_at()
+        .unwrap();
+    assert_eq!(
+        failed.next_eligible_at,
+        Some(
+            (attempt + time::Duration::seconds(60))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        )
+    );
 
     operations::insert_current_observation(enabled.data_directory.path());
     let observed = service.polling_status(&repo).unwrap();
     assert_eq!(observed.latest_observed_at.as_deref(), Some(STORED_AT_TEXT));
-    assert_eq!(observed.next_eligible_at, None);
+    assert_eq!(observed.next_eligible_at, failed.next_eligible_at);
     assert_eq!(
         PollingStatusFields::of(&observed),
         PollingStatusFields::of(&failed)

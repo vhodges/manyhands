@@ -694,10 +694,23 @@ fn begin_or_reconcile(
     // A context synchronization owns only its exact authoring kind/item. Other
     // contexts may continue authoring; the matching context is rejected again
     // before any owned write by RepositoryService's checkpoint guard.
-    let remote_active: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
-        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
-    if remote_active {
+    let remote_active: Option<(i64, bool)> = transaction.query_row(
+        "SELECT remote_operation_records.id,(action='poll' AND priority='poll') FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%'))",
+        rusqlite::params![root_path, target], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|_| super::remote::state::recovery_required())?;
+    if let Some((id, automatic_poll)) = remote_active {
+        if automatic_poll {
+            transaction.execute("UPDATE remote_operation_records SET yield_requested=1,updated_at=max(updated_at,?2) WHERE id=?1", params![id, time::OffsetDateTime::now_utc().unix_timestamp().max(0)])
+                .map_err(|_| super::remote::state::recovery_required())?;
+            // Commit the request before returning a retryable error. No local
+            // journal row has been inserted and no Git effect has begun.
+            transaction.commit().map_err(RepositoryError::sqlite)?;
+            return Err(RepositoryError::new(
+                operation,
+                None,
+                RepositoryErrorKind::RepositoryBusy,
+                "repository is busy; retry after the poll yields",
+            ));
+        }
         return Err(super::remote::state::recovery_required());
     }
     let existing = transaction

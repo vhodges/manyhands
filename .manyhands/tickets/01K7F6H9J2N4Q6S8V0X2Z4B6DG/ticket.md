@@ -31,6 +31,9 @@ discovered conforming shared contexts.
 - [x] Owner resume authorization conveyed by controller (2026-10-13): remaining
   execution resumed; this implementer assigned Task 1 only, inline, no subagents,
   local task commit and bookkeeping, then independent spec and quality review.
+- [x] Fresh Task 2 assignment (2026-10-13): Task 2 only in this ticket worktree,
+  no subagents, one local task commit and canonical bookkeeping, then return
+  for the controller's independent reviews. Resume rebase evidence trusted.
 
 The owner approved the planning documents and D1–D4 on 2026-10-11, then
 separately authorized implementation and local commits. The
@@ -60,14 +63,21 @@ and the baseline.
   and retry-deadline functions, transactional persisted rollback clamp, existing
   status deadline field and privacy scan. Red recorded before behavior; focused
   tests and all four required Rust checks passed (1,581 tests, 1 existing ignored).
-- [ ] Independent Task 1 spec review.
-- [ ] Independent Task 1 quality review.
+- [x] Independent Task 1 spec review: `ses_eca3c077effeAOiqWMn8w5xeR5`, compliant.
+- [x] Independent Task 1 quality review: `ses_eca397d08ffeZI2d2YhlbUJ99h`, approved;
+  minor direct corrupt timestamp read test carried into Task 2.
+- [x] Task 2: poll-kind reservation/local stage, atomic timestamps, D3/D4 gates;
+  prior minor direct corrupt timestamp read coverage resolved. Recorded RED then
+  focused GREEN and all four Rust checks (1,594 passed, 1 existing ignored).
+- [ ] Independent Task 2 spec review.
+- [ ] Independent Task 2 quality review.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
 `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`, before/after ticket HEAD
-`4c1590d73b9dbab17030670989bd8825328f1f55`. Task 1 is implemented and ready for
-independent spec then quality review. Tasks 2–8 have not started. Ticket remains
+`4c1590d73b9dbab17030670989bd8825328f1f55`. Task 1 is implemented and independently
+reviewed. Task 2 is implemented and ready for independent spec then quality review;
+Tasks 3–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence

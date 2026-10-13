@@ -531,3 +531,171 @@ avoiding a self-referential SHA in committed content. Final status/diff/recent-l
 inspection, `git diff --check` and `scripts/show-ticket` validation precede staging
 only Task 1 source and canonical bookkeeping. No push, PR, native dispatch, merge,
 closure or worktree cleanup is performed.
+
+## Task 2 Execution — 2026-10-13
+
+Assigned Task 2 only, inline with no subagents; approved design/plan and D1–D4
+remain settled. The controller already refreshed/rebased at resume (no-op main
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`); no repeated fetch/rebase.
+Verified clean assigned worktree/branch and Task 2 base
+`5ff9f4eee31cd88067a406ba8acbc317c0ee2045`. All Rust uses Devenv.
+
+### Prior Task 1 Independent Review Evidence
+
+Controller reports full Task 1 range
+`4c1590d73b9dbab17030670989bd8825328f1f55..5ff9f4eee31cd88067a406ba8acbc317c0ee2045`:
+
+- Spec `ses_eca3c077effeAOiqWMn8w5xeR5`: compliant.
+- Quality `ses_eca397d08ffeZI2d2YhlbUJ99h`: approved; minor missing direct
+  corrupt-timestamp read coverage carried into this task.
+
+Focused hardening `devenv shell -- cargo test --locked --test remote_reservation
+corrupt_poll_times`: 1 passed, 9 filtered. Both columns independently tested
+with CHECK enforcement bypassed: negative, year-10000, text, real values;
+snapshot and reopen return RecoveryRequired; deadline gate returns
+RecoveryRequired and status returns the existing InternalError mapping.
+This is already-green hardening, not new-behavior RED. Initial trial incorrectly
+expected the deadline-only gate/status projection to read attempt time; it
+returned Eligible. Source confirms the projection consumes only next_eligible_at;
+corrected the test scope, with no production change.
+
+### New-Behavior RED Before Implementation
+
+- `devenv shell -- cargo test --locked --lib remote::reservation`: compile-red,
+  10 missing new seam/variant errors. Refined ConflictPending into an internal
+  full-poll reservation wrapper, keeping public observation/sync enums unchanged.
+  Added behavior-free seam delegates to existing observe paths so assertions run.
+  Rerun: exit 101, **30 passed, 7 failed, 487 filtered**. Missing poll_kind migration,
+  D3 gate, kind-specific safe-point ordering/finish/restart and timestamps.
+- `devenv shell -- cargo test --locked --test remote_reservation`: exit 101,
+  **10 passed, 1 failed**: finish did not record latest_attempt_at.
+- `devenv shell -- cargo test --locked --test local_authoring`: initial test typo
+  used nonexistent comment_id helper; corrected to existing root_comment_id.
+  Rerun exit 101, **131 passed, 1 failed**: automatic poll guard returned
+  RecoveryRequired instead of RepositoryBusy. No production guard change yet.
+
+New tests use real local Git repositories; no transport claim, fake transport,
+sleep, global Git configuration, developer key, network or prompt is introduced.
+Implementation begins only after this recorded RED checkpoint.
+
+### Additional Policy-Boundary RED
+
+After the initial local-stage implementation, strengthened the policy tests to
+seed backoff/deadline **before** the advertisement batch rather than afterwards.
+`devenv shell -- cargo test --locked --lib remote::reservation` then exited 101:
+**35 passed, 2 failed, 487 filtered**. Existing observe `complete_batch` clears
+backoff and writes Completed immediately; an update batch must retain policy
+until the local stage finishes. This exposes a missing update-specific batch
+fork, not a reason to change observation or synchronization behavior. The
+following fix uses the existing policy-independent advertisement writer for
+update batches, retaining existing observe complete_batch and sync handling.
+
+### Implemented Boundary
+
+- Probe-and-add nullable `poll_kind` with only observe/update allowed on poll
+  rows and NULL (empty) on non-poll rows; migrate old poll rows to observe.
+  Legacy NULL poll rows decode as observe. A separate immutable-kind trigger
+  avoids rebuilding either CHECK list or changing the existing target trigger.
+- Internal `reserve_remote_poll` and `RemotePollReservationOutcome` distinguish
+  D3 ConflictPending from ordinary reservation outcomes. Existing public
+  observation/synchronization reservation enums remain intact. Same-ID kind
+  mismatch is OperationMismatch, including terminal replay and restart.
+- Update-only safe-point fork permits repeatable BeforeLocalMutation after the
+  committed batch, once-only BeforeDiscovery, both under local_prepared; the
+  existing active index and journal guard already include that phase. Completed
+  requires BeforeDiscovery. Observe remains AfterBatchCommit-complete and rejects
+  BeforeDiscovery; its old BeforeLocalMutation/restart restrictions remain.
+- Internal restart_remote_poll resets interrupted/abandoned update records at
+  every stage to reserved, clears step/yield, increments owner epoch and fences
+  the original service's old token. Terminal completed/cancelled records replay.
+- Update batches persist the complete advertisement without writing a poll
+  outcome/backoff. Finish consumes the pre-finish policy, then atomically writes
+  outcome, backoff, attempt time, deadline and phase. Automatic network/protocol
+  failures double the previous backoff; attention uses interval; explicit failure
+  and cancellation preserve policy; Completed clears backoff and uses interval.
+  Cancel acknowledgement writes attempt time with no deadline/backoff change.
+- D3 rejects new update reservations before insertion, with no policy write;
+  observe remains permitted. D4 uses the existing journal guard's sole active
+  phase predicate: automatic poll requests yield, commits that request and
+  returns RepositoryBusy before journal insertion; manual remains RecoveryRequired.
+  Both kinds and every existing synchronization branch retain their contracts.
+
+Additional already-green coverage checks the inclusive UTC endpoints and NULL,
+the recovery journal guard directly at update local_prepared (save/context/comment
+× both priorities), cancellation-writer rollback, actual AfterBatchCommit request
+acknowledgement as well as the pre-batch transaction recheck. The guard tests
+leave zero new local rows and retry successfully after acknowledgement. This
+hardening does not claim a second new-behavior RED cycle.
+
+### GREEN, Gate Failures And Final Verification — 2026-10-13T16:19:29Z
+
+All commands below ran in the assigned worktree through Devenv, sequentially:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | Final focused PASS: 39 passed, 487 filtered; final full gate also passes all 39 |
+| `devenv shell -- cargo test --locked --test remote_reservation` | PASS: 12 passed |
+| `devenv shell -- cargo test --locked --test local_authoring` | PASS: 132 passed |
+| `devenv shell -- cargo test --locked --lib remote::` | PASS: 299 passed, 225 filtered before the final batch-policy fork/hardening; final full gate covers the resulting 301 matching tests |
+| `devenv shell -- cargo test --locked --test remote_observation` | PASS: 15 real-SSH cases, suite untouched |
+| `devenv shell -- cargo test --locked --test read_status` | PASS: 23 passed after the deadline expectation correction |
+| `devenv shell -- cargo check --all-features --locked` | PASS on final Rust tree |
+| `devenv shell -- cargo fmt --check` | PASS on final Rust tree |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS on final Rust tree |
+| `devenv shell -- cargo test --all-features --locked` | PASS: 1,594 passed, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS: exit 0, no window |
+| `timeout --signal=TERM 90s devenv shell -- cargo run --locked --features desktop --bin manyhands` | Built in 14.66 s, reached Running; bounded stop after 90 s, no startup diagnostic; no visual interaction claimed |
+
+Full gate breakdown: **526 library** (+9 Task 2 tests), **779 ordinary
+integration** (+3 reservation and +1 authoring), **280 real-SSH** (comment
+publication 41, merge recovery 25, observation 15, synchronization 63, fixture
+31, transport 105), **9 compile-fail doctests**. Both binaries have zero tests;
+the existing thousand-item read characterization remains ignored. The final
+full log is `tool_135f2723a001mSAMD0YzfOXEpI` in the harness output directory.
+
+Honest trial history after first implementation:
+
+- Reservation tests initially had 35 pass/2 failures because observation-restart
+  equality assertions assumed no timestamps. Updated those assertions to prove
+  all observation/context/policy/publication evidence stays identical while
+  finish adds exactly attempt+interval. A trial used a nonexistent history_unknown
+  accessor; corrected to the existing absent-item publication evidence accessor.
+- The first integration run had 9 pass/2 failures: the old lifecycle guard test
+  expected RecoveryRequired instead of approved D4 RepositoryBusy; updated its
+  expected result and asserted durable yield. The generic restart refactor had
+  also inadvertently changed non-poll restart errors to OperationMismatch;
+  restored the original RecoveryRequired rule before the passing rerun.
+- Direct journal test initially used unwrap_err on opaque RecoveryRecord, which
+  has no Debug; used err/expect instead, without adding Debug to production.
+- The first required full gate passed library/preceding targets (including 41
+  comment SSH cases), then failed one tests/read_status assertion expecting None
+  after an automatic network failure (22 pass/1 fail). The explicitly required
+  finish timestamp now gives a deadline. **Minimal extra test-only file** beyond
+  the Task 2 list: tests/read_status.rs now asserts attempt+60 in the existing DTO
+  and that inserting an observation retains it. No status production/schema
+  change. Focused status passed; final check/fmt/Clippy and full gate passed.
+  This concrete failure justified the second full gate; no third broad repeat.
+
+### Local Review Handoff
+
+Task 2 implementation is ready for the controller's independent spec then quality
+review. Self-reviewed the base-to-working-tree production/test diff against Task 2
+and the settled result table. The Task 1 minor coverage finding is resolved.
+No material design contradiction, unresolved local failure or later-task work.
+Native matrix evidence and Task 2 independent approval remain open gates.
+
+Task 2 base is `5ff9f4eee31cd88067a406ba8acbc317c0ee2045`; its exact head and
+base-to-head range are returned after the single local task commit (a commit
+cannot contain its own SHA). This entry and comments bind that range to the
+`feat: give poll reservations a local stage+bookkeeping` checkpoint. Canonical
+RED comment `01M4TX8PRJBBYH50CQ3GT5VYTP` and review-ready comment
+`01M4V0ZN2MHG18CD1BFC2CYDWX` retain prior review and current verification evidence.
+Ticket remains open; Task 2 is ticked with its two independent review gates open.
+Final status/full diff/recent log, diff whitespace check and scripts/show-ticket
+validation precede staging only intended Task 2 source/tests/bookkeeping.
+
+`scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` successfully validated/rendered
+the open ticket and all eight canonical comments, including both Node-generated
+Task 2 ULIDs. `git diff --check` passed; status, production/test/bookkeeping
+diffs and recent `git log --oneline -10` were inspected. Only the seven intended
+Rust/test files, this ledger, the open ticket and its two comments are staged.
