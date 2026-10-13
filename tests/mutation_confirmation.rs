@@ -4863,6 +4863,52 @@ fn a_remote_with_a_setting_outside_the_repository_s_configuration_is_refused() {
     assert_eq!(fs::read(git_home.join(".gitconfig")).unwrap(), global);
 }
 
+/// What a deletion reads is the registration and, in the domain's
+/// review, the key's two files. A deletion is given no passphrase, so a
+/// scan for one cannot fail on anything it touches: the probes here are
+/// what it does read, the long lines of the private key file and of the
+/// public one, taken before the files are deleted. Neither reaches a
+/// preview, a result or a store.
+#[test]
+fn nothing_a_key_deletion_reads_of_the_key_files_reaches_an_envelope_or_a_store() {
+    let keyring = Keyring::new();
+    let (private, public) = keyring.files();
+    let lines = |path: &Path| -> Vec<String> {
+        fs::read_to_string(path)
+            .unwrap()
+            .split(['\n', ' '])
+            .filter(|line| line.len() > 40)
+            .map(str::to_owned)
+            .collect()
+    };
+    let probes: Vec<String> = lines(&private).into_iter().chain(lines(&public)).collect();
+    // The private key's body and the public key's blob.
+    assert!(probes.len() >= 2, "{}", probes.len());
+    let probes: Vec<&str> = probes.iter().map(String::as_str).collect();
+    let scan = |what: &str, value: serde_json::Value| {
+        assert_eq!(golden::find_sentinel(&value, &probes), None, "{what}");
+    };
+
+    let preview = keyring.prepare(&keyring.delete_key());
+    scan("the preview", serde_json::to_value(&preview).unwrap());
+    let confirmation = preview.data.expect("a preview").confirmation_id;
+    mutation::assert_request_stores_exclude(keyring.world.data.path(), &probes);
+
+    let deleted = keyring.execute(REQUEST_1, &confirmation, keyring.delete_key());
+    assert_eq!(deleted.code, ResultCode::Ok, "{}", deleted.message);
+    assert!(!private.exists() && !public.exists());
+    scan("the result", serde_json::to_value(&deleted).unwrap());
+    scan(
+        "the replay",
+        serde_json::to_value(keyring.retry(REQUEST_1, keyring.delete_key())).unwrap(),
+    );
+    mutation::assert_request_stores_exclude(keyring.world.data.path(), &probes);
+
+    // The scan can fail: it finds a probe where one is.
+    let holding = serde_json::json!({ "data": { "label": format!("key {}", probes[0]) } });
+    assert!(golden::find_sentinel(&holding, &probes).is_some());
+}
+
 /// A read that fails suggests its own recovery: for a path below a
 /// repository's root, to inspect the root the path lies in, which the
 /// action names. `prepare` keeps what the read suggested, as `execute`

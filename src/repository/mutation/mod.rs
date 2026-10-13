@@ -141,7 +141,10 @@ impl RepositoryService {
     /// journal row and evidence are read.
     #[doc(hidden)]
     pub fn set_request_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
-        *self.request_hook.lock().expect("test request hook lock") = Some(Box::new(hook));
+        *self
+            .request_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
     }
 
     /// Has `hook` run once in the mutation boundary, immediately before
@@ -170,11 +173,13 @@ impl RepositoryService {
         }
     }
 
+    /// As `run_acceptance_hook`: this is on the path of every request,
+    /// and a poisoned lock is taken all the same.
     fn run_request_hook(&self) {
         let hook = self
             .request_hook
             .lock()
-            .expect("test request hook lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(hook) = hook {
             hook();
