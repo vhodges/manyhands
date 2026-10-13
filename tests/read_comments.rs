@@ -19,6 +19,7 @@ use manyhands::{
     results::{Outcome, ProblemCode, ResultCode},
 };
 use serde_json::{Value, json};
+use support::comment_publication::TestCommentSession;
 use support::items::{
     COMMENT_A, COMMENT_B, COMMENT_C, COMMENT_D, COMMENT_E, DOCUMENT_A, DOCUMENT_B, TICKET_A,
     TICKET_B, comment_path, comment_source, commit, context_worktree, create_document_context,
@@ -1327,7 +1328,7 @@ fn a_submitted_comment_is_listed_with_the_identity_that_checkpointed_it() {
     create_document_context(&enabled.service, root, DOCUMENT_A, "docs/active.md");
     let outcome = enabled
         .service
-        .submit_comment(SubmitCommentRequest {
+        .submit_comment_with_test_session(SubmitCommentRequest {
             target: AuthoringTarget {
                 root: root.clone(),
                 kind: AuthoringKind::Document,
@@ -1341,10 +1342,7 @@ fn a_submitted_comment_is_listed_with_the_identity_that_checkpointed_it() {
             expected_destination: ExpectedPathObservation::Missing,
         })
         .unwrap();
-    assert!(matches!(
-        outcome,
-        CommentSubmissionOutcome::Saved { .. } | CommentSubmissionOutcome::IndexPending { .. }
-    ));
+    assert!(matches!(outcome, CommentSubmissionOutcome::Saved { .. }));
     refresh_completely(&enabled.service, root);
     let repo = enabled.service.resolve_repository(root).unwrap();
 

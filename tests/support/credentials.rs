@@ -231,10 +231,9 @@ pub fn data_directory_files(data_directory: &Path) -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// What reads may do to the data directory between two snapshots: nothing,
-/// except that the first read-only connection after a writer has closed
-/// creates SQLite's two journal files. The index and every other file that
-/// was there is byte for byte what it was.
+/// Read-only SQLite connections may create the WAL sidecars and update the five
+/// transient WAL-index read marks (bytes 100..120 of `-shm`). All persistent
+/// files, WAL bytes and the remaining shared-memory bytes must stay identical.
 pub fn assert_reads_left_the_data_directory(
     before: &[(String, Vec<u8>)],
     after: &[(String, Vec<u8>)],
@@ -249,7 +248,14 @@ pub fn assert_reads_left_the_data_directory(
         let Some((_, now)) = now else {
             panic!("{name} was removed");
         };
-        assert!(now == bytes, "{name} changed");
+        if name == &journal[0] && bytes.len() >= 120 && now.len() == bytes.len() {
+            assert!(
+                now[..100] == bytes[..100] && now[120..] == bytes[120..],
+                "{name} changed outside its transient read marks"
+            );
+        } else {
+            assert!(now == bytes, "{name} changed");
+        }
     }
     for (name, _) in after {
         assert!(

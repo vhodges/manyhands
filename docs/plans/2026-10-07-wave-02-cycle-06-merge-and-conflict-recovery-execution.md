@@ -2189,3 +2189,19 @@ worktree or branch cleanup.
 The product owner authorized marking this ticket done on its branch, pushing, and
 opening a pull request. The ticket is closed here so that it merges closed. Merge
 to main and worktree or branch cleanup remain the product owner's.
+
+### Evidence qualification from Cycle 07 — 2026-10-10
+
+Cycle 07's real public SSH composition found an uncovered cancellation boundary:
+resolution checkpoint applied, failure before owned metadata/sentinel release,
+then cancellation and deliberate restart. The typed stop was Interrupted but the
+journal became terminal Cancelled, preventing identical resolution cleanup.
+Earlier passing cancellation evidence covered prepared resolutions or resolutions
+that completed and cleared cancellation; the retirement fault tests did not also
+cancel. Those historical results stand but do not prove this combination.
+
+The owner authorizes a narrow repair in the Cycle 07 branch: applied resolution
+remains owned while the existing release proof is unfinished. Recognize that
+state in the existing recoverable-cancellation predicate, preserving terminal
+ordinary applied clean merges and fully released resolutions. Repair/regression/
+review/current verification evidence belongs in the Cycle 07 execution ledger.

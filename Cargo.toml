@@ -72,6 +72,10 @@ name = "mutation_remote"
 harness = false
 
 [[test]]
+name = "comment_publication"
+harness = false
+
+[[test]]
 name = "editor_feasibility"
 path = "tests/editor_feasibility.rs"
 required-features = ["editor-probe"]

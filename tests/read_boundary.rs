@@ -744,6 +744,63 @@ fn every_item_read(
 }
 
 #[test]
+fn read_only_sqlite_wal_read_marks_are_not_persistent_data_changes() {
+    let data = tempfile::tempdir().unwrap();
+    let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+    let writer = rusqlite::Connection::open(&registry).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE read_fixture(value INTEGER); INSERT INTO read_fixture VALUES(1);").unwrap();
+    writer
+        .execute("INSERT INTO read_fixture VALUES(2)", [])
+        .unwrap();
+    let before = credentials::data_directory_files(data.path());
+    let reader = rusqlite::Connection::open_with_flags(
+        &registry,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT COUNT(*) FROM read_fixture", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert!(reader.is_readonly(rusqlite::DatabaseName::Main).unwrap());
+    let after = credentials::data_directory_files(data.path());
+    let shm = format!("{}-shm", manyhands::repository::REGISTRY_FILE);
+    let original = &before.iter().find(|(name, _)| name == &shm).unwrap().1;
+    let current = &after.iter().find(|(name, _)| name == &shm).unwrap().1;
+    let changed: Vec<_> = original
+        .iter()
+        .zip(current)
+        .enumerate()
+        .filter_map(|(offset, (a, b))| (a != b).then_some(offset))
+        .collect();
+    assert!(
+        !changed.is_empty(),
+        "fixture did not change a WAL read mark"
+    );
+    assert!(
+        changed.iter().all(|offset| (100..120).contains(offset)),
+        "changed offsets: {changed:?}"
+    );
+    credentials::assert_reads_left_the_data_directory(&before, &after);
+    // The exception must not hide a real writer's new WAL frames or its
+    // changed WAL-index header. Keep the reader and writer open for both images.
+    writer
+        .execute("INSERT INTO read_fixture VALUES(3)", [])
+        .unwrap();
+    let written = credentials::data_directory_files(data.path());
+    assert!(
+        std::panic::catch_unwind(|| credentials::assert_reads_left_the_data_directory(
+            &after, &written
+        ))
+        .is_err()
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
     let (fixture, enabled) = repository_with_items();
     let before = support::repository_and_worktree_snapshot(&fixture);

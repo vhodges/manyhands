@@ -363,12 +363,31 @@ fn pending_recovery_stage(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
 ) -> Result<bool, RepositoryError> {
-    tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_integration_steps WHERE operation_record_id=?1 AND window_number=(SELECT max(window_number) FROM remote_integration_steps WHERE operation_record_id=?1) AND phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",
-        [record.id],
-        |row| row.get(0),
-    )
-    .map_err(|_| state::recovery_required())
+    let window = state::latest_integration_window(tx, record)?;
+    for ordinal in 0..=1 {
+        let Some(step) = state::integration_step_in_window(tx, record.id, window.number, ordinal)?
+        else {
+            continue;
+        };
+        if matches!(
+            step.phase,
+            state::IntegrationStepPhase::ConflictPending
+                | state::IntegrationStepPhase::ResolutionPrepared
+                | state::IntegrationStepPhase::CommitPrepared
+        ) {
+            return Ok(true);
+        }
+        // An applied resolution still owns cleanup until its existing artifact
+        // and ref-release evidence is complete. Ordinary applied clean merges
+        // have no attempt, and released resolutions retain terminal cancellation.
+        if step.phase == state::IntegrationStepPhase::Applied
+            && state::integration_has_resolution_attempt(tx, record, &step)?
+            && !state::integration_resolution_released(tx, record, &step)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn acknowledge(
@@ -550,6 +569,31 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
+            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path FROM comment_publication_bindings b
+                JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
+                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?))).optional().map_err(|_| state::recovery_required())?;
+            if let Some((kind, item, checkpoint, parent_root)) = binding {
+                let registered_root: String = tx
+                    .query_row(
+                        "SELECT root_path FROM repositories WHERE id=?1",
+                        [repository_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| state::recovery_required())?;
+                let identity_matches = target.item().is_some_and(|(target_kind, target_item)| {
+                    crate::repository::authoring_kind_segment(&target_kind) == kind
+                        && target_item.to_string() == item
+                });
+                if parent_root != registered_root
+                    || target.action() != RemoteOperationAction::SynchronizeContext
+                    || !identity_matches
+                {
+                    return Err(mismatch());
+                }
+                if checkpoint.is_none() {
+                    return Err(state::recovery_required());
+                }
+            }
             // The last step of the local row under the ID, when there is
             // one.
             let local: Option<Option<String>> = tx
@@ -632,6 +676,19 @@ impl RepositoryService {
                 .into_iter()
                 .next()
                 .map(RemoteOperationInspection::from))
+        })
+    }
+
+    /// Read-only correlation adapter: existence and historical authority, never
+    /// a reservation token or permission to restart.
+    pub(crate) fn comment_child_authority(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+    ) -> Result<Option<bool>, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            Ok(state::read_operation(tx, id, operation_id)?
+                .map(|record| record.authority.is_some()))
         })
     }
 

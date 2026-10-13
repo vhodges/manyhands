@@ -1,4 +1,37 @@
 use super::*;
+
+#[test]
+fn comment_publication_identity_mapping_keeps_the_opaque_confirmation() {
+    let expected = merge::ExpectedConfiguration([17; 32]);
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    };
+    let result = crate::repository::comment_publication::pending_synchronization(
+        SynchronizationError::IdentityRequired {
+            target,
+            expected_configuration: expected,
+        },
+    );
+    let crate::repository::CommentPublicationState::Pending {
+        reason: crate::repository::CommentPublicationPendingReason::Synchronization(error),
+    } = result
+    else {
+        panic!("identity recovery mapping");
+    };
+    let SynchronizationError::IdentityRequired {
+        expected_configuration,
+        ..
+    } = *error
+    else {
+        panic!("typed identity recovery");
+    };
+    assert_eq!(expected_configuration, expected);
+    assert_eq!(
+        format!("{expected_configuration:?}"),
+        "ExpectedConfiguration(<redacted>)"
+    );
+}
 #[cfg(unix)]
 use crate::repository::OwnedPathBoundary;
 use crate::repository::remote::reservation::commit_observation_batch;
@@ -2368,19 +2401,22 @@ fn review_primary_resolution_releases_whole_repository_authoring_without_restart
         service.save_document(save()).unwrap(),
         SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
     ));
-    let submitted = service.submit_comment(SubmitCommentRequest {
-        target: AuthoringTarget {
-            root: root.path().into(),
-            kind: AuthoringKind::Document,
-            item_id,
-            intent: ContextIntent::Edit,
-            operation_id: OperationId::new(),
+    let submitted = service.checkpoint_comment_locally(
+        SubmitCommentRequest {
+            target: AuthoringTarget {
+                root: root.path().into(),
+                kind: AuthoringKind::Document,
+                item_id,
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            parent_id: None,
+            body: "available after local completion".into(),
+            expected_destination: ExpectedPathObservation::Missing,
         },
-        comment_id: "01CRZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
-        parent_id: None,
-        body: "available after local completion".into(),
-        expected_destination: ExpectedPathObservation::Missing,
-    });
+        None,
+    );
     assert!(
         submitted.is_ok(),
         "comment authoring after primary release; category={:?}",
@@ -2445,14 +2481,14 @@ fn review_resolution_releases_parent_after_verified_cleanup_and_replays_original
             matches!(service.save_ticket(edit()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
         );
         assert!(
-            matches!(service.submit_comment(comment()), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+            matches!(service.checkpoint_comment_locally(comment(), None), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
         );
         if recover {
             *service.failure_point.lock().unwrap() =
                 Some(FailurePoint::ResolutionBeforeMetadataRetirement);
             assert!(service.resolve_synchronization(request.clone()).is_err());
             assert!(service.save_ticket(edit()).is_err());
-            assert!(service.submit_comment(comment()).is_err());
+            assert!(service.checkpoint_comment_locally(comment(), None).is_err());
             *service.failure_point.lock().unwrap() = None;
         }
         let restarted = RepositoryService::open_at(data.path()).unwrap();
@@ -2508,7 +2544,7 @@ fn review_resolution_releases_parent_after_verified_cleanup_and_replays_original
             saved.unwrap(),
             SaveOutcome::Saved { .. } | SaveOutcome::IndexPending { .. }
         ));
-        let submitted = restarted.submit_comment(comment());
+        let submitted = restarted.checkpoint_comment_locally(comment(), None);
         assert!(
             submitted.is_ok(),
             "comment authoring after parent release; category={:?}",
@@ -6829,7 +6865,7 @@ fn pending_context_synchronization_blocks_only_its_public_authoring_context() {
     );
     let comment_id: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap();
     assert!(
-        matches!(service.submit_comment(SubmitCommentRequest { target: AuthoringTarget { root: root.path().into(), kind: AuthoringKind::Ticket, item_id: ticket_id.clone(), intent: ContextIntent::Edit, operation_id: OperationId::new() }, comment_id, parent_id: None, body: "blocked".into(), expected_destination: ExpectedPathObservation::Missing }), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
+        matches!(service.checkpoint_comment_locally(SubmitCommentRequest { target: AuthoringTarget { root: root.path().into(), kind: AuthoringKind::Ticket, item_id: ticket_id.clone(), intent: ContextIntent::Edit, operation_id: OperationId::new() }, comment_id, parent_id: None, body: "blocked".into(), expected_destination: ExpectedPathObservation::Missing }, None), Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired)
     );
     assert_eq!(
         (
@@ -14213,6 +14249,11 @@ fn cancellation_after_an_interrupted_resolution_is_a_recoverable_stop() {
             FailurePoint::ResolutionAfterCandidatePrepared,
             "commit_prepared",
         ),
+        (FailurePoint::ResolutionBeforeMetadataRetirement, "applied"),
+        (
+            FailurePoint::ResolutionAfterCheckpointObservation,
+            "applied",
+        ),
     ] {
         let (root, data, service, operation, local, incoming) = resolution_fixture(&[(
             "docs/document.md",
@@ -14295,6 +14336,46 @@ fn cancellation_after_an_interrupted_resolution_is_a_recoverable_stop() {
         assert_eq!(step_phase(), "applied");
         assert_eq!(repository.state(), git2::RepositoryState::Clean);
     }
+}
+
+#[test]
+fn cancellation_after_a_fully_released_resolution_stays_terminal() {
+    let base = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Document\"\n---\n\nbase\n";
+    let (root, data, service, operation, _, _) = resolution_fixture(&[(
+        "docs/document.md",
+        base,
+        &base.replace("base", "local"),
+        &base.replace("base", "incoming"),
+    )]);
+    let inspection = service
+        .inspect_synchronization_recovery(root.path(), operation)
+        .unwrap();
+    let attempt = ResolveSynchronizationRequest::new(
+        root.path().into(),
+        operation,
+        OperationId::new(),
+        inspection.observation,
+        vec![(
+            inspection.paths[0].token.clone(),
+            RedactedConflictBytes::from_bytes(base.replace("base", "resolved").into_bytes()),
+        )],
+        None,
+    );
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::ResolutionAfterIndexLockRetirement);
+    assert!(service.resolve_synchronization(attempt).is_err());
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    service
+        .cancel_remote_operation(root.path(), operation)
+        .unwrap();
+    assert!(matches!(
+        service
+            .restart_remote_synchronization(root.path(), operation, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Replay(_)
+    ));
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(cancellation_state(&db, operation).0, "cancelled");
 }
 
 /// Cycle 05 cancellation is unchanged for an operation without a pending

@@ -4,14 +4,16 @@ use git2::{Config, Repository, Signature, Time, WorktreeAddOptions};
 #[cfg(unix)]
 use manyhands::repository::OwnedPathBoundary;
 use manyhands::repository::{
-    AuthoringKind, AuthoringTarget, CommentPublicationState, CommentSubmissionOutcome,
-    ContextIntent, ContextProvisionOutcome, DocumentDraft, EnableRepositoryOutcome,
-    EnableRepositoryRequest, ExpectedPathObservation, ExternalChangeExpectation, FailurePoint,
-    LocalCheckpoint, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-    SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
+    AuthoringKind, AuthoringTarget, CommentIndexingState, CommentPublicationState,
+    CommentSubmissionOutcome, ContextIntent, ContextProvisionOutcome, DocumentDraft,
+    EnableRepositoryOutcome, EnableRepositoryRequest, ExpectedPathObservation,
+    ExternalChangeExpectation, FailurePoint, LocalCheckpoint, RepositoryErrorKind,
+    RepositoryOperation, RepositoryService, SaveDocumentRequest, SaveOutcome, SaveTicketRequest,
+    SubmitCommentRequest, TicketDraft,
 };
 
 mod support;
+use support::comment_publication::TestCommentSession;
 
 #[cfg(unix)]
 static OWNED_PATH_HOOK_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
@@ -4373,7 +4375,7 @@ fn comment_document_root_writes_only_its_path_and_checkpoints() {
     let (context, commit_oid, publication) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Document,
                 support::document_id(),
@@ -4398,7 +4400,9 @@ fn comment_document_root_writes_only_its_path_and_checkpoints() {
     let repository = Repository::open(&context.worktree).unwrap();
     assert!(matches!(
         publication,
-        CommentPublicationState::PublishPending
+        CommentPublicationState::Pending {
+            reason: manyhands::repository::CommentPublicationPendingReason::NoPublicationRemote
+        }
     ));
     assert_eq!(
         repository.find_commit(commit_oid).unwrap().message(),
@@ -4427,7 +4431,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
     let (context, _, _) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Ticket,
                 support::ticket_id(),
@@ -4459,7 +4463,7 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
     let (reply_context, _, publication) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Ticket,
                 support::ticket_id(),
@@ -4472,7 +4476,19 @@ fn comment_ticket_reply_validates_parent_and_defers_configured_publication() {
     );
     let source = fs::read_to_string(comment_path(&reply_context, &support::reply_id())).unwrap();
     assert_eq!(context.worktree, reply_context.worktree);
-    assert!(matches!(publication, CommentPublicationState::SyncDeferred));
+    let CommentPublicationState::Pending {
+        reason: manyhands::repository::CommentPublicationPendingReason::Synchronization(error),
+    } = publication
+    else {
+        panic!("configured publication must attempt transport");
+    };
+    let manyhands::repository::SynchronizationError::Transport(error) = *error else {
+        panic!("typed transport recovery");
+    };
+    assert_eq!(
+        error.kind,
+        manyhands::repository::transport::SshTransportErrorKind::RuntimeUninitialized
+    );
     assert!(matches!(
         manyhands::canonical::parse_item(&comment_relative_path(&support::ticket_id(), &support::reply_id()), &source),
         Ok(manyhands::canonical::CanonicalItem::Comment(comment))
@@ -4502,8 +4518,12 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
             operation_id,
         )
     };
-    let (context, commit_oid, _) =
-        saved_comment(enabled.service.submit_comment(request()).unwrap());
+    let (context, commit_oid, _) = saved_comment(
+        enabled
+            .service
+            .submit_comment_with_test_session(request())
+            .unwrap(),
+    );
     let path = comment_path(&context, &support::root_comment_id());
     let created_at = match manyhands::canonical::parse_item(
         &comment_relative_path(&support::document_id(), &support::root_comment_id()),
@@ -4515,7 +4535,10 @@ fn comment_exact_retry_retains_timestamp_checkpoints_pending_then_noops() {
         _ => unreachable!(),
     };
 
-    let outcome = enabled.service.submit_comment(request()).unwrap();
+    let outcome = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
     assert!(matches!(
         outcome,
         CommentSubmissionOutcome::Saved {
@@ -4635,7 +4658,10 @@ fn comment_rejects_invalid_target_parent_and_conflicting_id_without_mutation() {
         };
         let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
         assert!(
-            enabled.service.submit_comment(request).is_err(),
+            enabled
+                .service
+                .submit_comment_with_test_session(request)
+                .is_err(),
             "{case} must reject"
         );
         assert_eq!(
@@ -4672,15 +4698,19 @@ fn comment_rejects_symlinked_parent_without_writing_outside_context() {
     symlink(external.path(), &parent).unwrap();
     let before = rejection_state(&fixture, &enabled.service, &context, &[&parent]);
 
-    let error = comment_error(enabled.service.submit_comment(comment_request(
-        &fixture.root,
-        AuthoringKind::Document,
-        support::document_id(),
-        ContextIntent::Edit,
-        support::root_comment_id(),
-        None,
-        "Body\n",
-    )));
+    let error = comment_error(
+        enabled
+            .service
+            .submit_comment_with_test_session(comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            )),
+    );
     assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
     assert!(
         !external
@@ -4751,7 +4781,7 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     let CommentSubmissionOutcome::Saved {
         checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
         ..
-    } = failing.submit_comment(request()).unwrap()
+    } = failing.submit_comment_with_test_session(request()).unwrap()
     else {
         panic!("comment commit must retain refresh recovery");
     };
@@ -4783,7 +4813,10 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
             ],
         ),
     );
-    let outcome = enabled.service.submit_comment(request()).unwrap();
+    let outcome = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
     assert!(matches!(
         outcome,
         CommentSubmissionOutcome::Saved {
@@ -4797,10 +4830,15 @@ fn recovery_comment_registry_failure_preserves_live_index_and_retries() {
     );
     let after_retry = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     assert_retry_only_updates_registry(&after_failure, &after_retry);
-    assert_registry_refresh_is_the_only_row_change(
-        &after_failure.registry_rows,
-        &after_retry.registry_rows,
-    );
+    // Compound replay finishes discovery instead of merely invalidating it.
+    assert_eq!(after_failure.registry_rows, after_retry.registry_rows);
+    let snapshot = enabled.service.repository_snapshot(&fixture.root).unwrap();
+    assert!(!snapshot.refresh_required);
+    assert!(snapshot.items.iter().any(|item| {
+        item.comments
+            .iter()
+            .any(|comment| comment.id == support::root_comment_id())
+    }));
 }
 
 /// Two calls under one operation ID can run at once. A comment whose
@@ -4841,10 +4879,14 @@ fn a_comment_s_row_another_call_is_indexing_under_is_left_as_it_is() {
     };
     let failing = support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
         .open_service(enabled.data_directory.path());
-    let CommentSubmissionOutcome::IndexPending {
+    let CommentSubmissionOutcome::Saved {
         checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+        indexing: CommentIndexingState {
+            local_pending: true,
+            ..
+        },
         ..
-    } = failing.submit_comment(request()).unwrap()
+    } = failing.submit_comment_with_test_session(request()).unwrap()
     else {
         panic!("the comment is committed and its hand-off is owed");
     };
@@ -4853,12 +4895,19 @@ fn a_comment_s_row_another_call_is_indexing_under_is_left_as_it_is() {
         &operation_id.to_string(),
     );
 
-    let beside = enabled.service.submit_comment(request()).unwrap();
+    let beside = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
 
     assert!(matches!(
         beside,
-        CommentSubmissionOutcome::IndexPending {
+        CommentSubmissionOutcome::Saved {
             checkpoint: LocalCheckpoint::NoChange,
+            indexing: CommentIndexingState {
+                local_pending: true,
+                ..
+            },
             ..
         }
     ));
@@ -4871,9 +4920,16 @@ fn a_comment_s_row_another_call_is_indexing_under_is_left_as_it_is() {
     // The other call died: the same operation takes the hand-off up.
     owner.die();
     assert!(matches!(
-        enabled.service.submit_comment(request()).unwrap(),
+        enabled
+            .service
+            .submit_comment_with_test_session(request())
+            .unwrap(),
         CommentSubmissionOutcome::Saved {
             checkpoint: LocalCheckpoint::NoChange,
+            indexing: CommentIndexingState {
+                local_pending: false,
+                ..
+            },
             ..
         }
     ));
@@ -4927,7 +4983,7 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     };
     let outcome = enabled
         .service
-        .submit_comment_with_identity_config_for_testing(request(), &effective)
+        .submit_comment_with_test_identity(request(), &effective)
         .unwrap();
     assert!(matches!(
         outcome,
@@ -4954,7 +5010,7 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
         .open_service(enabled.data_directory.path());
     assert_eq!(
-        comment_error(failing.submit_comment(request())).kind,
+        comment_error(failing.submit_comment_with_test_session(request())).kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert!(path.is_file());
@@ -4978,7 +5034,10 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
         manyhands::canonical::CanonicalItem::Comment(comment) => comment.created_at,
         _ => unreachable!(),
     };
-    let retry_outcome = enabled.service.submit_comment(request()).unwrap();
+    let retry_outcome = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
     assert!(matches!(
         &retry_outcome,
         CommentSubmissionOutcome::Saved {
@@ -5058,15 +5117,19 @@ fn comment_rejects_any_existing_context_problem_without_mutation() {
     let path = comment_path(&context, &support::root_comment_id());
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
 
-    let error = comment_error(enabled.service.submit_comment(comment_request(
-        &fixture.root,
-        AuthoringKind::Document,
-        support::document_id(),
-        ContextIntent::Edit,
-        support::root_comment_id(),
-        None,
-        "Body\n",
-    )));
+    let error = comment_error(
+        enabled
+            .service
+            .submit_comment_with_test_session(comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            )),
+    );
     assert_eq!(error.kind, RepositoryErrorKind::MissingAuthoringTarget);
     assert!(!path.parent().unwrap().exists());
     assert_eq!(
@@ -5076,7 +5139,7 @@ fn comment_rejects_any_existing_context_problem_without_mutation() {
 }
 
 #[test]
-fn comment_missing_registration_returns_refresh_pending_then_retries_only_invalidation() {
+fn comment_missing_registration_repairs_discovery_without_another_checkpoint() {
     let fixture = support::born_repository();
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
@@ -5108,7 +5171,10 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
         context,
         checkpoint,
         ..
-    } = enabled.service.submit_comment(request()).unwrap()
+    } = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap()
     else {
         panic!("a changed comment with no registration must retain its checkpoint OID");
     };
@@ -5129,7 +5195,10 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
             .unwrap(),
         EnableRepositoryOutcome::AlreadyEnabled
     ));
-    let outcome = enabled.service.submit_comment(request()).unwrap();
+    let outcome = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
     assert!(matches!(
         outcome,
         CommentSubmissionOutcome::Saved {
@@ -5141,7 +5210,7 @@ fn comment_missing_registration_returns_refresh_pending_then_retries_only_invali
         support::head_commit(&Repository::open(context.worktree).unwrap()),
         Some(commit_oid)
     );
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(registry_refresh_required(&enabled.service), 0);
 }
 
 #[test]
@@ -5184,13 +5253,16 @@ fn recovery_comment_before_item_write_preserves_absent_parent_and_retries() {
     };
 
     assert_eq!(
-        comment_error(failing.submit_comment(request())).kind,
+        comment_error(failing.submit_comment_with_test_session(request())).kind,
         RepositoryErrorKind::InjectedFailure
     );
     assert!(!path.parent().unwrap().exists());
     let failure_state = rejection_state(&fixture, &enabled.service, &context, &[&path]);
     assert_eq!(failure_state, before);
-    let retry_outcome = enabled.service.submit_comment(request()).unwrap();
+    let retry_outcome = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap();
     assert!(matches!(
         &retry_outcome,
         CommentSubmissionOutcome::Saved {
@@ -5245,7 +5317,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
     let (ticket_context, ticket_commit, ticket_publication) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Ticket,
                 support::ticket_id(),
@@ -5258,7 +5330,9 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
     );
     assert!(matches!(
         ticket_publication,
-        CommentPublicationState::PublishPending
+        CommentPublicationState::Pending {
+            reason: manyhands::repository::CommentPublicationPendingReason::NoPublicationRemote
+        }
     ));
     assert_eq!(
         Repository::open(&ticket_context.worktree)
@@ -5272,7 +5346,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
     let (document_context, _, _) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Document,
                 support::document_id(),
@@ -5286,7 +5360,7 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
     let (reply_context, reply_commit, reply_publication) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Document,
                 support::document_id(),
@@ -5300,7 +5374,9 @@ fn comment_root_ticket_and_reply_document_have_expected_checkpoint_and_publicati
     assert_eq!(document_context.worktree, reply_context.worktree);
     assert!(matches!(
         reply_publication,
-        CommentPublicationState::PublishPending
+        CommentPublicationState::Pending {
+            reason: manyhands::repository::CommentPublicationPendingReason::NoPublicationRemote
+        }
     ));
     assert_eq!(
         Repository::open(&reply_context.worktree)
@@ -5347,15 +5423,19 @@ fn comment_rejects_a_valid_same_id_comment_at_another_canonical_path() {
     let path = comment_path(&context, &support::root_comment_id());
     let before = rejection_state(&fixture, &enabled.service, &context, &[&path, &conflicting]);
 
-    let error = comment_error(enabled.service.submit_comment(comment_request(
-        &fixture.root,
-        AuthoringKind::Document,
-        support::document_id(),
-        ContextIntent::Edit,
-        support::root_comment_id(),
-        None,
-        "Body\n",
-    )));
+    let error = comment_error(
+        enabled
+            .service
+            .submit_comment_with_test_session(comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            )),
+    );
     assert_eq!(error.kind, RepositoryErrorKind::OccupiedItemPath);
     assert_eq!(
         rejection_state(&fixture, &enabled.service, &context, &[&path, &conflicting]),
@@ -5861,11 +5941,7 @@ fn saved_comment(
             context,
             checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
             publication,
-        }
-        | CommentSubmissionOutcome::IndexPending {
-            context,
-            checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
-            publication,
+            ..
         } => (context, commit_oid, publication),
         _ => panic!("comment submission must create a checkpoint"),
     }
@@ -5890,8 +5966,8 @@ fn ticket_error(
 }
 
 fn comment_error(
-    result: Result<CommentSubmissionOutcome, manyhands::repository::RepositoryError>,
-) -> manyhands::repository::RepositoryError {
+    result: Result<CommentSubmissionOutcome, manyhands::repository::CommentSubmissionError>,
+) -> manyhands::repository::CommentSubmissionError {
     match result {
         Ok(_) => panic!("comment submission unexpectedly succeeded"),
         Err(error) => error,
@@ -6236,8 +6312,8 @@ fn operation_record_rows(
         .unwrap()
 }
 
-fn assert_redacted_authoring_failure(
-    error: &manyhands::repository::RepositoryError,
+fn assert_redacted_authoring_failure<E: std::fmt::Debug + std::fmt::Display>(
+    error: &E,
     service: &RepositoryService,
     forbidden: &[&str],
 ) {
@@ -6854,7 +6930,7 @@ fn assert_stale_comment_creation(fixture: support::TestRepository) {
     );
     request.expected_destination = ExpectedPathObservation::Missing;
 
-    let error = comment_error(enabled.service.submit_comment(request));
+    let error = comment_error(enabled.service.submit_comment_with_test_session(request));
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     let diagnostic = error.external_change().unwrap();
     assert_eq!(diagnostic.root, fixture.root.canonicalize().unwrap());
@@ -7330,7 +7406,7 @@ fn comment_file_names_the_checkpoint_identity_as_created_by() {
     let (context, commit_oid, _) = saved_comment(
         enabled
             .service
-            .submit_comment(comment_request(
+            .submit_comment_with_test_session(comment_request(
                 &fixture.root,
                 AuthoringKind::Document,
                 support::document_id(),
@@ -7413,7 +7489,7 @@ fn assert_comment_retry_keeps_its_file(second_identity: Option<(&str, &str)>) {
     let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
         .open_service(enabled.data_directory.path());
     assert_eq!(
-        comment_error(failing.submit_comment(request())).kind,
+        comment_error(failing.submit_comment_with_test_session(request())).kind,
         RepositoryErrorKind::InjectedFailure
     );
     let written = fs::read(&path).unwrap();
@@ -7430,7 +7506,12 @@ fn assert_comment_retry_keeps_its_file(second_identity: Option<(&str, &str)>) {
     }
 
     // Not `OccupiedItemPath`: the file is this operation's own.
-    let (_, commit_oid, _) = saved_comment(enabled.service.submit_comment(request()).unwrap());
+    let (_, commit_oid, _) = saved_comment(
+        enabled
+            .service
+            .submit_comment_with_test_session(request())
+            .unwrap(),
+    );
 
     assert_eq!(fs::read(&path).unwrap(), written);
     let retried = written_comment(&path);
