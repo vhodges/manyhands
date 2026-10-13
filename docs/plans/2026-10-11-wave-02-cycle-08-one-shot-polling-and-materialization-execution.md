@@ -876,3 +876,116 @@ seven owned Rust/test files, this ledger, the ticket and its two new comments.
 `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` successfully validated/rendered
 the open ticket and all ten canonical comments, including both new Node ULIDs.
 Final diff/recent log were inspected and `git diff --check` passed.
+
+## Task 3 Independent Reviews And Atomic-Absence Correction — 2026-10-13
+
+Controller reports review of Task 3 range
+`6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a..dc96f0b71fad8bba911f349bbf53140864b81d1b`:
+
+- Spec `ses_ec9b35ee6ffeBdb0HkkfCCp9R4`: passed.
+- Quality `ses_ec9b0a1d9ffeWP162PBxjUK6l4`: **blocked, Important**. Initially
+  absent tracking destinations use `reference(..., false, ...)`, which has a
+  check-to-lock race against external Git. Fix before Task 4; new local commit,
+  no amendment. No guard-contract or design amendment is needed.
+
+Resumed inside the same assigned worktree/branch, clean fix base
+`dc96f0b71fad8bba911f349bbf53140864b81d1b`; no fresh fetch/rebase. Loaded receiving
+code review and applied the existing systematic-debugging/TDD instructions.
+
+### Locked Backend Investigation
+
+Verified the actual Cargo registry source, `git2 0.20.4` and
+`libgit2-sys 0.18.8+1.9.7`, rather than assuming force=false is atomic:
+
+- git2 `repo.rs:1509–1517` calls `git_reference_create`; libgit2 `refs.c:487–495`
+  delegates with NULL `old_id`. `refdb_fs.c:1112–1125` checks existence before
+  `refdb_fs_backend__write` takes `loose_lock` at 1613. `cmp_old_ref:1521–1523`
+  skips comparison for NULL. A Git creator after that check can be replaced.
+- `reference_matching` passes a non-NULL expected OID through
+  `git_reference_create_matching` unchanged (`repo.rs:1564–1571`,
+  `refs.c:480–481`). The filesystem backend takes the ref lock before
+  `write_tail:1634` calls `cmp_old_ref`. That comparator accepts lookup NotFound
+  only when the supplied expected OID is zero (`1525–1527`); existing direct
+  values or symbolic types differ and return Modified without committing.
+- The force bit must be true to bypass the non-atomic preliminary existence
+  check, **not** to bypass the expected-value comparison under the ref lock.
+  The existing Some(old) path already uses this bit with a nonzero expectation.
+  A zero expectation therefore represents atomic absence for valid Git refs.
+
+### Focused RED Before Guard Behavior — 2026-10-13T17:37:20Z
+
+Extracted the existing match unchanged into `write_tracking_tip`; caller still
+validates every commit and destination before any write. Two real local-ref
+primitive tests use the public git2 Transaction lock and external Git with system
+and global configuration excluded, no sleeps, test hooks or simulated transport.
+
+`devenv shell -- cargo test --locked --lib transport_absent_tracking_guard`
+exited 101: **0 passed, 2 failed, 529 filtered**. The lock test captures absence,
+creates a competing ref using external `git update-ref`, holds its public ref
+lock, then invokes the unchanged primitive. Expected Locked, got Exists. The
+other test expected under-lock Modified after competing creation, got Exists.
+These errors distinguish the best-effort pre-lock check from the required locked
+CAS path. The test does not claim to pause inside C between instructions; the
+locked source analysis plus deterministic lock/compare-path assertions prove the
+chosen atomic primitive. Competing OID/reflog preservation, release/retry, real
+absence success and direct/same-OID/packed/symbolic variants are also asserted.
+The correction starts only after this recorded RED.
+
+### Atomic-Absence Fix And GREEN — 2026-10-13T18:13:46Z
+
+The shared local writer now always uses `reference_matching`, retaining the
+captured OID for an existing destination and supplying `Oid::zero()` for captured
+absence. `force=true` skips only the preliminary best-effort existence check;
+the locked backend still compares the supplied expectation under its ref lock.
+No unguarded write is introduced. The all-tips commit/old-value validation loop
+stays before the first write; later guarded failures still retain valid earlier
+tracking observations and return ProtocolFailure. Existing Some(old) behavior
+and all mapping/observation/stop code are unchanged.
+
+Sequential Devenv evidence:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | PASS |
+| `devenv shell -- cargo test --locked --lib transport_absent_tracking_guard` | GREEN: 2 passed, 529 filtered (after RED 0 passed/2 failed) |
+| `devenv shell -- cargo test --locked --lib transport` | PASS: 33 passed, 498 filtered |
+| `devenv shell -- cargo test --locked --test ssh_transport poll_` | PASS: 9 real-SSH cases, including initial-absence race, validate-all-before-first-write and permitted partial failure |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_` | PASS: 7 real-SSH cases, shared-writer compatibility |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS after test-only range-pattern correction |
+| `devenv shell -- cargo test --all-features --locked` | PASS: 1,608 passed, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS: exit 0, no window |
+| `timeout --signal=TERM 90s devenv shell -- cargo run --locked --features desktop --bin manyhands` | Built in 6.48 s, reached Running, no startup diagnostic, bounded timeout stop; no visual interaction claim |
+
+The first Clippy gate flagged the new test's `0 | 1 | 2` pattern; changed only
+that pattern to `0..=2`, then check/fmt/Clippy passed and the full gate ran once.
+No production trial failure after the recorded RED. No duplicate broad test run.
+Full log: `tool_1365d606d001URFdZV4VOOZeUU`. Counts: **531 library** (+2 fix
+regressions), **779 ordinary integration**, **289 real-SSH** (41 comment, 25
+merge, 15 observation, 63 synchronization, 31 fixture, 114 transport), **9
+compile-fail doctests**. Both binary targets have zero tests; the existing
+thousand-item characterization remains ignored. All existing SSH cases passed
+without edits. Real transport assertions remain in real-SSH targets; new unit
+tests claim only local reference primitive/lock behavior and backend semantics.
+
+Lock hashes still match the previous checkpoint: Cargo.lock
+`8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`, devenv.lock
+`d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`.
+
+Self-reviewed the base-to-fix diff against the Important finding and source
+semantics. The blocker is technically corrected with RED/GREEN evidence;
+independent quality re-review remains pending and is not implied by this entry.
+New local commit `fix: guard absent tracking refs atomically` from fix base
+`dc96f0b71fad8bba911f349bbf53140864b81d1b`; its exact head/range is returned after
+commit. Full Task 3 re-review starts at `6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a`.
+Only remote.rs and canonical ledger/ticket/two fix comments change.
+Comments `01M4V5E6NFNSBJQM0FDDG8DVRK` and `01M4V7GXPAC24SSPC0WXW6BAEF` record
+review, investigation, RED and GREEN. Task 2's direct-SQL kind-immutability minor
+remains explicitly deferred; Task 1's corrupt-time minor remains resolved.
+Native matrix remains pending. Ticket stays open and Task 4 remains unstarted.
+
+Final `git diff --check` passed; status/full diff/recent log inspected before
+staging only those five intended files. `scripts/show-ticket
+01K7F6H9J2N4Q6S8V0X2Z4B6DG` successfully validated/rendered the open ticket and
+all twelve canonical comments, including both Node-generated fix ULIDs.

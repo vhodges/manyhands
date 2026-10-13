@@ -621,17 +621,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 super::operation_tests::checkpoint(
                     super::operation_tests::Checkpoint::BeforeTrackingWrite,
                 );
-                match old {
-                    Some(old) => repository.reference_matching(
-                        &destination,
-                        oid,
-                        true,
-                        old,
-                        "manyhands exact fetch",
-                    ),
-                    None => repository.reference(&destination, oid, false, "manyhands exact fetch"),
-                }
-                .map_err(|_| {
+                write_tracking_tip(repository, &destination, oid, old).map_err(|_| {
                     self.context
                         .with_kind(SshTransportErrorKind::ProtocolFailure)
                 })?;
@@ -759,6 +749,27 @@ fn tracking_oid(
     }
 }
 
+// Object/all-destination validation stays in the caller. In locked libgit2
+// 1.9.7, force=false checks existence BEFORE the ref lock. A non-NULL zero OID
+// instead requires absence in cmp_old_ref UNDER that lock. force=true skips
+// only the preliminary existence check; the expected-value guard still applies.
+fn write_tracking_tip(
+    repository: &git2::Repository,
+    destination: &str,
+    oid: git2::Oid,
+    old: Option<git2::Oid>,
+) -> Result<(), git2::Error> {
+    repository
+        .reference_matching(
+            destination,
+            oid,
+            true,
+            old.unwrap_or_else(git2::Oid::zero),
+            "manyhands exact fetch",
+        )
+        .map(|_| ())
+}
+
 fn poll_mappings(plan: &RemoteRefPlan, advertised: &[(String, git2::Oid)]) -> Vec<String> {
     use crate::repository::remote::RemoteRefClassification;
     advertised
@@ -800,6 +811,153 @@ fn poll_mappings_match_scope(
 mod tests {
     use super::*;
     use std::str::FromStr;
+    fn tracking_commit(repository: &git2::Repository, message: &str) -> git2::Oid {
+        let tree = repository.treebuilder(None).unwrap().write().unwrap();
+        let tree = repository.find_tree(tree).unwrap();
+        let signature =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        repository
+            .commit(None, &signature, &signature, message, &tree, &[])
+            .unwrap()
+    }
+    fn external_git(root: &std::path::Path, args: &[&str]) {
+        assert!(
+            std::process::Command::new("git")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", root.join("absent-config"))
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-C"
+                ])
+                .arg(root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn transport_absent_tracking_guard_locks_before_comparing_concurrent_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = git2::Repository::init(directory.path()).unwrap();
+        repository
+            .config()
+            .unwrap()
+            .set_bool("core.logallrefupdates", true)
+            .unwrap();
+        let incoming = tracking_commit(&repository, "incoming");
+        let competing = tracking_commit(&repository, "competing");
+        let name = "refs/remotes/origin/concurrent";
+        let captured = tracking_oid(&repository, name).unwrap();
+        assert_eq!(captured, None);
+        // External Git commits the competing creation; an independent git2
+        // handle then holds the public ref lock. This distinguishes lock+CAS
+        // from a pre-lock check without timing the backend's instructions.
+        external_git(
+            directory.path(),
+            &["update-ref", name, &competing.to_string()],
+        );
+        let external = git2::Repository::open(directory.path()).unwrap();
+        let mut lock = external.transaction().unwrap();
+        lock.lock_ref(name).unwrap();
+        let bytes = std::fs::read(repository.path().join(name)).unwrap();
+        let log = std::fs::read(repository.path().join("logs").join(name)).unwrap();
+        assert_eq!(
+            write_tracking_tip(&repository, name, incoming, captured)
+                .unwrap_err()
+                .code(),
+            git2::ErrorCode::Locked
+        );
+        assert_eq!(std::fs::read(repository.path().join(name)).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(repository.path().join("logs").join(name)).unwrap(),
+            log
+        );
+        drop(lock);
+        // After release it must reach the under-lock old-value comparison,
+        // reject the captured absence as Modified, and retain the competitor.
+        assert_eq!(
+            write_tracking_tip(&repository, name, incoming, captured)
+                .unwrap_err()
+                .code(),
+            git2::ErrorCode::Modified
+        );
+        assert_eq!(repository.refname_to_id(name).unwrap(), competing);
+        assert_eq!(std::fs::read(repository.path().join(name)).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(repository.path().join("logs").join(name)).unwrap(),
+            log
+        );
+        assert!(!repository.path().join(format!("{name}.lock")).exists());
+        assert!(!repository.path().join("FETCH_HEAD").exists());
+        // True absence remains a successful guarded create.
+        write_tracking_tip(&repository, "refs/remotes/origin/new", incoming, None).unwrap();
+        assert_eq!(
+            repository.refname_to_id("refs/remotes/origin/new").unwrap(),
+            incoming
+        );
+    }
+
+    #[test]
+    fn transport_absent_tracking_guard_rejects_direct_packed_and_symbolic_competitors() {
+        for mode in 0..4 {
+            let directory = tempfile::tempdir().unwrap();
+            let repository = git2::Repository::init(directory.path()).unwrap();
+            let incoming = tracking_commit(&repository, "incoming");
+            let competing = tracking_commit(&repository, "competing");
+            let name = "refs/remotes/origin/concurrent";
+            let captured = tracking_oid(&repository, name).unwrap();
+            assert_eq!(captured, None);
+            match mode {
+                0..=2 => {
+                    let target = if mode == 1 { incoming } else { competing };
+                    repository
+                        .reference(name, target, false, "external creation")
+                        .unwrap();
+                    if mode == 2 {
+                        external_git(directory.path(), &["pack-refs", "--all"]);
+                        assert!(!repository.path().join(name).exists());
+                    }
+                }
+                _ => {
+                    repository
+                        .reference("refs/remotes/origin/other", competing, false, "fixture")
+                        .unwrap();
+                    repository
+                        .reference_symbolic(
+                            name,
+                            "refs/remotes/origin/other",
+                            false,
+                            "external creation",
+                        )
+                        .unwrap();
+                }
+            }
+            let reference = repository.find_reference(name).unwrap();
+            let target = reference.target();
+            let symbolic = reference.symbolic_target().map(str::to_owned);
+            let reflog_len = repository.reflog(name).map(|log| log.len()).ok();
+            assert_eq!(
+                write_tracking_tip(&repository, name, incoming, captured)
+                    .unwrap_err()
+                    .code(),
+                git2::ErrorCode::Modified
+            );
+            let reference = repository.find_reference(name).unwrap();
+            assert_eq!(reference.target(), target);
+            assert_eq!(reference.symbolic_target(), symbolic.as_deref());
+            assert_eq!(
+                repository.reflog(name).map(|log| log.len()).ok(),
+                reflog_len
+            );
+            assert!(!repository.path().join(format!("{name}.lock")).exists());
+        }
+    }
     #[test]
     fn transport_poll_scope_rejects_unadvertised_or_incomplete_mappings() {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();

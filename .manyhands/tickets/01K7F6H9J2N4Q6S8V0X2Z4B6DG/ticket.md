@@ -76,8 +76,11 @@ and the baseline.
   hook; RED and corrected stop-fixture behavioral RED recorded. GREEN: 31 focused
   library, 9 poll SSH, 114 entire transport cases; four Rust checks passed
   (1,606 tests, 0 failures, 1 existing ignored). Combined frozen/automatic scope.
-- [ ] Independent Task 3 spec review.
-- [ ] Independent Task 3 quality review.
+- [x] Independent Task 3 spec review: `ses_ec9b35ee6ffeBdb0HkkfCCp9R4`, passed.
+- [ ] Independent Task 3 quality review: `ses_ec9b0a1d9ffeWP162PBxjUK6l4`,
+  blocked Important on atomic absence; correction implemented with 2-test RED/GREEN,
+  33 library/9 poll SSH/7 exact SSH GREEN and all four gates (1,608 passed,
+  1 existing ignored). Awaiting independent quality re-review.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -85,7 +88,8 @@ Task 0 is completed and independently reviewed. The owner resumed execution on
 `4c1590d73b9dbab17030670989bd8825328f1f55`. Task 1 is implemented and independently
 reviewed. Task 2 is implemented and independently reviewed. Fresh Task 3 assignment
 authorizes Task 3 only, inline, no subagents, one local commit and bookkeeping.
-Task 3 is implemented and ready for independent spec then quality review;
+Task 3 spec passed; quality identified an Important atomic-absence blocker.
+Authorized correction is implemented and verified, awaiting quality re-review;
 Tasks 4–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
