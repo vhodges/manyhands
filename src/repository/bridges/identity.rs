@@ -7,25 +7,50 @@
 //! on it or not: an identity is what enabling, and every save after it,
 //! needs first.
 //!
-//! **No journal row.** The operation is short, holds the repository lease
-//! throughout and leaves nothing half done that it can still undo: if a
-//! key cannot be written after another was, the configuration file is put
-//! back as it was, byte for byte. A process that is killed between two
-//! keys leaves the keys it wrote; nothing records that, and the next
-//! caller sees the configuration as it is.
+//! **One write, under Git's own lock.** Other programs write the same
+//! file: `git config`, `git remote add`, an editor's Git integration.
+//! They keep each other apart with `config.lock`, a file made beside the
+//! configuration file that only one of them can make, and so does this:
+//!
+//! 1. `config.lock` is made, and the call fails as `RepositoryBusy` if
+//!    it is there already. It is given the configuration file's mode.
+//! 2. The configuration file is read, now that no program that keeps to
+//!    the lock can change it, and copied to a scratch file beside it.
+//!    Git sets the keys in the scratch file. The scratch file and not
+//!    `config.lock` itself, because Git edits a configuration file by
+//!    making `<file>.lock` beside it and renaming that over the file:
+//!    done to `config.lock`, that would replace the lock this call
+//!    holds with a file of Git's making and mode.
+//! 3. What the scratch file then holds is written to `config.lock`,
+//!    which is renamed over the configuration file.
+//!
+//! So every key is set by one rename, or none is: an identity is never
+//! half set, in this process or after it is killed. Nothing is ever put
+//! back: a call that fails removes its lock and its scratch file, and
+//! the configuration file is as it was because it was never touched. A
+//! lock left by a process that died is not removed here; it is its
+//! owner's, and Git itself asks the user to remove one.
+//!
+//! **No journal row.** The operation is short and holds the repository
+//! lease throughout; with one rename there is nothing a row could
+//! record as begun and not ended.
 //!
 //! **A pending operation does not refuse it.** An operation that stopped
 //! for want of an identity is taken up again once there is one, so
 //! nothing here asks the journal anything. The lease is what keeps it
 //! apart from an operation that is running.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use git2::{Config, ConfigLevel, Repository};
 
 use super::super::{
     FailurePoint, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-    canonical, canonical_repository_root, read_bytes_if_exists, repository_lease, restore_file,
+    canonical, canonical_repository_root, repository_lease,
 };
 
 const NAME_KEY: &str = "user.name";
@@ -284,8 +309,16 @@ impl LocalIdentity {
     /// `RecoveryRequired`: Git will not set such a key, what it "holds"
     /// is not one value, and the file is the user's to put right.
     pub(crate) fn own(repository: &Repository, root: &Path) -> Result<Self, RepositoryError> {
+        let config = local_config(repository)
+            .map_err(|error| RepositoryError::git(OPERATION, Some(root.to_owned()), error))?;
+        Self::said_once(&config, root)
+    }
+
+    /// What `config`, a repository's own configuration or a copy of it,
+    /// holds of an identity, each key of which it must say at most once
+    /// and itself; see `own`.
+    fn said_once(config: &Config, root: &Path) -> Result<Self, RepositoryError> {
         let git = |error| RepositoryError::git(OPERATION, Some(root.to_owned()), error);
-        let config = local_config(repository).map_err(git)?;
         for key in [NAME_KEY, EMAIL_KEY, INITIALS_KEY] {
             let mut said = 0;
             let mut included = false;
@@ -305,7 +338,7 @@ impl LocalIdentity {
                 ));
             }
         }
-        Self::of(&config).map_err(git)
+        Self::of(config).map_err(git)
     }
 
     /// What `config` holds of an identity.
@@ -318,15 +351,123 @@ impl LocalIdentity {
     }
 }
 
+/// Git's lock on a configuration file: `<file>.lock` beside it, which
+/// only one program can make. Whoever holds it is the one writer of the
+/// file, and writes by renaming the lock over it.
+///
+/// Dropped without that, the lock is removed and the file is as it was.
+struct ConfigLock {
+    config: PathBuf,
+    lock: PathBuf,
+    /// The lock file, open, until it is renamed or removed.
+    file: Option<File>,
+    root: PathBuf,
+}
+
+impl ConfigLock {
+    /// Makes the lock of `config`, with the mode `config` has.
+    /// `RepositoryBusy` when the lock is there already: another program
+    /// is writing the file, or one died and left it.
+    fn take(config: &Path, root: &Path) -> Result<Self, RepositoryError> {
+        let io = |error| RepositoryError::io(OPERATION, Some(root.to_owned()), error);
+        let mut name = config.as_os_str().to_owned();
+        name.push(".lock");
+        let lock = PathBuf::from(name);
+        let permissions = std::fs::metadata(config).map_err(io)?.permissions();
+        let file = match File::options().write(true).create_new(true).open(&lock) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(RepositoryError::new(
+                    OPERATION,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::RepositoryBusy,
+                    "the repository's Git configuration is locked by another program",
+                ));
+            }
+            Err(error) => return Err(io(error)),
+        };
+        // From here on the lock is this call's, and is removed with it.
+        let held = Self {
+            config: config.to_owned(),
+            lock,
+            file: Some(file),
+            root: root.to_owned(),
+        };
+        // The file was made with the process's default mode; the one it
+        // replaces may be more open or more closed than that. Only Unix
+        // has a mode to keep.
+        #[cfg(unix)]
+        std::fs::set_permissions(&held.lock, permissions).map_err(io)?;
+        #[cfg(not(unix))]
+        let _ = permissions;
+        Ok(held)
+    }
+
+    /// Replaces the configuration file with `source`, by one rename of
+    /// the lock over it. On an `Err` the file is as it was.
+    fn replace(mut self, source: &[u8]) -> Result<(), RepositoryError> {
+        let root = self.root.clone();
+        let io = |error| RepositoryError::io(OPERATION, Some(root.clone()), error);
+        if let Some(mut file) = self.file.take() {
+            file.write_all(source).map_err(io)?;
+            file.sync_all().map_err(io)?;
+            // Closed before it is renamed, which Windows requires.
+        }
+        std::fs::rename(&self.lock, &self.config).map_err(io)?;
+        // The lock is gone with the rename. A lock that is there from
+        // now on is another program's, and is not this call's to remove.
+        self.lock = PathBuf::new();
+        Ok(())
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if !self.lock.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.lock);
+        }
+    }
+}
+
 impl RepositoryService {
+    /// Has `hook` run once in the next `set_local_identity` on this
+    /// service that writes, while it holds the lock on the repository's
+    /// configuration file: after the name is set in what it will write,
+    /// and before anything is put in place.
+    #[doc(hidden)]
+    pub fn set_local_identity_lock_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .identity_lock_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    fn run_identity_lock_hook(&self) {
+        let hook = self
+            .identity_lock_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     /// Writes a name and an email, and optionally initials, to the local
     /// Git configuration of the repository at `request.root`, under the
     /// repository lease. No other configuration is written.
     ///
     /// It is idempotent: a configuration that already holds what is
-    /// asked is left as it is. When a key cannot be written after
-    /// another was, the configuration file is restored to its bytes as
-    /// they were, and the error is the one that stopped the write.
+    /// asked is left as it is. Otherwise every key is set by one
+    /// replacement of the configuration file under Git's own lock on
+    /// it, or none is; see the module's description. A call that fails
+    /// has not touched the file.
+    ///
+    /// `RepositoryBusy` when the configuration file is locked;
+    /// `ExternalChange` when it does not hold what `request.expected`
+    /// says, compared under the lock; `RecoveryRequired` when it says a
+    /// key of the identity twice or in an included file.
     pub fn set_local_identity(
         &self,
         request: SetLocalIdentityRequest,
@@ -346,7 +487,12 @@ impl RepositoryService {
         if identity.held_by(&current) {
             return Ok(SetLocalIdentityOutcome::Unchanged(current));
         }
-        if expected.is_some_and(|expected| expected != current) {
+        // Asked again under the lock. Here it spares a request that is
+        // refused anyway from waiting on one.
+        if expected
+            .as_ref()
+            .is_some_and(|expected| *expected != current)
+        {
             return Err(RepositoryError::new(
                 OPERATION,
                 Some(root),
@@ -354,27 +500,61 @@ impl RepositoryService {
                 "the repository's local identity is not the one that was observed",
             ));
         }
-        let path = repository.commondir().join("config");
-        let before = read_bytes_if_exists(&path, OPERATION, &root)?;
-        let written = (|| {
-            let mut config = local_config(&repository).map_err(git)?;
-            identity.write(&mut config, &current, || {
-                self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)
-            })
-        })();
-        match written {
-            Ok(()) => Ok(SetLocalIdentityOutcome::Changed(
-                identity.written_over(&current),
-            )),
-            Err(original) => match restore_file(&path, before.as_deref()) {
-                Ok(()) => Err(original),
-                Err(restoration) => Err(RepositoryError::with_source(
-                    OPERATION,
-                    Some(root),
-                    RepositoryErrorKind::RollbackIncomplete,
-                    restoration,
-                )),
-            },
+        let changed = || {
+            RepositoryError::new(
+                OPERATION,
+                Some(root.clone()),
+                RepositoryErrorKind::ExternalChange,
+                "the repository's local identity is not the one that was observed",
+            )
+        };
+        let io = |error| RepositoryError::io(OPERATION, Some(root.clone()), error);
+        let directory = repository.commondir();
+        let path = directory.join("config");
+        let lock = ConfigLock::take(&path, &root)?;
+        // No program that keeps to the lock changes the file from here
+        // on. What it holds now is what is edited: a change to any other
+        // key that landed before the lock is kept.
+        let source = std::fs::read(&path).map_err(io)?;
+        // Beside the file, so that what it includes is found from the
+        // copy as it is from the file. The handle is let go before Git
+        // replaces the copy by name.
+        let scratch = tempfile::Builder::new()
+            .prefix("manyhands-identity-")
+            .tempfile_in(directory)
+            .map_err(io)?
+            .into_temp_path();
+        std::fs::write(&scratch, &source).map_err(io)?;
+        let mut config = Config::open(&scratch).map_err(git)?;
+        let locked = LocalIdentity::said_once(&config, &root)?;
+        if identity.held_by(&locked) {
+            return Ok(SetLocalIdentityOutcome::Unchanged(locked));
         }
+        if expected.is_some_and(|expected| expected != locked) {
+            return Err(changed());
+        }
+        identity.write(&mut config, &locked, || {
+            self.run_identity_lock_hook();
+            self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)
+        })?;
+        // What Git gives back of what it was given, which is what the
+        // repository will hold.
+        let written = LocalIdentity::of(&Config::open(&scratch).map_err(git)?).map_err(git)?;
+        if written != identity.written_over(&locked) {
+            return Err(RepositoryError::new(
+                OPERATION,
+                Some(root),
+                RepositoryErrorKind::InvalidIdentity,
+                "the repository's Git configuration does not give the identity back as given",
+            ));
+        }
+        let edited = std::fs::read(&scratch).map_err(io)?;
+        // Immediately before the rename: a program that does not keep to
+        // the lock has not written the file meanwhile.
+        if std::fs::read(&path).map_err(io)? != source {
+            return Err(changed());
+        }
+        lock.replace(&edited)?;
+        Ok(SetLocalIdentityOutcome::Changed(written))
     }
 }

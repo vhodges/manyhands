@@ -941,8 +941,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // operation it names did is that operation's request's to say.
         Some(Command::OperationResume) => Recorded::nothing(),
         // An identity has no operation either: this is not reached, and
-        // nothing is claimed. A call that could not put the
-        // configuration file back says so in its own answer.
+        // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),

@@ -294,6 +294,9 @@ pub struct RepositoryService {
     /// request's domain call.
     request_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     acceptance_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// What a test runs in `set_local_identity` while it holds the lock
+    /// on the repository's configuration file.
+    identity_lock_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// What the request records read the time from.
     clock: Arc<dyn mutation::Clock>,
 }
@@ -869,9 +872,9 @@ pub enum FailurePoint {
     /// held by another writer past the wait would have it fail. Nothing
     /// is compared, changed or recorded.
     BeforeKeyRegistryChange,
-    /// `set_local_identity`, after the name is written to the
-    /// repository's own configuration and before the email is: the call
-    /// fails there, and puts the configuration file back as it was.
+    /// `set_local_identity`, after the name is set in what it will
+    /// write and before the email is: the call fails there, with the
+    /// repository's configuration file never touched.
     AfterLocalIdentityName,
 }
 
@@ -3509,6 +3512,7 @@ impl RepositoryService {
             rebuild_error_hook: Mutex::new(None),
             request_hook: Mutex::new(None),
             acceptance_hook: Mutex::new(None),
+            identity_lock_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
         })
     }

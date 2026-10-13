@@ -112,8 +112,8 @@ impl Command {
             // its own ID, in its own journal, and the resume's record
             // holds none.
             Self::OperationResume => false,
-            // A few keys of Git configuration, written under the
-            // repository lease and put back if one of them fails: no
+            // A few keys of Git configuration, set by one replacement
+            // of the file under the repository lease, or not at all: no
             // operation ID and no row. What shows the work to be done
             // is the configuration itself.
             Self::RepoIdentitySet => false,

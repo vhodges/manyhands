@@ -13,9 +13,10 @@
 //! it to act nor changes it.
 //!
 //! **No operation and no row.** `set_local_identity` holds the repository
-//! lease, writes at most three keys and puts the configuration file back
-//! if one of them fails. Nothing records that it began. What says a
-//! request's work is done is the configuration itself:
+//! lease and sets every key by one replacement of the configuration
+//! file, under Git's own lock on it, or sets none. Nothing records that
+//! it began, and nothing of it is ever half done. What says a request's
+//! work is done is the configuration itself:
 //!
 //! - it holds what the request asks: the request's end state holds, by
 //!   its own work or another's, and a retry is a no-op. A request whose
@@ -24,10 +25,9 @@
 //! - it holds what was previewed: nothing of the request has been done,
 //!   and the domain is called;
 //! - it holds anything else: what is there is not what was shown, and
-//!   the answer is `external_change`. That is also the answer to a
-//!   process killed between two keys, whose own partial write is then
-//!   what is there: a new preview shows it, and a new request completes
-//!   it.
+//!   the answer is `external_change`. A request's own work is never
+//!   what is there in part: a call that failed, or a process that was
+//!   killed, left the file as it was.
 //!
 //! The comparison with the preview is what keeps a late retry from
 //! writing its identity over a later one. It is the consent's own
@@ -182,10 +182,12 @@ impl RepoIdentityBinding {
 
     /// The one domain call, and what it came to.
     ///
-    /// A call that fails has written nothing, or has put the file back.
-    /// The call that accepted the request is then refused and its record
-    /// released. A later call of the request keeps the record: it is the
-    /// request's, and the same request is what goes on.
+    /// A call that fails has not touched the configuration file: it is
+    /// replaced whole or not at all. The call that accepted the request
+    /// is then refused and its record released. A later call of the
+    /// request keeps the record: it is the request's, and the same
+    /// request is what goes on. So it is for a configuration file that
+    /// another program has locked, which is `busy`.
     fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
         let result = service.set_local_identity(SetLocalIdentityRequest {
             root: accepted.root(),
@@ -203,31 +205,23 @@ impl RepoIdentityBinding {
                 answer: Answer::stopped(ResultCode::AlreadyApplied).with_data(data(local)),
                 standing: Standing::Final,
             },
-            // Changed between this call's observation and its lease:
+            // Changed between this call's observation and its lock:
             // what is there is not what was shown, as when the
             // observation itself finds it so.
             Err(error) if error.kind == RepositoryErrorKind::ExternalChange => Ran {
                 answer: refused(error),
                 standing: Standing::NotRun { journal: NO_ROW },
             },
-            Err(error) => {
-                // The file could not be put back: some of the identity
-                // is written and no effect shows it.
-                let local_change = error.kind == RepositoryErrorKind::RollbackIncomplete;
-                Ran {
-                    answer: Answer {
-                        local_change,
-                        ..refused(error)
-                    },
-                    standing: if accepted.attempt > 1 {
-                        Standing::Unconfirmed
-                    } else {
-                        Standing::Stopped {
-                            journal: Some(NO_ROW),
-                        }
-                    },
-                }
-            }
+            Err(error) => Ran {
+                answer: refused(error),
+                standing: if accepted.attempt > 1 {
+                    Standing::Unconfirmed
+                } else {
+                    Standing::Stopped {
+                        journal: Some(NO_ROW),
+                    }
+                },
+            },
         }
     }
 }

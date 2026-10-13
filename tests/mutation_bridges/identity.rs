@@ -237,7 +237,7 @@ mod domain {
     }
 
     #[test]
-    fn a_failure_after_the_first_key_puts_the_configuration_file_back() {
+    fn a_failure_after_the_first_key_leaves_the_configuration_file_as_it_was() {
         git_home::isolated();
         let plain = Plain::new();
         // What a rewrite by Git would not keep: a comment and its spacing.
@@ -263,7 +263,7 @@ mod domain {
         let error = service.set_local_identity(asked.clone()).unwrap_err();
 
         assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
-        assert_eq!(local_file(&plain.root), source, "restored byte for byte");
+        assert_eq!(local_file(&plain.root), source, "as it was, byte for byte");
         // The same call, with nothing in its way, writes all three.
         assert!(matches!(
             service.set_local_identity(asked).unwrap(),
@@ -709,7 +709,7 @@ mod boundary {
         assert_eq!(failed.effects, Effects::not_requested());
         assert!(failed.data.is_none());
         assert!(failed.recovery.is_empty(), "{:?}", failed.recovery);
-        assert_eq!(local_file(&plain.root), before, "restored byte for byte");
+        assert_eq!(local_file(&plain.root), before, "as it was, byte for byte");
         desk.assert_nothing_left(REQUEST_1);
 
         // The confirmation was released with the record: the request,
@@ -934,7 +934,7 @@ mod boundary {
         assert_eq!(failed.code, ResultCode::InternalError);
         assert_eq!(failed.outcome, Outcome::Error);
         assert_eq!(recovery_actions(&failed), ["request.retry"]);
-        assert_eq!(local_file(&plain.root), before, "restored byte for byte");
+        assert_eq!(local_file(&plain.root), before, "as it was, byte for byte");
         assert_eq!(
             desk.record(REQUEST_1).map(|record| record.state),
             Some(RequestState::Accepted),
@@ -1082,7 +1082,7 @@ mod boundary {
         let preview = desk.prepare(&set(&root));
         let confirmation = preview.data.as_ref().unwrap().confirmation_id.clone();
         scan(serde_json::to_value(&preview).unwrap());
-        // A call that fails reads the file whole, to put it back.
+        // A call reads the file whole, to edit a copy of it.
         desk.fail_once_at(FailurePoint::AfterLocalIdentityName);
         let failed = desk.execute(REQUEST_1, &confirmation, set(&root));
         assert_eq!(failed.code, ResultCode::InternalError);
@@ -1495,5 +1495,231 @@ mod ambiguous {
         assert_eq!(local(&plain.root), held(NAME, EMAIL, None));
         let written = String::from_utf8(local_file(&plain.root)).unwrap();
         assert!(written.contains("path = other.inc"), "{written}");
+    }
+}
+
+/// The write is one replacement of the configuration file under Git's
+/// own lock on it, `config.lock`: nothing another program wrote is ever
+/// put back over, and an identity is never half set.
+mod atomic {
+    use std::sync::{Arc, Mutex};
+
+    use manyhands::results::{Outcome, ResultCode};
+
+    use super::{
+        super::support::{
+            confirmation::Desk,
+            mutation::{REQUEST_1, recovery_actions},
+        },
+        boundary::{EMAIL, NAME, assert_set, by_hand, set},
+        *,
+    };
+
+    const URL: &str = "https://example.invalid/team/project.git";
+
+    fn lock_file(root: &Path) -> std::path::PathBuf {
+        root.join(".git/config.lock")
+    }
+
+    /// The names of what the repository's Git directory holds, but for
+    /// the file Manyhands' own lease is taken on.
+    fn git_directory(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(root.join(".git"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name != "manyhands-operation.lock")
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_configuration_lock_someone_left_is_busy_and_is_not_removed() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let before = local_file(&plain.root);
+        fs::write(lock_file(&plain.root), "left behind").unwrap();
+
+        // The operation itself.
+        let error = desk
+            .service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+        // And through the boundary.
+        let busy = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+
+        assert_eq!(busy.code, ResultCode::Busy);
+        assert_eq!(busy.outcome, Outcome::Error);
+        assert_eq!(recovery_actions(&busy), ["request.retry"]);
+        assert_eq!(local_file(&plain.root), before);
+        assert_eq!(
+            fs::read(lock_file(&plain.root)).unwrap(),
+            b"left behind",
+            "the lock is its owner's to remove"
+        );
+        desk.assert_nothing_left(REQUEST_1);
+        // Once it is gone, the same request writes.
+        fs::remove_file(lock_file(&plain.root)).unwrap();
+        assert_set(
+            &desk.execute(REQUEST_1, &confirmation, set(&plain.root)),
+            None,
+        );
+        assert!(!lock_file(&plain.root).exists());
+    }
+
+    /// A mode is a Unix thing: the test is Unix only.
+    #[cfg(unix)]
+    #[test]
+    fn the_configuration_file_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        git_home::isolated();
+        for mode in [0o640, 0o664, 0o600] {
+            let plain = Plain::new();
+            let path = plain.root.join(".git/config");
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let (service, _data) = service();
+
+            let outcome = service
+                .set_local_identity(SetLocalIdentityRequest {
+                    initials: InitialsChange::Set("ae".to_owned()),
+                    ..request(&plain.root, NAME, EMAIL)
+                })
+                .unwrap();
+
+            assert!(matches!(outcome, SetLocalIdentityOutcome::Changed(_)));
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                mode,
+                "{mode:o}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_git_makes_while_the_identity_is_being_written_is_refused_and_not_lost() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let (service, _data) = service();
+        let other = {
+            let root = plain.root.clone();
+            move || {
+                git2::Config::open(&root.join(".git/config"))
+                    .and_then(|mut config| config.set_str("remote.origin.url", URL))
+            }
+        };
+        // Another program writes the configuration while this one holds
+        // its lock, as `git remote add` would.
+        let attempt = Arc::new(Mutex::new(None));
+        let held = {
+            let (attempt, other, root) = (attempt.clone(), other.clone(), plain.root.clone());
+            move || {
+                let locked = lock_file(&root).exists();
+                *attempt.lock().unwrap() = Some((locked, other().map_err(|error| error.class())));
+            }
+        };
+        service.set_local_identity_lock_hook_for_testing(held);
+
+        let outcome = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap();
+
+        assert!(matches!(outcome, SetLocalIdentityOutcome::Changed(_)));
+        let (locked, refused) = attempt.lock().unwrap().take().expect("the hook ran");
+        assert!(locked, "the configuration is locked as Git locks it");
+        // Git refuses the other program: its change is not made, and so
+        // not made and then lost.
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(local(&plain.root), held_identity());
+        assert_eq!(plain.local_config("remote.origin.url"), None);
+        assert!(!lock_file(&plain.root).exists());
+        // It tries again, as it would, and both are there.
+        other().unwrap();
+        assert_eq!(
+            plain.local_config("remote.origin.url").as_deref(),
+            Some(URL)
+        );
+        assert_eq!(local(&plain.root), held_identity());
+    }
+
+    fn held_identity() -> LocalIdentity {
+        held(NAME, EMAIL, None)
+    }
+
+    #[test]
+    fn a_change_to_another_key_after_the_preview_is_kept() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&set(&plain.root));
+        let root = plain.root.clone();
+        // Runs once the request is accepted, before its domain call.
+        desk.service
+            .set_request_hook_for_testing(move || by_hand(&root, "remote.origin.url", URL));
+
+        let done = desk.execute(REQUEST_1, &confirmation, set(&plain.root));
+
+        assert_set(&done, None);
+        assert_eq!(
+            plain.local_config("remote.origin.url").as_deref(),
+            Some(URL)
+        );
+        assert_eq!(local(&plain.root), held_identity());
+    }
+
+    #[test]
+    fn a_write_that_fails_part_way_never_touched_the_configuration_file() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at_with_failure_point_for_testing(
+            data.path(),
+            FailurePoint::AfterLocalIdentityName,
+        )
+        .unwrap();
+        // The lease's file is there before, so that the listing compares.
+        drop(
+            RepositoryService::hold_lease_for_testing(
+                &plain.root,
+                data.path(),
+                manyhands::repository::LeaseKind::Repository,
+            )
+            .unwrap(),
+        );
+        let path = plain.root.join(".git/config");
+        let before = (local_file(&plain.root), git_directory(&plain.root));
+        let seen = Arc::new(Mutex::new(None));
+        {
+            // At the moment of the failure: the name is set in what will
+            // be written, and the file itself holds none of it.
+            let (seen, path) = (seen.clone(), path.clone());
+            service.set_local_identity_lock_hook_for_testing(move || {
+                *seen.lock().unwrap() = Some(fs::read(path).unwrap());
+            });
+        }
+
+        let error = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap_err();
+
+        assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+        assert_eq!(seen.lock().unwrap().as_ref(), Some(&before.0));
+        assert_eq!(local_file(&plain.root), before.0);
+        assert_eq!(
+            git_directory(&plain.root),
+            before.1,
+            "no lock and no scratch file is left"
+        );
+        // The call again finds the file as it was, and writes.
+        assert!(matches!(
+            service
+                .set_local_identity(request(&plain.root, NAME, EMAIL))
+                .unwrap(),
+            SetLocalIdentityOutcome::Changed(_)
+        ));
+        assert_eq!(git_directory(&plain.root), before.1);
     }
 }
