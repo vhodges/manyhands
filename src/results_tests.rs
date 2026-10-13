@@ -153,7 +153,7 @@ fn result_code_messages_are_fixed() {
         "The request completed.",
         "That path cannot be used as a target.",
         "No Git repository exists at that path.",
-        "That path is inside a repository but is not its root or a linked worktree root.",
+        "That path is inside a repository but is not a root this command takes.",
         "The repository has no working tree.",
         "The repository is not registered with Manyhands.",
         "The repository has never been enabled in Manyhands; enable it first.",

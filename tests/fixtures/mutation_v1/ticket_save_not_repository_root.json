@@ -11,7 +11,7 @@
     "publication": "not_requested",
     "write": "not_requested"
   },
-  "message": "That path is inside a repository but is not its root or a linked worktree root.",
+  "message": "That path is inside a repository but is not a root this command takes.",
   "operation_id": null,
   "outcome": "error",
   "recovery": [

@@ -539,7 +539,7 @@ result_codes! {
     NotRepository => "not_repository", Some(FailureClass::Input),
         "No Git repository exists at that path.";
     NotRepositoryRoot => "not_repository_root", Some(FailureClass::Input),
-        "That path is inside a repository but is not its root or a linked worktree root.";
+        "That path is inside a repository but is not a root this command takes.";
     BareRepository => "bare_repository", Some(FailureClass::Input),
         "The repository has no working tree.";
     RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),

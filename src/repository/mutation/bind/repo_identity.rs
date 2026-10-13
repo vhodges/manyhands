@@ -37,7 +37,7 @@
 //! put back as it was previewed: a retry then writes, as the request
 //! was consented to.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
@@ -140,6 +140,30 @@ fn data(local: LocalIdentity) -> MutationDataDto {
     })
 }
 
+/// Whether `root` is inside a repository and is not that repository's
+/// own root: a directory below the root, or the root of a linked
+/// worktree, which shares the configuration of the repository that owns
+/// it. Every command answers such a path `not_repository_root`; the
+/// domain operation, which is given a root and no more, calls both an
+/// invalid path. What cannot be read here is left to the domain to
+/// refuse as what it is.
+fn is_inside_and_not_the_root(root: &Path) -> bool {
+    let Ok(selected) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let Ok(repository) = git2::Repository::discover(&selected) else {
+        return false;
+    };
+    if repository.is_bare() {
+        return false;
+    }
+    repository.is_worktree()
+        || repository
+            .workdir()
+            .and_then(|directory| std::fs::canonicalize(directory).ok())
+            .is_some_and(|directory| directory != selected)
+}
+
 impl RepoIdentityBinding {
     /// Checks the input, and reads what a preview covers. Nothing is
     /// written and no lease is taken. An `Err` is an input that cannot
@@ -148,6 +172,9 @@ impl RepoIdentityBinding {
     /// a read that failed.
     fn observe(&self) -> Result<Observed, Answer> {
         let asked = ValidIdentity::of(&self.name, &self.email, &self.initials).map_err(refused)?;
+        if is_inside_and_not_the_root(&self.root) {
+            return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+        }
         let (repository, root) = identity_repository(&self.root).map_err(refused)?;
         // A key that is there twice, or in an included file, is refused
         // here as `recovery_required`: no preview is given of what Git

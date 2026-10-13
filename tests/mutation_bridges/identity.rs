@@ -683,7 +683,15 @@ mod boundary {
             .repository
             .worktree("linked", &linked, None)
             .unwrap();
-        assert_eq!(code(&linked), ResultCode::InvalidPath);
+        // A linked worktree's root, and a directory below the root: as
+        // for every other command, a path inside a repository that is
+        // not the repository's own root.
+        assert_eq!(code(&linked), ResultCode::NotRepositoryRoot);
+        fs::create_dir(plain.root.join("below")).unwrap();
+        assert_eq!(
+            code(&plain.root.join("below")),
+            ResultCode::NotRepositoryRoot
+        );
         assert_eq!(desk.confirmation_rows(), 0);
 
         // An execute of one presents no confirmation that could be its
