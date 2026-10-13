@@ -5026,7 +5026,65 @@ fn the_folder_list_is_not_complete_when_discovery_met_a_limit() {
     assert_git_transport_uninitialized();
 }
 
-// A row that is not what a refresh stores is not repaired or skipped.
+// A directory whose path the list cannot carry is left out, and the list
+// says it is not whole. Nothing a refresh stores makes the read fail.
+// Unix only: a backslash is a separator on Windows, and neither Windows
+// nor macOS takes a name that is not Unicode.
+#[cfg(unix)]
+#[test]
+fn a_directory_whose_name_the_list_cannot_carry_is_left_out_and_the_list_is_not_complete() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    // Linux takes any bytes for a name. macOS refuses bytes that are not
+    // UTF-8, so only the backslash is tried there.
+    let names: &[&[u8]] = if cfg!(target_os = "linux") {
+        &[b"we\\ird", b"not-utf8-\xff"]
+    } else {
+        &[b"we\\ird"]
+    };
+    for name in names {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        let odd = root.join("docs/outer").join(OsStr::from_bytes(name));
+        fs::create_dir_all(odd.join("below")).unwrap();
+        fs::create_dir_all(root.join("docs/plain")).unwrap();
+        write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+
+        let list = enabled.service.list_document_folders(&repo).unwrap();
+
+        // The directory and the one below it are not listed. The ones
+        // beside and above it are, and the one above is not empty.
+        assert_eq!(
+            folders(&list),
+            [("docs/outer", false), ("docs/plain", true)],
+            "{name:?}"
+        );
+        assert!(!list.complete, "{name:?}");
+        assert_eq!(list.index.state, IndexState::Current);
+        // A rebuild stores the same, and the read still answers.
+        rebuild(&enabled.service, root);
+        let rebuilt = enabled.service.list_document_folders(&repo).unwrap();
+        assert_eq!(folders(&rebuilt), folders(&list));
+        assert!(!rebuilt.complete);
+        assert_eq!(
+            ids(&enabled.service.list_documents(&repo).unwrap()),
+            [Some(DOCUMENT_A)]
+        );
+
+        // Once it is gone the list is whole again.
+        fs::remove_dir_all(&odd).unwrap();
+        refresh_completely(&enabled.service, root);
+        let list = enabled.service.list_document_folders(&repo).unwrap();
+        assert_eq!(folders(&list), [("docs/outer", true), ("docs/plain", true)]);
+        assert!(list.complete);
+    }
+    assert_git_transport_uninitialized();
+}
+
+// A row that no refresh stores is not repaired or skipped. A refresh
+// stores no path with a backslash on any platform: on Windows none can
+// be made, and elsewhere such a directory is left out.
 #[test]
 fn a_stored_folder_that_is_not_under_docs_fails_the_read() {
     for path in ["notes", "docs", "docs/../etc", "/etc", "docs//a", "docs\\a"] {

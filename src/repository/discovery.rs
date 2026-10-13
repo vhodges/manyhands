@@ -78,8 +78,14 @@ pub(super) struct RootObservation {
 /// observation was not whole: a directory that could not be opened, one
 /// below the depth the observation goes to, and every directory it had
 /// not reached when it met its limit on entries. A directory named
-/// `.git` is never listed, as it is never read for documents. Nor is one
-/// whose name is not UTF-8: the index stores paths as text.
+/// `.git` is never listed, as it is never read for documents.
+///
+/// Nor is a directory whose path the list cannot carry: one with a name
+/// that is not UTF-8, since the index stores paths as text, or with a
+/// backslash in a name, which only a Unix file system allows and which a
+/// stored path, written with forward slashes for every platform, cannot
+/// tell from a separator. Such a directory is still read for documents.
+/// A problem at its parent says the folders there are not all listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ObservedFolder {
     pub(super) path: String,
@@ -1076,7 +1082,7 @@ fn collect_documents(
     if !directory_exists(&docs, problems) {
         return;
     }
-    let mut directories = vec![(docs, 0)];
+    let mut directories = vec![(docs.clone(), 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
         let DirectoryListing {
@@ -1085,11 +1091,27 @@ fn collect_documents(
             empty,
         } = read_document_directory(&directory, &mut entries, problems);
         // `docs` itself is no folder under `docs/`.
-        if depth > 0
-            && let Some(empty) = empty
-            && let Some(path) = folder_path(root, &directory)
-        {
-            folders.push(ObservedFolder { path, empty });
+        if depth > 0 {
+            match folder_path(root, &directory) {
+                Some(path) => {
+                    if let Some(empty) = empty {
+                        folders.push(ObservedFolder { path, empty });
+                    }
+                }
+                // Said at the nearest directory above it whose own path
+                // can be stored: a problem is stored by its path too.
+                None => {
+                    let above = directory
+                        .ancestors()
+                        .skip(1)
+                        .find(|above| folder_path(root, above).is_some())
+                        .unwrap_or(&docs);
+                    problems.push(source_problem(
+                        above,
+                        "a directory here has a name the folder list cannot hold",
+                    ));
+                }
+            }
         }
         for entry in directory_entries {
             let path = entry.path();
@@ -1167,12 +1189,14 @@ pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
 
 /// A directory's path as the index stores it: relative to the worktree,
 /// its native components joined with forward slashes. `None` for one
-/// that is not under `root` or has a component that is not UTF-8.
+/// that is not under `root`, or has a component that is not UTF-8 or
+/// holds a backslash: joined with forward slashes, such a path is not
+/// one a read of the list takes for a path.
 fn folder_path(root: &Path, directory: &Path) -> Option<String> {
     let relative = directory.strip_prefix(root).ok()?;
     let components = relative
         .iter()
-        .map(OsStr::to_str)
+        .map(|component| component.to_str().filter(|name| !name.contains('\\')))
         .collect::<Option<Vec<_>>>()?;
     Some(components.join("/"))
 }
