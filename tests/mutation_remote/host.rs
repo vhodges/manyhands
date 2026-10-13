@@ -170,7 +170,7 @@ fn key_path_forms(w: &World) -> Vec<Vec<u8>> {
     let debug = format!("{text:?}");
     let mut forms = vec![raw];
     for quoted in [json, debug] {
-        let inner = quoted[1..quoted.len() - 1].as_bytes().to_vec();
+        let inner = quoted.as_bytes()[1..quoted.len() - 1].to_vec();
         if !forms.contains(&inner) {
             forms.push(inner);
         }
