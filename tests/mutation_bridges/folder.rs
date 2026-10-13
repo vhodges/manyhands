@@ -579,7 +579,7 @@ mod boundary {
     }
 
     #[test]
-    fn a_path_that_is_not_a_folder_s_is_invalid_input_on_every_platform() {
+    fn a_path_that_is_not_a_folder_s_is_invalid_path_on_every_platform() {
         git_home::isolated();
         let world = World::new();
         let outside = tempfile::tempdir().unwrap();
@@ -641,7 +641,16 @@ mod boundary {
         ];
         for path in paths {
             let refused = world.execute(REQUEST_1, create(&world, path));
-            assert_refused(&world, REQUEST_1, &refused, ResultCode::InvalidInput);
+            // A path that is not a folder's is `invalid_path`, as a
+            // document's is. One that is a folder's and is deeper than
+            // discovery reads is `invalid_input`: a limit, as the count
+            // of entries is.
+            let code = if path == seventeen.as_str() {
+                ResultCode::InvalidInput
+            } else {
+                ResultCode::InvalidPath
+            };
+            assert_refused(&world, REQUEST_1, &refused, code);
             assert_eq!(refused.outcome, Outcome::Error, "{path:?}");
             assert!(refused.recovery.is_empty(), "{path:?}");
             // The path it was given is nowhere in what it answers.
@@ -1524,8 +1533,14 @@ mod boundary {
         assert_golden("folder_create_occupied", &world, &occupied);
 
         let invalid = world.execute(REQUEST_3, create(&world, "docs/../notes"));
-        assert_eq!(invalid.code, ResultCode::InvalidInput);
-        assert_golden("folder_create_invalid_input", &world, &invalid);
+        assert_eq!(invalid.code, ResultCode::InvalidPath);
+        assert_golden("folder_create_invalid_path", &world, &invalid);
+
+        // Seventeen directories below `docs`: more than discovery reads.
+        let deep = format!("docs/{}", ["d"; 17].join("/"));
+        let limit = world.execute(REQUEST_3, create(&world, &deep));
+        assert_eq!(limit.code, ResultCode::InvalidInput);
+        assert_golden("folder_create_invalid_input", &world, &limit);
 
         let failing = failing_at(FailurePoint::BeforeIndexTransactionCommit);
         let pending = failing.execute(REQUEST_1, create(&failing, "docs/notes"));

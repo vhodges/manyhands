@@ -41,7 +41,7 @@ use super::{
     super::{
         super::{
             CreateFolderError, CreateFolderOutcome, CreateFolderRequest, DocumentFolderPath,
-            FolderDiscovery, OperationFamily, RepositoryService,
+            DocumentFolderPathProblem, FolderDiscovery, OperationFamily, RepositoryService,
             recovery::{FinalKind, JournalRow},
         },
         command::Command,
@@ -97,6 +97,27 @@ fn there(code: ResultCode, discovery: FolderDiscovery) -> (Answer, bool) {
     (answer, settled)
 }
 
+/// The code of a path a folder cannot be made at. A path that is not a
+/// folder's, by the rules of how one is written, is `invalid_path`, as
+/// a document's path that is not valid for its kind is. One that is
+/// written as a folder's and is deeper than discovery reads is
+/// `invalid_input`: a limit of discovery, as the count of entries is,
+/// which the domain refuses with the same code.
+fn path_problem_code(problem: DocumentFolderPathProblem) -> ResultCode {
+    match problem {
+        DocumentFolderPathProblem::TooDeep => ResultCode::InvalidInput,
+        DocumentFolderPathProblem::NotUnderDocuments
+        | DocumentFolderPathProblem::Absolute
+        | DocumentFolderPathProblem::EmptySegment
+        | DocumentFolderPathProblem::Relative
+        | DocumentFolderPathProblem::Character
+        | DocumentFolderPathProblem::TrailingDotOrSpace
+        | DocumentFolderPathProblem::DeviceName
+        | DocumentFolderPathProblem::GitDirectory
+        | DocumentFolderPathProblem::TooLong => ResultCode::InvalidPath,
+    }
+}
+
 impl FolderCreateBinding {
     /// The one domain call, under the recorded operation ID, and what
     /// it came to.
@@ -104,11 +125,14 @@ impl FolderCreateBinding {
         // The path was read in `prepare`, and a record is of a request
         // that passed it. One that does not parse now is refused all the
         // same, and nothing is made.
-        let Ok(path) = DocumentFolderPath::parse(&self.path) else {
-            return Ran {
-                answer: Answer::stopped(ResultCode::InvalidInput),
-                standing: Self::left(service, accepted),
-            };
+        let path = match DocumentFolderPath::parse(&self.path) {
+            Ok(path) => path,
+            Err(problem) => {
+                return Ran {
+                    answer: Answer::stopped(path_problem_code(problem)),
+                    standing: Self::left(service, accepted),
+                };
+            }
         };
         let result = service.create_folder(CreateFolderRequest {
             root: accepted.root(),
@@ -237,7 +261,7 @@ impl Binding for FolderCreateBinding {
     /// the repository lease.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         DocumentFolderPath::parse(&self.path)
-            .map_err(|_| Answer::stopped(ResultCode::InvalidInput))?;
+            .map_err(|problem| Answer::stopped(path_problem_code(problem)))?;
         resolve_root(call.service, &self.root)?;
         Ok(Prepared {
             observation: None,

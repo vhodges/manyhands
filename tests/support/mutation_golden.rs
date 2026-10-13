@@ -40,6 +40,7 @@ pub const CASES: &[&str] = &[
     "folder_create",
     "folder_create_discovery_pending",
     "folder_create_invalid_input",
+    "folder_create_invalid_path",
     "folder_create_noop",
     "folder_create_occupied",
     "host_approve_external_change",
