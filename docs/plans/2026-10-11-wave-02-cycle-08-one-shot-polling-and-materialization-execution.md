@@ -699,3 +699,180 @@ the open ticket and all eight canonical comments, including both Node-generated
 Task 2 ULIDs. `git diff --check` passed; status, production/test/bookkeeping
 diffs and recent `git log --oneline -10` were inspected. Only the seven intended
 Rust/test files, this ledger, the open ticket and its two comments are staged.
+
+## Task 3 Execution — 2026-10-13
+
+Fresh implementer assigned Task 3 only, inline, no subagents, on the assigned
+ticket worktree/branch. Confirmed clean HEAD at Task 3 base
+`6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a`. Controller's resume refresh/rebase
+remains authoritative; no new fetch/rebase. Approved design and D1–D4 retained.
+
+### Prior Task 2 Reviews
+
+Controller reports range
+`5ff9f4eee31cd88067a406ba8acbc317c0ee2045..6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a`:
+
+- Spec `ses_ec9ebcd99ffekVz7ijwoL63NJx`: compliant.
+- Quality `ses_ec9e9909cffeS4kt0Z0ENmyjss`: approved; minor suggested direct-SQL
+  poll-kind immutability regression remains explicitly deferred to final review.
+- Task 1 minor direct corrupt timestamp read coverage was resolved by Task 2.
+  Existing green evidence is not a new-behavior RED claim.
+
+### Test-First RED — 2026-10-13T16:37:08Z
+
+Before production behavior, sequential Devenv commands:
+
+- `devenv shell -- cargo test --locked --lib transport`: compile-red for missing
+  callback API and private combined scope; behavior-free signatures/placeholders
+  then gave runtime RED: **28 passed, 2 failed, 498 filtered** at mapping/stop
+  placeholders.
+- `devenv shell -- cargo test --locked --test ssh_transport poll_`: compile-red
+  for missing fetch API/private scope (also corrected missing existing
+  PassphraseResponse import). With behavior-free fetch placeholder, runtime RED
+  exits 101 on the first real-SSH case, `poll_fetch_set`. Harness stops at first
+  failing child; individual filters `poll_absent_primary_and_empty_set`,
+  `poll_tracking_race`, `poll_noncommit_tip` each exit 101 at the same missing
+  fetch behavior. `poll_progress_stop` also exited 101, but later investigation
+  identified a pre-transport setup failure; corrected behavioral RED is below.
+  No transport assertions passed yet.
+
+Tests register seven real in-process SSH cases, including policy compatibility,
+and two unit tests. No new cfg(test) checkpoint hook or fake transport. The
+source-inclusion policy driver constructs a frozen expectation from real public
+registry/configuration state; races use the caller callback and public lease
+probe. New behavior begins only after this checkpoint.
+
+### Stop Fixture Correction And Behavioral RED
+
+First GREEN trial: library 30 passed; SSH filter passed fetch-set, absent/empty,
+tracking race and noncommit, then stop case failed before transport. Investigation
+found its fixture helper tried a parentless `commit(Some(main))` over existing
+main; libgit2 refuses that inconsistent parent update. Corrected the test helper
+to create the object without an update, then set the fixture ref. The earlier
+stop RED was a setup failure and is **not** stop-behavior evidence. Removed the
+progress registration before continuing; corrected
+`devenv shell -- cargo test --locked --test ssh_transport poll_progress_stop`
+exited 101 at poll.rs line 307 (`unwrap_err` after a successful full download).
+This is behavioral RED for the missing registration; registration is implemented
+only after this corrected checkpoint. Unit stop-intent RED remains valid.
+
+Additional exact-set scope test preceded the extracted predicate:
+`devenv shell -- cargo test --locked --lib transport` exited 101 with
+**30 passed, 1 failed, 498 filtered**, at its behavior-free scope placeholder.
+It requires the complete advertised parsed set and rejects duplicates, omitted
+members, wildcards, malformed/unadvertised sources, local destinations and Push.
+Two added SSH hardening cases (download-connection advertisement, partial guarded
+write failure) and stronger excluded graph/key-ID assertions were already green;
+they are not presented as new-behavior RED.
+
+### Implemented Task 3 Boundary
+
+- `fetch_poll_set` uses the shared `TransferAction::FetchTracking` path. Its
+  renewed selected-key connection lists the advertisement, derives explicit
+  forced mappings for the advertised primary and parsed document/ticket names,
+  and captures the old destinations before download. Malformed names remain
+  in the returned advertisement but are not downloaded; other families are
+  ignored. The original download-connection advertisement is returned.
+- Empty parsed sets return before `download`; no configured/default refspec
+  fallback. FETCH_HEAD updates, tag following and pruning are disabled. D1
+  retains previously fetched tracking refs even when sources disappear.
+- Under the existing short repository lease, the complete parsed mapping set,
+  configuration, endpoint, selected key and host policy are rechecked; every
+  fetched tip must be a commit and every old destination must still match
+  before the first write. Existing guarded `reference_matching`/nonforcing
+  creation performs the writes. A later write failure returns failure while
+  retaining the valid tracking observation already written, never completion.
+- Progress registration belongs only to the poll action. Its explicit sticky
+  closure-stop flag prevents writes after false independently of libgit2's
+  GenericError/User code; result stays the existing redacted TransportUnavailable
+  category so the later orchestrator must consume its caller-owned stop flag.
+  Transport neither knows reservations nor throttles queries. Task 6 must supply
+  the short read-only flags query, <=250-ms caller throttle and acknowledgement.
+- The existing combined automatic+frozen-expectation scope is visible to the
+  repository's remote module; its policy behavior is unchanged. Automatic blocked
+  unlock and endpoint/key/source mismatch cases are compatibility evidence,
+  not a new policy-behavior RED claim.
+- Source-inclusion fixture driver adds no checkpoint hook. Callback races use
+  real local refs or fixture ref locks; stop uses paced real SSH and the public
+  repository lease probe. Privacy scans run after transport/leases have ended.
+  No frontend, dependency, schema or later-task implementation changed.
+
+### Acceptance Evidence
+
+| Task 3 requirement | Passing real-SSH case |
+| --- | --- |
+| Primary + document + ticket exact tips; malformed/outside commit/tree/blob objects absent; tags, FETCH_HEAD, unrelated/local refs preserved; tracking-only ancestry rewind | `poll_fetch_set` |
+| Absent primary leaves its tracking unchanged; empty parsed set makes no download callback, downloads no outside graph, retains absent context tracking (D1) | `poll_absent_primary_and_empty_set` |
+| Existing or initially absent destination changed after capture: fails, preserves changed destination and primary still old; all checked before first write | `poll_tracking_race` |
+| Downloaded blob tip is present but rejected before any tracking write | `poll_noncommit_tip` |
+| Paced stop exits without refs/FETCH_HEAD/commit, precisely two helpers (scope+download), no further connection; callback can acquire public lease | `poll_progress_stop` |
+| Frozen endpoint, missing/replaced key selection, changed key source: zero helpers/prompts before refusal | `poll_frozen_policy` |
+| Blocked automatic unlock: no second prompt, zero Git helpers | `poll_automatic_blocked_unlock` |
+| New context added after earlier scope advertisement: returned advertisement and tracking belong to download connection | `poll_download_advertisement` |
+| Second tracking ref lock fails guarded write; first valid tracking tip retained, context/local ref preserved, no completed claim | `poll_partial_guarded_write` |
+
+Every case (and every loop iteration) waits for real helper audits, asserts zero
+receive-pack commands/advertisements and zero receiver updates, then scans the
+registry for password/endpoint probes and registers them with the child-output
+privacy harness. All nine cases use the real in-process SSH fixture. Three new
+library tests prove parsed mapping selection, complete exact-set validation and
+sticky stop intent; library tests make no SSH transfer claim.
+
+### GREEN And Full Verification — 2026-10-13T17:21:49Z
+
+All Rust commands ran sequentially through Devenv in the assigned worktree:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | PASS |
+| `devenv shell -- cargo test --locked --lib transport` | Final focused PASS: 31 passed, 498 filtered |
+| `devenv shell -- cargo test --locked --test ssh_transport poll_` | PASS: 9 real-SSH cases after fixture correction/hardening; final entire target/full gate also cover all nine after exact-set predicate wiring |
+| `devenv shell -- cargo test --locked --test ssh_transport` | PASS on final Rust tree: 114 real-SSH cases, including all 105 untouched existing cases |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | PASS: 1,606 passed, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS: exit 0, no window |
+| `timeout --signal=TERM 90s devenv shell -- cargo run --locked --features desktop --bin manyhands` | Built in 8.03 s, reached Running, no startup diagnostic; bounded timeout stop, no visual interaction claimed |
+
+Full gate breakdown: **529 library** (+3 Task 3), **779 ordinary integration**,
+**289 real-SSH** (comment publication 41, merge recovery 25, observation 15,
+synchronization 63, fixture 31, transport 114), **9 compile-fail doctests**.
+Both binary test targets have zero tests; the existing thousand-item read
+characterization remains ignored. Full log: `tool_1362dc32a001ZRHM1I40DZfKCY`.
+Existing synchronization, observation, merge and comment cases passed unchanged.
+No broad gate failure or duplicate broad rerun. Initial compile trials, corrected
+fixture failure and corrected behavioral RED are recorded above, not concealed.
+
+Unchanged lock hashes:
+
+- Cargo.lock: `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`.
+- devenv.lock: `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`.
+
+### Review Handoff And Deferred Finding
+
+Self-reviewed the complete Task 3 base-to-working-tree diff against the approved
+Task 3 plan and transport constraints. Task 3 is ready for the controller's
+independent spec then quality review, with no implementer subagent dispatch.
+Base: `6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a`; exact local commit head/range
+will be returned after committing `feat: fetch the poll ref set with guarded
+tracking refs+bookkeeping`, avoiding a self-referential SHA in committed content.
+
+**Deferred minor still open:** Task 2 quality review
+`ses_ec9e9909cffeS4kt0Z0ENmyjss` suggested a direct-SQL kind-immutability
+regression. Carry explicitly into the final Cycle review ledger; Task 3 did not
+add it or change poll-kind production behavior. Task 1 corrupt-time minor remains
+resolved. Native matrix and independent Task 3 review are remaining gates.
+Linux paced stop evidence is not a universal callback-latency guarantee; existing
+10-s TCP/30-s blocking-SSH limits remain, without a total deadline. D2 Linux
+partial-worktree characterization remains authoritative and untouched.
+
+Canonical comments `01M4V1ZZM9SAQHCJFT8DFA7SHJ` (RED/prior reviews) and
+`01M4V4HS2G64D9TR1P71N6CQB8` (review-ready/corrected RED/GREEN) record checkpoints.
+Ticket remains open; Task 4 was not started. Final status/full diff/recent-log,
+`git diff --check` and `scripts/show-ticket` validation precede staging only the
+seven owned Rust/test files, this ledger, the ticket and its two new comments.
+
+`scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` successfully validated/rendered
+the open ticket and all ten canonical comments, including both new Node ULIDs.
+Final diff/recent log were inspected and `git diff --check` passed.

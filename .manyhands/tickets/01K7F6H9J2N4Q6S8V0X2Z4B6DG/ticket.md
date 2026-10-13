@@ -69,15 +69,24 @@ and the baseline.
 - [x] Task 2: poll-kind reservation/local stage, atomic timestamps, D3/D4 gates;
   prior minor direct corrupt timestamp read coverage resolved. Recorded RED then
   focused GREEN and all four Rust checks (1,594 passed, 1 existing ignored).
-- [ ] Independent Task 2 spec review.
-- [ ] Independent Task 2 quality review.
+- [x] Independent Task 2 spec review: `ses_ec9ebcd99ffekVz7ijwoL63NJx`, compliant.
+- [x] Independent Task 2 quality review: `ses_ec9e9909cffeS4kt0Z0ENmyjss`, approved;
+  minor suggested direct-SQL kind immutability regression carried to final review.
+- [x] Task 3: exact parsed poll fetch set, guarded tracking refs and sticky stop
+  hook; RED and corrected stop-fixture behavioral RED recorded. GREEN: 31 focused
+  library, 9 poll SSH, 114 entire transport cases; four Rust checks passed
+  (1,606 tests, 0 failures, 1 existing ignored). Combined frozen/automatic scope.
+- [ ] Independent Task 3 spec review.
+- [ ] Independent Task 3 quality review.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
 `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`, before/after ticket HEAD
 `4c1590d73b9dbab17030670989bd8825328f1f55`. Task 1 is implemented and independently
-reviewed. Task 2 is implemented and ready for independent spec then quality review;
-Tasks 3–8 have not started. Ticket remains
+reviewed. Task 2 is implemented and independently reviewed. Fresh Task 3 assignment
+authorizes Task 3 only, inline, no subagents, one local commit and bookkeeping.
+Task 3 is implemented and ready for independent spec then quality review;
+Tasks 4–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence

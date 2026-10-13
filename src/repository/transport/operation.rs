@@ -61,7 +61,10 @@ impl RepositoryService {
         )
     }
 
-    fn with_authenticated_remote_policy_expected<P: SessionCredentialProvider, T>(
+    pub(in super::super) fn with_authenticated_remote_policy_expected<
+        P: SessionCredentialProvider,
+        T,
+    >(
         &self,
         request: VerifySshTransportRequest,
         session: &mut SessionCredentials<P>,

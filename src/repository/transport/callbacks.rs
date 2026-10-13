@@ -13,9 +13,21 @@ pub(super) struct CallbackAttempt {
     passthrough: Cell<bool>,
     key_submissions: Cell<u8>,
     username_submissions: Cell<u8>,
+    poll_stopped: Cell<bool>,
 }
 
 impl CallbackAttempt {
+    pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
+        if self.poll_stopped.get() {
+            return false;
+        }
+        let continuing = keep_going();
+        self.poll_stopped.set(!continuing);
+        continuing
+    }
+    pub(super) fn poll_stopped(&self) -> bool {
+        self.poll_stopped.get()
+    }
     pub(super) fn failure(&self) -> Option<SshTransportErrorKind> {
         self.failure.borrow().clone()
     }

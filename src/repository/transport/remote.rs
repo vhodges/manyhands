@@ -5,6 +5,11 @@ use crate::repository::{
     remote::{RemoteRefPlan, SynchronizationTarget},
 };
 
+struct PollTransfer<'a> {
+    plan: &'a RemoteRefPlan,
+    progress: &'a mut dyn FnMut(git2::Progress<'_>) -> bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TransferAction {
     Observe,
@@ -144,6 +149,27 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         .map(|_| ())
     }
 
+    /// Fetch only parsed advertised contexts and the advertised primary. The
+    /// caller owns throttling and stop intent; this hook has no reservation
+    /// knowledge and runs only during download, outside the repository lease.
+    #[allow(dead_code)] // Consumed by the later one-shot poll orchestrator.
+    pub(crate) fn fetch_poll_set(
+        &mut self,
+        plan: &RemoteRefPlan,
+        mut progress: impl FnMut(git2::Progress<'_>) -> bool,
+    ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        self.validate_plan(plan, SshDirection::Fetch)?;
+        self.transfer_inner(
+            &[],
+            TransferAction::FetchTracking,
+            None,
+            Some(PollTransfer {
+                plan,
+                progress: &mut progress,
+            }),
+        )
+    }
+
     pub(crate) fn push_exact(
         &mut self,
         plan: &RemoteRefPlan,
@@ -240,6 +266,19 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         action: TransferAction,
         scope: Option<(&RemoteRefPlan, &SynchronizationTarget)>,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        self.transfer_inner(refspecs, action, scope, None)
+    }
+
+    fn transfer_inner(
+        &mut self,
+        refspecs: &[&str],
+        action: TransferAction,
+        scope: Option<(&RemoteRefPlan, &SynchronizationTarget)>,
+        mut poll: Option<PollTransfer<'_>>,
+    ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        if let Some(poll) = poll.as_ref() {
+            self.validate_plan(poll.plan, SshDirection::Fetch)?;
+        }
         if let Some((plan, target)) = scope
             && (!plan_matches_configuration(plan, self.context)
                 || if action == TransferAction::PushObjects {
@@ -338,6 +377,40 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
         }
+        // The poll's set and returned OIDs belong to this authenticated download
+        // connection, never an earlier advertisement on a different connection.
+        let poll_advertisement = if poll.is_some() {
+            connection
+                .list()
+                .map_err(|_| {
+                    self.context
+                        .with_kind(SshTransportErrorKind::ProtocolFailure)
+                })?
+                .iter()
+                .map(|head| (head.name().to_owned(), head.oid()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let poll_mapping_set = poll
+            .as_ref()
+            .map(|poll| poll_mappings(poll.plan, &poll_advertisement));
+        let poll_refspecs: Vec<_> = poll_mapping_set
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        let refspecs = if poll.is_some() {
+            poll_refspecs.as_slice()
+        } else {
+            refspecs
+        };
+        // Empty download mappings select configured/default mappings in libgit2.
+        // An empty parsed poll set must stop here, without a download or prune.
+        if poll.is_some() && refspecs.is_empty() {
+            return Ok(poll_advertisement);
+        }
         let tracking_repository = if action == TransferAction::FetchTracking {
             Some(git2::Repository::open(&self.context.root).map_err(|_| {
                 self.context
@@ -403,6 +476,9 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             }
             Ok(())
         });
+        if let Some(poll) = poll.as_mut() {
+            callbacks.transfer_progress(|stats| attempt.poll_progress(|| (poll.progress)(stats)));
+        }
         // libgit2 replaces prior options even on a connected remote. Every set
         // carries policy; an unexpected further reconnect fails closed through
         // the one-submission bound instead of silently changing credentials.
@@ -423,6 +499,13 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             }
             connection.remote().download(refspecs, Some(&mut options))
         };
+        // Locked libgit2 reports GenericError after callback=false, not User.
+        // Preserve explicit stop intent and never enter the tracking-write stage.
+        if attempt.poll_stopped() {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::TransportUnavailable));
+        }
         if let Some(kind) = attempt.failure() {
             return Err(self.context.with_kind(
                 if self.passphrase.is_some() && super::operation::authentication_failure(&kind) {
@@ -482,10 +565,23 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 self.context
                     .with_kind(SshTransportErrorKind::ProtocolFailure)
             })?;
-            let (plan, target) = scope.expect("tracking transfer has typed scope");
-            if !plan_matches_configuration(plan, self.context)
-                || !mappings_match_scope(plan, target, self.context.direction, refspecs)
-            {
+            let valid_scope = match (scope, poll.as_ref()) {
+                (Some((plan, target)), None) => {
+                    plan_matches_configuration(plan, self.context)
+                        && mappings_match_scope(plan, target, self.context.direction, refspecs)
+                }
+                (None, Some(poll)) => {
+                    plan_matches_configuration(poll.plan, self.context)
+                        && poll_mappings_match_scope(
+                            poll.plan,
+                            &poll_advertisement,
+                            self.context.direction,
+                            refspecs,
+                        )
+                }
+                _ => false,
+            };
+            if !valid_scope {
                 return Err(self
                     .context
                     .with_kind(SshTransportErrorKind::ConfigurationInvalid));
@@ -545,7 +641,11 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 );
             }
         }
-        Ok(object_advertisement)
+        Ok(if poll.is_some() {
+            poll_advertisement
+        } else {
+            object_advertisement
+        })
     }
     fn recheck_trust(&self) -> Result<(), SshTransportError> {
         let trust = self
@@ -659,10 +759,118 @@ fn tracking_oid(
     }
 }
 
+fn poll_mappings(plan: &RemoteRefPlan, advertised: &[(String, git2::Oid)]) -> Vec<String> {
+    use crate::repository::remote::RemoteRefClassification;
+    advertised
+        .iter()
+        .filter_map(|(name, _)| match plan.classify_advertised_ref(name)? {
+            RemoteRefClassification::Primary => Some(plan.primary_fetch_refspec()),
+            RemoteRefClassification::RecognizedContext { kind, item_id } => {
+                let target = plan.context(kind, &item_id);
+                Some(format!(
+                    "+{}:{}",
+                    target.remote_ref(),
+                    target.tracking_ref()
+                ))
+            }
+            RemoteRefClassification::MalformedContext => None,
+        })
+        .collect()
+}
+
+fn poll_mappings_match_scope(
+    plan: &RemoteRefPlan,
+    advertised: &[(String, git2::Oid)],
+    direction: SshDirection,
+    mappings: &[&str],
+) -> bool {
+    let expected = poll_mappings(plan, advertised);
+    direction == SshDirection::Fetch
+        && mappings.len() == expected.len()
+        && expected
+            .iter()
+            .all(|mapping| mappings.contains(&mapping.as_str()))
+        && mappings
+            .iter()
+            .enumerate()
+            .all(|(index, mapping)| !mappings[..index].contains(mapping))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+    #[test]
+    fn transport_poll_scope_rejects_unadvertised_or_incomplete_mappings() {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let oid = git2::Oid::from_bytes(&[1; 20]).unwrap();
+        let name = "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let advertised = vec![("refs/heads/main".into(), oid), (name.into(), oid)];
+        let mappings = poll_mappings(&plan, &advertised);
+        let refs: Vec<_> = mappings.iter().map(String::as_str).collect();
+        assert!(poll_mappings_match_scope(
+            &plan,
+            &advertised,
+            SshDirection::Fetch,
+            &refs
+        ));
+        assert!(!poll_mappings_match_scope(
+            &plan,
+            &advertised,
+            SshDirection::Push,
+            &refs
+        ));
+        for invalid in [
+            vec![],
+            vec![refs[0]],
+            vec![refs[0], refs[0]],
+            vec![refs[0], refs[1], refs[1]],
+            vec![refs[0], "+refs/heads/*:refs/remotes/origin/*"],
+            vec![
+                refs[0],
+                "+refs/heads/unrelated:refs/remotes/origin/unrelated",
+            ],
+            vec![
+                refs[0],
+                "+refs/heads/manyhands/ticket/bad:refs/remotes/origin/manyhands/ticket/bad",
+            ],
+            vec![refs[0], "+refs/heads/main:refs/heads/main"],
+        ] {
+            assert!(!poll_mappings_match_scope(
+                &plan,
+                &advertised,
+                SshDirection::Fetch,
+                &invalid
+            ));
+        }
+    }
+    #[test]
+    fn transport_poll_mappings_are_exact_parsed_advertised_set() {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let oid = git2::Oid::from_bytes(&[1; 20]).unwrap();
+        let ticket = "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let advertised: Vec<_> = [
+            "HEAD",
+            "refs/heads/main",
+            ticket,
+            "refs/heads/manyhands/ticket/bad",
+            "refs/heads/unrelated",
+            "refs/tags/tag",
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), oid))
+        .collect();
+        assert_eq!(
+            poll_mappings(&plan, &advertised),
+            vec![
+                plan.primary_fetch_refspec(),
+                format!(
+                    "+{ticket}:refs/remotes/origin/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV"
+                )
+            ]
+        );
+        assert!(poll_mappings(&plan, &advertised[3..]).is_empty());
+    }
     #[test]
     fn exact_mapping_scope_rejects_unchecked_syntax_and_direction() {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
