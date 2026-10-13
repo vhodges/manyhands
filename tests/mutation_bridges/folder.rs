@@ -269,10 +269,14 @@ mod domain {
         git_home::isolated();
         for present in [false, true] {
             let world = failing_at(FailurePoint::BeforeRegistryWrite);
-            if present {
+            // The folder asked for is the one that is there, or one
+            // that is not.
+            let attempt = if present {
                 fs::create_dir(world.root.join("docs/a")).unwrap();
-            }
-            let attempt = request(&world, "docs/a/b");
+                request(&world, "docs/a")
+            } else {
+                request(&world, "docs/a/b")
+            };
             let before = super::tree(&world.root);
             let rows = journal(&world);
 
@@ -283,10 +287,14 @@ mod domain {
             assert!(before == super::tree(&world.root));
             assert_eq!(journal(&world), rows);
             assert_eq!(listed(&world).1, IndexState::Current);
-            // The same call again makes it.
+            // The same call again makes it, or finds it.
             assert_eq!(
                 world.service.create_folder(attempt).unwrap(),
-                CreateFolderOutcome::Created(FolderDiscovery::Current)
+                if present {
+                    CreateFolderOutcome::AlreadyPresent(FolderDiscovery::Current)
+                } else {
+                    CreateFolderOutcome::Created(FolderDiscovery::Current)
+                }
             );
         }
     }
