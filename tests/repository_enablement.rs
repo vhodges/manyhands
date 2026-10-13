@@ -587,6 +587,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "confirmation_records",
             "contexts",
             "discovered_comments",
+            "discovered_folders",
             "discovered_items",
             "item_edges",
             "item_problems",
