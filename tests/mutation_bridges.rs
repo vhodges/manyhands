@@ -10,6 +10,9 @@
 
 mod support;
 
+#[path = "mutation_bridges/cache_loss.rs"]
+mod cache_loss;
+
 #[path = "mutation_bridges/conformance.rs"]
 mod conformance;
 
