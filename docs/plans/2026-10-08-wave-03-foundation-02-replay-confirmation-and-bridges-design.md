@@ -1750,6 +1750,12 @@ predates this Cycle; each names its ticket.
   `request show` does list it. Showing it needs a new value of the
   published operation actions. Confirmed by the product owner on
   2026-10-12.
+- **An accepted record that cannot be read repeats its answer.** A
+  record no record function could have written, such as one that lost
+  its operation, is `internal_error` with `request.retry` on every send,
+  and each send raises its attempt. The record's shape cannot change, so
+  the action leads nowhere; the way out is a new request ID. It was a
+  dead end before the action was offered too.
 - **A refusal on a retry that will never change holds its record.** A
   retried selection whose key was removed is `key_not_found` on every
   send, with the record `accepted` and `request.retry` offered each time.
@@ -1882,25 +1888,24 @@ predates this Cycle; each names its ticket.
   moved between its two reads. Two edges remain: a host that presents two
   keys in one connection, and a pin changed and put back between the
   reads. Closing them needs the domain to report the key it saw.
-- **The message of `host_replacement_required` is not true of the
-  `prepare` refusal.** It reads "The host's key differs from the approved
-  one and must be replaced.", and a `prepare` saw no key of the host:
-  the host is pinned to another key than the one the request names.
-  There is one message for each code. The alternatives are to reword it
-  to cover both, such as "The host is pinned to another key; its pin
-  must be replaced.", or to accept it.
-- **F1's pin read names the stored pin `algorithm` and `fingerprint`.**
-  `host_pin`, the data of `host inspect` and of the pin list, is
-  unchanged, and in this Cycle's vocabulary those two names are only the
-  key a request names, a stored pin being `pinned_*`. Three options: 1.
-  leave it, as built: `host_pin` is a shape of one thing, a pin, so the
-  plain names are not ambiguous inside it, the vocabulary is stated as
-  the mutation boundary's, and a front end gives `host inspect`'s
-  `fingerprint` to `host replace` as `old_fingerprint`; 2. rename F1's
-  fields to `pinned_*`, which is one vocabulary everywhere and breaks the
-  F1 read contract and its goldens; 3. add `pinned_*` beside the old
-  names and deprecate the old, which breaks nothing and leaves two names
-  for one thing until the old go.
+- **Two fixed messages do not fit.** The message of
+  `host_replacement_required` reads "The host's key differs from the
+  approved one and must be replaced.", and it is also the message of the
+  `prepare` refusal, where no key of the host was seen: the host is
+  pinned to another key than the one the request names. The message of
+  `host_mismatch` reads "The host did not present the expected
+  fingerprint.", where `expected` means the key the request names. Both
+  are published strings, one for each code, and their wording is the
+  product's. Proposed and not made: "The host is pinned to another key;
+  its pin must be replaced." and "The host did not present the key the
+  request named."
+- **`presented_*` is null on a successful approval.** The result of
+  `host approve` and `host replace` fills `presented_algorithm` and
+  `presented_fingerprint` on `host_mismatch` only. On a success the key
+  the host presented is the key the request names, in `algorithm` and
+  `fingerprint`. The meaning never conflicts, since it is never another
+  key, and the schema says so; filling it always would change a
+  published success shape.
 - **The transport's own types keep their names.** `HostApproval` and the
   transport's replacement error say `expected` and `presented`, and
   `HostApproval::presented` is the key the request names, the meaning the
@@ -2590,8 +2595,14 @@ observed, always and only that. `pinned_algorithm` and
 its preview and its result. A caller copies `presented_*` from a
 synchronization's data or from an observation into the `algorithm` and
 `fingerprint` of `host approve`, and reads `presented_*` back from any
-result with the same meaning. F1's `host_pin` shape, the data of
-`host inspect`, is not changed.
+result with the same meaning, with one gap: the result of a host
+approval fills `presented_*` only on `host_mismatch`; see the known
+limits. F1's `host_pin` shape, the data of `host inspect` and of the pin
+list, follows the same vocabulary: it names the stored pin
+`pinned_algorithm` and `pinned_fingerprint`, renamed from `algorithm`
+and `fingerprint` with the product owner's approval on 2026-10-13. A
+front end gives `host inspect`'s `pinned_fingerprint` to `host replace`
+as `old_fingerprint`.
 
 ### Result codes
 
@@ -3234,8 +3245,10 @@ stored in lower case, so setting `QA7` over `qa7` is a no-op. A root that
 is a linked worktree's, or a directory below the repository's root, is
 `not_repository_root`, as for every other command: a worktree shares the
 configuration of the repository that owns it, which is named by its own
-root. The binding decides this before the domain operation, which has no
-error kind for it and by itself answers `invalid_path`. A bare repository and a path that is
+root. A path below a root offers `repo.inspect` of the root it lies in;
+a linked worktree's own root offers nothing, as for every command. The
+binding decides this before the domain operation, which has no error
+kind for it and by itself answers `invalid_path`. A bare repository and a path that is
 no repository are `bare_repository` and `not_repository` at `prepare`.
 
 **Validation.** A name or an email is `invalid_input` unless all of these
@@ -3983,6 +3996,11 @@ the input files.
 - Extended: `envelope` (result codes), `recovery_action` (the new actions),
   `identity` (`initials` and `initials_source`, both required),
   `operation` (the `repair_item` action).
+- Renamed in an F1 shape: `host_pin`, whose `algorithm` and `fingerprint`
+  are now `pinned_algorithm` and `pinned_fingerprint`, with the goldens
+  of `host inspect` and the pin list. The message of
+  `not_repository_root` changed a read golden too. These are the two
+  changes this Cycle makes to what F1 published.
 - New: `preview`, which is the repository shape of `repo create` and
   `repo enable`, and a schema for each other shape of a preview's
   details: `remote_removal_preview`, `repository_removal_preview`,
@@ -4014,13 +4032,13 @@ the input files.
   golden and every golden's data has one root; and every result code has
   a golden, and a mutation golden, or stands in an explicit list with its
   reason. `CODES_NO_FIXTURE_CAN_PRODUCE` has one entry,
-  `remote_unavailable`. `CODES_NO_MUTATION_GOLDEN_HAS` has five:
-  `remote_unavailable`, which no fixture can produce; `invalid_id`,
+  `remote_unavailable`. `CODES_NO_MUTATION_GOLDEN_HAS` has four:
+  `remote_unavailable`, which no fixture can produce, and `invalid_id`,
   `public_key_unavailable` and `authority_not_found`, each a read's code
-  that no command of `execute` or `prepare` returns; and
-  `repository_inaccessible`, which a mutation returns where Git or a file
-  cannot be opened for a reason other than what is at the path, a state
-  no fixture holds on every platform. A golden may also be of one of
+  that no command of `execute` or `prepare` returns.
+  `repository_inaccessible` has a golden: a repository whose Git
+  configuration cannot be parsed is `repository_inaccessible`, `blocked`
+  with no action, on a rebuild and on a save. A golden may also be of one of
   three commands `execute` does not bind: `request show`,
   `request cancel` and `host observe`.
 - A golden of a command can be of a refusal. `item sync`, `repo sync`,
@@ -4221,6 +4239,9 @@ F1 changed no existing public function. F2 changes these:
       `not_repository_root` is "That path is inside a repository but is
       not a root this command takes.", which is true when a mutation
       gives it for a linked worktree root; a read's golden holds it too.
+    - F1's `HostPinDto` and `host_pin.schema.json` name the stored pin
+      `pinned_algorithm` and `pinned_fingerprint`, with the two read
+      goldens that hold them.
     - `canonical::front_matter` is new, within the crate. Visibility
       only: `read::credentials::stored_authority`, and the two fields of
       `HostTrustSnapshot`, are readable within the repository module.
