@@ -277,8 +277,35 @@ pub(crate) fn local_initials(repository: &Repository) -> Result<Option<String>, 
 impl LocalIdentity {
     /// Reads the repository's own configuration. Nothing is written and
     /// no lease is taken.
-    pub(crate) fn read(repository: &Repository) -> Result<Self, git2::Error> {
-        Self::of(&local_config(repository)?)
+    ///
+    /// Each of the three keys must be said at most once, and in the
+    /// configuration file itself. One that is there twice, or that a
+    /// file the configuration includes holds, is refused as
+    /// `RecoveryRequired`: Git will not set such a key, what it "holds"
+    /// is not one value, and the file is the user's to put right.
+    pub(crate) fn own(repository: &Repository, root: &Path) -> Result<Self, RepositoryError> {
+        let git = |error| RepositoryError::git(OPERATION, Some(root.to_owned()), error);
+        let config = local_config(repository).map_err(git)?;
+        for key in [NAME_KEY, EMAIL_KEY, INITIALS_KEY] {
+            let mut said = 0;
+            let mut included = false;
+            let mut entries = config.multivar(key, None).map_err(git)?;
+            while let Some(entry) = entries.next() {
+                let entry = entry.map_err(git)?;
+                said += 1;
+                included |= entry.include_depth() > 0;
+            }
+            if said > 1 || included {
+                return Err(RepositoryError::new(
+                    OPERATION,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::RecoveryRequired,
+                    "the repository's own Git configuration holds a key of the identity more \
+                     than once, or in an included file",
+                ));
+            }
+        }
+        Self::of(&config).map_err(git)
     }
 
     /// What `config` holds of an identity.
@@ -315,7 +342,7 @@ impl RepositoryService {
         let (repository, root) = identity_repository(&root)?;
         let git = |error| RepositoryError::git(OPERATION, Some(root.clone()), error);
         let _lease = repository_lease(&repository, &root, OPERATION)?;
-        let current = LocalIdentity::read(&repository).map_err(git)?;
+        let current = LocalIdentity::own(&repository, &root)?;
         if identity.held_by(&current) {
             return Ok(SetLocalIdentityOutcome::Unchanged(current));
         }

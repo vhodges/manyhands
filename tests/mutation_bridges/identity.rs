@@ -1200,7 +1200,7 @@ mod validation {
             items::TICKET_A,
             mutation::{self, REQUEST_1, REQUEST_2, World},
         },
-        boundary::{EMAIL, NAME, assert_set, details},
+        boundary::{EMAIL, NAME, details},
         *,
     };
 
@@ -1362,7 +1362,138 @@ mod validation {
             .unwrap();
         assert_eq!(commit.author().name(), Some(name));
         assert_eq!(commit.author().email(), Some(email));
-        // The plain identity of the other tests is as valid as it was.
-        let _ = assert_set;
+    }
+}
+
+/// A repository whose own configuration does not say one thing of a key
+/// the command sets: the key is there twice, or comes from a file the
+/// configuration includes. Git refuses to set such a key, so no preview
+/// is given of it.
+mod ambiguous {
+    use manyhands::results::{Outcome, ResultCode};
+
+    use super::{
+        super::support::confirmation::Desk,
+        boundary::{EMAIL, NAME, set, set_with},
+        *,
+    };
+
+    fn append(root: &Path, source: &str) {
+        let mut config = local_file(root);
+        config.extend_from_slice(source.as_bytes());
+        fs::write(root.join(".git/config"), config).unwrap();
+    }
+
+    /// What a scenario does to a repository before its request.
+    type Arrange = fn(&Path);
+
+    /// Each way a key can be said twice, or elsewhere.
+    fn arrangements() -> Vec<(&'static str, Arrange)> {
+        vec![
+            ("a name that is there twice", |root| {
+                append(root, "[user]\n\tname = Second Name\n");
+            }),
+            ("an email that is there twice", |root| {
+                append(root, "[user]\n\temail = second@example.invalid\n");
+            }),
+            ("initials that are there twice", |root| {
+                append(root, "[manyhands]\n\tinitials = aa\n\tinitials = bb\n");
+            }),
+            ("an email from an included file", |root| {
+                let mut own = git2::Config::open(&root.join(".git/config")).unwrap();
+                own.remove("user.email").unwrap();
+                drop(own);
+                fs::write(
+                    root.join(".git/identity.inc"),
+                    "[user]\n\temail = included@example.invalid\n",
+                )
+                .unwrap();
+                append(root, "[include]\n\tpath = identity.inc\n");
+            }),
+            (
+                "a name the file holds and an included file holds too",
+                |root| {
+                    fs::write(
+                        root.join(".git/identity.inc"),
+                        format!("[user]\n\tname = {NAME}\n"),
+                    )
+                    .unwrap();
+                    append(root, "[include]\n\tpath = identity.inc\n");
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_key_said_twice_or_in_an_included_file_gets_no_preview() {
+        git_home::isolated();
+        for (what, arrange) in arrangements() {
+            let plain = Plain::new();
+            arrange(&plain.root);
+            let desk = Desk::new();
+            let before = local_file(&plain.root);
+
+            for request in [
+                set(&plain.root),
+                set_with(&plain.root, InitialsChange::Set("ae".to_owned())),
+            ] {
+                let prepared = desk.prepare(&request);
+                assert_eq!(prepared.code, ResultCode::RecoveryRequired, "{what}");
+                assert_eq!(prepared.outcome, Outcome::Blocked, "{what}");
+                assert!(prepared.data.is_none(), "{what}");
+                assert_eq!(recovery_actions_of(&prepared), ["repo.inspect"], "{what}");
+            }
+            assert_eq!(desk.confirmation_rows(), 0, "{what}");
+            assert_eq!(local_file(&plain.root), before, "{what}");
+        }
+    }
+
+    fn recovery_actions_of<T>(envelope: &manyhands::results::Envelope<T>) -> Vec<&'static str> {
+        envelope
+            .recovery
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_key_said_twice_or_in_an_included_file_is_refused_by_the_operation() {
+        git_home::isolated();
+        for (what, arrange) in arrangements() {
+            let plain = Plain::new();
+            arrange(&plain.root);
+            let (service, _data) = service();
+            let before = local_file(&plain.root);
+
+            let error = service
+                .set_local_identity(SetLocalIdentityRequest {
+                    initials: InitialsChange::Set("ae".to_owned()),
+                    ..request(&plain.root, NAME, EMAIL)
+                })
+                .unwrap_err();
+
+            assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired, "{what}");
+            assert_eq!(local_file(&plain.root), before, "{what}");
+        }
+    }
+
+    /// A key that is said once, in the file itself, beside an include
+    /// that says other things: the command writes as it does anywhere.
+    #[test]
+    fn an_included_file_that_says_nothing_of_the_identity_is_no_obstacle() {
+        git_home::isolated();
+        let plain = Plain::new();
+        fs::write(plain.root.join(".git/other.inc"), "[core]\n\tabbrev = 12\n").unwrap();
+        append(&plain.root, "[include]\n\tpath = other.inc\n");
+        let (service, _data) = service();
+
+        let outcome = service
+            .set_local_identity(request(&plain.root, NAME, EMAIL))
+            .unwrap();
+
+        assert!(matches!(outcome, SetLocalIdentityOutcome::Changed(_)));
+        assert_eq!(local(&plain.root), held(NAME, EMAIL, None));
+        let written = String::from_utf8(local_file(&plain.root)).unwrap();
+        assert!(written.contains("path = other.inc"), "{written}");
     }
 }

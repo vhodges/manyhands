@@ -143,13 +143,16 @@ fn data(local: LocalIdentity) -> MutationDataDto {
 impl RepoIdentityBinding {
     /// Checks the input, and reads what a preview covers. Nothing is
     /// written and no lease is taken. An `Err` is an input that cannot
-    /// be written, a root that is no repository's own, or a read that
-    /// failed.
+    /// be written, a root that is no repository's own, a configuration
+    /// that says a key of the identity twice or in an included file, or
+    /// a read that failed.
     fn observe(&self) -> Result<Observed, Answer> {
         let asked = ValidIdentity::of(&self.name, &self.email, &self.initials).map_err(refused)?;
         let (repository, root) = identity_repository(&self.root).map_err(refused)?;
-        let current = LocalIdentity::read(&repository)
-            .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
+        // A key that is there twice, or in an included file, is refused
+        // here as `recovery_required`: no preview is given of what Git
+        // would then refuse to write.
+        let current = LocalIdentity::own(&repository, &root).map_err(refused)?;
         Ok(Observed {
             repository,
             root,
