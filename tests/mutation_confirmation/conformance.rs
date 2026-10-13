@@ -32,6 +32,11 @@ const ROWS: [Row; 6] = [
                     ..site.input()
                 }),
             },
+            // The target appears, with a file in it.
+            &|| {
+                fs::create_dir(&site.root).unwrap();
+                fs::write(site.root.join("notes.txt"), "mine\n").unwrap();
+            },
             rule,
         );
         Ok(())
@@ -49,6 +54,8 @@ const ROWS: [Row; 6] = [
                     ..plain.input()
                 }),
             },
+            // The worktree becomes dirty.
+            &|| fs::write(plain.root.join("untracked.txt"), "new\n").unwrap(),
             rule,
         );
         Ok(())
@@ -63,6 +70,8 @@ const ROWS: [Row; 6] = [
                 Ask::Same | Ask::Refused | Ask::Unconsented => home.remove_remote("backup"),
                 Ask::Changed => home.remove_remote("another"),
             },
+            // The remote is selected for publication.
+            &|| home.select(REQUEST_3, Some("backup")),
             rule,
         );
         Ok(())
@@ -78,6 +87,8 @@ const ROWS: [Row; 6] = [
                 // command.
                 Ask::Changed => home.remove_remote("backup"),
             },
+            // Another removes the registration.
+            &|| home.remove_registration_by_hand(),
             rule,
         );
         Ok(())
@@ -91,6 +102,10 @@ const ROWS: [Row; 6] = [
                 Ask::Same | Ask::Refused | Ask::Unconsented => keyring.delete_key(),
                 Ask::Changed => keyring.delete(SharedKeyId::new()),
             },
+            // The key is selected.
+            &|| {
+                keyring.service().select_shared_key(keyring.id).unwrap();
+            },
             rule,
         );
         Ok(())
@@ -103,6 +118,17 @@ const ROWS: [Row; 6] = [
             &|ask| match ask {
                 Ask::Same | Ask::Refused | Ask::Unconsented => stranded.abandon(),
                 Ask::Changed => abandon::abandon(&stranded.world.root, UNKNOWN),
+            },
+            // The operation records another step.
+            &|| {
+                items::index(stranded.world.data.path())
+                    .execute(
+                        "UPDATE operation_records
+                            SET completed_step = 'authoring_checkpoint_observed'
+                          WHERE state != 'completed'",
+                        [],
+                    )
+                    .unwrap();
             },
             rule,
         );

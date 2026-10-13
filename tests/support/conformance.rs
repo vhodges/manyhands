@@ -10,9 +10,18 @@
 //! 3. a request that is refused leaves no record;
 //! 4. a command that needs confirmation is refused without one, as
 //!    `confirmation_required`, and any other command is refused with
-//!    one, as `not_confirmable`; either way no record is left.
+//!    one, as `not_confirmable`; either way no record is left;
+//! 5. a command that needs confirmation is refused as `external_change`
+//!    when what its preview showed has changed by the time its
+//!    confirmation is presented, and no record is left. The confirmation
+//!    is a real one of the same request, so the refusal is the binding's
+//!    own comparison with what was previewed and not a check of the
+//!    confirmation. The rule is run for every row that says its command
+//!    needs confirmation, and fails for a row that gives no way to make
+//!    its preview stale: rule 4 fails a row that says its command needs
+//!    none when it does, so no confirmed command is without this rule.
 //!
-//! A row is a fixture and the four requests the rules make of it. The
+//! A row is a fixture and the requests the rules make of it. The
 //! rows are spread over four test targets, because the fixtures are:
 //! `HOMES` says which target holds the row of each command, and `run`,
 //! which each of those targets calls with its rows, fails for a bound
@@ -121,6 +130,11 @@ pub struct Subject<'w> {
     pub record: &'w dyn Fn(&str) -> Option<Recorded>,
     /// How many request records there are.
     pub request_rows: &'w dyn Fn() -> i64,
+    /// For a command that needs confirmation: takes the preview whose
+    /// confirmation `Ask::Same` presents, and then changes what that
+    /// preview showed, as another actor would. `None` for a command that
+    /// needs none.
+    pub outdate: Option<&'w dyn Fn()>,
 }
 
 /// What a rule is expected to do for a command.
@@ -287,15 +301,31 @@ fn consent(row: &Row, subject: &Subject<'_>) {
     refused(row.command, subject, Ask::Unconsented, expected);
 }
 
+fn stale(row: &Row, subject: &Subject<'_>) {
+    let command = row.command;
+    let outdate = subject.outdate.unwrap_or_else(|| {
+        panic!(
+            "{command}: a command that needs confirmation has no stale-preview row: its \
+             fixture gives no way to change what its preview showed"
+        )
+    });
+    outdate();
+    refused(command, subject, Ask::Same, "external_change");
+}
+
 type Rule = fn(&Row, &Subject<'_>);
 
-fn rules(row: &Row) -> [(&'static str, Rule, Expect); 4] {
-    [
+fn rules(row: &Row) -> Vec<(&'static str, Rule, Expect)> {
+    let mut rules: Vec<(&'static str, Rule, Expect)> = vec![
         ("replay", replay, row.replay),
         ("mismatch", mismatch, row.mismatch),
         ("refusal", refusal, row.refusal),
         ("consent", consent, row.consent),
-    ]
+    ];
+    if row.confirmed {
+        rules.push(("stale preview", stale, Expect::Holds));
+    }
+    rules
 }
 
 /// The message a panic carried.

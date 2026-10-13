@@ -3,19 +3,21 @@
 //! `repo identity-set` needs confirmation: its request presents the
 //! confirmation of a preview of it. The request that is refused presents
 //! a confirmation no preview gave, and the one with the wrong consent
-//! presents none. A refusal by the binding itself, for a preview that is
-//! stale, is in `identity::boundary`.
+//! presents none. The preview is made stale by a value changed in the
+//! repository's own configuration.
 //!
 //! `document repair` and `ticket repair` need confirmation too, and are
 //! driven the same way: the request that is changed carries another
-//! source, which is another ID. A refusal by the binding itself, for a
-//! preview that is stale, is in `tests/mutation_confirmation/repair.rs`.
+//! source, which is another ID. The preview is made stale by an edit of
+//! the file, committed on primary.
 //!
 //! `folder create` needs none. The request that is refused is one the
 //! domain refuses, for a file at its path: it was accepted first, and
 //! the rule is that nothing of it is left.
 
-use manyhands::repository::{FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput};
+use manyhands::repository::{
+    FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput, TicketRepairInput,
+};
 
 use super::support::{
     confirmation::{Desk, Plain},
@@ -24,6 +26,9 @@ use super::support::{
     mutation::{World, drive_confirmed, drive_plain},
     repair::{self, Shelf},
 };
+
+/// What someone commits on primary over the file a preview was of.
+const EDITED: &str = "---\nmanyhands_managed: true\n---\nEdited since the preview.\n";
 
 const ROWS: [Row; 4] = [
     Row::new("document repair", true, "confirmation_not_found", |rule| {
@@ -40,6 +45,10 @@ const ROWS: [Row; 4] = [
                 Ask::Same | Ask::Refused | Ask::Unconsented => with(repair::ADOPTED),
                 Ask::Changed => with(repair::UNHELD),
             },
+            // The file is edited and committed on primary.
+            &|| {
+                shelf.commit_on_primary(repair::MARKER_PATH, EDITED);
+            },
             rule,
         );
         Ok(())
@@ -48,9 +57,17 @@ const ROWS: [Row; 4] = [
         git_home::isolated();
         let shelf = Shelf::new();
         let path = items::ticket_path(repair::TICKET_MARKER);
+        // The token the file has when the row begins: a request that
+        // read it anew after the file changed would be another request
+        // than the one its confirmation is of.
+        let token = shelf.path_token(&path);
         let with = |title: &str| {
-            let source = repair::ticket(repair::TICKET_MARKER, &format!("team: {title}\n"));
-            shelf.ticket_repair(&path, &source)
+            Mutation::TicketRepair(TicketRepairInput {
+                root: shelf.root.clone(),
+                path: path.clone().into(),
+                observation: token.clone(),
+                source: repair::ticket(repair::TICKET_MARKER, &format!("team: {title}\n")),
+            })
         };
         drive_confirmed(
             &shelf.service,
@@ -58,6 +75,9 @@ const ROWS: [Row; 4] = [
             &|ask| match ask {
                 Ask::Same | Ask::Refused | Ask::Unconsented => with("one"),
                 Ask::Changed => with("other"),
+            },
+            &|| {
+                shelf.commit_on_primary(&path, EDITED);
             },
             rule,
         );
@@ -107,6 +127,13 @@ const ROWS: [Row; 4] = [
                 &|ask| match ask {
                     Ask::Same | Ask::Refused | Ask::Unconsented => set("Ada Example"),
                     Ask::Changed => set("Ada Other"),
+                },
+                // A value of the repository's own configuration changes.
+                &|| {
+                    git2::Config::open(&plain.root.join(".git/config"))
+                        .unwrap()
+                        .set_str("user.email", "later@example.invalid")
+                        .unwrap();
                 },
                 rule,
             );

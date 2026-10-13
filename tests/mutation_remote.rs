@@ -4388,6 +4388,8 @@ fn conforming(
     };
     let w = built().map_err(|_| "a world with a server".to_owned())?;
     rule(&Subject {
+        // A synchronization needs no confirmation.
+        outdate: None,
         call: &|id, ask| {
             let confirmation = match ask {
                 Ask::Same | Ask::Changed | Ask::Refused => None,

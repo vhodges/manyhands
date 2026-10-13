@@ -1237,9 +1237,11 @@ fn drive(
     service: &RepositoryService,
     data: &Path,
     call: &dyn Fn(&str, Ask) -> Envelope<MutationDataDto>,
+    outdate: Option<&dyn Fn()>,
     rule: &mut dyn FnMut(&Subject<'_>),
 ) {
     rule(&Subject {
+        outdate,
         call: &|request_id, ask| rendered(&call(request_id, ask)),
         record: &|request_id| {
             service
@@ -1282,6 +1284,7 @@ pub fn drive_plain(
                 request(Ask::Same),
             ),
         },
+        None,
         rule,
     );
 }
@@ -1292,10 +1295,15 @@ pub fn drive_plain(
 /// `Ask::Same`, made when the first of them is asked for. The request
 /// that is refused is `Ask::Same` presenting a confirmation no preview
 /// gave, and the one with the wrong consent presents none.
+///
+/// `change` changes what a preview of `Ask::Same` shows, as another
+/// actor would: the stale-preview rule takes the preview, calls it, and
+/// then presents the preview's confirmation.
 pub fn drive_confirmed(
     service: &RepositoryService,
     data: &Path,
     request: &dyn Fn(Ask) -> Mutation,
+    change: &dyn Fn(),
     rule: &mut dyn FnMut(&Subject<'_>),
 ) {
     let confirmation = std::cell::OnceCell::new();
@@ -1323,6 +1331,10 @@ pub fn drive_confirmed(
             ),
             Ask::Unconsented => execute_with(service, request_id, request(Ask::Same)),
         },
+        Some(&|| {
+            previewed();
+            change();
+        }),
         rule,
     );
 }

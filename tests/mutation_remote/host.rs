@@ -1364,6 +1364,9 @@ fn the_output_privacy_scan_passes_what_a_host_approval_emits_and_fails_the_key_p
 /// present the confirmation of one preview of `Ask::Same`; the request
 /// that is refused presents a confirmation no preview gave, and the one
 /// with the wrong consent presents none.
+///
+/// The preview is made stale by another actor's pin: the host is pinned
+/// to a third key, with no connection.
 fn conforming(
     arrange: fn(&World) -> Result<(), FixtureError>,
     request: fn(&World, conformance::Ask) -> Mutation,
@@ -1377,14 +1380,21 @@ fn conforming(
     };
     let w = built().map_err(|_| "a world with a server".to_owned())?;
     let confirmation = std::cell::OnceCell::new();
+    let previewed = || -> String {
+        confirmation
+            .get_or_init(|| preview(&w, &request(&w, Ask::Same)).expect("a preview").0)
+            .clone()
+    };
     rule(&Subject {
+        outdate: Some(&|| {
+            previewed();
+            w.service
+                .approve_host_pin_for_testing(&authority(&w.server), &third_key())
+                .expect("another actor's pin");
+        }),
         call: &|id, ask| {
             let presented = match ask {
-                Ask::Same | Ask::Changed => Some(
-                    confirmation
-                        .get_or_init(|| preview(&w, &request(&w, Ask::Same)).expect("a preview").0)
-                        .clone(),
-                ),
+                Ask::Same | Ask::Changed => Some(previewed()),
                 Ask::Refused => Some(NO_SUCH_CONFIRMATION.to_owned()),
                 Ask::Unconsented => None,
             };
@@ -1417,6 +1427,14 @@ fn fixed_other_key() -> HostKeyIdentity {
     HostKeyIdentity {
         algorithm: "ssh-ed25519".into(),
         sha256: format!("SHA256:{}", "A".repeat(43)),
+    }
+}
+
+/// A key that is neither the server's nor `fixed_other_key`.
+fn third_key() -> HostKeyIdentity {
+    HostKeyIdentity {
+        algorithm: "ssh-ed25519".into(),
+        sha256: format!("SHA256:{}A", "C".repeat(42)),
     }
 }
 
