@@ -64,7 +64,10 @@ enablement, in `RepositoryService::enable_recorded` (`src/repository.rs`).
   repository has no commit yet; writes `.git/info/exclude`; creates the
   `.manyhands` directory; writes `.manyhands/config.toml`; records the step in
   its journal; builds a tree; and makes the initialization commit. None of
-  those later steps writes Git configuration.
+  those later steps is a call that sets a configuration key. That libgit2
+  writes no Git configuration inside its own `set_head` and commit calls is
+  assumed from reading enablement's calls; libgit2's code for those calls was
+  not read, and this must be checked in planning.
 - **Restore.** If any of those steps returns an error, `restore_enablement`
   runs. When the request supplied an identity it calls `restore_file` on
   `.git/config` with the snapshot. `restore_file` calls
@@ -201,7 +204,9 @@ rename removes its lock and has not touched the file.
 For enablement the question is where the rename goes among the other steps,
 because enablement also writes files, a commit and journal rows. The commit
 does not read the identity from configuration: `enable_recorded` passes the
-name and email to the commit directly. So the lock can be taken before the
+name and email to the commit directly. So, provided libgit2 itself writes no
+Git configuration while it moves `HEAD` and makes the commit (assumed, not
+confirmed; see "Open points for planning"), the lock can be taken before the
 first write and renamed after the commit succeeds. With that order a failed
 enablement has never touched `.git/config`, and nothing needs restoring.
 
@@ -358,6 +363,11 @@ could be done with either A or B.
 - Where exactly the rename sits relative to the commit and the
   `InitializationCommitted` journal step, and what a retry does when it
   finds the commit made and the identity not stored.
+- Whether libgit2 writes Git configuration inside `Repository::set_head` or
+  `Repository::commit`. Option A's order (lock held across the commit)
+  depends on it not doing so. This was assumed from reading enablement's own
+  calls and was not confirmed in libgit2's source; if either call does write
+  configuration, it would fail against the lock enablement holds.
 - Whether a failed enablement must still leave `.git/config` byte-identical
   (true under A; not established under B).
 - Whether enablement should refuse, before writing anything, a
