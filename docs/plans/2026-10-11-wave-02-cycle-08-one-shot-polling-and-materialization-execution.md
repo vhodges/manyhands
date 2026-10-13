@@ -10,6 +10,53 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 4 Independent Blocker Confirmation — 2026-10-13T19:58:22Z
+
+Controller conveyed independent read-only blocker review
+`ses_ec92a184effe7ndQKcvXtxKxkg`: **CONFIRMED contract contradiction**. This
+records reviewer confirmation, not owner approval of an amendment. Earlier Task 3
+review approvals were likewise reported by the controller, not directly by the
+owner. Documentation-only checkpoint base:
+`b3f989c0f963c3b933d8ab4479e037271e70e775`; assigned worktree/branch verified clean.
+
+The independent review grounds the contradiction in these unchanged sources:
+
+- Design lines 303–304 require regular non-executable canonical sources.
+- Implementation plan lines 310–318 require negative executable-mode tests and
+  two-way agreement with existing discovery; lines 325–327 restrict shared
+  helper/rule changes to visibility widening without body changes.
+- `src/repository/discovery.rs:389–479` accepts a valid registration, exact
+  authoring branch and valid matching item. Lines 1077–1078 and 1304–1336 collect
+  regular UTF-8 files without an executable-permission exclusion.
+- `src/canonical.rs:354–359` accepts the reproduced document's valid fields;
+  canonical document parsing has no executable-mode input.
+- **Tree-reader clarification:**
+  `src/repository/remote/sync.rs:4487–4533` captures entry modes in the snapshot;
+  it does not itself reject executable entries. Future poll conformity validation
+  must enforce any retained non-executable rule using that captured information.
+
+### Focused Proposal For Owner — UNAPPROVED, Awaiting Decision
+
+Recommended amendment: retain the non-executable poll conformity rule and leave
+discovery behavior unchanged, but require only **accepted tree ⇒ active context**
+after checkout. Poll validation may be stricter than discovery. Remove the
+**rejected tree ⇒ inactive context** implication from the agreement requirement.
+This proposal is recorded for decision only; it does not change the approved
+Cycle contract, design or implementation plan.
+
+Other options require an explicit owner decision: accepting executable poll
+items changes the approved policy; authorizing discovery behavior changes
+broadens Task 4's scope beyond visibility-only changes. No option is approved
+by this review or this bookkeeping authorization.
+
+**Task 4 remains blocked awaiting OWNER amendment**, unticked, ticket open.
+No implementation or test was added or run for this checkpoint, and no later
+task was started. The deferred Task 2 direct-SQL kind-immutability minor remains
+explicit for final Cycle review. Canonical Node-generated comment
+`01M4VDGDZ2RRWK1V2RTTN6JHMJ` records the independent confirmation and unapproved
+proposal. Only ledger, ticket and comment are intended for the authorized local
+documentation commit; schema/rendering and whitespace checks precede commit.
+
 ## Task 4 Blocked Before Production — 2026-10-13T19:53:29Z
 
 Fresh implementer assigned **Task 4 only**, inline, no subagents, in the assigned

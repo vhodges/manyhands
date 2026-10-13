@@ -84,6 +84,9 @@ and the baseline.
   discovery-agreement RED: 8 passed, 1 failed, 523 filtered. Existing discovery
   accepts a valid executable document tree that poll must reject; two-way
   agreement conflicts with visibility-only changes. Probe removed, Rust unchanged.
+  Independent read-only review `ses_ec92a184effe7ndQKcvXtxKxkg` CONFIRMED the
+  contradiction. Awaiting OWNER amendment; accepted⇒active-only proposal is
+  UNAPPROVED, recorded in comment `01M4VDGDZ2RRWK1V2RTTN6JHMJ` and the ledger.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
