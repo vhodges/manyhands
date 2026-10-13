@@ -1,0 +1,55 @@
+{
+  "code": "ok",
+  "command": "host approve",
+  "data": {
+    "command": "host approve",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "algorithm": "ssh-ed25519",
+      "current_algorithm": null,
+      "current_fingerprint": null,
+      "fetch": true,
+      "fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
+      "host": "git.example.invalid",
+      "port": 2222,
+      "push": true,
+      "reapproval_required": false,
+      "root": "<root>"
+    },
+    "effects": [
+      {
+        "effect": "host_pinned"
+      }
+    ],
+    "expires_at": "2023-11-14T22:23:20Z",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}
