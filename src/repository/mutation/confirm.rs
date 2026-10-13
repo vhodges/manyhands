@@ -31,7 +31,7 @@ use super::{
         Accepted, Answer, Binding, CallContext, Confirmed, Entered, Place, Previewed, Ran, Standing,
     },
     command::Command,
-    dto::{MutationDataDto, PreviewDto, PreviewEffectDto},
+    dto::{HostReplacementDto, MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
     observe::ObservationDigest,
     outcome,
@@ -86,18 +86,23 @@ pub(super) fn scope_key(place: Place<'_>) -> Option<ScopeKey> {
 /// The envelope of a `prepare` that gave no preview: a rejection, or a
 /// no-op for a command whose end state already holds. It names no
 /// request, since `prepare` is of none.
-fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<PreviewDto> {
+fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<PrepareDataDto> {
     let Answer {
         code,
         effects,
-        // A preview is the only data `prepare` gives.
+        // What a request would report is not what `prepare` gives: a
+        // preview, or what the one refusal below is about.
         data: _,
         // What the binding or a read suggested is kept, as `execute`
         // keeps it; `outcome::offered` decides.
         recovery,
         local_change,
         offers_nothing,
+        host_replacement,
     } = answer;
+    // The host a refusal is about is named by its data, and the action
+    // that replaces its pin takes the host.
+    let authority = host_replacement.as_ref().map(HostReplacementDto::authority);
     let recovery = outcome::offered(
         &outcome::Named {
             code,
@@ -110,10 +115,15 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         },
         recovery,
         offers_nothing,
-        None,
+        authority.as_deref(),
     );
-    Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
-        .with_recovery(recovery)
+    let envelope =
+        Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
+            .with_recovery(recovery);
+    match host_replacement {
+        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(data)),
+        None => envelope,
+    }
 }
 
 /// How the row of a confirmed request's operation reads when the request
@@ -273,14 +283,14 @@ impl RepositoryService {
     ///
     /// The envelope names no request: `prepare` changes no canonical or
     /// Git state, and the confirmation ID is how a caller refers to it.
-    pub fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+    pub fn prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto> {
         let envelope = self.prepare_call(mutation);
         self.offering(envelope, outcome::CallKind::Prepare)
     }
 
     /// One call of `prepare`, before the journal is asked what its
     /// envelope can offer.
-    fn prepare_call(&self, mutation: &Mutation) -> Envelope<PreviewDto> {
+    fn prepare_call(&self, mutation: &Mutation) -> Envelope<PrepareDataDto> {
         let command = mutation.kind();
         let Some(mut binding) = mutation.confirmed() else {
             return without_preview(
@@ -345,7 +355,7 @@ impl RepositoryService {
             Effects::not_requested(),
             false,
         )
-        .with_data(PreviewDto {
+        .with_data(PrepareDataDto::Preview(PreviewDto {
             confirmation_id: confirmation_id.to_string(),
             expires_at: expires,
             command: command.name().to_owned(),
@@ -355,7 +365,7 @@ impl RepositoryService {
                 .map(|effect| PreviewEffectDto { effect })
                 .collect(),
             details,
-        })
+        }))
     }
 
     /// The consent a request no record holds runs with: the confirmation

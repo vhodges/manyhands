@@ -16,6 +16,7 @@ use manyhands::{
     results::{DiscoveryEffect, Effects, Envelope, Outcome, ResultCode},
 };
 
+use super::support::mutation::Previewed as _;
 use super::support::{
     FailOnce,
     confirmation::{Desk, Plain},
@@ -1280,7 +1281,7 @@ mod boundary {
                 operation_id: id,
             })
         };
-        let preview = world.service.prepare(&abandon());
+        let preview = world.service.prepare(&abandon()).previewed();
         assert_eq!(preview.code, ResultCode::Ok, "{preview:?}");
         let confirmation = preview.data.unwrap().confirmation_id;
         let abandoned =

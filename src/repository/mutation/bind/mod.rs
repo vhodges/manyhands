@@ -22,7 +22,7 @@ use super::{
     command::Command,
     confirm::{Row, Seen},
     context::context_names,
-    dto::{MutationDataDto, PreviewDetailsDto, PreviewEffect},
+    dto::{HostReplacementDto, MutationDataDto, PreviewDetailsDto, PreviewEffect},
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     observe::ObservationDigest,
@@ -279,6 +279,10 @@ pub(crate) struct Answer {
     /// binding knows that none of the code's actions gets past what
     /// stopped the request.
     pub(crate) offers_nothing: bool,
+    /// What a preview of `host approve` is refused with for a host that
+    /// has a pin: the one data a `prepare` gives that is no preview. No
+    /// answer of `execute` holds it.
+    pub(crate) host_replacement: Option<HostReplacementDto>,
 }
 
 impl Answer {
@@ -291,6 +295,7 @@ impl Answer {
             recovery: Vec::new(),
             local_change: false,
             offers_nothing: false,
+            host_replacement: None,
         }
     }
 

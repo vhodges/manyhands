@@ -12,10 +12,10 @@ use std::{
 use manyhands::{
     canonical,
     repository::{
-        CommitIdentity, FailurePoint, KeyDeleteInput, Mutation, MutationDataDto, PreviewDto,
-        RemoteRemoveInput, RemoteSelectInput, RemoveRegistrationRequest, RepoCreateInput,
-        RepoEnableInput, RepoRemoveInput, RepositoryService, RequestId, RequestState, SharedKeyId,
-        request_store::RequestRecord,
+        CommitIdentity, FailurePoint, KeyDeleteInput, Mutation, MutationDataDto, PrepareDataDto,
+        PreviewDto, RemoteRemoveInput, RemoteSelectInput, RemoveRegistrationRequest,
+        RepoCreateInput, RepoEnableInput, RepoRemoveInput, RepositoryService, RequestId,
+        RequestState, SharedKeyId, request_store::RequestRecord,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -23,7 +23,7 @@ use manyhands::{
 use super::{
     TestRepository, born_repository, golden, items,
     mutation::{
-        self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, REQUEST_3, TestClock, World,
+        self, KeyWorld, PASSPHRASE, PASSPHRASE_SENTINEL, Previewed, REQUEST_3, TestClock, World,
         execute_confirmed, execute_with, key_data,
     },
     schema,
@@ -61,8 +61,22 @@ pub fn preview_schema(command: &str) -> &'static str {
     }
 }
 
-/// `prepare`, with its envelope checked against the published contract.
+/// The published schema of what a `host approve` is refused with at
+/// `prepare` for a host that has a pin.
+pub const HOST_REPLACEMENT_SCHEMA: &str = "host_replacement.schema.json";
+
+/// `prepare`, with its envelope checked against the published contract,
+/// as an envelope of a preview.
 pub fn prepare_with(service: &RepositoryService, mutation: &Mutation) -> Envelope<PreviewDto> {
+    prepare_whole_with(service, mutation).previewed()
+}
+
+/// `prepare`, with its envelope checked against the published contract,
+/// as it is given.
+pub fn prepare_whole_with(
+    service: &RepositoryService,
+    mutation: &Mutation,
+) -> Envelope<PrepareDataDto> {
     let envelope = service.prepare(mutation);
     let value = serde_json::to_value(&envelope).unwrap();
     schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
@@ -71,8 +85,14 @@ pub fn prepare_with(service: &RepositoryService, mutation: &Mutation) -> Envelop
     // A preview is of no request.
     assert_eq!(envelope.request_id, None);
     assert_eq!(envelope.operation_id, None);
-    if !value["data"].is_null() {
-        schema::check_published(preview_schema(mutation.command()), &value["data"]).unwrap();
+    match &envelope.data {
+        Some(PrepareDataDto::Preview(_)) => {
+            schema::check_published(preview_schema(mutation.command()), &value["data"]).unwrap();
+        }
+        Some(PrepareDataDto::HostReplacement(_)) => {
+            schema::check_published(HOST_REPLACEMENT_SCHEMA, &value["data"]).unwrap();
+        }
+        None => {}
     }
     envelope
 }

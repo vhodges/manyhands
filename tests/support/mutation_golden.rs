@@ -41,6 +41,7 @@ pub const CASES: &[&str] = &[
     "folder_create_occupied",
     "host_approve_external_change",
     "host_approve_host_mismatch",
+    "host_approve_host_replacement_required",
     "host_approve_preview",
     "host_approve_preview_noop",
     "host_inspect_observation",

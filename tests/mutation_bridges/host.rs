@@ -12,15 +12,15 @@ use std::path::Path;
 
 use manyhands::{
     repository::{
-        HostApproveInput, HostObservationDto, HostReplaceInput, Mutation, PreviewDetailsDto,
-        PreviewEffect,
+        HostApproveInput, HostObservationDto, HostReplaceInput, HostReplacementDto, Mutation,
+        PrepareDataDto, PreviewDetailsDto, PreviewEffect,
         transport::{HostKeyIdentity, SshAuthority},
     },
     results::{Envelope, Outcome, ResultCode, Scope},
 };
 
 use super::support::{
-    confirmation::{HOST_PREVIEW_SCHEMA, Home},
+    confirmation::{HOST_PREVIEW_SCHEMA, HOST_REPLACEMENT_SCHEMA, Home, prepare_whole_with},
     git_home,
     golden::ContractCase,
     mutation::{self, REQUEST_1, REQUEST_2, REQUEST_3, recovery_actions},
@@ -148,9 +148,38 @@ fn the_previews_and_the_local_answers_of_a_host_approval_match_their_schemas_and
     assert_golden("host_approve_external_change", &root, HOST_SCHEMA, &stale);
 
     // A host that has a pin is not approved: its pin is replaced.
-    let pinned = home.prepare(&approve(&root, &first));
+    // The refusal says what the replacement is formed from, as the same
+    // code from a synchronization does: the host, its pin, the key this
+    // request named, and the action. Nothing was connected to, so it
+    // says nothing of a key the host presents.
+    let pinned = prepare_whole_with(home.service(), &approve(&root, &first));
     assert_eq!(pinned.code, ResultCode::HostReplacementRequired);
-    assert!(pinned.data.is_none());
+    assert_eq!(
+        pinned.data,
+        Some(PrepareDataDto::HostReplacement(HostReplacementDto {
+            host: "git.example.invalid".to_owned(),
+            port: 2222,
+            algorithm: first.algorithm.clone(),
+            fingerprint: first.sha256.clone(),
+            pinned_algorithm: second.algorithm.clone(),
+            pinned_fingerprint: second.sha256.clone(),
+        }))
+    );
+    assert_eq!(recovery_actions(&pinned), ["host.replace"]);
+    assert_eq!(
+        pinned.recovery[0].arguments["authority"],
+        "git.example.invalid:2222"
+    );
+    assert_eq!(
+        pinned.recovery[0].arguments["root"].as_str(),
+        pinned.scope.repository.as_deref()
+    );
+    assert_golden(
+        "host_approve_host_replacement_required",
+        &root,
+        HOST_REPLACEMENT_SCHEMA,
+        &pinned,
+    );
     let replacing = home.prepare(&replace(&root, &second, &first));
     assert_eq!(replacing.outcome, Outcome::Success, "{}", replacing.message);
     assert_golden(

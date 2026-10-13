@@ -19,6 +19,7 @@ use serde_json::Value;
 
 mod support;
 
+use support::mutation::Previewed as _;
 use support::{
     FailOnce,
     confirmation::Unregistered,
@@ -834,7 +835,7 @@ fn a_repo_enable_and_its_preview_match_their_schemas_and_goldens() {
     assert_eq!(required.code, ResultCode::ConfirmationRequired);
     assert_repository_contract("repo_enable_confirmation_required", &world.root, &required);
 
-    let stale = world.service.prepare(&world.enable());
+    let stale = world.service.prepare(&world.enable()).previewed();
     assert_eq!(stale.outcome, Outcome::Success);
     assert_repository_contract("repo_enable_preview", &world.root, &stale);
     let stale = stale.data.unwrap().confirmation_id;
@@ -848,7 +849,7 @@ fn a_repo_enable_and_its_preview_match_their_schemas_and_goldens() {
     assert_eq!(enabled.outcome, Outcome::Success);
     assert_repository_contract("repo_enable", &world.root, &enabled);
 
-    let noop = world.service.prepare(&world.enable());
+    let noop = world.service.prepare(&world.enable()).previewed();
     assert_eq!(noop.outcome, Outcome::Noop);
     assert_repository_contract("repo_enable_preview_noop", &world.root, &noop);
     drop(world.fixture);
@@ -861,7 +862,7 @@ fn a_repo_enable_of_a_conflicted_worktree_matches_its_golden() {
     let world = Unregistered::new();
     support::conflict_primary_worktree(&world.fixture);
 
-    let refused = world.service.prepare(&world.enable());
+    let refused = world.service.prepare(&world.enable()).previewed();
 
     assert_eq!(refused.code, ResultCode::WorktreeConflicted);
     assert_eq!(refused.outcome, Outcome::Blocked);
@@ -904,6 +905,7 @@ fn a_repo_enable_whose_registration_is_pending_matches_its_golden() {
     let confirmation = world
         .service
         .prepare(&world.enable())
+        .previewed()
         .data
         .unwrap()
         .confirmation_id;
@@ -934,7 +936,7 @@ fn a_repo_create_and_its_preview_match_their_schemas_and_goldens() {
     // repository is initialized leaves it.
     std::fs::create_dir(&root).unwrap();
     let service = Unregistered::open(data.path(), None);
-    let preview = service.prepare(&create());
+    let preview = service.prepare(&create()).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     assert_repository_contract("repo_create_preview", &root, &preview);
     let confirmation = preview.data.unwrap().confirmation_id;
@@ -981,7 +983,7 @@ fn a_remote_remove_and_its_preview_match_their_schemas_and_goldens() {
     };
     let secret = [REMOTE_SECRET];
 
-    let preview = world.service.prepare(&remove());
+    let preview = world.service.prepare(&remove()).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     assert_confirmed_contract(
         "remote_remove_preview",
@@ -1002,7 +1004,7 @@ fn a_remote_remove_and_its_preview_match_their_schemas_and_goldens() {
         &removed,
     );
 
-    let noop = world.service.prepare(&remove());
+    let noop = world.service.prepare(&remove()).previewed();
     assert_eq!(noop.outcome, Outcome::Noop);
     assert_confirmed_contract(
         "remote_remove_preview_noop",
@@ -1024,7 +1026,7 @@ fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
         })
     };
 
-    let preview = world.service.prepare(&remove());
+    let preview = world.service.prepare(&remove()).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     // When the repository was registered differs from run to run.
     let enabled_at = match &preview.data.as_ref().unwrap().details {
@@ -1053,7 +1055,7 @@ fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
         &removed,
     );
 
-    let noop = world.service.prepare(&remove());
+    let noop = world.service.prepare(&remove()).previewed();
     assert_eq!(noop.outcome, Outcome::Noop);
     assert_confirmed_contract(
         "repo_remove_preview_noop",
@@ -1088,7 +1090,7 @@ fn an_operation_abandon_and_its_preview_match_their_schemas_and_goldens() {
     };
     let replaced = [(operation_id.as_str(), "<abandoned>")];
 
-    let preview = world.service.prepare(&abandon(&operation_id));
+    let preview = world.service.prepare(&abandon(&operation_id)).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     assert_confirmed_contract_replacing(
         "operation_abandon_preview",
@@ -1116,7 +1118,7 @@ fn an_operation_abandon_and_its_preview_match_their_schemas_and_goldens() {
         &abandoned,
     );
 
-    let noop = world.service.prepare(&abandon(&operation_id));
+    let noop = world.service.prepare(&abandon(&operation_id)).previewed();
     assert_eq!(noop.outcome, Outcome::Noop);
     assert_confirmed_contract_replacing(
         "operation_abandon_preview_noop",
@@ -1129,7 +1131,8 @@ fn an_operation_abandon_and_its_preview_match_their_schemas_and_goldens() {
 
     let unknown = world
         .service
-        .prepare(&abandon("01ARZ3NDEKTSV4RRFFQ69G5FZZ"));
+        .prepare(&abandon("01ARZ3NDEKTSV4RRFFQ69G5FZZ"))
+        .previewed();
     assert_eq!(unknown.code, ResultCode::OperationNotFound);
     assert_confirmed_contract(
         "operation_abandon_preview_not_found",
@@ -1249,7 +1252,7 @@ fn a_key_delete_and_its_preview_match_their_schemas_and_goldens() {
         );
     };
 
-    let preview = world.service.prepare(&delete(&world));
+    let preview = world.service.prepare(&delete(&world)).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     check(
         "key_delete_preview",
@@ -1434,7 +1437,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 43] = [
+const DATA_ROOTS: [&str; 44] = [
     "cancel.schema.json",
     "comment_list.schema.json",
     "cycle_list.schema.json",
@@ -1446,6 +1449,7 @@ const DATA_ROOTS: [&str; 43] = [
     "host_pin.schema.json",
     "host_pin_list.schema.json",
     "host_preview.schema.json",
+    "host_replacement.schema.json",
     "identity.schema.json",
     "identity_mutation.schema.json",
     "identity_preview.schema.json",

@@ -447,6 +447,76 @@ pub struct PreviewDto {
     pub details: PreviewDetailsDto,
 }
 
+/// What a `prepare` of `host approve` reports when it is refused as
+/// `host_replacement_required`: the host has a pin, and a pin is changed
+/// by `host replace` and by nothing else. With the `host.replace` action
+/// the result offers, it is what that request is formed from:
+/// `pinned_fingerprint` is its old fingerprint, and `algorithm` and
+/// `fingerprint` are the key the refused request named.
+///
+/// A preview connects to nothing, so no key the host presents is known
+/// here, and none is reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostReplacementDto {
+    /// The host, in lower case.
+    pub host: String,
+    pub port: u16,
+    /// The algorithm and the fingerprint of the key the request names.
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// The pin stored for the host now.
+    pub pinned_algorithm: String,
+    pub pinned_fingerprint: String,
+}
+
+impl HostReplacementDto {
+    /// The host as a recovery action names it: `host:port`, with an
+    /// address that holds a colon in brackets.
+    pub(crate) fn authority(&self) -> String {
+        authority_text(&self.host, self.port)
+    }
+}
+
+/// A host as a recovery action and a record's target name it:
+/// `host:port`, with an address that holds a colon in brackets.
+pub(crate) fn authority_text(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// The `data` of a `prepare` envelope: the preview, or, for the one
+/// refusal that reports any, what the refusal is about. A `prepare`
+/// that gives neither carries no data: every other rejection, and a
+/// no-op for a command whose end state already holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum PrepareDataDto {
+    Preview(PreviewDto),
+    /// Of `host approve`, refused as `host_replacement_required`.
+    HostReplacement(HostReplacementDto),
+}
+
+impl PrepareDataDto {
+    /// The preview, when the data is one.
+    pub fn preview(&self) -> Option<&PreviewDto> {
+        match self {
+            Self::Preview(preview) => Some(preview),
+            Self::HostReplacement(_) => None,
+        }
+    }
+
+    /// The preview, when the data is one.
+    pub fn into_preview(self) -> Option<PreviewDto> {
+        match self {
+            Self::Preview(preview) => Some(preview),
+            Self::HostReplacement(_) => None,
+        }
+    }
+}
+
 /// The `data` of a mutation's envelope: the shape of the command's family.
 /// It may accompany any outcome and never holds a body or a source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -586,11 +656,7 @@ impl SynchronizationMutationDto {
     /// The host as a recovery action names it: `host:port`, with an
     /// address that holds a colon in brackets.
     pub(crate) fn authority(&self) -> String {
-        if self.host.contains(':') {
-            format!("[{}]:{}", self.host, self.port)
-        } else {
-            format!("{}:{}", self.host, self.port)
-        }
+        authority_text(&self.host, self.port)
     }
 
     /// The data as a finished record stored it.

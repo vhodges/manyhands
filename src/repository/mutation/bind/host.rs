@@ -73,8 +73,8 @@ use super::{
         },
         command::Command,
         dto::{
-            HostMutationDto, HostObservationDto, HostPreviewDto, MutationDataDto,
-            PreviewDetailsDto, PreviewEffect,
+            self, HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto,
+            MutationDataDto, PreviewDetailsDto, PreviewEffect,
         },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
@@ -116,14 +116,9 @@ const HOST_INSPECT: &str = "host inspect";
 /// No row is ever read for the commands: they have no operation.
 const NO_ROW: JournalRow = JournalRow::Absent;
 
-/// The host as a record's target names it: `host:port`, with an address
-/// that holds a colon in brackets.
+/// The host as a record's target names it.
 fn authority_text(authority: &SshAuthority) -> String {
-    if authority.host.contains(':') {
-        format!("[{}]:{}", authority.host, authority.port)
-    } else {
-        format!("{}:{}", authority.host, authority.port)
-    }
+    dto::authority_text(&authority.host, authority.port)
 }
 
 /// Whether `fingerprint` is one a pin can hold: `SHA256:` and a digest,
@@ -789,8 +784,21 @@ impl Confirmed for HostBinding {
             // A host with no pin is approved.
             (None, None) => PreviewEffect::HostPinned,
             // A pin is changed by its replacement and by nothing else.
-            (None, Some(_)) => {
-                return Err(Answer::stopped(ResultCode::HostReplacementRequired));
+            // The answer says what that replacement is formed from: the
+            // pin there is, and the key this request named. Nothing was
+            // connected to, so no key the host presents is known.
+            (None, Some(pin)) => {
+                return Err(Answer {
+                    host_replacement: Some(HostReplacementDto {
+                        host: host.authority.host.clone(),
+                        port: host.authority.port,
+                        algorithm: self.algorithm.clone(),
+                        fingerprint: self.fingerprint.clone(),
+                        pinned_algorithm: pin.algorithm.clone(),
+                        pinned_fingerprint: pin.sha256.clone(),
+                    }),
+                    ..Answer::stopped(ResultCode::HostReplacementRequired)
+                });
             }
             (Some(old), Some(pin)) if *old == pin.sha256 => PreviewEffect::HostPinReplaced,
             // The pin that is to be replaced is not the host's.

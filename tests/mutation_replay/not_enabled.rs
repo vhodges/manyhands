@@ -22,6 +22,7 @@ use manyhands::{
     results::{Effects, Envelope, FailureClass, Outcome, ResultCode},
 };
 
+use crate::support::mutation::Previewed as _;
 use crate::support::{
     self, TestRepository,
     items::{self, TICKET_A},
@@ -203,7 +204,8 @@ fn a_preview_of_a_remote_removal_in_a_never_enabled_repository_says_it_is_not_en
         .prepare(&Mutation::RemoteRemove(RemoteRemoveInput {
             root: world.root.clone(),
             name: "origin".to_owned(),
-        }));
+        }))
+        .previewed();
     assert_eq!(preview.code.as_str(), NOT_ENABLED);
     assert_eq!(preview.outcome, Outcome::Error);
     assert!(preview.recovery.is_empty());
@@ -219,7 +221,8 @@ fn a_preview_of_repo_remove_for_a_never_enabled_repository_is_still_a_noop() {
         .service
         .prepare(&Mutation::RepoRemove(RepoRemoveInput {
             root: world.root.clone(),
-        }));
+        }))
+        .previewed();
     assert_eq!(
         (preview.outcome, preview.code),
         (Outcome::Noop, ResultCode::AlreadyApplied)

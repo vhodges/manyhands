@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 host replacement data",
+  "description": "The data of a prepare envelope of host approve that is refused as host_replacement_required: the host has a pin, and a pin is changed by host replace and by nothing else. With the host.replace action the envelope offers, this is what that request is formed from: pinned_fingerprint is its old fingerprint, and algorithm and fingerprint are its key. A prepare connects to nothing, so no key the host presents is reported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "host",
+    "port",
+    "algorithm",
+    "fingerprint",
+    "pinned_algorithm",
+    "pinned_fingerprint"
+  ],
+  "properties": {
+    "host": {
+      "description": "The host, in lower case.",
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "algorithm": {
+      "description": "The algorithm of the key the refused request named.",
+      "type": "string"
+    },
+    "fingerprint": {
+      "description": "The fingerprint of the key the refused request named: SHA256: and the digest of the public key, as a pin holds it.",
+      "type": "string"
+    },
+    "pinned_algorithm": {
+      "description": "The algorithm of the key the host is pinned to now.",
+      "type": "string"
+    },
+    "pinned_fingerprint": {
+      "description": "The fingerprint of the key the host is pinned to now: what host replace is given as the old fingerprint.",
+      "type": "string"
+    }
+  }
+}

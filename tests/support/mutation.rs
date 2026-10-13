@@ -16,10 +16,10 @@ use manyhands::{
         CancellationToken, ConfirmationId, DocumentCreateInput, DocumentDraft, DocumentMoveInput,
         DocumentMutationDto, DocumentSaveInput, IdentityMutationDto, KeyGenerateInput,
         KeyMutationDto, Mutation, MutationCall, MutationDataDto, NoProgress, OperationFamily,
-        OperationId, OperationMutationDto, ProgressEvent, ProgressSink, RegisterSharedKeyOutcome,
-        RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto, RepositoryService,
-        RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership, TicketCreateInput,
-        TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
+        OperationId, OperationMutationDto, PrepareDataDto, PreviewDto, ProgressEvent, ProgressSink,
+        RegisterSharedKeyOutcome, RegisterSharedKeyRequest, RelationshipWrite, RemoteMutationDto,
+        RepositoryService, RequestId, ResolvedRepository, SharedKeyId, SharedKeyOwnership,
+        TicketCreateInput, TicketDraft, TicketMutationDto, TicketSaveInput, TicketSlugAssignInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SecretPassphrase,
             SessionCredentialProvider, SessionCredentials, UnlockRequest,
@@ -992,6 +992,44 @@ impl Drop for KeyWorld {
     }
 }
 
+/// The envelope of a `prepare` as one of a preview. The data `prepare`
+/// gives that is no preview, of a host approval refused for a host that
+/// has a pin, is dropped: a test of it reads the envelope as it is.
+pub trait Previewed {
+    fn previewed(self) -> Envelope<PreviewDto>;
+}
+
+impl Previewed for Envelope<PrepareDataDto> {
+    fn previewed(self) -> Envelope<PreviewDto> {
+        let Envelope {
+            schema_version,
+            command,
+            request_id,
+            operation_id,
+            outcome,
+            code,
+            message,
+            scope,
+            effects,
+            data,
+            recovery,
+        } = self;
+        Envelope {
+            schema_version,
+            command,
+            request_id,
+            operation_id,
+            outcome,
+            code,
+            message,
+            scope,
+            effects,
+            data: data.and_then(PrepareDataDto::into_preview),
+            recovery,
+        }
+    }
+}
+
 /// The names of the recovery actions an envelope suggests.
 pub fn recovery_actions<T>(envelope: &Envelope<T>) -> Vec<&'static str> {
     envelope
@@ -1263,7 +1301,7 @@ pub fn drive_confirmed(
     let confirmation = std::cell::OnceCell::new();
     let previewed = || -> &String {
         confirmation.get_or_init(|| {
-            let preview = service.prepare(&request(Ask::Same));
+            let preview = service.prepare(&request(Ask::Same)).previewed();
             preview
                 .data
                 .unwrap_or_else(|| panic!("no preview: {}", preview.message))

@@ -27,6 +27,7 @@ use manyhands::{
 
 mod support;
 
+use support::mutation::Previewed as _;
 use support::{
     confirmation::*,
     golden,
@@ -185,7 +186,7 @@ fn prepare_for_a_command_that_needs_no_confirmation_is_not_confirmable() {
             root: world.root.clone(),
         }),
     ] {
-        let envelope = world.service.prepare(&mutation);
+        let envelope = world.service.prepare(&mutation).previewed();
         assert_eq!(envelope.code, ResultCode::NotConfirmable);
         assert_eq!(envelope.outcome, Outcome::Error);
         assert_eq!(envelope.command, mutation.command());

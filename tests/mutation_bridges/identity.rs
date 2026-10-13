@@ -8,6 +8,7 @@ use manyhands::repository::{
     SetLocalIdentityOutcome, SetLocalIdentityRequest,
 };
 
+use super::support::mutation::Previewed as _;
 use super::support::{self, confirmation::Plain, git_home};
 
 /// A credential planted in the repository's own configuration, which the
@@ -1016,7 +1017,7 @@ mod boundary {
         assert_eq!(world.branch_commits(TICKET_A), 0);
 
         // The action the result offers, on a repository that is enabled.
-        let preview = world.service.prepare(&set(&world.root));
+        let preview = world.service.prepare(&set(&world.root)).previewed();
         assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
         let preview = preview.data.unwrap();
         assert_eq!(details(&preview).effective.source, IdentitySource::None);
@@ -1148,7 +1149,7 @@ mod boundary {
         let desk = Desk::new();
         let request = || set_with(&plain.root, InitialsChange::Set("AE".to_owned()));
 
-        let stale = desk.service.prepare(&request());
+        let stale = desk.service.prepare(&request()).previewed();
         assert_eq!(stale.outcome, Outcome::Success);
         assert_golden(
             "repo_identity_set_preview",
@@ -1172,7 +1173,7 @@ mod boundary {
         assert_set(&done, Some("ae"));
         assert_golden("repo_identity_set", &plain.root, IDENTITY_SCHEMA, &done);
 
-        let noop = desk.service.prepare(&request());
+        let noop = desk.service.prepare(&request()).previewed();
         assert_eq!(noop.outcome, Outcome::Noop);
         assert_golden(
             "repo_identity_set_preview_noop",
@@ -1329,7 +1330,7 @@ mod validation {
         let email = "åsa+q#1@example.invalid";
         let request = || set(&world.root, name, email);
 
-        let preview = world.service.prepare(&request());
+        let preview = world.service.prepare(&request()).previewed();
         assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
         let preview = preview.data.unwrap();
         assert_eq!(details(&preview).name, name);
@@ -1344,7 +1345,7 @@ mod validation {
         assert_eq!(local(&world.root), held(name, email, None));
         // What was written is what is asked: the same request is a no-op.
         assert_eq!(
-            world.service.prepare(&request()).code,
+            world.service.prepare(&request()).previewed().code,
             ResultCode::AlreadyApplied
         );
         // And a save commits as it.

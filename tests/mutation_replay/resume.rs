@@ -18,6 +18,7 @@ use manyhands::{
     },
 };
 
+use crate::support::mutation::Previewed as _;
 use crate::support::{
     FailOnce,
     conformance::{Ask, Row},
@@ -743,7 +744,10 @@ fn a_resume_presenting_a_confirmation_is_not_confirmable() {
     );
     assert_eq!(stored(&world, &operation_id), before);
     // And `prepare` gives no preview of it.
-    let prepared = world.service.prepare(&resume(&world, &operation_id));
+    let prepared = world
+        .service
+        .prepare(&resume(&world, &operation_id))
+        .previewed();
     assert_eq!(prepared.code, ResultCode::NotConfirmable);
 }
 
@@ -1043,7 +1047,7 @@ fn a_resume_of_a_pending_local_row_no_request_holds_offers_its_abandon() {
             operation_id: OperationId::parse(OPERATION_A).unwrap(),
         })
     };
-    let preview = world.service.prepare(&abandon());
+    let preview = world.service.prepare(&abandon()).previewed();
     assert_eq!(preview.outcome, Outcome::Success);
     let confirmation = preview.data.unwrap().confirmation_id;
     let abandoned =

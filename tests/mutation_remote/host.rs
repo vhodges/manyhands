@@ -104,6 +104,7 @@ pub(crate) const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[
 
 const HOST_OBSERVATION_SCHEMA: &str = "host_observation.schema.json";
 const HOST_PREVIEW_SCHEMA: &str = "host_preview.schema.json";
+const HOST_REPLACEMENT_SCHEMA: &str = "host_replacement.schema.json";
 const HOST_MUTATION_SCHEMA: &str = "host_mutation.schema.json";
 
 fn authority(server: &SshRemoteFixture) -> SshAuthority {
@@ -248,12 +249,20 @@ fn observe(w: &World) -> Result<HostObservationDto, FixtureError> {
     observe_as(w, None, Provider).data.ok_or(FixtureError)
 }
 
-fn prepare(w: &World, mutation: &Mutation) -> Envelope<PreviewDto> {
+fn prepare(w: &World, mutation: &Mutation) -> Envelope<PrepareDataDto> {
     let envelope = w.service.prepare(mutation);
     let value = scanned(w, &envelope);
     assert_eq!(envelope.request_id, None);
-    if !value["data"].is_null() {
-        schema::check_published(HOST_PREVIEW_SCHEMA, &value["data"]).expect("the preview schema");
+    match &envelope.data {
+        Some(PrepareDataDto::Preview(_)) => {
+            schema::check_published(HOST_PREVIEW_SCHEMA, &value["data"])
+                .expect("the preview schema");
+        }
+        Some(PrepareDataDto::HostReplacement(_)) => {
+            schema::check_published(HOST_REPLACEMENT_SCHEMA, &value["data"])
+                .expect("the replacement schema");
+        }
+        None => {}
     }
     envelope
 }
@@ -262,7 +271,10 @@ fn prepare(w: &World, mutation: &Mutation) -> Envelope<PreviewDto> {
 fn preview(w: &World, mutation: &Mutation) -> Result<(String, HostPreviewDto), FixtureError> {
     let envelope = prepare(w, mutation);
     assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
-    let data = envelope.data.ok_or(FixtureError)?;
+    let data = envelope
+        .data
+        .and_then(PrepareDataDto::into_preview)
+        .ok_or(FixtureError)?;
     match data.details {
         PreviewDetailsDto::Host(details) => {
             // The root is the one the result is of, as the library
@@ -649,9 +661,34 @@ fn a_rotated_host_key_is_replaced_by_naming_the_old_and_the_new_fingerprint()
     assert!(old != new);
 
     // An approval is of a host that has no pin: this one is replaced.
+    // The refusal says what the replacement is formed from: the pin
+    // there is and the key the request named. Nothing was connected to,
+    // so it says nothing of what the host presents.
+    let connected = connections(&w);
     let approve = prepare(&w, &approval(&w));
     assert_eq!(approve.code, ResultCode::HostReplacementRequired);
-    assert!(approve.data.is_none());
+    assert_eq!(connections(&w), connected);
+    assert_eq!(
+        approve.data,
+        Some(PrepareDataDto::HostReplacement(HostReplacementDto {
+            host: authority(&w.server).host,
+            port: authority(&w.server).port,
+            algorithm: new.algorithm.clone(),
+            fingerprint: new.sha256.clone(),
+            pinned_algorithm: old.algorithm.clone(),
+            pinned_fingerprint: old.sha256.clone(),
+        }))
+    );
+    assert_eq!(approve.recovery.len(), 1);
+    assert_eq!(approve.recovery[0].action.as_str(), "host.replace");
+    assert_eq!(
+        approve.recovery[0].arguments["authority"],
+        format!("127.0.0.1:{}", authority(&w.server).port)
+    );
+    assert_eq!(
+        approve.recovery[0].arguments["root"].as_str(),
+        approve.scope.repository.as_deref()
+    );
     // The old fingerprint is to be the pin's.
     for wrong in [new.sha256.clone(), another_key()?.sha256] {
         let refused = prepare(&w, &replacement(&w, &wrong, &new));
