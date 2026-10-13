@@ -174,8 +174,8 @@ fn host_pins(
             Ok(HostPinDto {
                 host: authority.host,
                 port: authority.port,
-                algorithm: identity.algorithm,
-                fingerprint: identity.sha256,
+                pinned_algorithm: identity.algorithm,
+                pinned_fingerprint: identity.sha256,
                 reapproval_required,
             })
         })

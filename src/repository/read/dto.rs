@@ -283,16 +283,19 @@ pub struct HostPinListDto {
     pub reapproval_required: bool,
 }
 
-/// One pinned host key. `fingerprint` has the form a key's `fingerprint` has:
-/// `SHA256:` and the digest of the host's public key.
+/// One pinned host key. `pinned_fingerprint` has the form a key's
+/// `fingerprint` has: `SHA256:` and the digest of the host's public key.
+/// A stored pin is named `pinned_*` in every published shape:
+/// `pinned_fingerprint` is what `host replace` is given as the old
+/// fingerprint.
 /// `reapproval_required` is the application-wide marker left when the pin
 /// registry was lost, so it is the same for every pin of one read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HostPinDto {
     pub host: String,
     pub port: u16,
-    pub algorithm: String,
-    pub fingerprint: String,
+    pub pinned_algorithm: String,
+    pub pinned_fingerprint: String,
     pub reapproval_required: bool,
 }
 

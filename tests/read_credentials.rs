@@ -870,8 +870,8 @@ fn pin(host: &str, port: u16, algorithm: &str, sha256: &str, reapproval: bool) -
     HostPinDto {
         host: host.to_owned(),
         port,
-        algorithm: algorithm.to_owned(),
-        fingerprint: sha256.to_owned(),
+        pinned_algorithm: algorithm.to_owned(),
+        pinned_fingerprint: sha256.to_owned(),
         reapproval_required: reapproval,
     }
 }
@@ -1114,7 +1114,7 @@ fn a_stored_pin_that_is_not_a_valid_pin_is_an_internal_error() {
                 .service
                 .inspect_host(&authority("a.example", 22))
                 .unwrap()
-                .algorithm,
+                .pinned_algorithm,
             "ecdsa-sha2-nistp256",
             "{why}"
         );

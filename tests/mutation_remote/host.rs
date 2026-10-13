@@ -341,7 +341,7 @@ fn pins(w: &World) -> Vec<(u16, String)> {
         .expect("the pins")
         .items
         .into_iter()
-        .map(|pin| (pin.port, pin.fingerprint))
+        .map(|pin| (pin.port, pin.pinned_fingerprint))
         .collect()
 }
 
