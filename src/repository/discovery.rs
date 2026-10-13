@@ -753,7 +753,7 @@ fn leave_active_items_to_their_contexts(
     });
 }
 
-fn authoring_item_matches(
+pub(crate) fn authoring_item_matches(
     item: &canonical::CanonicalItem,
     kind: crate::repository::AuthoringKind,
     item_id: &canonical::ItemId,

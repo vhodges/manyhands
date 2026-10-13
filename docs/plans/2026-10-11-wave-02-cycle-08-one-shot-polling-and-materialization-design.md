@@ -311,7 +311,11 @@ without touching the filesystem:
 - Reject a tree with any entry under `.manyhands/worktrees/`.
 
 Failure is `nonconforming`. Because the rule is the one discovery applies, a
-materialized context is one the next refresh accepts as active.
+materialized context is one the next refresh accepts as active. **Owner-approved
+amendment, 2026-10-13:** agreement is accepted tree ⇒ active context only.
+Materialization validation may be stricter than local discovery: executable
+items remain rejected by polling, and existing discovery behavior is unchanged.
+A rejected tree need not be inactive in discovery; polling still creates nothing.
 
 ### Materialization
 

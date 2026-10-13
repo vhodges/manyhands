@@ -80,13 +80,23 @@ and the baseline.
 - [x] Independent Task 3 quality review: `ses_ec9b0a1d9ffeWP162PBxjUK6l4`,
   controller reports cumulative approval after atomic-absence correction through
   `34b97c178a48b39b6ae32e30de52ff5722d1dd06`; prior Important resolved.
-- [ ] Task 4: blocked for owner amendment (2026-10-13). Meaningful test-first
+- [x] Task 4: delivered after owner-approved amendment (2026-10-13). Historical
   discovery-agreement RED: 8 passed, 1 failed, 523 filtered. Existing discovery
   accepts a valid executable document tree that poll must reject; two-way
-  agreement conflicts with visibility-only changes. Probe removed, Rust unchanged.
+  agreement conflicted with visibility-only changes. Historical probe removed;
+  Rust was unchanged at that blocked checkpoint.
   Independent read-only review `ses_ec92a184effe7ndQKcvXtxKxkg` CONFIRMED the
-  contradiction. Awaiting OWNER amendment; accepted⇒active-only proposal is
-  UNAPPROVED, recorded in comment `01M4VDGDZ2RRWK1V2RTTN6JHMJ` and the ledger.
+  contradiction. Owner subsequently approved accepted⇒active-only agreement,
+  retaining executable rejection and unchanged discovery. Approved documents
+  updated before production; resume comment `01M4VE4298RCK58VXV4YT3M6P8`.
+  Classification, fixed guidance, guarded clean fast-forward and tree conformity
+  complete. RED recorded before behavior; final GREEN 23 poll tests and four
+  Rust gates (1,623 passed, 1 existing ignored). Shared helper bodies unchanged.
+- [ ] Independent Task 4 spec review: pending controller review of
+  `961b3c21db11f797e5bd1cdac0bf85d748cd1dec` through the new local task commit.
+- [ ] Independent Task 4 quality review: pending, same complete range including
+  the owner-approved agreement amendment. Review-ready comment
+  `01M4VKXQKGZT8153HENHVW8QVB`.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -96,8 +106,12 @@ reviewed. Task 2 is implemented and independently reviewed. Fresh Task 3 assignm
 authorizes Task 3 only, inline, no subagents, one local commit and bookkeeping.
 Controller reports Task 3 spec and quality approval of the cumulative corrected
 range. Fresh implementer assigned Task 4 only, no subagents. Task 4 stopped at
-confirmed discovery-agreement contradiction before production work; owner
-amendment required, recorded in the ledger and comment `01M4VD7G36JQ3T0D3VXEX7YDTQ`.
+confirmed discovery-agreement contradiction before production work; the
+historical blocker is recorded in comment `01M4VD7G36JQ3T0D3VXEX7YDTQ`. Owner
+approved the focused agreement amendment; Task 4 resumed at clean review base
+`961b3c21db11f797e5bd1cdac0bf85d748cd1dec`, controller preflight a clean no-op.
+Task 4 is now implemented and verified, ready for independent spec and quality
+reviews. No Task 5 implementation.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 5–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.

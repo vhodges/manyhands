@@ -10,6 +10,196 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 4 Owner Amendment And Resume — 2026-10-13T20:09:05Z
+
+The controller conveyed the owner's **"Yes"** approving the focused amendment:
+retain executable rejection and unchanged existing discovery; agreement is
+**accepted tree ⇒ active context only**. Remove rejected ⇒ inactive; rejected
+trees must still be rejected by polling with no automatic creation.
+Materialization validation may be stricter than local discovery. D1–D4 unchanged.
+Updated the approved Task 4 agreement, relevant design text and Cycle contract
+for consistency before production behavior. The prior blocker RED is historical,
+separate evidence, not a test for the amended agreement.
+
+Controller's fresh fetch/rebase succeeded as a clean no-op: main
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`, before/after ticket HEAD and exact
+Task 4 review base `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`. Implementer
+confirmed clean assigned worktree/branch at that SHA. No repeated preflight.
+Task 4 only resumes inline, no subagents, local commit/bookkeeping then return
+for independent spec and quality reviews. Task 3 cumulative approvals remain
+controller-reported and trusted; Task 2 minor direct-SQL kind-immutability
+regression remains explicitly deferred to final review. No later task authority.
+
+Canonical Node-generated comment `01M4VE4298RCK58VXV4YT3M6P8` records owner
+amendment/resume. Task 4 is unticked until delivered; ticket remains open.
+
+### New Task 4 RED Before Behavior — 2026-10-13T20:17:29Z
+
+`devenv shell -- cargo test --locked --lib remote::poll` first exited 101 with
+58 missing-new-API compile errors. Added only behavior-free signatures/enums and
+`todo!` bodies; corrected runtime RED exits 101: **8 passed, 12 failed, 523
+filtered**. All 12 new tests fail at the missing guidance/relation/classification/
+fast-forward/conformity placeholders. No helper visibility or behavior changed
+yet. Matrix loops stop at their first placeholder; subsequent GREEN will exercise
+every case. This is distinct from the historical pre-amendment blocker RED.
+
+Fixture trials, not behavior RED: symlink creation initially used libgit2's
+trailing-slash workdir and failed ENOENT; corrected to the exact deterministic
+path. An auxiliary clean-status/different-index-tree probe using disabled
+filemode, ignorecase and a corrupt TREE cache did not establish that prerequisite:
+mode/case changes are reported staged, and libgit2 recomputes the corrupt cache.
+Removed that unsupported auxiliary probe (including its temporary OpenSSL use).
+The real different-index-tree case remains in the preservation matrix and expects
+Dirty because staged status precedes the defensive tree-equality guard; no
+production classification-order adaptation. Initial placeholder warning is
+unused update fields, which implementation will consume.
+
+Tests use real local repositories, ODB-built trees, full worktree/index/status/
+HEAD/ref snapshots, no transport/fake/sleep/global Git mutation. Owner-amended
+agreement validates all accepted trees through real worktree discovery and checks
+rejected trees cause no branch/path/registration creation. Production starts only
+after this recorded RED checkpoint and canonical comment
+`01M4VEKEC2JMK9AD1DH3NFFHCW`.
+
+Additional conformity regression RED before its correction: the same command
+exits 101, **21 passed, 1 failed, 523 filtered**, for a valid ordinary document
+plus an executable duplicate carrying the same ID. Filtering modes before
+identity parsing hid the duplicate that discovery would include. Added a
+discovery-excluded `docs/.git/` source case to the same test. The one-way agreement
+requires retaining duplicate identity checks before mode filtering, and excluding
+sources discovery cannot observe. Actual local ahead/diverged/missing-ancestry
+repository hardening is already green (not claimed as new behavior RED).
+
+After an initial passing full gate (1,622 tests), self-review found the incoming
+path precheck could misclassify a clean tracked-file-to-directory change as
+Inaccessible: checking the child first produces ENOTDIR for the tracked parent
+that safe checkout is authorized to replace. Added regression before correcting
+that precheck: `devenv shell -- cargo test --locked --lib
+remote::poll::tests::poll_fast_forward_allows_clean_tracked_file_to_directory_transition`
+exits 101, **0 passed, 1 failed, 545 filtered**, expected FastForwarded, got
+Inaccessible. This is a poll-only precheck bug, not a shared helper rewrite or
+another product decision. Re-run required gates on the corrected Rust tree.
+
+### Task 4 Implementation And Final Verification — 2026-10-13T21:50:29Z
+
+Delivered Task 4 only under the owner's narrowly approved agreement amendment:
+
+- `PollDisposition` has all **15** contract variants and fixed static guidance.
+  No free-text reason or recovery content storage. Pure `classify_relation`
+  consumes unchanged `clean_descendant`; either ancestry-query error propagates,
+  never guessed as divergence. The Git-backed classifier surfaces ancestry
+  failure as the existing typed RecoveryRequired error.
+- `classify_local_target` skips deleted/unknown remote contexts before any local
+  classification, preserving that batch category. Otherwise it checks materialized
+  identity/exact workdir, then uses unchanged cleanliness checks: conflict/state
+  metadata before any dirty status (including untracked directories); defensive
+  index-tree mismatch/read failure is Inaccessible. Equal/current, strict behind,
+  ahead and divergence are separate typed outcomes; context compares only its own
+  incoming OID. No primary integration or publication.
+- `poll_fast_forward` is a remote-module local-stage seam, acquiring the common
+  repository lease itself. Under it, it reobserves canonical configuration/ref
+  plan, frozen endpoints/key evidence, own tracking OID, branch OID and local
+  cleanliness, checks incoming path collisions, then rechecks OIDs immediately
+  before/after calling unchanged locked safe checkout/ref update. An ignored
+  incoming collision is Dirty before effects. No transport, prompt or discovery
+  refresh runs under this lease. Target-order orchestration and stored report
+  rows belong to Task 6, not this seam.
+- `conforming_context_tree` uses the existing ODB reader's sources/modes and the
+  widened active-item predicate plus `canonical::validate_context`. It checks
+  exact ticket path or unique document ID/kind, regular non-executable UTF-8
+  item sources, rejects any gitlink and any `.manyhands/worktrees` entry, and
+  preserves malformed-comment conformity with ordinary discovery diagnostics.
+  Document traversal bounds/excluded `.git` sources preserve accepted⇒active.
+  Matching executable duplicates are not hidden before identity validation.
+  Rejected validation creates no branch, directory or registration; accepted
+  matrix trees are checked out and accepted by existing discovery. No rejected⇒
+  inactive assertion remains.
+- Shared `sync.rs`, `refs.rs` and `discovery.rs` diffs are **visibility only**
+  (including the tree snapshot fields). No helper body/test hook rewrite, no
+  synchronization contract change. `repository.rs` needs no edit: its existing
+  parent-private configuration/lease helpers are already accessible to children.
+  Five Rust files changed, no frontend/schema/dependency/lockfile changes.
+
+Preservation snapshots cover worktree file/directory/symlink bytes, target index,
+Git status, HEAD, sorted refs, and worktree registrations (including context
+HEAD/index files). The staged different-index-tree matrix case is Dirty by the
+approved status-first order; the shared defensive tree check remains unchanged.
+Tests have real local Git state, no fake transport, sleeps, developer keys,
+global Git configuration or cfg(test) production checkpoint hook. Existing
+harness-false transport suites run unchanged over real SSH.
+
+#### Honest Trial And Investigation History
+
+- First implementation: **19 passed, 1 failed** for ignored collision returning
+  RecoveryRequired rather than Dirty. A diagnostic proved git2 `dry_run` returns
+  success here. Locked source `git2-0.20.4/src/build.rs:350–353` selects checkout
+  NONE; `libgit2/checkout.c` short-circuits that strategy before ignored conflict
+  selection. Replaced only the new poll preflight with incoming-path inspection,
+  retaining the shared safe updater. Diagnostic removed; focused **20 passed**.
+- The executable-duplicate RED above led to identity checking before mode
+  filtering. The second `.git` case initially failed fixture setup because
+  TreeBuilder protects the name; the test writes that hostile tree directly to
+  the ODB, without changing global Git options. Final regression and matrix pass.
+- Initial required check/fmt passed; Clippy failed on three large shared-error
+  results and one test type-complexity. Followed sync/observation's existing
+  result_large_err module convention to preserve the typed seam and added a
+  test alias. No public shared-error or helper behavior change.
+- Initial full gate passed **1,622 tests**. The additional tracked-file-to-
+  directory RED above justified a second full gate after correcting ancestor
+  inspection. First focused retry reached FastForwarded, correct HEAD and file
+  bytes, but asserted against the fixture's cached old index; corrected the
+  verification to `index.read(true)` before tree comparison. No production
+  change for that stale-handle assertion. Final focused and broad gates pass.
+
+#### Final Evidence (Sequential Devenv Commands)
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | Final GREEN: **23 passed**, 523 filtered; 15 new tests over the 8 existing |
+| `devenv shell -- cargo test --locked --lib remote::` | **319 passed**, 226 filtered before the final shape regression; final full gate includes the resulting 320 matches |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | **63 real-SSH cases**, unchanged; final full gate again passes all 63 |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery` | **25 real-SSH cases**, unchanged; final full gate again passes all 25 |
+| `devenv shell -- cargo check --all-features --locked` | PASS on final Rust tree |
+| `devenv shell -- cargo fmt --check` | PASS on final Rust tree |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS on final Rust tree |
+| `devenv shell -- cargo test --all-features --locked` | PASS on final Rust tree: **1,623 passed, 0 failed, 1 existing ignored** |
+
+Final full-gate log: `tool_137257cf9001DtpHhLQfzDVEtz`. Breakdown: **546 library**,
+**779 ordinary integration**, **289 real-SSH** (comment publication 41, merge
+recovery 25, observation 15, synchronization 63, SSH fixture 31, SSH transport
+114), **9 compile-fail doctests**. Both binary targets have zero tests. The ignored
+test remains the existing thousand-item read characterization. Native matrix
+was not run. Task 0 characterization/baseline was not repeated.
+
+Unchanged SHA-256: Cargo.lock
+`8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8`;
+devenv.lock `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e`.
+
+#### Independent Review Handoff
+
+Self-reviewed actual source and shared-helper diffs against amended Task 4.
+Task 4 delivered and ticked; independent spec and quality gates remain unticked.
+Exact review base is **`961b3c21db11f797e5bd1cdac0bf85d748cd1dec`**; head is
+returned after the single local implementation/bookkeeping commit. That range
+includes the owner-approved amendment. Prior blocker tests and independent
+confirmation remain historical evidence in earlier commits/ledger sections.
+No second material decision or unresolved test failure. Ticket open, no Task 5.
+
+**Deferred Task 2 minor remains for final Cycle review:** direct-SQL poll-kind
+immutability regression suggested by `ses_ec9e9909cffeS4kt0Z0ENmyjss`.
+Task 3 cumulative approvals remain controller-reported, trusted and ticked.
+No implementer subagents; return this range to the controller for both reviews.
+Canonical review-ready comment `01M4VKXQKGZT8153HENHVW8QVB` records final evidence.
+Only intended Task 4 Rust/docs/ticket/comments are staged after status/full diff/
+recent-log inspection, whitespace and scripts/show-ticket validation.
+
+`scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` validated/rendered the open
+ticket and all canonical comments, including the three new Node-generated ULIDs.
+`git diff --check` passed. Source/helper and amendment/bookkeeping diffs and recent
+log were inspected; frontend, repository.rs, acceptance tests and dependency/
+lockfile diffs are empty. Only documentation wording/indentation changed after
+the passing final Rust gate, so no duplicate Rust verification is needed.
+
 ## Task 4 Independent Blocker Confirmation — 2026-10-13T19:58:22Z
 
 Controller conveyed independent read-only blocker review

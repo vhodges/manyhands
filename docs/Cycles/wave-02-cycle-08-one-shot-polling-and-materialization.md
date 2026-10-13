@@ -156,7 +156,11 @@ integration.
    for an active context, and the tree must not carry entries under
    `.manyhands/worktrees/`. Only then create the local branch at the fetched
    commit and the worktree at `.manyhands/worktrees/<ULID>/`. A nonconforming
-   tree creates nothing.
+   tree creates nothing. **Owner-approved amendment, 2026-10-13:** poll
+   materialization validation may be stricter than local discovery; regular
+   non-executable items are required while discovery behavior is unchanged.
+   Agreement requires accepted trees to be active after checkout, not rejected
+   trees to be inactive in discovery.
 8. Materialization happens once. A second poll, a concurrent poll from another
    process, or a replay finds the context present and reports it current.
    Existing local state that is not exactly the poll's own recorded partial

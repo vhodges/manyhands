@@ -315,7 +315,11 @@ expectation.
   an invalid comment (conforming).
 - [ ] Failing agreement test: every tree accepted by
   `conforming_context_tree`, once checked out as a worktree, is reported as an
-  active context by the existing discovery; every rejected one is not.
+  active context by the existing discovery. For rejected trees assert poll
+  rejection and no automatic creation, not discovery inactivity. **Owner-approved
+  amendment, 2026-10-13:** materialization validation may be stricter than local
+  discovery; retain executable rejection and existing discovery behavior. The
+  agreement is accepted ⇒ active only, with no rejected ⇒ inactive implication.
 - [ ] Record red:
 
   ```sh
