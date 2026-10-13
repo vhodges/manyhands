@@ -147,6 +147,10 @@ const CASES: &[ssh_harness::Case] = &[
         a_token_cancelled_before_execute_does_nothing,
     ),
     (
+        "a_token_cancelled_once_the_push_has_returned_does_not_unsay_the_publication",
+        a_token_cancelled_once_the_push_has_returned_does_not_unsay_the_publication,
+    ),
+    (
         "a_token_cancelled_from_the_sink_stops_at_the_first_safe_point",
         a_token_cancelled_from_the_sink_stops_at_the_first_safe_point,
     ),
@@ -1958,6 +1962,69 @@ fn a_token_cancelled_from_the_sink_stops_at_the_first_safe_point() -> Result<(),
     // A new request synchronizes.
     let fresh = execute(&w, REQUEST_2, repo_sync(&w));
     assert_eq!(fresh.effects, published(local));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    Ok(())
+}
+
+/// The call's own token is cancelled once the push has returned: the
+/// sink is told of the verification only after it. The push's outcome
+/// is classified by then, and a cancellation that comes after it does
+/// not turn a commit that was published into one that was not: the
+/// answer is cancelled and reports the publication, as it does for a
+/// cancellation asked for by request.
+fn a_token_cancelled_once_the_push_has_returned_does_not_unsay_the_publication()
+-> Result<(), FixtureError> {
+    use ProgressStage as S;
+    let w = World::new()?;
+    approve(&w)?;
+    let local = advance(&w.repo()?, "refs/heads/main", "local-advance")?;
+    let pushes = accepted(&w.server);
+    let token = CancellationToken::new();
+    let mut sink = CancelAt {
+        stage: S::Verifying,
+        token: token.clone(),
+        seen: Vec::new(),
+    };
+    let envelope = call(
+        &w,
+        &w.service,
+        REQUEST_1,
+        repo_sync(&w),
+        Provider,
+        &mut sink,
+        &token,
+    );
+    assert!(token.is_cancelled());
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, local);
+    // It stops at the next safe point, before its index hand-off, and
+    // says what it did: the publication and its commit.
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Cancelled, ResultCode::Cancelled)
+    );
+    assert_eq!(envelope.effects, published_and_cancelled(local));
+    assert_eq!(
+        sink.seen,
+        [
+            S::Accepted,
+            S::Connecting,
+            S::Fetching,
+            S::Observing,
+            S::Pushing,
+            S::Verifying,
+            S::Stopping
+        ]
+    );
+    assert!(envelope.recovery.is_empty());
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    // The same request returns the stored result, and pushes nothing.
+    let again = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(again, envelope);
     assert_eq!(accepted(&w.server), pushes + 1);
     Ok(())
 }

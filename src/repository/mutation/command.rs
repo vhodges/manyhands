@@ -21,7 +21,10 @@ macro_rules! commands {
 
             /// The command's published name: what an envelope's `command`
             /// holds, what a record stores and what the intent digest is
-            /// made with. This is the one place a name is written.
+            /// made with. This is the one place the name of a command of
+            /// `execute` is written. Three names are of no such command
+            /// and are written where they are answered: `request show`,
+            /// `request cancel` and `host observe`.
             pub(crate) const fn name(self) -> &'static str {
                 match self {
                     $(Self::$variant => $name),+
@@ -486,8 +489,12 @@ mod tests {
 
     #[test]
     fn the_published_names_are_the_ones_records_hold() {
+        assert_eq!(Command::DocumentCreate.name(), "document create");
+        assert_eq!(Command::DocumentSave.name(), "document save");
+        assert_eq!(Command::DocumentMove.name(), "document move");
         assert_eq!(Command::TicketCreate.name(), "ticket create");
         assert_eq!(Command::TicketSave.name(), "ticket save");
+        assert_eq!(Command::TicketSlugAssign.name(), "ticket slug-assign");
         assert_eq!(Command::RemoteAdd.name(), "remote add");
         assert_eq!(Command::RemoteSelect.name(), "remote select");
         assert_eq!(Command::IndexRefresh.name(), "index refresh");

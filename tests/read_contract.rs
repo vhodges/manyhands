@@ -680,6 +680,26 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 
 /// Every `enum` in a published schema, by file and property, with the Rust
 /// list it must equal.
+/// The actions the local store records: what a local operation that is
+/// abandoned can be. They are named, and not taken from `ALL` by
+/// position: an action added before them that is not local would then
+/// pass for one.
+const LOCAL_ACTIONS: [OperationAction; 13] = [
+    OperationAction::CreateAndEnable,
+    OperationAction::Enable,
+    OperationAction::RemoveRegistration,
+    OperationAction::AddRemote,
+    OperationAction::RemoveRemote,
+    OperationAction::SetPublicationRemote,
+    OperationAction::Refresh,
+    OperationAction::Rebuild,
+    OperationAction::PrepareContext,
+    OperationAction::SaveDocument,
+    OperationAction::SaveTicket,
+    OperationAction::SubmitComment,
+    OperationAction::RepairItem,
+];
+
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
@@ -950,18 +970,12 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_abandon_preview.schema.json",
             "details.action",
-            OperationAction::ALL[..13]
-                .iter()
-                .map(|action| action.as_str())
-                .collect(),
+            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
         ),
         (
             "operation_mutation.schema.json",
             "action",
-            OperationAction::ALL[..13]
-                .iter()
-                .map(|action| action.as_str())
-                .collect(),
+            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
         ),
         (
             "preview.schema.json",
