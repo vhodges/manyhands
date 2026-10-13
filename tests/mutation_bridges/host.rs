@@ -1,4 +1,4 @@
-//! `host approve`, `host replace` and `host inspect`: what of them needs
+//! `host approve`, `host replace` and `host observe`: what of them needs
 //! no server, and the fixtures of their results.
 //!
 //! A preview is made without a connection, and so are the answers to a
@@ -227,7 +227,7 @@ fn a_host_observation_matches_its_schema_and_golden() {
     git_home::isolated();
     let (presented, pinned) = (key("a"), key("b"));
     let envelope = Envelope::read_success(
-        "host inspect",
+        "host observe",
         Scope {
             repository: Some("<root>".to_owned()),
             ..Scope::default()
@@ -246,7 +246,7 @@ fn a_host_observation_matches_its_schema_and_golden() {
     );
     mutation::assert_contract(
         &ContractCase {
-            name: "host_inspect_observation",
+            name: "host_observe",
             data_schema: Some(OBSERVATION_SCHEMA),
             placeholders: &[],
             sentinels: &[],
@@ -290,6 +290,38 @@ fn an_observation_that_names_no_host_of_the_remote_is_refused_before_any_connect
             envelope.message
         );
     }
+}
+
+/// An observation that fails offers what every read and every mutation
+/// offers for the same code on the same repository, and is told from the
+/// pin read of `host inspect` by its own command name.
+#[test]
+fn an_observation_that_fails_keeps_the_recovery_its_read_suggested() {
+    git_home::isolated();
+    let home = home();
+    let mut session = manyhands::repository::keys::SessionCredentials::new(NoPassphrase);
+    // The repository was enabled and is no longer registered.
+    home.remove_registration_by_hand();
+
+    let lost = home.service().observe_host(home.root(), None, &mut session);
+
+    assert_eq!(lost.command, "host observe");
+    assert_eq!(lost.code, ResultCode::RepositoryNotRegistered);
+    assert!(lost.data.is_none());
+    assert_eq!(recovery_actions(&lost), ["index.rebuild"]);
+    assert_eq!(
+        lost.recovery[0].arguments["root"].as_str(),
+        home.root().to_str()
+    );
+    mutation::assert_contract(
+        &ContractCase {
+            name: "host_observe_repository_not_registered",
+            data_schema: None,
+            placeholders: &[(home.root().to_str().unwrap(), "<root>")],
+            sentinels: &["SENTINEL-user-41c7", "SENTINEL-path-8be2"],
+        },
+        &lost,
+    );
 }
 
 struct NoPassphrase;

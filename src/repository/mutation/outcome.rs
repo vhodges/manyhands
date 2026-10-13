@@ -605,22 +605,19 @@ pub(crate) fn offered(
     offers_nothing: bool,
     authority: Option<&str>,
 ) -> Vec<RecoveryAction> {
-    let rootless = suggested
-        .iter()
-        .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
     let mut actions = if offers_nothing {
         Vec::new()
-    } else if suggested.is_empty() || rootless {
-        recovery(
-            named.code,
-            named.command,
-            named.root,
-            named.request_id,
-            named.operation_id,
-            named.retry,
-        )
     } else {
-        suggested
+        suggested_or(suggested, || {
+            recovery(
+                named.code,
+                Some(named.command),
+                named.root,
+                named.request_id,
+                named.operation_id,
+                named.retry,
+            )
+        })
     };
     if named.unsettled
         && let Some(request_id) = named.request_id
@@ -631,6 +628,39 @@ pub(crate) fn offered(
         actions.insert(0, same_request(request_id));
     }
     with_host_action(actions, named.code, named.root, authority)
+}
+
+/// Rule 2 of `offered`: what was suggested, unless it is empty or holds
+/// an action that lacks the root it takes; then `own`.
+fn suggested_or(
+    suggested: Vec<RecoveryAction>,
+    own: impl FnOnce() -> Vec<RecoveryAction>,
+) -> Vec<RecoveryAction> {
+    let rootless = suggested
+        .iter()
+        .any(|action| action.arguments.is_empty() && !action.action.argument_keys().is_empty());
+    if suggested.is_empty() || rootless {
+        own()
+    } else {
+        suggested
+    }
+}
+
+/// The actions a failed `host observe` offers. It is a read over the
+/// network, of no command of `execute` and of no request: what the read
+/// that failed suggested is kept, as rule 2 of `offered` keeps it, and
+/// otherwise the action is the code's own with no command's rules
+/// applied, so that the same code on the same repository offers what it
+/// offers a mutation: a rebuild for a repository that is not registered
+/// or an index that cannot be read, an inspection for a configuration
+/// that is not valid. Nothing is offered to be sent again or previewed:
+/// there is no request and no confirmation.
+pub(crate) fn offered_by_observation(
+    code: ResultCode,
+    root: Option<&str>,
+    suggested: Vec<RecoveryAction>,
+) -> Vec<RecoveryAction> {
+    suggested_or(suggested, || recovery(code, None, root, None, None, false))
 }
 
 /// Whose envelope `RepositoryService::offering` is given.
@@ -645,7 +675,9 @@ pub(crate) enum CallKind {
 /// What a client does about a code that stopped a request. Every code is
 /// named: one added later does not compile until its action is decided.
 ///
-/// `command` is the command the result is of. `root` is the repository
+/// `command` is the command the result is of, and `None` for a result
+/// of `host observe`, which is no command of `execute`: no rule of a
+/// command then applies. `root` is the repository
 /// the result names, when it names one. `request_id` is the request's,
 /// and `None` for a result of `prepare`, which has none: nothing is
 /// then offered to be sent again. `retry` says the request's record was
@@ -662,7 +694,7 @@ pub(crate) enum CallKind {
 /// request, first, with whatever else its code offers.
 fn recovery(
     code: ResultCode,
-    command: Command,
+    command: Option<Command>,
     root: Option<&str>,
     request_id: Option<RequestId>,
     operation_id: Option<OperationId>,
@@ -688,7 +720,7 @@ fn recovery(
         // index up to date. Not so while the request's record is left
         // accepted: its refresh's row could not be closed, and refuses
         // every other refresh, so the same request is what takes it up.
-        ResultCode::DiscoveryPending if command.hands_off_to_any_refresh() => {
+        ResultCode::DiscoveryPending if command.is_some_and(Command::hands_off_to_any_refresh) => {
             if retry {
                 retry_request()
             } else {
@@ -710,7 +742,7 @@ fn recovery(
         ResultCode::IdentityRequired | ResultCode::InitialsRequired => {
             // A command that makes its repository has none yet to set an
             // identity on: the request is sent again with one.
-            if command.creates_its_repository() {
+            if command.is_some_and(Command::creates_its_repository) {
                 Vec::new()
             } else {
                 vec![at_root(RecoveryActionKind::RepoIdentitySet)]
@@ -770,7 +802,11 @@ fn recovery(
         // are no longer what its own operation left. That operation
         // refuses any other deletion of the key, and with what it left
         // put back the same request goes on; nothing is offered.
-        ResultCode::ExternalChange => match (command.needs_confirmation(), retry, root) {
+        ResultCode::ExternalChange => match (
+            command.is_some_and(Command::needs_confirmation),
+            retry,
+            root,
+        ) {
             (true, false, _) => prepare_again(),
             (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
             (true, true, None) | (false, _, _) => Vec::new(),
@@ -930,7 +966,8 @@ fn recovery(
     let offered = actions
         .iter()
         .any(|action| action.action == RecoveryActionKind::RequestRetry);
-    if command.stops_at_safe_points() && retry && !resumes && !never && !offered {
+    if command.is_some_and(Command::stops_at_safe_points) && retry && !resumes && !never && !offered
+    {
         actions.splice(0..0, retry_request());
     }
     actions
@@ -938,8 +975,8 @@ fn recovery(
 
 /// Whether `code`, from a synchronization, is one the same request
 /// never gets past; see the closing rule of `recovery`.
-fn never_finished_by_the_same_request(code: ResultCode, command: Command) -> bool {
-    command.stops_at_safe_points()
+fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
+    command.is_some_and(Command::stops_at_safe_points)
         && (code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted)
 }
 

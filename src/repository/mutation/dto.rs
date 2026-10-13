@@ -269,7 +269,7 @@ pub struct HostPreviewDto {
     pub reapproval_required: bool,
 }
 
-/// What `host inspect` reports of a host a repository's publication
+/// What `host observe` reports of a host a repository's publication
 /// remote names, once it has connected to it: the key the host
 /// presented, and the pin the host has. Nothing is pinned by it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

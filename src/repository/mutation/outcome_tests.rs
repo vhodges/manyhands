@@ -312,7 +312,7 @@ fn actions(code: ResultCode, retry: bool) -> Vec<&'static str> {
     let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
     recovery(
         code,
-        Command::TicketSave,
+        Some(Command::TicketSave),
         Some("/repository"),
         Some(request_id),
         None,
@@ -1258,7 +1258,7 @@ fn recovery_required_with_no_repository_offers_the_request_or_nothing() {
     let offered = |retry| {
         recovery(
             ResultCode::RecoveryRequired,
-            Command::KeyGenerate,
+            Some(Command::KeyGenerate),
             None,
             Some(request_id),
             None,
@@ -1290,7 +1290,7 @@ fn an_external_change_under_an_accepted_key_deletion_offers_nothing() {
     let offered = |command, root, retry| {
         recovery(
             ResultCode::ExternalChange,
-            command,
+            Some(command),
             root,
             Some(request_id),
             None,
@@ -1353,7 +1353,7 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
         for retry in [false, true] {
             let offered: Vec<&str> = recovery(
                 code,
-                Command::KeySelect,
+                Some(Command::KeySelect),
                 None,
                 Some(request_id),
                 None,
@@ -1367,7 +1367,7 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
         }
         let offered = recovery(
             code,
-            Command::KeySelect,
+            Some(Command::KeySelect),
             Some("/repository"),
             Some(request_id),
             None,
@@ -1389,7 +1389,7 @@ fn a_result_that_names_no_repository_offers_no_rebuild() {
 fn actions_of(command: Command, code: ResultCode, retry: bool) -> Vec<&'static str> {
     recovery(
         code,
-        command,
+        Some(command),
         Some("/repository"),
         Some(RequestId::new()),
         None,
@@ -1430,7 +1430,7 @@ fn a_hand_off_no_operation_owes_is_offered_as_a_refresh() {
     let offered = |command, retry| {
         recovery(
             ResultCode::DiscoveryPending,
-            command,
+            Some(command),
             Some("/repository"),
             Some(RequestId::new()),
             Some(operation),
@@ -1667,7 +1667,14 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
 fn a_blocked_synchronization_with_no_way_forward_is_offered_its_cancellation() {
     let request_id = RequestId::new();
     let offered = |command, code, request_id, retry| {
-        recovery(code, command, Some("/repository"), request_id, None, retry)
+        recovery(
+            code,
+            Some(command),
+            Some("/repository"),
+            request_id,
+            None,
+            retry,
+        )
     };
     let names = |actions: &[RecoveryAction]| -> Vec<&str> {
         actions
@@ -1781,7 +1788,7 @@ fn a_host_that_is_not_trusted_is_offered_its_approval_before_the_same_request() 
         with_host_action(
             recovery(
                 code,
-                Command::RepoSync,
+                Some(Command::RepoSync),
                 root,
                 Some(RequestId::new()),
                 None,
@@ -1865,7 +1872,7 @@ fn a_result_of_no_request_is_never_offered_a_retry() {
         for retry in [false, true] {
             let offered = recovery(
                 code,
-                Command::RepoEnable,
+                Some(Command::RepoEnable),
                 Some("/repository"),
                 None,
                 None,
@@ -1892,7 +1899,7 @@ fn offered(
     pending: &[&str],
 ) -> Vec<(&'static str, Option<String>)> {
     let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
-    let own = recovery(code, command, root, None, None, retry);
+    let own = recovery(code, Some(command), root, None, None, retry);
     offering_abandon(own, code, root, &pending, &[], None)
         .into_iter()
         .map(|action| {
@@ -1950,7 +1957,7 @@ fn another_request_s_operation_a_resume_would_take_up_is_offered_its_resume_befo
     let refused = || {
         recovery(
             ResultCode::RecoveryRequired,
-            Command::TicketSave,
+            Some(Command::TicketSave),
             Some(ROOT),
             None,
             None,
@@ -1992,7 +1999,7 @@ fn another_request_s_operation_a_resume_would_take_up_is_offered_its_resume_befo
     // resume of another's.
     let own = recovery(
         ResultCode::Busy,
-        Command::IndexRefresh,
+        Some(Command::IndexRefresh),
         Some(ROOT),
         None,
         None,
@@ -2086,7 +2093,7 @@ fn each_pending_operation_is_offered_once() {
     let pending = vec![PENDING.to_owned(), other.to_owned()];
     let own = recovery(
         ResultCode::RecoveryRequired,
-        Command::TicketSave,
+        Some(Command::TicketSave),
         Some(ROOT),
         None,
         None,
@@ -2122,7 +2129,14 @@ fn each_pending_operation_is_offered_once() {
 fn offered_with_own(code: ResultCode, command: Command, pending: &[&str]) -> Vec<&'static str> {
     let pending: Vec<String> = pending.iter().map(|id| (*id).to_owned()).collect();
     let request_id = RequestId::parse("01ARZ3NDEKTSV4RRFFQ69G5FX1").unwrap();
-    let own = recovery(code, command, Some(ROOT), Some(request_id), None, true);
+    let own = recovery(
+        code,
+        Some(command),
+        Some(ROOT),
+        Some(request_id),
+        None,
+        true,
+    );
     offering_abandon(own, code, Some(ROOT), &pending, &[], Some(PENDING))
         .into_iter()
         .map(|action| {
@@ -2197,7 +2211,7 @@ fn an_own_operation_that_is_not_to_be_abandoned_is_not_offered() {
     // A result that names no repository.
     let own = recovery(
         ResultCode::RecoveryRequired,
-        Command::KeyGenerate,
+        Some(Command::KeyGenerate),
         None,
         None,
         None,
@@ -2241,7 +2255,7 @@ fn a_cancellation_is_not_offered_for_a_reservation_that_is_not_the_request_s_own
     .with_operation_id(OperationId::new().to_string())
     .with_recovery(recovery(
         ResultCode::MergeRequired,
-        Command::RepoSync,
+        Some(Command::RepoSync),
         Some("/nowhere"),
         Some(request_id),
         None,
@@ -2318,4 +2332,37 @@ fn a_result_whose_record_could_not_be_settled_offers_the_same_request_first() {
             }
         }
     }
+}
+
+/// A failed `host observe` is of no command and no request: its code
+/// offers what it offers a mutation on the same repository, and nothing
+/// that is sent again or previewed.
+#[test]
+fn a_failed_host_observation_offers_its_code_s_own_action_and_no_request() {
+    let names = |code, suggested| -> Vec<&'static str> {
+        offered_by_observation(code, Some("/repository"), suggested)
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect()
+    };
+    for (code, expected) in [
+        (ResultCode::RepositoryNotRegistered, vec!["index.rebuild"]),
+        (ResultCode::IndexUnavailable, vec!["index.rebuild"]),
+        (ResultCode::InvalidConfiguration, vec!["repo.inspect"]),
+        (ResultCode::ExternalChange, vec![]),
+        (ResultCode::TransportUnavailable, vec![]),
+        (ResultCode::Busy, vec![]),
+        (ResultCode::PublicationRemoteRequired, vec![]),
+    ] {
+        assert_eq!(names(code, Vec::new()), expected, "{code:?}");
+    }
+    // What the read suggested is kept.
+    let suggested = vec![RecoveryAction::new(
+        RecoveryActionKind::RepoInspect,
+        [(ROOT_ARGUMENT, "/elsewhere".into())],
+    )];
+    let kept = offered_by_observation(ResultCode::NotRepositoryRoot, None, suggested.clone());
+    assert_eq!(kept, suggested);
+    // With no root there is nothing to rebuild.
+    assert!(offered_by_observation(ResultCode::IndexUnavailable, None, Vec::new()).is_empty());
 }

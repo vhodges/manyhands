@@ -1,6 +1,6 @@
 //! `host approve` and `host replace`: the host of a repository's
 //! publication remote is pinned to a key, or its pin is changed to
-//! another. Both need confirmation. And `host inspect`, the read that
+//! another. Both need confirmation. And `host observe`, the read that
 //! shows what a host presents before either.
 //!
 //! A host is named by its authority: its name in lower case, and its
@@ -91,7 +91,7 @@ use super::{
 pub struct HostApproveInput {
     pub root: PathBuf,
     pub authority: SshAuthority,
-    /// The algorithm of the key, as `host inspect` and a
+    /// The algorithm of the key, as `host observe` and a
     /// synchronization that stopped for the host give it.
     pub algorithm: String,
     /// The key's fingerprint: `SHA256:` and the digest of the public key.
@@ -110,8 +110,9 @@ pub struct HostReplaceInput {
     pub old_fingerprint: String,
 }
 
-/// The command `observe_host` answers.
-const HOST_INSPECT: &str = "host inspect";
+/// The command `observe_host` answers. It is not `host inspect`, the
+/// read of the pins that connects to nothing and gives another shape.
+const HOST_OBSERVE: &str = "host observe";
 
 /// No row is ever read for the commands: they have no operation.
 const NO_ROW: JournalRow = JournalRow::Absent;
@@ -837,8 +838,8 @@ impl Confirmed for HostBinding {
 }
 
 impl RepositoryService {
-    /// `host inspect`, with a connection: what the host `authority`
-    /// presents now, and the pin it has. `authority` is a host the
+    /// `host observe`: what the host `authority` presents now, to a
+    /// connection, and the pin it has. `authority` is a host the
     /// publication remote of the repository at `root` names, for
     /// fetching or for pushing; `None` is the host the remote is
     /// fetched from.
@@ -858,12 +859,17 @@ impl RepositoryService {
             repository: crate::results::absolute_path_string(root),
             ..Scope::default()
         };
-        let failure = |scope: Scope, code: ResultCode| {
-            Envelope::failure(HOST_INSPECT, scope, code, Vec::new())
+        // What a failure offers is decided where every result's is; a
+        // read that failed and suggested its own recovery keeps it.
+        let offering = |scope: Scope, code: ResultCode, suggested| {
+            let recovery =
+                outcome::offered_by_observation(code, scope.repository.as_deref(), suggested);
+            Envelope::failure(HOST_OBSERVE, scope, code, recovery)
         };
+        let failure = |scope: Scope, code: ResultCode| offering(scope, code, Vec::new());
         let host = match Host::read(self, root, authority) {
             Ok(host) => host,
-            Err(answer) => return failure(unresolved(), answer.code),
+            Err(answer) => return offering(unresolved(), answer.code, answer.recovery),
         };
         let scope = Scope {
             repository: crate::results::absolute_path_string(&host.root),
@@ -935,7 +941,7 @@ impl RepositoryService {
             return failure(scope, ResultCode::ExternalChange);
         }
         Envelope::read_success(
-            HOST_INSPECT,
+            HOST_OBSERVE,
             scope,
             HostObservationDto {
                 host: host.authority.host,

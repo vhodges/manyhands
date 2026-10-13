@@ -1,6 +1,6 @@
 {
   "code": "ok",
-  "command": "host inspect",
+  "command": "host observe",
   "data": {
     "algorithm": "ssh-ed25519",
     "fetch": true,

@@ -1392,7 +1392,7 @@ const UNBOUND_COMMANDS: [(&str, &str); 3] = [
         "a signal to a running request, which records nothing of its own",
     ),
     (
-        "host inspect",
+        "host observe",
         "the observation of a host's key, which host approve consents to",
     ),
 ];

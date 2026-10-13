@@ -1,4 +1,4 @@
-//! `host inspect`, `host approve` and `host replace`, against a real
+//! `host observe`, `host approve` and `host replace`, against a real
 //! authenticated server.
 //!
 //! Every envelope and every store is scanned for the world's private
@@ -230,7 +230,7 @@ fn observe_as(
         w.service
             .observe_host(&w.root, authority, &mut SessionCredentials::new(provider));
     let value = scanned(w, &envelope);
-    assert_eq!(envelope.command, "host inspect");
+    assert_eq!(envelope.command, "host observe");
     // A read of the network is of no request.
     assert_eq!(envelope.request_id, None);
     assert_eq!(envelope.operation_id, None);
