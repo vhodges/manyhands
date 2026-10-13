@@ -101,15 +101,22 @@ and the baseline.
   25 poll tests, 322 remote tests, four Rust gates (1,625 passed, 1 ignored).
   Approval reported by controller; comment `01M4VPNGXTADT2ASHG97ZQH66Q` retains
   correction evidence.
-- [ ] Independent Task 4 spec re-review after quality fixes: pending, must
-  precede quality re-review of the cumulative range from
+- [x] Independent Task 4 spec re-review after quality fixes:
+  `ses_ec8bd9b3effeS3OD0g7achFQNy`, controller reports approved through
+  `8cb5d777758287b200e09255dc1fa7f254fc4da3`, cumulative range from
   `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`.
-- [ ] Independent Task 4 quality review: `ses_ec892692effePXdmvv7I1Ys7ER`
-  BLOCKED two Important findings: foreign context ownership and docs/.md file
-  selection. Poll-only fixes implemented and verified; RED for each recorded in
+- [x] Independent Task 4 quality review: `ses_ec892692effePXdmvv7I1Ys7ER`,
+  controller reports approved through `8cb5d777758287b200e09255dc1fa7f254fc4da3`
+  after fixing two Important findings: foreign context ownership and docs/.md
+  file selection. Poll-only fixes implemented and verified; RED for each recorded in
   comment `01M4VQFGNCG4TE2MMA6WD27C3Z`. GREEN: 29 poll/326 remote tests and
-  required Rust gates (1,629 passed, 1 ignored). Awaiting spec then quality
-  re-review; comment `01M4VSWK7DJCKF0FWEA82VZC6Q`. Approved agreement unchanged.
+  required Rust gates (1,629 passed, 1 ignored). Historical review-ready comment
+  `01M4VSWK7DJCKF0FWEA82VZC6Q`; approved agreement unchanged.
+- [ ] Task 5: assigned at clean base `8cb5d777758287b200e09255dc1fa7f254fc4da3`;
+  blocked before production/test edits. Required unchanged
+  `validate_context_worktree` in step 5 unconditionally scans canonical files,
+  conflicting with no scan under the single lease. Await owner ruling; evidence
+  and prior review approvals in comment `01M4VTCVFT1CJHJ0YQ3WC77KTR` and ledger.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -123,11 +130,13 @@ confirmed discovery-agreement contradiction before production work; the
 historical blocker is recorded in comment `01M4VD7G36JQ3T0D3VXEX7YDTQ`. Owner
 approved the focused agreement amendment; Task 4 resumed at clean review base
 `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`, controller preflight a clean no-op.
-Task 4 spec passed through `6daaaec5`; quality identified two Important blockers.
-Poll-only corrections are implemented and verified, awaiting spec re-review then
-quality re-review. No Task 5 implementation.
+Task 4 spec and quality are now controller-reported approved after all corrections,
+through `8cb5d777758287b200e09255dc1fa7f254fc4da3`. Fresh Task 5-only assignment
+permits a local task commit and canonical bookkeeping, no subagents/network/rebase.
+Task 5 stopped before implementation at the lease/validator scan contradiction;
+owner ruling required. No Rust change or RED/GREEN run for this checkpoint.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
-Tasks 5–8 have not started. Ticket remains
+Tasks 6–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence

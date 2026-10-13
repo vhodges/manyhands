@@ -10,6 +10,81 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 5 Pre-Implementation Scope Blocker — 2026-10-13T23:43:36Z
+
+Fresh implementer assigned **Task 5 only**, inline with no subagents. Verified
+clean assigned worktree and branch at the exact task base
+`8cb5d777758287b200e09255dc1fa7f254fc4da3`. This assignment explicitly forbids
+network and rebase, so the prior controller preflight remains trusted; no new
+fetch/rebase was performed. Current AGENTS, approved Task 5/design, ledger,
+ticket, relevant poll/state fixtures and existing repository helpers inspected.
+
+### Prior Task 4 Reviews Now Approved
+
+The controller reports approval after the directory-collapse ignored-collision,
+foreign-worktree identity and docs/.md-selection corrections, through this base:
+
+- Spec `ses_ec8bd9b3effeS3OD0g7achFQNy`: **approved** corrected Task 4.
+- Quality `ses_ec892692effePXdmvv7I1Ys7ER`: **approved** corrected Task 4.
+- These supersede the pending re-review status above; historical findings and
+  RED/GREEN evidence remain intact. Ticket review checkboxes reflect the report.
+- Owner amendment remains accepted tree ⇒ active context **only**; rejected
+  trees may still be active in discovery. Non-executable poll conformity and
+  unchanged discovery are retained. D1–D4 unchanged.
+- **Deferred Task 2 minor remains for final Cycle review:** direct-SQL
+  poll-kind immutability regression from `ses_ec9e9909cffeS4kt0Z0ENmyjss`.
+
+### Contradiction Requiring Owner Ruling Before Implementation
+
+The assignment says no network, prompt **or scan under the lease**, requires
+five ordered materialization steps under **one lease acquisition**, and freezes
+existing helper bodies to visibility-only changes. Approved design step 5
+(`...-design.md:332–340`) explicitly requires `validate_context_worktree` before
+recording `complete`, under that lease. The unchanged helper is not identity-only:
+
+- `src/repository.rs:8315–8384`: `validate_context_worktree` unconditionally
+  calls `canonical_context_at` at line 8354 (even with `require_target = false`).
+- `src/repository.rs:7976–7987`: `canonical_context_at` calls
+  `collect_canonical_sources`, parses candidates and validates the context.
+- `src/repository.rs:8136–8144`: that collector traverses docs, tickets and
+  comments. `collect_managed_sources:8175–8215` and
+  `collect_document_sources:8226–8263` recursively enumerate directories;
+  `collect_canonical_source:8290–8312` reads UTF-8 file bodies.
+
+Thus calling the required unchanged validator in step 5 performs a canonical
+filesystem scan while holding the lease. Moving it outside the lease, replacing
+it with the stronger poll-local identity proof alone, or changing its body would
+silently alter an explicit requirement. No such alteration is authorized.
+
+**Stopped before production or test edits**, as instructed for scope
+contradictions. Owner ruling requested: does the no-scan constraint permit the
+unchanged canonical validation inside `validate_context_worktree` at step 5,
+while discovery/index refresh scans remain outside the lease? This question is
+not an accepted exception or amendment; approved Cycle/design/plan unchanged.
+
+### Evidence And Handoff
+
+No Rust command was run, no behavioral RED or GREEN is claimed, and no failing
+test was added. The three planned RED commands remain unrun:
+
+- `devenv shell -- cargo test --locked --lib remote::poll`
+- `devenv shell -- cargo test --locked --lib remote::state`
+- `devenv shell -- cargo test --locked --test repository_enablement`
+
+This is a bookkeeping-only checkpoint, not a Rust submission or feature commit.
+Only ledger, open ticket and canonical Node-generated comment
+`01M4VTCVFT1CJHJ0YQ3WC77KTR` are changed. Exact checkpoint range begins
+`8cb5d777758287b200e09255dc1fa7f254fc4da3`; head returned after local commit.
+`git diff --exit-code -- src tests Cargo.toml Cargo.lock devenv.lock` verifies
+the source/test/dependency tree is unchanged. `git diff --check` and
+`scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` validate whitespace and
+canonical ticket/comment rendering before staging only these intended files.
+
+Task 5 remains unticked and blocked for an owner ruling, not review-ready.
+Task 6 not started; ticket open. No subagents, outward publication, native run,
+merge, closure, removal or design change. Required Rust gates will run after
+authorized Rust implementation; prior Task 4 verification remains historical.
+
 ## Task 4 Quality Identity And Selection Corrections — 2026-10-13T22:52:37Z
 
 Controller reports prior spec `ses_ec8bd9b3effeS3OD0g7achFQNy` passed cumulative
