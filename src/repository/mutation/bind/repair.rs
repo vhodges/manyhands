@@ -301,6 +301,18 @@ impl RepairBinding {
         self.about(Answer::stopped(code))
     }
 
+    /// The answer of a repair whose item's context holds, at the path,
+    /// neither the file the token is of nor the corrected source nor an
+    /// item. Nothing is offered: no command brings a context up to
+    /// primary or removes it, so a new preview is refused the same way.
+    /// The way out is by hand, removing the item's worktree and branch.
+    fn stale_context(&self) -> Answer {
+        Answer {
+            offers_nothing: true,
+            ..self.stopped(ResultCode::ExternalChange)
+        }
+    }
+
     /// The answer of a repair whose end state already holds: a no-op.
     fn already_applied(&self) -> Answer {
         let (code, effects) = save::settled(None);
@@ -492,9 +504,7 @@ impl RepairBinding {
             // No new preview could be given of it: the item is edited by
             // a save.
             Context::Item => Some(self.stopped(ResultCode::NotRepairable)),
-            // The context's file is neither the file the token is of nor
-            // the corrected source.
-            Context::Other => Some(self.stopped(ResultCode::ExternalChange)),
+            Context::Other => Some(self.stale_context()),
         }
     }
 
@@ -852,7 +862,7 @@ impl Confirmed for RepairBinding {
         match self.context(repository.root(), &path, &id, &observed.bytes) {
             Context::Repaired => Ok(Seen::EndState(self.already_applied())),
             Context::Item => Err(stop(self, Answer::stopped(ResultCode::NotRepairable))),
-            Context::Other => Err(stop(self, Answer::stopped(ResultCode::ExternalChange))),
+            Context::Other => Err(stop(self, self.stale_context())),
             Context::Absent | Context::Untouched | Context::Written => Ok(Seen::State {
                 found: self.digest(&path, &observed),
                 own: None,

@@ -1186,6 +1186,52 @@ mod boundary {
         assert_eq!(shelf.journal_rows(), rows);
     }
 
+    /// The item's context holds, at the path, neither the file the token
+    /// is of nor the source nor an item. No command brings a context up
+    /// to primary or removes it, so a new preview is refused the same
+    /// way: nothing is offered, where an external change otherwise offers
+    /// a new preview.
+    #[test]
+    fn a_repair_its_item_s_context_holds_other_bytes_for_offers_nothing() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        let source = document(ADOPTED);
+        let token = shelf.path_token(MARKER_PATH);
+        let repair = || shelf.document_repair_with(MARKER_PATH, &token, &source);
+        let (first, _) = shelf.preview(&repair());
+        let (second, _) = shelf.preview(&repair());
+        assert_eq!(
+            shelf.confirmed(REQUEST_1, &first, repair()).code,
+            ResultCode::Ok
+        );
+        items::write(
+            &shelf.worktree(ADOPTED),
+            MARKER_PATH,
+            "---\nmanyhands_managed: true\n---\nScribble.\n",
+        );
+
+        // A new preview.
+        let refused = shelf.prepare(&repair());
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, ResultCode::ExternalChange)
+        );
+        assert!(refused.data.is_none());
+        assert_eq!(recovery_actions_of(&refused), [""; 0]);
+        assert_golden(
+            "document_repair_stale_context",
+            &shelf,
+            PREVIEW_SCHEMA,
+            &refused,
+        );
+
+        // A request that presents a confirmation given before.
+        let changed = shelf.confirmed(REQUEST_2, &second, repair());
+        assert_eq!(changed.code, ResultCode::ExternalChange);
+        assert_eq!(recovery_actions_of(&changed), [""; 0]);
+        assert!(shelf.record(REQUEST_2).is_none());
+    }
+
     #[test]
     fn a_file_with_a_valid_id_keeps_it() {
         git_home::isolated();

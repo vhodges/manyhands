@@ -30,6 +30,7 @@ pub const CASES: &[&str] = &[
     "document_repair_partial",
     "document_repair_preview",
     "document_repair_preview_noop",
+    "document_repair_stale_context",
     "document_save",
     "document_save_invalid_input",
     "failure_request_not_found",
