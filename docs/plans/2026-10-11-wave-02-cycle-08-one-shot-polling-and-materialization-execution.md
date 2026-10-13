@@ -10,6 +10,121 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 4 Quality Identity And Selection Corrections — 2026-10-13T22:52:37Z
+
+Controller reports prior spec `ses_ec8bd9b3effeS3OD0g7achFQNy` passed cumulative
+Task 4 through `6daaaec520aeb37e777185cc28b8576e51b43383`. Independent quality
+`ses_ec892692effePXdmvv7I1Ys7ER` then **BLOCKED with two Important findings**:
+
+1. Matching workdir, branch spelling and OIDs do not prove context ownership.
+   Root registration can remain while its deterministic directory holds a
+   standalone or foreign linked repository; poll can fast-forward that foreign
+   namespace while holding only the original root's lease. Add poll-local linked
+   identity: expected canonical commondir, exact registered gitdir and backlink.
+2. `docs/.md` (including nested forms) has no `Path::extension`, yet the tree
+   reader/canonical parser accept its suffix. Discovery skips it. Poll document
+   file selection must use discovery's extension boundary; `.hidden.md` remains
+   selected, and ignored `.md` copies must not break accepted⇒active.
+
+Fix base verified clean in the assigned worktree/branch:
+`6daaaec520aeb37e777185cc28b8576e51b43383`. Approved contract/amendment and D1–D4
+unchanged. Task 0/preflight trusted; no fetch/rebase. Only Task 4 poll-local fixes
+authorized, shared helpers frozen, no subagents/later tasks. New spec re-review
+must precede quality re-review. Task 2 SQL kind-immutability minor stays deferred.
+
+### Investigation And RED Before Either Production Correction
+
+`materialized_target` and `validate_context_worktree` check location/branch but
+not opened-repository ownership. Locked `git2 0.20.4` Worktree API exposes path,
+name and validate; libgit2 `worktree.c:253–285` validate checks presence/shape,
+not the required exact identity. `git_worktree__read_link:75–99` resolves relative
+metadata links against the admin directory. Poll must verify ownership separately.
+Discovery `collect_documents` uses extension `md`; the tree reader records the
+broader suffix-based sources unchanged, so poll must apply selection itself.
+
+Before production, added real repository and ODB regressions, then ran sequential
+Devenv commands:
+
+| Command | Behavioral RED |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::poll_context_identity_` | **0 passed, 3 failed, 549 filtered**, exit 101. Standalone and foreign-linked replacements kept root registration, exact expected branch/OIDs and incoming commit objects; both returned FastForwarded and changed target bytes. Same-common/wrong-admin substitution also changed state. Full root/target/foreign-owner snapshots assert preservation and Inaccessible. |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::poll_document_selection_matches_discovery_extensions_including_dotfiles` | **0 passed, 1 failed, 551 filtered**, exit 101: docs/.md accepted, expected rejected. Matrix includes nested .md, top/nested .hidden.md controls, and visible document plus ignored .md duplicate; all accepted trees must be active in real discovery. |
+
+Initial auxiliary same-common fixture had an old backlink and thus opened with
+the other workdir; corrected its backlink to the deterministic path and reran
+the identity filter before production. All three failures then prove behavior,
+not setup. Backlink-malformation variant follows the same-common case at GREEN.
+Fixture identities are pinned locally to synthetic name/email for reflogs. Object
+graphs are copied with public ODB reads/writes, no clone/fake/SSH transport,
+developer keys, sleeps or global Git configuration changes. RED recorded before
+either production correction in comment `01M4VQFGNCG4TE2MMA6WD27C3Z`.
+
+### Poll-Local Corrections And Final GREEN — 2026-10-13T23:34:43Z
+
+Added a poll-local materialized-target wrapper around the unchanged sync helper.
+It retains workdir/branch checks and additionally requires a context to be a
+linked worktree whose canonical commondir is the owner's, whose opened gitdir
+is exactly the owner's `worktrees/<ULID>` admin directory, and whose regular
+non-symlink admin `gitdir` backlink resolves to the exact regular worktree `.git`
+file. Registration name/path must match too; admin directories are real,
+non-symlink directories. Relative backlinks resolve against the admin directory,
+matching the locked backend. Invalid/unreadable identity yields Inaccessible
+before cleanliness or ancestry work. Classification and update preparation use
+the wrapper; a freshly opened, revalidated handle is used immediately before
+the existing OID checks and shared safe updater. No foreign namespace is updated
+under the original root's lease.
+
+Conformity now selects documents under docs only when `Path::extension == md`,
+matching existing discovery before parsing/ID selection. Top/nested `.md`-only
+trees are rejected and create nothing; `.hidden.md` controls are accepted and
+active. A visible document plus an ignored `.md` carrying the same ID remains
+accepted/active because discovery excludes that copy too. The reader still
+captures the broader sources unchanged; executable/mode/encoding/duplicate and
+comment rules otherwise retain the approved behavior.
+
+GREEN exercises four ownership cases (standalone, foreign-linked, same-common
+wrong admin, malformed exact-file backlink) and verifies classification plus
+fast-forward both return Inaccessible with full root/target/foreign-owner
+snapshot equality. Six document-selection cases prove rejection/preservation
+and accepted⇒active in real worktrees. Existing healthy context fast-forward
+and all previous preservation/conformity tests remain green. All new test state
+is local fixture Git/ODB state; no fake transport or production test seam.
+
+Final sequential Devenv evidence on the unchanged-after-verification Rust tree:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **29 passed**, 523 filtered |
+| `devenv shell -- cargo test --locked --lib remote::` | **326 passed**, 226 filtered |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,629 passed, 0 failed, 1 existing ignored** |
+
+Full log `tool_1377f574d001T58TNCzyUcVnSN`: **552 library**, **779 ordinary
+integration**, **289 real-SSH** (41 comment, 25 merge, 15 observation, 63
+synchronization, 31 fixture, 114 transport), **9 compile-fail doctests**.
+Four new library tests added; the ignored test is the existing thousand-item
+characterization. One full gate ran for these corrections, with no production
+trial failure or duplicate broad repeat. Shared helpers, acceptance tests,
+dependencies, lockfiles and approved Cycle/design/plan have empty diffs against
+the fix base. No native run or Task 0 characterization replay.
+
+Self-reviewed source/fixtures against both quality findings and the frozen
+contracts. Only `poll.rs`, `poll_tests.rs`, ledger, open ticket and two new
+canonical comments belong to the new local correction commit. Whitespace and
+scripts/show-ticket schema/rendering checks precede staging intended files;
+status/diff/recent log inspected. Canonical GREEN comment
+`01M4VSWK7DJCKF0FWEA82VZC6Q` records re-review readiness.
+
+Both Important findings are technically corrected, **not independently approved**.
+Return for **spec re-review, then quality re-review**. Incremental fix range starts
+`6daaaec520aeb37e777185cc28b8576e51b43383`; cumulative Task 4 range starts
+`961b3c21db11f797e5bd1cdac0bf85d748cd1dec`; exact new head returned after commit.
+Prior spec approval through 6daaaec5 remains historical controller-reported
+evidence. Ticket open; no Task 5/subagents/outward publication. Deferred Task 2
+direct-SQL kind-immutability minor remains explicit for final Cycle review.
+
 ## Task 4 Spec P1 Correction — 2026-10-13T22:01:48Z
 
 Controller conveys independent spec review `ses_ec8bd9b3effeS3OD0g7achFQNy`:

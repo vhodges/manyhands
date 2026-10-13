@@ -1570,3 +1570,330 @@ fn poll_clean_retiring_directories_still_fast_forward_with_noncolliding_ignored_
         }
     }
 }
+
+fn copy_fixture_objects(source: &git2::Repository, destination: &git2::Repository) {
+    let source = source.odb().unwrap();
+    let destination = destination.odb().unwrap();
+    source
+        .foreach(|oid| {
+            let object = source.read(*oid).unwrap();
+            assert_eq!(
+                destination.write(object.kind(), object.data()).unwrap(),
+                *oid
+            );
+            true
+        })
+        .unwrap();
+}
+
+fn substituted_context_is_inaccessible(case: &str) {
+    let f = LocalFixture::new();
+    f.repository
+        .config()
+        .unwrap()
+        .set_str("user.name", "Fixture")
+        .unwrap();
+    f.repository
+        .config()
+        .unwrap()
+        .set_str("user.email", "fixture@example.invalid")
+        .unwrap();
+    let (target, original) = f.context();
+    let incoming = f.incoming(f.old, None);
+    f.tracking(&target, incoming);
+    let path = f.root.join(".manyhands/worktrees").join(POLL_ID);
+    let branch = format!("manyhands/document/{POLL_ID}");
+    let foreign_root = tempfile::tempdir().unwrap();
+    let foreign_root_path = foreign_root.path().canonicalize().unwrap();
+    let mut init = git2::RepositoryInitOptions::new();
+    init.initial_head("main");
+    let foreign_parent = git2::Repository::init_opts(&foreign_root_path, &init).unwrap();
+    foreign_parent
+        .config()
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
+    foreign_parent
+        .config()
+        .unwrap()
+        .set_str("user.name", "Fixture")
+        .unwrap();
+    foreign_parent
+        .config()
+        .unwrap()
+        .set_str("user.email", "fixture@example.invalid")
+        .unwrap();
+    copy_fixture_objects(&f.repository, &foreign_parent);
+    foreign_parent
+        .reference("refs/heads/main", f.old, false, "fixture")
+        .unwrap();
+    foreign_parent
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    drop(original);
+    let linked = if case == "backlink" {
+        let gitfile = path.join(".git");
+        assert!(gitfile.is_file());
+        fs::write(path.join("ignored"), b"ignored backlink sentinel\n").unwrap();
+        fs::write(
+            f.repository
+                .commondir()
+                .join("worktrees")
+                .join(POLL_ID)
+                .join("gitdir"),
+            format!("{}\n", path.join("ignored").display()),
+        )
+        .unwrap();
+        git2::Repository::open(&path).unwrap()
+    } else {
+        fs::rename(&path, path.parent().unwrap().join("kept")).unwrap();
+        match case {
+            "standalone" => {
+                let mut init = git2::RepositoryInitOptions::new();
+                init.initial_head(&branch);
+                let repo = git2::Repository::init_opts(&path, &init).unwrap();
+                repo.config()
+                    .unwrap()
+                    .set_bool("core.autocrlf", false)
+                    .unwrap();
+                repo.config()
+                    .unwrap()
+                    .set_str("user.name", "Fixture")
+                    .unwrap();
+                repo.config()
+                    .unwrap()
+                    .set_str("user.email", "fixture@example.invalid")
+                    .unwrap();
+                copy_fixture_objects(&f.repository, &repo);
+                repo.reference(&format!("refs/heads/{branch}"), f.old, false, "fixture")
+                    .unwrap();
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .unwrap();
+                assert!(!repo.is_worktree());
+                repo
+            }
+            "foreign_linked" => {
+                let reference = foreign_parent
+                    .branch(&branch, &foreign_parent.find_commit(f.old).unwrap(), false)
+                    .unwrap()
+                    .into_reference();
+                let mut options = git2::WorktreeAddOptions::new();
+                options.reference(Some(&reference));
+                foreign_parent
+                    .worktree("foreign", &path, Some(&options))
+                    .unwrap();
+                let repo = git2::Repository::open(&path).unwrap();
+                assert!(repo.is_worktree());
+                assert_ne!(
+                    repo.commondir().canonicalize().unwrap(),
+                    f.repository.commondir().canonicalize().unwrap()
+                );
+                repo
+            }
+            "same_common_admin" => {
+                let other_path = path.parent().unwrap().join(OTHER_ID);
+                let reference = f
+                    .repository
+                    .branch("other", &f.repository.find_commit(f.old).unwrap(), false)
+                    .unwrap()
+                    .into_reference();
+                let mut options = git2::WorktreeAddOptions::new();
+                options.reference(Some(&reference));
+                f.repository
+                    .worktree(OTHER_ID, &other_path, Some(&options))
+                    .unwrap();
+                let other = git2::Repository::open(&other_path).unwrap();
+                other.set_head(&format!("refs/heads/{branch}")).unwrap();
+                fs::create_dir(&path).unwrap();
+                fs::write(
+                    path.join(".git"),
+                    fs::read(other_path.join(".git")).unwrap(),
+                )
+                .unwrap();
+                fs::write(
+                    other.path().join("gitdir"),
+                    format!("{}\n", path.join(".git").display()),
+                )
+                .unwrap();
+                let repo = git2::Repository::open(&path).unwrap();
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .unwrap();
+                assert_eq!(
+                    repo.commondir().canonicalize().unwrap(),
+                    f.repository.commondir().canonicalize().unwrap()
+                );
+                assert_ne!(
+                    repo.path().canonicalize().unwrap(),
+                    f.repository
+                        .commondir()
+                        .join("worktrees")
+                        .join(POLL_ID)
+                        .canonicalize()
+                        .unwrap()
+                );
+                repo
+            }
+            _ => unreachable!(),
+        }
+    };
+    assert_eq!(
+        f.repository
+            .find_worktree(POLL_ID)
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap(),
+        path.canonicalize().unwrap(),
+        "original root registration kept"
+    );
+    assert_eq!(
+        linked.workdir().unwrap().canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+    assert_eq!(
+        linked.find_reference("HEAD").unwrap().symbolic_target(),
+        Some(format!("refs/heads/{branch}").as_str())
+    );
+    assert_eq!(linked.head().unwrap().target(), Some(f.old));
+    assert!(
+        linked.find_commit(incoming).is_ok(),
+        "matching incoming objects exist"
+    );
+    let expected = f
+        .service
+        .observation_configuration(&f.root, &f.plan)
+        .unwrap();
+    let root_before = snapshot(&f.root, &f.repository);
+    let foreign_before = snapshot(&path, &linked);
+    let parent_before = snapshot(&foreign_root_path, &foreign_parent);
+    let classification = classify_local_target(
+        &f.root,
+        "main",
+        &target,
+        PollTrackingState::Present(incoming),
+    )
+    .unwrap();
+    let result = f.service.poll_fast_forward(
+        &f.root,
+        &f.plan,
+        &expected,
+        &PollFastForward {
+            target,
+            before: f.old,
+            after: incoming,
+        },
+    );
+    assert_eq!(
+        snapshot(&f.root, &f.repository),
+        root_before,
+        "root changed: {case}, result={result:?}"
+    );
+    assert_eq!(
+        snapshot(&path, &linked),
+        foreign_before,
+        "foreign target changed: {case}"
+    );
+    assert_eq!(
+        snapshot(&foreign_root_path, &foreign_parent),
+        parent_before,
+        "foreign owner changed: {case}"
+    );
+    assert_eq!(
+        classification,
+        LocalPollClassification::Unchanged {
+            disposition: PollDisposition::Inaccessible,
+            local_oid: None
+        }
+    );
+    assert_eq!(result.unwrap(), PollDisposition::Inaccessible);
+}
+
+#[test]
+fn poll_context_identity_rejects_standalone_substitution_without_mutating_either_repo() {
+    substituted_context_is_inaccessible("standalone");
+}
+
+#[test]
+fn poll_context_identity_rejects_foreign_linked_substitution_without_mutating_either_repo() {
+    substituted_context_is_inaccessible("foreign_linked");
+}
+
+#[test]
+fn poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink() {
+    for case in ["same_common_admin", "backlink"] {
+        substituted_context_is_inaccessible(case);
+    }
+}
+
+#[test]
+fn poll_document_selection_matches_discovery_extensions_including_dotfiles() {
+    for (path, extra, expected) in [
+        ("docs/.md", None, false),
+        ("docs/nested/.md", None, false),
+        ("docs/.hidden.md", None, true),
+        ("docs/nested/.hidden.md", None, true),
+        ("docs/visible.md", Some("docs/.md"), true),
+        ("docs/visible.md", Some("docs/nested/.md"), true),
+    ] {
+        let f = LocalFixture::new();
+        let mut entries = vec![(
+            path,
+            item_source(AuthoringKind::Document, POLL_ID),
+            0o100644,
+        )];
+        if let Some(extra) = extra {
+            entries.push((
+                extra,
+                item_source(AuthoringKind::Document, POLL_ID),
+                0o100644,
+            ));
+        }
+        let tree = f
+            .repository
+            .find_tree(fixture_tree(&f.repository, &entries))
+            .unwrap();
+        let before = snapshot(&f.root, &f.repository);
+        let accepted = conforming_context_tree(
+            &f.repository,
+            &tree,
+            AuthoringKind::Document,
+            &POLL_ID.parse().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot(&f.root, &f.repository), before);
+        assert_eq!(accepted, expected, "{path}, extra={extra:?}");
+        assert!(f.repository.find_worktree(POLL_ID).is_err());
+        assert!(!f.root.join(".manyhands/worktrees").join(POLL_ID).exists());
+        if accepted {
+            let sig =
+                git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(2, 0))
+                    .unwrap();
+            let oid = f
+                .repository
+                .commit(None, &sig, &sig, "document selection", &tree, &[])
+                .unwrap();
+            let reference = f
+                .repository
+                .branch(
+                    &format!("manyhands/document/{POLL_ID}"),
+                    &f.repository.find_commit(oid).unwrap(),
+                    false,
+                )
+                .unwrap()
+                .into_reference();
+            let path = f.root.join(".manyhands/worktrees").join(POLL_ID);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut options = git2::WorktreeAddOptions::new();
+            options.reference(Some(&reference));
+            f.repository
+                .worktree(POLL_ID, &path, Some(&options))
+                .unwrap();
+            let observed = crate::repository::discovery::observe_root(&f.repository, &f.root);
+            assert_eq!(observed.active_contexts.len(), 1);
+            assert_eq!(
+                observed.active_contexts[0].context.item_id,
+                Some(POLL_ID.parse().unwrap())
+            );
+        }
+    }
+}

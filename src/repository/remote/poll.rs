@@ -115,6 +115,87 @@ pub(super) fn classify_relation<E>(
         Err(_) => unreachable!("clean descendant error contract"),
     }
 }
+
+/// Poll-local ownership proof. Location and branch spelling alone cannot bind
+/// an opened repository to the root whose lease the poll owns.
+fn poll_materialized_target(
+    root: &Path,
+    primary: &str,
+    target: &SynchronizationTarget,
+) -> Result<git2::Repository, SynchronizationError> {
+    let invalid = || SynchronizationError::TargetNotMaterialized;
+    let linked = sync::materialized_target(root, primary, target)?;
+    let expected_path = match target {
+        SynchronizationTarget::Primary => root.to_owned(),
+        SynchronizationTarget::Context { item_id, .. } => {
+            root.join(".manyhands/worktrees").join(item_id.to_string())
+        }
+    }
+    .canonicalize()
+    .map_err(|_| invalid())?;
+    if linked
+        .workdir()
+        .and_then(|p| p.canonicalize().ok())
+        .as_ref()
+        != Some(&expected_path)
+    {
+        return Err(invalid());
+    }
+    if let SynchronizationTarget::Context { item_id, .. } = target {
+        let owner = git2::Repository::open(root).map_err(|_| invalid())?;
+        let common = owner.commondir().canonicalize().map_err(|_| invalid())?;
+        if !linked.is_worktree() || linked.commondir().canonicalize().ok().as_ref() != Some(&common)
+        {
+            return Err(invalid());
+        }
+        let name = item_id.to_string();
+        let registered = owner.find_worktree(&name).map_err(|_| invalid())?;
+        if registered.name() != Some(name.as_str())
+            || registered.path().canonicalize().ok().as_ref() != Some(&expected_path)
+        {
+            return Err(invalid());
+        }
+        let worktrees = common.join("worktrees");
+        let admin = worktrees.join(&name);
+        for path in [&worktrees, &admin] {
+            let metadata = std::fs::symlink_metadata(path).map_err(|_| invalid())?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(invalid());
+            }
+        }
+        let admin = admin.canonicalize().map_err(|_| invalid())?;
+        if linked.path().canonicalize().ok().as_ref() != Some(&admin) {
+            return Err(invalid());
+        }
+        let gitfile = expected_path.join(".git");
+        let backlink_file = admin.join("gitdir");
+        for path in [&gitfile, &backlink_file] {
+            let metadata = std::fs::symlink_metadata(path).map_err(|_| invalid())?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(invalid());
+            }
+        }
+        // libgit2's worktree link reader resolves relative links against the
+        // admin directory. Validate the exact .git file, not just its parent.
+        let backlink = std::fs::read_to_string(&backlink_file).map_err(|_| invalid())?;
+        let backlink = Path::new(backlink.trim_end());
+        if backlink.as_os_str().is_empty() {
+            return Err(invalid());
+        }
+        let backlink = if backlink.is_absolute() {
+            backlink.to_owned()
+        } else {
+            admin.join(backlink)
+        };
+        if backlink.canonicalize().map_err(|_| invalid())?
+            != gitfile.canonicalize().map_err(|_| invalid())?
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(linked)
+}
+
 #[allow(dead_code)]
 pub(super) fn classify_local_target(
     root: &Path,
@@ -135,18 +216,9 @@ pub(super) fn classify_local_target(
             return Ok(unchanged(PollDisposition::HistoryUnknown, None));
         }
     };
-    let Ok(linked) = sync::materialized_target(root, primary, target) else {
+    let Ok(linked) = poll_materialized_target(root, primary, target) else {
         return Ok(unchanged(PollDisposition::Inaccessible, None));
     };
-    let expected_path = match target {
-        SynchronizationTarget::Primary => root.to_owned(),
-        SynchronizationTarget::Context { item_id, .. } => {
-            root.join(".manyhands/worktrees").join(item_id.to_string())
-        }
-    };
-    if linked.workdir().and_then(|p| p.canonicalize().ok()) != expected_path.canonicalize().ok() {
-        return Ok(unchanged(PollDisposition::Inaccessible, None));
-    }
     let Ok(local) = sync::local_oid(&linked) else {
         return Ok(unchanged(PollDisposition::Inaccessible, None));
     };
@@ -217,7 +289,10 @@ impl RepositoryService {
             }
             LocalPollClassification::FastForward { .. } => {}
         }
-        let linked = sync::materialized_target(root, plan.primary_branch(), &update.target)?;
+        let Ok(linked) = poll_materialized_target(root, plan.primary_branch(), &update.target)
+        else {
+            return Ok(PollDisposition::Inaccessible);
+        };
         let commit = linked
             .find_commit(update.after)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -295,13 +370,17 @@ impl RepositoryService {
                 }
             }
         }
-        if sync::local_oid(&linked)? != update.before
+        let Ok(fresh) = poll_materialized_target(root, plan.primary_branch(), &update.target)
+        else {
+            return Ok(PollDisposition::Inaccessible);
+        };
+        if sync::local_oid(&fresh)? != update.before
             || repository.refname_to_id(target_ref.tracking_ref()).ok() != Some(update.after)
         {
             return Err(SynchronizationError::ExternalChange);
         }
-        sync::fast_forward(&linked, branch, update.before, update.after)?;
-        if sync::local_oid(&linked)? != update.after {
+        sync::fast_forward(&fresh, branch, update.before, update.after)?;
+        if sync::local_oid(&fresh)? != update.after {
             return Err(SynchronizationError::ExternalChange);
         }
         Ok(PollDisposition::FastForwarded)
@@ -396,7 +475,11 @@ pub(super) fn conforming_context_tree(
             continue;
         };
         let is_ticket = kind == AuthoringKind::Ticket && path_text == ticket_path;
-        let is_document = kind == AuthoringKind::Document && path_text.starts_with("docs/");
+        let is_document = kind == AuthoringKind::Document
+            && path_text.starts_with("docs/")
+            && Path::new(path_text)
+                .extension()
+                .is_some_and(|extension| extension == "md");
         let is_comment = path_text.starts_with(&comments);
         if !is_ticket && !is_document && !is_comment {
             continue;

@@ -92,17 +92,24 @@ and the baseline.
   Classification, fixed guidance, guarded clean fast-forward and tree conformity
   complete. RED recorded before behavior; final GREEN 23 poll tests and four
   Rust gates (1,623 passed, 1 existing ignored). Shared helper bodies unchanged.
-- [ ] Independent Task 4 spec review: `ses_ec8bd9b3effeS3OD0g7achFQNy` blocked P1:
+- [x] Independent Task 4 spec review: `ses_ec8bd9b3effeS3OD0g7achFQNy` passed
+  through `6daaaec520aeb37e777185cc28b8576e51b43383` after correcting its P1:
   ignored descendants of a tracked directory replaced by a file/symlink escape
   preflight, causing partial checkout. Poll-only correction authorized; meaningful
   snapshot RED recorded before production in comment `01M4VMJE8B5XZAF6KRT7YYRSBY`.
   Correction now implemented and verified: 20 obstruction cases/4 clean controls,
   25 poll tests, 322 remote tests, four Rust gates (1,625 passed, 1 ignored).
-  Awaiting spec re-review, comment `01M4VPNGXTADT2ASHG97ZQH66Q`.
-- [ ] Independent Task 4 quality review: not started, awaits spec re-review of
-  the complete range from `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`, including
-  the owner-approved agreement amendment. Review-ready comment
-  `01M4VKXQKGZT8153HENHVW8QVB`.
+  Approval reported by controller; comment `01M4VPNGXTADT2ASHG97ZQH66Q` retains
+  correction evidence.
+- [ ] Independent Task 4 spec re-review after quality fixes: pending, must
+  precede quality re-review of the cumulative range from
+  `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`.
+- [ ] Independent Task 4 quality review: `ses_ec892692effePXdmvv7I1Ys7ER`
+  BLOCKED two Important findings: foreign context ownership and docs/.md file
+  selection. Poll-only fixes implemented and verified; RED for each recorded in
+  comment `01M4VQFGNCG4TE2MMA6WD27C3Z`. GREEN: 29 poll/326 remote tests and
+  required Rust gates (1,629 passed, 1 ignored). Awaiting spec then quality
+  re-review; comment `01M4VSWK7DJCKF0FWEA82VZC6Q`. Approved agreement unchanged.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -116,9 +123,9 @@ confirmed discovery-agreement contradiction before production work; the
 historical blocker is recorded in comment `01M4VD7G36JQ3T0D3VXEX7YDTQ`. Owner
 approved the focused agreement amendment; Task 4 resumed at clean review base
 `961b3c21db11f797e5bd1cdac0bf85d748cd1dec`, controller preflight a clean no-op.
-Task 4 spec review found a P1 checkout-preservation blocker; poll-only correction
-is implemented and verified, awaiting spec re-review. Quality has not started and
-is held until spec approval. No Task 5 implementation.
+Task 4 spec passed through `6daaaec5`; quality identified two Important blockers.
+Poll-only corrections are implemented and verified, awaiting spec re-review then
+quality re-review. No Task 5 implementation.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 5–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
