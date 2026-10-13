@@ -681,16 +681,8 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    let child: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid=?1)", [&requested], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    if child {
-        let allowed: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
-            JOIN operation_records o ON o.id=b.local_record_id JOIN remote_operation_records r ON r.operation_ulid=b.synchronization_ulid
-            JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
-            AND r.authoritative_kind IS NOT NULL AND r.action='synchronize_context' AND r.kind=b.kind AND r.item_id=b.item_ulid)",
-            params![requested,root_path], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-        if action != "refresh" || !target.is_empty() || !allowed {
-            return Err(mismatch(operation, root));
-        }
+    if !comment_child_may_begin(&transaction, root_path, action, &requested, target)? {
+        return Err(mismatch(operation, root));
     }
     if tagged_local_binding {
         let remote_id: bool = transaction
@@ -1226,6 +1218,38 @@ impl JournalRow {
     }
 }
 
+/// Whether the local operation `requested` of `action` and `target` may
+/// begin on `root_path` as far as comment publication is concerned.
+///
+/// The ID a comment's binding keeps for its synchronization is that
+/// synchronization's alone. The one local operation under it is the
+/// synchronization's index hand-off: a refresh with no target, once the
+/// remote journal holds an authoritative result for the bound context.
+/// Anything else under the ID is another operation's use of it. An ID
+/// that is no binding's synchronization is not this question's.
+///
+/// Decided here for `begin_or_reconcile`, which asks it first, and for
+/// `require_refresh_can_begin`, so that a call which asks before it
+/// changes anything is refused what its refresh would be.
+fn comment_child_may_begin(
+    connection: &Connection,
+    root_path: &str,
+    action: &str,
+    requested: &str,
+    target: &str,
+) -> Result<bool, RepositoryError> {
+    let child: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid=?1)", [requested], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    if !child {
+        return Ok(true);
+    }
+    let allowed: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
+        JOIN operation_records o ON o.id=b.local_record_id JOIN remote_operation_records r ON r.operation_ulid=b.synchronization_ulid
+        JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
+        AND r.authoritative_kind IS NOT NULL AND r.action='synchronize_context' AND r.kind=b.kind AND r.item_id=b.item_ulid)",
+        params![requested,root_path], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    Ok(action == "refresh" && target.is_empty() && allowed)
+}
+
 /// What the local journal holds pending for a root, as a call that would
 /// begin or take up an operation there reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1313,10 +1337,11 @@ fn in_the_way(
     Ok(matching.map_or(Pending::Another, Pending::Own))
 }
 
-/// Refuses, with `RecoveryRequired`, a root on which a refresh under
-/// `operation_id` would be refused before it began: for a remote
-/// operation that holds its reservation, or for a pending local row the
-/// refresh may not take up. It is the same test the refresh then makes,
+/// Refuses a root on which a refresh under `operation_id` would be
+/// refused before it began: with `OperationMismatch` for an ID that is a
+/// comment's synchronization and whose hand-off is not yet due, and with
+/// `RecoveryRequired` for a remote operation that holds its reservation,
+/// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
 /// for a call that would otherwise change something first and find the
 /// refresh refused after. Nothing is written.
 pub(super) fn require_refresh_can_begin(
@@ -1327,6 +1352,15 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
+    if !comment_child_may_begin(
+        connection,
+        root_path,
+        refresh,
+        &operation_id.to_string(),
+        "",
+    )? {
+        return Err(mismatch(operation, root));
+    }
     match in_the_way(
         connection,
         root_path,
@@ -2106,6 +2140,48 @@ mod abandoned_row_tests {
             )
             .unwrap();
         connection
+    }
+
+    /// The ID a comment's binding keeps for its synchronization is that
+    /// synchronization's alone. A refresh under it is its index hand-off
+    /// and begins only once the synchronization has an authoritative
+    /// result; `begin_or_reconcile` refuses any other. A call that asks
+    /// first whether its refresh can begin is refused the same way, and
+    /// so has changed nothing when it is.
+    #[test]
+    fn a_refresh_under_a_comment_s_synchronization_id_is_refused_before_it_is_begun() {
+        const CHILD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAC";
+        let connection = journal("submit_comment", "completed", Some("completed"), 7);
+        connection
+            .execute_batch(
+                "CREATE TABLE remote_operation_records (
+                    operation_ulid TEXT, repository_id INTEGER, action TEXT, kind TEXT,
+                    item_id TEXT, phase TEXT, authoritative_kind TEXT)",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO comment_publication_bindings
+                    (operation_ulid, local_record_id, root_digest, kind, item_ulid, comment_ulid,
+                     synchronization_ulid, pre_checkpoint_oid)
+                 VALUES (?1, 1, ?2, 'document', ?1, ?1, ?3, ?4)",
+                params![ID, [0_u8; 32].as_slice(), CHILD, "0".repeat(40)],
+            )
+            .unwrap();
+        let root = Path::new("/repository");
+        let begin = |id: &str| {
+            require_refresh_can_begin(
+                &connection,
+                root,
+                RepositoryOperation::CreateFolder,
+                OperationId::parse(id).unwrap(),
+            )
+            .map_err(|error| error.kind)
+        };
+
+        assert_eq!(begin(CHILD), Err(RepositoryErrorKind::OperationMismatch));
+        // Any other ID is asked only what is pending.
+        assert_eq!(begin("01ARZ3NDEKTSV4RRFFQ69G5FAD"), Ok(()));
     }
 
     fn abandoned_journal() -> Connection {
