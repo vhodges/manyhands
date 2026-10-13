@@ -430,6 +430,41 @@ fn a_bare_repository_and_a_directory_that_is_none_are_refused_as_what_they_are()
     }
 }
 
+/// A repository Git refuses to open, for a reason other than that
+/// nothing is there, is `repository_inaccessible`: here its own
+/// configuration no longer parses. Nothing is accepted for it, and with
+/// the file as it was the same request goes through.
+#[test]
+fn a_repository_git_cannot_open_is_repository_inaccessible() {
+    let world = World::new();
+    let config = world.root.join(".git/config");
+    let written = fs::read(&config).unwrap();
+    fs::write(&config, "[core\n").unwrap();
+
+    let refused = world.execute(REQUEST_1, rebuild(&world));
+    let saved = world.execute(REQUEST_2, world.save(TICKET_A, "v1:any"));
+    fs::write(&config, &written).unwrap();
+
+    for envelope in [&refused, &saved] {
+        assert_eq!(
+            (envelope.outcome, envelope.code),
+            (Outcome::Blocked, ResultCode::RepositoryInaccessible),
+            "{}",
+            envelope.command
+        );
+        assert!(envelope.recovery.is_empty());
+    }
+    // A save resolves its root before it is accepted. A rebuild leaves
+    // the root to its domain operation, so it was accepted and names its
+    // operation; nothing of either request is left.
+    assert_eq!(saved.operation_id, None);
+    world.assert_golden("index_rebuild_repository_inaccessible", &refused);
+    assert_eq!(world.request_rows(), 0);
+    assert_eq!(world.pending_journal_rows(), 0);
+    let rebuilt = world.execute(REQUEST_1, rebuild(&world));
+    assert_eq!(rebuilt.code, ResultCode::Ok, "{}", rebuilt.message);
+}
+
 /// A rebuild that was accepted and never ran is asked again, when it is
 /// entered again, whether its repository is enabled, before it registers
 /// anything: what it was accepted on may no longer be there.

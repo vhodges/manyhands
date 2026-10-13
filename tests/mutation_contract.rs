@@ -1655,14 +1655,15 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 5] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 4] = [
     (
         ResultCode::RemoteUnavailable,
         "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
     ),
     (
         ResultCode::InvalidId,
-        "a read's code: an ID that is not written as one. A mutation takes its IDs as typed          values, and no command of execute or prepare returns it",
+        "a read's code: an ID that is not written as one. A mutation takes its IDs as typed \
+         values, and no command of execute or prepare returns it",
     ),
     (
         ResultCode::PublicKeyUnavailable,
@@ -1671,10 +1672,6 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 5] = [
     (
         ResultCode::AuthorityNotFound,
         "a read's code, of host inspect: no command of execute or prepare returns it",
-    ),
-    (
-        ResultCode::RepositoryInaccessible,
-        "a mutation returns it where Git or a file of the repository cannot be opened for a          reason other than what is at the path, as for a file its user may not read; no          fixture holds that on every platform, and a registered root that is gone, which          gives a read this code, is invalid_path to a mutation",
     ),
 ];
 

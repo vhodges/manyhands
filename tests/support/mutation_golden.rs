@@ -56,6 +56,7 @@ pub const CASES: &[&str] = &[
     "index_rebuild_bare_repository",
     "index_rebuild_not_enabled",
     "index_rebuild_not_repository",
+    "index_rebuild_repository_inaccessible",
     "index_refresh",
     "index_refresh_failed",
     "index_refresh_index_unavailable",
