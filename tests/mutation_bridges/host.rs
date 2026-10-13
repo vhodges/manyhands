@@ -273,3 +273,122 @@ impl manyhands::repository::keys::SessionCredentialProvider for NoPassphrase {
         manyhands::repository::keys::PassphraseResponse::Unavailable
     }
 }
+
+/// A host written another way than the remote writes it either names
+/// the remote's host, as a pin would store it, or is no host: it is
+/// never a second host beside the one the remote names. Each is
+/// answered by `prepare`, which connects to nothing; this target never
+/// starts the transport.
+#[test]
+fn a_host_written_another_way_names_the_remote_s_host_or_is_invalid_input() {
+    git_home::isolated();
+    let home = Home::new();
+    home.add_remote("origin", LOCATION);
+    home.select(REQUEST_3, Some("origin"));
+    let root = home.root().to_owned();
+    let approving = |host: &str, port: u16| {
+        Mutation::HostApprove(HostApproveInput {
+            root: root.clone(),
+            authority: SshAuthority {
+                host: host.to_owned(),
+                port,
+            },
+            algorithm: key("a").algorithm,
+            fingerprint: key("a").sha256,
+        })
+    };
+    // `Some` is the host the preview shows; `None` is `invalid_input`.
+    let cases: [(&str, &str, u16, Option<&str>); 17] = [
+        // The remote names a host in mixed case and a port.
+        (
+            LOCATION,
+            "git.example.invalid",
+            2222,
+            Some("git.example.invalid"),
+        ),
+        (
+            LOCATION,
+            "GIT.Example.INVALID",
+            2222,
+            Some("git.example.invalid"),
+        ),
+        (LOCATION, "git.example.invalid.", 2222, None),
+        (LOCATION, "git.example.invalid", 22, None),
+        (LOCATION, "git.example.invalid:2222", 2222, None),
+        (LOCATION, "git.example.invalid:2222", 22, None),
+        (
+            LOCATION,
+            "SENTINEL-user-41c7@git.example.invalid",
+            2222,
+            None,
+        ),
+        (LOCATION, "user@git.example.invalid", 2222, None),
+        (LOCATION, "git.example.invalid/path", 2222, None),
+        (LOCATION, "[git.example.invalid]", 2222, None),
+        (LOCATION, " git.example.invalid", 2222, None),
+        // The remote names no port: that is port 22, and no other.
+        (
+            "ssh://git@git.example.invalid/team/project.git",
+            "git.example.invalid",
+            22,
+            Some("git.example.invalid"),
+        ),
+        (
+            "ssh://git@git.example.invalid/team/project.git",
+            "git.example.invalid",
+            2222,
+            None,
+        ),
+        (
+            "ssh://git@git.example.invalid:22/team/project.git",
+            "git.example.invalid",
+            22,
+            Some("git.example.invalid"),
+        ),
+        // The remote names an IPv6 address.
+        (
+            "ssh://git@[2001:db8::1]:2222/team/project.git",
+            "2001:db8::1",
+            2222,
+            Some("2001:db8::1"),
+        ),
+        (
+            "ssh://git@[2001:db8::1]:2222/team/project.git",
+            "2001:0DB8:0:0:0:0:0:1",
+            2222,
+            Some("2001:db8::1"),
+        ),
+        (
+            "ssh://git@[2001:db8::1]:2222/team/project.git",
+            "[2001:db8::1]",
+            2222,
+            None,
+        ),
+    ];
+    for (location, host, port, expected) in cases {
+        home.git().remote_set_url("origin", location).unwrap();
+        let envelope = home.prepare(&approving(host, port));
+        let shown = envelope
+            .data
+            .as_ref()
+            .map(|preview| match &preview.details {
+                PreviewDetailsDto::Host(details) => {
+                    assert_eq!(details.port, port, "{location} {host}:{port}");
+                    details.host.clone()
+                }
+                _ => panic!("the details of a host preview"),
+            });
+        assert_eq!(shown.as_deref(), expected, "{location} {host}:{port}");
+        if expected.is_none() {
+            assert_eq!(
+                envelope.code,
+                ResultCode::InvalidInput,
+                "{location} {host}:{port}"
+            );
+        }
+        let rendered = serde_json::to_string(&envelope).unwrap();
+        assert!(!rendered.contains("SENTINEL"), "{location} {host}:{port}");
+    }
+    // No pin came of any of it.
+    assert!(home.service().list_host_pins().unwrap().items.is_empty());
+}
