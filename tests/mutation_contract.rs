@@ -1288,6 +1288,7 @@ fn a_key_delete_and_its_preview_match_their_schemas_and_goldens() {
 // command, a schema, a fixture or a code that is added without its part of
 // the contract fails here.
 
+const READ_GOLDENS: &str = "read_v1";
 const MUTATION_GOLDENS: &str = "mutation_v1";
 
 fn file_names(directory: &Path) -> Vec<String> {
@@ -1303,6 +1304,25 @@ fn read_json(path: &Path) -> Value {
     let text =
         fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// Every registered golden envelope, of the reads and of the mutation
+/// boundary, as `(directory/case, envelope)`.
+fn golden_envelopes() -> Vec<(String, Value)> {
+    let read = golden::CASES
+        .iter()
+        .map(|case| (READ_GOLDENS, golden::fixture_directory(), case));
+    let mutation = mutation::CASES
+        .iter()
+        .map(|case| (MUTATION_GOLDENS, mutation::fixture_directory(), case));
+    read.chain(mutation)
+        .map(|(set, directory, case)| {
+            (
+                format!("{set}/{case}"),
+                read_json(&directory.join(format!("{case}.json"))),
+            )
+        })
+        .collect()
 }
 
 /// What a set of fixtures and its registered cases differ by: a file no
@@ -1526,6 +1546,98 @@ fn every_schema_is_reachable_from_a_published_root() {
     let roots: Vec<&str> = DATA_ROOTS.into_iter().chain(OTHER_ROOTS).collect();
     assert_eq!(
         schema_differences(&schema::schema_directory(), &roots),
+        [""; 0]
+    );
+}
+
+/// What the data of the goldens and the data roots differ by: data that is
+/// not exactly one root's, and a root no golden carries the data of.
+fn data_root_differences(goldens: &[(String, Value)], roots: &[&str]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut carried = BTreeSet::new();
+    for (name, envelope) in goldens {
+        let data = &envelope["data"];
+        if data.is_null() {
+            continue;
+        }
+        let described: Vec<&str> = roots
+            .iter()
+            .copied()
+            .filter(|root| schema::check_published(root, data).is_ok())
+            .collect();
+        match described.as_slice() {
+            [root] => {
+                carried.insert(*root);
+            }
+            _ => problems.push(format!(
+                "{name}: its data is described by {described:?}, not by one root"
+            )),
+        }
+    }
+    problems.extend(
+        roots
+            .iter()
+            .filter(|root| !carried.contains(*root))
+            .map(|root| format!("{root}: a root no golden carries the data of")),
+    );
+    problems
+}
+
+/// A root is a root because an answer carries it, and the goldens are the
+/// answers: so a schema cannot be listed as a root to make it reachable.
+#[test]
+fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() {
+    assert_eq!(
+        data_root_differences(&golden_envelopes(), &DATA_ROOTS),
+        [""; 0]
+    );
+}
+
+/// The result codes no fixture can produce, each with the reason. Every
+/// other code is the code of a golden envelope.
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 1] = [(
+    ResultCode::RemoteUnavailable,
+    "the transport gives it only when libgit2 says the remote is not found, and the test \
+     server answers a path it does not serve by closing the connection, which is \
+     transport_unavailable; no test of the transport produces it either",
+)];
+
+/// What the codes of the goldens and the published codes differ by: a code
+/// with neither a golden nor a reason, and a reason for a code that has a
+/// golden.
+fn code_differences(
+    golden_codes: &BTreeSet<String>,
+    excused: &[(ResultCode, &str)],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for code in ResultCode::ALL {
+        let name = code.as_str();
+        let reason = excused.iter().find(|(excused, _)| *excused == code);
+        match (golden_codes.contains(name), reason) {
+            (true, None) => {}
+            (false, Some((_, reason))) => {
+                assert!(!reason.trim().is_empty(), "{name}: a reason is required");
+            }
+            (false, None) => problems.push(format!(
+                "{name}: no golden has this code, and no reason is given"
+            )),
+            (true, Some(_)) => problems.push(format!(
+                "{name}: listed as a code no fixture can produce, and a golden has it"
+            )),
+        }
+    }
+    problems
+}
+
+#[test]
+fn every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it() {
+    let golden_codes: BTreeSet<String> = golden_envelopes()
+        .iter()
+        .map(|(_, envelope)| envelope["code"].as_str().unwrap().to_owned())
+        .collect();
+
+    assert_eq!(
+        code_differences(&golden_codes, &CODES_NO_FIXTURE_CAN_PRODUCE),
         [""; 0]
     );
 }
