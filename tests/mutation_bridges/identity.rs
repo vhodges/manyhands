@@ -375,10 +375,10 @@ mod boundary {
 
     const IDENTITY_SCHEMA: &str = "identity_mutation.schema.json";
 
-    const NAME: &str = "Ada Example";
-    const EMAIL: &str = "ada@example.invalid";
+    pub(super) const NAME: &str = "Ada Example";
+    pub(super) const EMAIL: &str = "ada@example.invalid";
 
-    fn input(root: &Path, initials: InitialsChange) -> RepoIdentitySetInput {
+    pub(super) fn input(root: &Path, initials: InitialsChange) -> RepoIdentitySetInput {
         RepoIdentitySetInput {
             root: root.to_owned(),
             name: NAME.to_owned(),
@@ -389,15 +389,15 @@ mod boundary {
 
     /// The request the scenarios make: a name and an email, with nothing
     /// said of initials.
-    fn set(root: &Path) -> Mutation {
+    pub(super) fn set(root: &Path) -> Mutation {
         Mutation::RepoIdentitySet(input(root, InitialsChange::Unchanged))
     }
 
-    fn set_with(root: &Path, initials: InitialsChange) -> Mutation {
+    pub(super) fn set_with(root: &Path, initials: InitialsChange) -> Mutation {
         Mutation::RepoIdentitySet(input(root, initials))
     }
 
-    fn details(preview: &PreviewDto) -> &IdentityPreviewDto {
+    pub(super) fn details(preview: &PreviewDto) -> &IdentityPreviewDto {
         match &preview.details {
             PreviewDetailsDto::Identity(details) => details,
             other => panic!("not a preview of an identity: {other:?}"),
@@ -406,7 +406,7 @@ mod boundary {
 
     /// Changes one value of the repository's own configuration by hand,
     /// as `git config` would.
-    fn by_hand(root: &Path, key: &str, value: &str) {
+    pub(super) fn by_hand(root: &Path, key: &str, value: &str) {
         git2::Config::open(&root.join(".git/config"))
             .unwrap()
             .set_str(key, value)
@@ -415,7 +415,7 @@ mod boundary {
 
     /// A request that set the identity: a success with no effect, whose
     /// data is what the repository's own configuration now holds.
-    fn assert_set(envelope: &Envelope<MutationDataDto>, initials: Option<&str>) {
+    pub(super) fn assert_set(envelope: &Envelope<MutationDataDto>, initials: Option<&str>) {
         assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
         assert_eq!(envelope.outcome, Outcome::Success);
         assert_eq!(envelope.effects, Effects::not_requested());
@@ -1180,5 +1180,189 @@ mod boundary {
             IDENTITY_PREVIEW_SCHEMA,
             &noop,
         );
+    }
+}
+
+/// What Git would not hand back as it was given, and what no commit can
+/// carry: each is refused before anything is written.
+mod validation {
+    use manyhands::{
+        repository::{
+            ConfirmationId, Mutation, RepoIdentitySetInput,
+            request_store::{DigestSalt, FieldValue, IntentDigest, NewConfirmation, ScopeKey},
+        },
+        results::{Outcome, ResultCode},
+    };
+
+    use super::{
+        super::support::{
+            confirmation::{Desk, START},
+            items::TICKET_A,
+            mutation::{self, REQUEST_1, REQUEST_2, World},
+        },
+        boundary::{EMAIL, NAME, assert_set, details},
+        *,
+    };
+
+    /// The names and emails that are refused, each with why.
+    fn refused() -> Vec<(&'static str, String, String)> {
+        let name = |what, name: &str| (what, name.to_owned(), EMAIL.to_owned());
+        let email = |what, email: &str| (what, NAME.to_owned(), email.to_owned());
+        vec![
+            name("a name with a space before it", " Ada Example"),
+            name("a name with a space after it", "Ada Example "),
+            name("a name that ends in a carriage return", "Ada Example\r"),
+            name("a name that ends in a form feed", "Ada Example\u{c}"),
+            name("a name that ends in a no-break space", "Ada Example\u{a0}"),
+            name("a name that holds a newline", "Ada\nExample"),
+            name("a name that holds a tab", "Ada\tExample"),
+            name("a name that is a space", " "),
+            name("a name no commit can carry", "Ada <ops>"),
+            name("a name that is only punctuation Git drops", ";"),
+            name("a name that ends in a quote, which Git drops", "Ada \"Q\""),
+            name(
+                "a name that ends in a comma, which Git drops",
+                "Ada Example,",
+            ),
+            email("an email with a space after it", "ada@example.invalid "),
+            email("an email that holds a newline", "ada@example.invalid\nx"),
+            email("an email in angle brackets", "<ada@example.invalid>"),
+        ]
+    }
+
+    fn set(root: &Path, name: &str, email: &str) -> Mutation {
+        Mutation::RepoIdentitySet(RepoIdentitySetInput {
+            root: root.to_owned(),
+            name: name.to_owned(),
+            email: email.to_owned(),
+            initials: InitialsChange::Unchanged,
+        })
+    }
+
+    #[test]
+    fn a_value_git_would_not_hand_back_or_no_commit_can_carry_is_refused_by_the_operation() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let (service, _data) = service();
+        let before = local_file(&plain.root);
+        for (what, name, email) in refused() {
+            let error = service
+                .set_local_identity(request(&plain.root, &name, &email))
+                .unwrap_err();
+            assert_eq!(error.kind, RepositoryErrorKind::InvalidIdentity, "{what}");
+        }
+        assert_eq!(local_file(&plain.root), before);
+    }
+
+    #[test]
+    fn a_value_git_would_not_hand_back_or_no_commit_can_carry_is_invalid_input_at_prepare() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let before = local_file(&plain.root);
+        for (what, name, email) in refused() {
+            let prepared = desk.prepare(&set(&plain.root, &name, &email));
+            assert_eq!(prepared.code, ResultCode::InvalidInput, "{what}");
+            assert_eq!(prepared.outcome, Outcome::Error, "{what}");
+            assert!(prepared.data.is_none(), "{what}");
+        }
+        assert_eq!(desk.confirmation_rows(), 0);
+        assert_eq!(local_file(&plain.root), before);
+    }
+
+    /// No preview is given of such a request, so no confirmation is its
+    /// own. One is recorded here by hand, as a preview of the request
+    /// would have recorded it, so that `execute` gets as far as the
+    /// binding's own check.
+    #[test]
+    fn a_value_git_would_not_hand_back_or_no_commit_can_carry_is_invalid_input_at_execute() {
+        git_home::isolated();
+        let plain = Plain::new();
+        let desk = Desk::new();
+        let before = local_file(&plain.root);
+        let scope = ScopeKey::for_repository(&plain.root).unwrap();
+        for (what, name, email) in refused() {
+            let confirmation_id = ConfirmationId::new();
+            let recorded = desk
+                .service
+                .insert_confirmation(&NewConfirmation {
+                    confirmation_id,
+                    scope: scope.clone(),
+                    command: "repo identity-set".to_owned(),
+                    target: String::new(),
+                    intent_digest: IntentDigest::builder(
+                        DigestSalt::Confirmation(confirmation_id),
+                        "repo identity-set",
+                        &scope,
+                        "",
+                    )
+                    .field("name", FieldValue::Text(&name))
+                    .field("email", FieldValue::Text(&email))
+                    .field("initials", FieldValue::Absent)
+                    .finish(),
+                    observation_digest: Some("0".repeat(64)),
+                    expires_at: START + 600,
+                })
+                .unwrap();
+            assert!(recorded);
+
+            let executed = desk.execute(
+                REQUEST_1,
+                &confirmation_id.to_string(),
+                set(&plain.root, &name, &email),
+            );
+
+            assert_eq!(executed.code, ResultCode::InvalidInput, "{what}");
+            assert_eq!(executed.outcome, Outcome::Error, "{what}");
+            desk.assert_nothing_left(REQUEST_1);
+        }
+        assert_eq!(local_file(&plain.root), before);
+    }
+
+    /// Unusual, and valid: Git hands each back as it was given, and a
+    /// commit carries it.
+    #[test]
+    fn an_unusual_name_that_git_hands_back_unchanged_is_written_and_commits() {
+        git_home::isolated();
+        let world = World::new();
+        let name = "Åsa \"Q\" O'Neil  #1; née Ödman Jr.";
+        let email = "åsa+q#1@example.invalid";
+        let request = || set(&world.root, name, email);
+
+        let preview = world.service.prepare(&request());
+        assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+        let preview = preview.data.unwrap();
+        assert_eq!(details(&preview).name, name);
+        let done = mutation::execute_confirmed(
+            &world.service,
+            REQUEST_1,
+            &preview.confirmation_id,
+            request(),
+        );
+
+        assert_eq!(done.code, ResultCode::Ok, "{}", done.message);
+        assert_eq!(local(&world.root), held(name, email, None));
+        // What was written is what is asked: the same request is a no-op.
+        assert_eq!(
+            world.service.prepare(&request()).code,
+            ResultCode::AlreadyApplied
+        );
+        // And a save commits as it.
+        let saved = world.execute(
+            REQUEST_2,
+            Mutation::TicketSave(manyhands::repository::TicketSaveInput {
+                draft: World::draft(mutation::TITLE, mutation::BODY),
+                ..world.save_input(TICKET_A, &world.token(TICKET_A))
+            }),
+        );
+        assert_eq!(saved.outcome, Outcome::Success, "{}", saved.message);
+        let repository = git2::Repository::open(&world.root).unwrap();
+        let commit = repository
+            .find_commit(world.branch_tip(TICKET_A).unwrap())
+            .unwrap();
+        assert_eq!(commit.author().name(), Some(name));
+        assert_eq!(commit.author().email(), Some(email));
+        // The plain identity of the other tests is as valid as it was.
+        let _ = assert_set;
     }
 }

@@ -95,9 +95,22 @@ pub(crate) struct ValidIdentity {
 }
 
 impl ValidIdentity {
-    /// Checks the input alone. A name and an email are each nonempty and
-    /// hold no NUL, the email holds an `@`, and initials that are set are
-    /// two or three ASCII letters or digits.
+    /// Checks the input alone, and writes nothing to any repository.
+    ///
+    /// A name and an email are each nonempty, hold no control character
+    /// and neither begin nor end with white space; the email holds an
+    /// `@`; and initials that are set are two or three ASCII letters or
+    /// digits. Beyond that, each value is one Git gives back as it was
+    /// given and a commit can carry:
+    ///
+    /// - written to a Git configuration file and read from it again, it
+    ///   is equal to the input. The file is a scratch one in the system's
+    ///   temporary directory;
+    /// - the signature Git makes of the name and the email holds both
+    ///   unchanged. Git refuses angle brackets in either, and drops
+    ///   white space, commas, colons, semicolons, quotes and backslashes
+    ///   from their ends: a value it would change is refused here, since
+    ///   the commits made as it would not carry it.
     pub(crate) fn of(
         name: &str,
         email: &str,
@@ -111,13 +124,25 @@ impl ValidIdentity {
                 message,
             )
         };
-        if name.is_empty() || email.is_empty() || name.contains('\0') || email.contains('\0') {
-            return Err(invalid(
-                "an identity's name and email must be nonempty and NUL-free",
-            ));
+        for value in [name, email] {
+            if value.is_empty() || value.chars().any(char::is_control) || value.trim() != value {
+                return Err(invalid(
+                    "an identity's name and email must be nonempty, hold no control character \
+                     and neither begin nor end with white space",
+                ));
+            }
         }
         if !email.contains('@') {
             return Err(invalid("an identity's email must hold an @"));
+        }
+        match git2::Signature::now(name, email) {
+            Ok(signature) if signature.name() == Some(name) && signature.email() == Some(email) => {
+            }
+            Ok(_) | Err(_) => {
+                return Err(invalid(
+                    "an identity's name and email must be ones a commit carries unchanged",
+                ));
+            }
         }
         let initials = match initials {
             InitialsChange::Unchanged => InitialsChange::Unchanged,
@@ -131,11 +156,61 @@ impl ValidIdentity {
                 }
             },
         };
-        Ok(Self {
+        let identity = Self {
             name: name.to_owned(),
             email: email.to_owned(),
             initials,
-        })
+        };
+        if !identity.round_trips()? {
+            return Err(invalid(
+                "an identity must be one Git configuration gives back as it was given",
+            ));
+        }
+        Ok(identity)
+    }
+
+    /// Whether the identity, written to a Git configuration file, reads
+    /// from it again as it was written. The file is a scratch one of
+    /// this call's own, outside any repository, and is removed.
+    fn round_trips(&self) -> Result<bool, RepositoryError> {
+        let io = |error| RepositoryError::io(OPERATION, None, error);
+        let git = |error| RepositoryError::git(OPERATION, None, error);
+        // The handle is let go before Git replaces the file by name.
+        let scratch = tempfile::NamedTempFile::new().map_err(io)?.into_temp_path();
+        let mut config = Config::open(&scratch).map_err(git)?;
+        let nothing = LocalIdentity::default();
+        // A value Git cannot write at all is one it does not give back.
+        if self.write(&mut config, &nothing, || Ok(())).is_err() {
+            return Ok(false);
+        }
+        let written = LocalIdentity::of(&Config::open(&scratch).map_err(git)?).map_err(git)?;
+        Ok(written == self.written_over(&nothing))
+    }
+
+    /// Sets the identity's keys in `config`, which holds `current`.
+    /// `after_name` is run once the name is set and before the email is.
+    fn write(
+        &self,
+        config: &mut Config,
+        current: &LocalIdentity,
+        after_name: impl FnOnce() -> Result<(), RepositoryError>,
+    ) -> Result<(), RepositoryError> {
+        let git = |error| RepositoryError::git(OPERATION, None, error);
+        config.set_str(NAME_KEY, &self.name).map_err(git)?;
+        after_name()?;
+        config.set_str(EMAIL_KEY, &self.email).map_err(git)?;
+        match &self.initials {
+            InitialsChange::Unchanged => {}
+            InitialsChange::Clear => {
+                if current.initials.is_some() {
+                    config.remove(INITIALS_KEY).map_err(git)?;
+                }
+            }
+            InitialsChange::Set(initials) => {
+                config.set_str(INITIALS_KEY, initials).map_err(git)?;
+            }
+        }
+        Ok(())
     }
 
     /// What the repository's own configuration holds once this is
@@ -203,11 +278,15 @@ impl LocalIdentity {
     /// Reads the repository's own configuration. Nothing is written and
     /// no lease is taken.
     pub(crate) fn read(repository: &Repository) -> Result<Self, git2::Error> {
-        let config = local_config(repository)?;
+        Self::of(&local_config(repository)?)
+    }
+
+    /// What `config` holds of an identity.
+    fn of(config: &Config) -> Result<Self, git2::Error> {
         Ok(Self {
-            name: local_value(&config, NAME_KEY)?,
-            email: local_value(&config, EMAIL_KEY)?,
-            initials: local_value(&config, INITIALS_KEY)?,
+            name: local_value(config, NAME_KEY)?,
+            email: local_value(config, EMAIL_KEY)?,
+            initials: local_value(config, INITIALS_KEY)?,
         })
     }
 }
@@ -252,21 +331,9 @@ impl RepositoryService {
         let before = read_bytes_if_exists(&path, OPERATION, &root)?;
         let written = (|| {
             let mut config = local_config(&repository).map_err(git)?;
-            config.set_str(NAME_KEY, &identity.name).map_err(git)?;
-            self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)?;
-            config.set_str(EMAIL_KEY, &identity.email).map_err(git)?;
-            match &identity.initials {
-                InitialsChange::Unchanged => {}
-                InitialsChange::Clear => {
-                    if current.initials.is_some() {
-                        config.remove(INITIALS_KEY).map_err(git)?;
-                    }
-                }
-                InitialsChange::Set(initials) => {
-                    config.set_str(INITIALS_KEY, initials).map_err(git)?;
-                }
-            }
-            Ok(())
+            identity.write(&mut config, &current, || {
+                self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)
+            })
         })();
         match written {
             Ok(()) => Ok(SetLocalIdentityOutcome::Changed(
