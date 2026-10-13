@@ -1420,7 +1420,25 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
         RepositoryOperation::RepairItem => "repair_item",
-        _ => "other",
+        // No row is begun under the name of any of these: they have no
+        // operation ID, or, as a folder's creation does, they begin the
+        // row of the refresh that follows. Each is named, so that an
+        // operation added later does not compile until it is said
+        // whether it begins a row, and under what name.
+        RepositoryOperation::OpenRegistry
+        | RepositoryOperation::RegisterSharedKey
+        | RepositoryOperation::SelectSharedKey
+        | RepositoryOperation::ClearSharedKeySelection
+        | RepositoryOperation::UnregisterSharedKey
+        | RepositoryOperation::ListSharedKeys
+        | RepositoryOperation::PreflightGeneratedKeyDeletion
+        | RepositoryOperation::Inspect
+        | RepositoryOperation::ListRemotes
+        | RepositoryOperation::RepositorySnapshot
+        | RepositoryOperation::Read
+        | RepositoryOperation::AbandonOperation
+        | RepositoryOperation::SetLocalIdentity
+        | RepositoryOperation::CreateFolder => "other",
     }
 }
 
