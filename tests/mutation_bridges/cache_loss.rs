@@ -157,7 +157,7 @@ fn a_host_approval_after_the_cache_is_lost_is_of_a_host_with_no_pin() {
     let PreviewDetailsDto::Host(details) = &preview.details else {
         panic!("the details of a host preview");
     };
-    assert_eq!(details.current_fingerprint, None);
+    assert_eq!(details.pinned_fingerprint, None);
 }
 
 /// A folder that was made is there. Its request, retried once the

@@ -6,11 +6,11 @@
     "confirmation_id": "<confirmation>",
     "details": {
       "algorithm": "ssh-ed25519",
-      "current_algorithm": "ssh-ed25519",
-      "current_fingerprint": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbA",
       "fetch": true,
       "fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
       "host": "git.example.invalid",
+      "pinned_algorithm": "ssh-ed25519",
+      "pinned_fingerprint": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbA",
       "port": 2222,
       "push": true,
       "reapproval_required": false,

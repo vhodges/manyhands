@@ -136,7 +136,7 @@ fn the_previews_and_the_local_answers_of_a_host_approval_match_their_schemas_and
     };
     assert_eq!(details.host, "git.example.invalid");
     assert!(details.fetch && details.push);
-    assert_eq!(details.current_fingerprint, None);
+    assert_eq!(details.pinned_fingerprint, None);
 
     // Another actor pins the host: the preview is stale, and the request
     // is refused before anything is connected to. Nothing answers at the
@@ -237,8 +237,8 @@ fn a_host_observation_matches_its_schema_and_golden() {
             port: authority().port,
             fetch: true,
             push: false,
-            algorithm: presented.algorithm,
-            fingerprint: presented.sha256,
+            presented_algorithm: presented.algorithm,
+            presented_fingerprint: presented.sha256,
             pinned_algorithm: Some(pinned.algorithm),
             pinned_fingerprint: Some(pinned.sha256),
             reapproval_required: false,

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 host replacement data",
-  "description": "The data of a prepare envelope of host approve that is refused as host_replacement_required: the host has a pin, and a pin is changed by host replace and by nothing else. With the host.replace action the envelope offers, this is what that request is formed from: pinned_fingerprint is its old fingerprint, and algorithm and fingerprint are its key. A prepare connects to nothing, so no key the host presents is reported.",
+  "description": "The data of a prepare envelope of host approve that is refused as host_replacement_required: the host has a pin, and a pin is changed by host replace and by nothing else. With the host.replace action the envelope offers, this is what that request is formed from: pinned_fingerprint is its old fingerprint, and algorithm and fingerprint are its key. A prepare connects to nothing, so no key the host presents is reported. One vocabulary names a host's keys in every shape of the mutation boundary: presented_algorithm and presented_fingerprint are the key the host presented when it was observed; pinned_algorithm and pinned_fingerprint are the pin stored for the host now; algorithm and fingerprint are the key a host approve or host replace request names.",
   "type": "object",
   "additionalProperties": false,
   "required": [

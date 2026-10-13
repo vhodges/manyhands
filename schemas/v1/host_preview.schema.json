@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 host preview",
-  "description": "The data of a prepare envelope that gives a preview of host approve or host replace: the host, the key that will be pinned once the host is seen to present it, and the confirmation an execute of the same command, repository, host and input presents. The preview is made without a connection. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a host already pinned to the key. A prepare of host approve for a host that has another pin is refused as host_replacement_required and carries the data host_replacement.schema.json describes.",
+  "description": "The data of a prepare envelope that gives a preview of host approve or host replace: the host, the key that will be pinned once the host is seen to present it, and the confirmation an execute of the same command, repository, host and input presents. The preview is made without a connection. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a host already pinned to the key. A prepare of host approve for a host that has another pin is refused as host_replacement_required and carries the data host_replacement.schema.json describes. One vocabulary names a host's keys in every shape of the mutation boundary: presented_algorithm and presented_fingerprint are the key the host presented when it was observed; pinned_algorithm and pinned_fingerprint are the pin stored for the host now; algorithm and fingerprint are the key a host approve or host replace request names.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -47,8 +47,8 @@
         "push",
         "algorithm",
         "fingerprint",
-        "current_algorithm",
-        "current_fingerprint",
+        "pinned_algorithm",
+        "pinned_fingerprint",
         "reapproval_required"
       ],
       "properties": {
@@ -79,14 +79,14 @@
           "description": "The fingerprint of the key that will be pinned: SHA256: and the digest of the public key, as a pin holds it.",
           "type": "string"
         },
-        "current_algorithm": {
+        "pinned_algorithm": {
           "description": "The algorithm of the key the host is pinned to now. Null for a host that has no pin.",
           "type": [
             "string",
             "null"
           ]
         },
-        "current_fingerprint": {
+        "pinned_fingerprint": {
           "description": "The fingerprint of the key the host is pinned to now. Null for a host that has no pin. With the remote this is what the confirmation is for: a request that finds another pin by the time it runs is external_change.",
           "type": [
             "string",

@@ -2,10 +2,11 @@
   "code": "host_replacement_required",
   "command": "repo sync",
   "data": {
-    "algorithm": "ssh-ed25519",
-    "expected_fingerprint": "<expected>",
     "host": "127.0.0.1",
+    "pinned_algorithm": "ssh-ed25519",
+    "pinned_fingerprint": "<pinned>",
     "port": 0,
+    "presented_algorithm": "ssh-ed25519",
     "presented_fingerprint": "<presented>"
   },
   "effects": {

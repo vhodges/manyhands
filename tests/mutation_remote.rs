@@ -789,13 +789,13 @@ fn assert_golden(
     for pointer in [
         "/data/fingerprint",
         "/data/presented_fingerprint",
-        "/data/expected_fingerprint",
+        "/data/pinned_fingerprint",
     ] {
         if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {
             let placeholder = match pointer {
                 "/data/fingerprint" => "<fingerprint>",
                 "/data/presented_fingerprint" => "<presented>",
-                _ => "<expected>",
+                _ => "<pinned>",
             };
             replaced.push((found.to_owned(), placeholder));
         }
@@ -1492,9 +1492,10 @@ fn an_unknown_host_is_host_approval_required_and_holds_its_reservation() -> Resu
     let presented = w.server.host_identity();
     assert_eq!(data.host, "127.0.0.1");
     assert_eq!(data.port, w.server.address().port());
-    assert_eq!(data.algorithm, presented.algorithm);
+    assert_eq!(data.presented_algorithm, presented.algorithm);
     assert_eq!(data.presented_fingerprint, presented.sha256);
-    assert_eq!(data.expected_fingerprint, None);
+    assert_eq!(data.pinned_algorithm, None);
+    assert_eq!(data.pinned_fingerprint, None);
     assert_host_action(&w, &first, RecoveryActionKind::HostApprove)?;
 
     // With the host approved, a new request synchronizes.
@@ -1524,9 +1525,14 @@ fn a_rotated_host_key_is_host_replacement_required_with_both_fingerprints()
         &envelope,
     );
     let data = synchronization_data(&envelope)?;
+    assert_eq!(data.presented_algorithm, presented.algorithm);
     assert_eq!(data.presented_fingerprint, presented.sha256);
     assert_eq!(
-        data.expected_fingerprint.as_deref(),
+        data.pinned_algorithm.as_deref(),
+        Some(pinned.algorithm.as_str())
+    );
+    assert_eq!(
+        data.pinned_fingerprint.as_deref(),
         Some(pinned.sha256.as_str())
     );
     assert_host_action(&w, &envelope, RecoveryActionKind::HostReplace)?;

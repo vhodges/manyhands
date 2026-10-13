@@ -2,10 +2,11 @@
   "code": "host_approval_required",
   "command": "repo sync",
   "data": {
-    "algorithm": "ssh-ed25519",
-    "expected_fingerprint": null,
     "host": "127.0.0.1",
+    "pinned_algorithm": null,
+    "pinned_fingerprint": null,
     "port": 0,
+    "presented_algorithm": "ssh-ed25519",
     "presented_fingerprint": "<presented>"
   },
   "effects": {

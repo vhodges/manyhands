@@ -418,8 +418,8 @@ fn observing_a_host_reports_what_it_presents_and_its_pin_and_pins_nothing()
     assert_eq!(unknown.host, "127.0.0.1");
     assert_eq!(unknown.port, w.server.address().port());
     assert!(unknown.fetch && unknown.push);
-    assert_eq!(unknown.algorithm, presented.algorithm);
-    assert_eq!(unknown.fingerprint, presented.sha256);
+    assert_eq!(unknown.presented_algorithm, presented.algorithm);
+    assert_eq!(unknown.presented_fingerprint, presented.sha256);
     assert_eq!(unknown.pinned_algorithm, None);
     assert_eq!(unknown.pinned_fingerprint, None);
     assert!(!unknown.reapproval_required);
@@ -433,7 +433,7 @@ fn observing_a_host_reports_what_it_presents_and_its_pin_and_pins_nothing()
     // A pinned host: the pin is reported with what it presents.
     approve(&w)?;
     let trusted = observe(&w)?;
-    assert_eq!(trusted.fingerprint, presented.sha256);
+    assert_eq!(trusted.presented_fingerprint, presented.sha256);
     assert_eq!(trusted.pinned_algorithm, Some(presented.algorithm.clone()));
     assert_eq!(trusted.pinned_fingerprint, Some(presented.sha256.clone()));
     assert_eq!(pins(&w), [pinned_to(&w.server, &presented)]);
@@ -442,7 +442,7 @@ fn observing_a_host_reports_what_it_presents_and_its_pin_and_pins_nothing()
     w.server.rotate_host_key()?;
     let rotated = w.server.host_identity();
     let changed = observe(&w)?;
-    assert_eq!(changed.fingerprint, rotated.sha256);
+    assert_eq!(changed.presented_fingerprint, rotated.sha256);
     assert_eq!(changed.pinned_fingerprint, Some(presented.sha256.clone()));
     assert_eq!(pins(&w), [pinned_to(&w.server, &presented)]);
 
@@ -474,8 +474,8 @@ fn approving_the_observed_fingerprint_stores_the_pin_and_publishes_nothing()
     advance(&w.repo()?, "refs/heads/main", "local-advance")?;
     let observed = observe(&w)?;
     let key = HostKeyIdentity {
-        algorithm: observed.algorithm.clone(),
-        sha256: observed.fingerprint.clone(),
+        algorithm: observed.presented_algorithm.clone(),
+        sha256: observed.presented_fingerprint.clone(),
     };
     let approve = approve_of(&w, &w.server, &key);
     let before = references(&w)?;
@@ -494,8 +494,8 @@ fn approving_the_observed_fingerprint_stores_the_pin_and_publishes_nothing()
     assert!(shown.fetch && shown.push);
     assert_eq!(shown.algorithm, key.algorithm);
     assert_eq!(shown.fingerprint, key.sha256);
-    assert_eq!(shown.current_fingerprint, None);
-    assert_eq!(shown.current_algorithm, None);
+    assert_eq!(shown.pinned_fingerprint, None);
+    assert_eq!(shown.pinned_algorithm, None);
     assert_eq!(pins(&w), []);
 
     let envelope = confirmed(&w, REQUEST_1, &confirmation, approve);
@@ -551,7 +551,7 @@ fn a_synchronization_stopped_for_its_host_goes_on_once_the_offered_approval_is_m
             host: host.to_owned(),
             port: fixed(port.parse())?,
         },
-        algorithm: data.algorithm.clone(),
+        algorithm: data.presented_algorithm.clone(),
         fingerprint: data.presented_fingerprint.clone(),
     });
     let (confirmation, _) = preview(&w, &approve)?;
@@ -576,13 +576,13 @@ fn a_synchronization_stopped_for_its_host_goes_on_once_the_offered_approval_is_m
     let data = synchronization_data(&stopped)?;
     let replace = replacement(
         &w,
-        data.expected_fingerprint.as_deref().ok_or(FixtureError)?,
+        data.pinned_fingerprint.as_deref().ok_or(FixtureError)?,
         &HostKeyIdentity {
-            algorithm: data.algorithm.clone(),
+            algorithm: data.presented_algorithm.clone(),
             sha256: data.presented_fingerprint.clone(),
         },
     );
-    assert_eq!(data.expected_fingerprint, Some(pinned.sha256));
+    assert_eq!(data.pinned_fingerprint, Some(pinned.sha256));
     let (confirmation, _) = preview(&w, &replace)?;
     let replaced = confirmed(&w, REQUEST_4, &confirmation, replace);
     assert_eq!(replaced.outcome, Outcome::Success, "{}", replaced.message);
@@ -706,8 +706,8 @@ fn a_rotated_host_key_is_replaced_by_naming_the_old_and_the_new_fingerprint()
     let (confirmation, shown) = preview(&w, &replace)?;
     assert_eq!(connections(&w), connected);
     assert_eq!(sockets(&w), opened);
-    assert_eq!(shown.current_fingerprint, Some(old.sha256.clone()));
-    assert_eq!(shown.current_algorithm, Some(old.algorithm.clone()));
+    assert_eq!(shown.pinned_fingerprint, Some(old.sha256.clone()));
+    assert_eq!(shown.pinned_algorithm, Some(old.algorithm.clone()));
     assert_eq!(shown.fingerprint, new.sha256);
     let before = references(&w)?;
     let envelope = confirmed(&w, REQUEST_2, &confirmation, replace);
@@ -803,7 +803,10 @@ fn the_fetch_host_and_the_push_host_are_each_approved_in_their_own_direction()
         .data
         .ok_or(FixtureError)?;
     assert!(pushing.push && !pushing.fetch);
-    assert_eq!(pushing.fingerprint, destination.host_identity().sha256);
+    assert_eq!(
+        pushing.presented_fingerprint,
+        destination.host_identity().sha256
+    );
     let approve = approve_of(&w, &destination, &destination.host_identity());
     let (confirmation, shown) = preview(&w, &approve)?;
     assert!(shown.push && !shown.fetch);

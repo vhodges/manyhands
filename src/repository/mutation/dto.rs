@@ -246,6 +246,18 @@ pub struct RepairPreviewDto {
 /// once the host is seen to present it, and the pin there is now. A
 /// fingerprint is `SHA256:` and the digest of the host's public key, as
 /// a pin's is.
+///
+/// One vocabulary names a host's keys in every shape the boundary
+/// publishes. `presented_algorithm` and `presented_fingerprint` are the
+/// key the host presented when it was observed, and nothing else.
+/// `pinned_algorithm` and `pinned_fingerprint` are the pin stored for
+/// the host now. `algorithm` and `fingerprint` are the key a
+/// `host approve` or `host replace` request names: its input, and the
+/// echo of that input in its preview and its result. So what a
+/// synchronization or an observation gives as `presented_*` is what an
+/// approval is given as `algorithm` and `fingerprint`, and its
+/// `pinned_fingerprint` is what a replacement is given as the old
+/// fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HostPreviewDto {
     /// The repository's root, as the request's records name it.
@@ -262,8 +274,8 @@ pub struct HostPreviewDto {
     pub fingerprint: String,
     /// The pin the host has now, which the command replaces. Null for a
     /// host that has none.
-    pub current_algorithm: Option<String>,
-    pub current_fingerprint: Option<String>,
+    pub pinned_algorithm: Option<String>,
+    pub pinned_fingerprint: Option<String>,
     /// The application-wide marker left when the pin registry was lost.
     /// The command leaves it as it is.
     pub reapproval_required: bool,
@@ -282,9 +294,10 @@ pub struct HostObservationDto {
     /// Whether the publication remote is pushed to this host.
     pub push: bool,
     /// The algorithm and the fingerprint of the key the host presented:
-    /// what `host approve` and `host replace` are given.
-    pub algorithm: String,
-    pub fingerprint: String,
+    /// what `host approve` and `host replace` are given as `algorithm`
+    /// and `fingerprint`.
+    pub presented_algorithm: String,
+    pub presented_fingerprint: String,
     /// The pin the host has. Null for a host that has none. A host that
     /// presented its pin is trusted; one that presented another key has
     /// changed, and `pinned_fingerprint` is what `host replace` is given
@@ -643,13 +656,15 @@ pub struct SynchronizationMutationDto {
     pub host: String,
     pub port: u16,
     /// The algorithm of the key the host presented.
-    pub algorithm: String,
+    pub presented_algorithm: String,
     /// The fingerprint of the key the host presented: `SHA256:` and
     /// the digest of the public key.
     pub presented_fingerprint: String,
-    /// The fingerprint the host is pinned to, when the host presented
-    /// another key than its pin. Null for a host that has no pin.
-    pub expected_fingerprint: Option<String>,
+    /// The pin stored for the host, when the host presented another key
+    /// than its pin: `pinned_fingerprint` is what `host replace` is
+    /// given as the old fingerprint. Null for a host that has no pin.
+    pub pinned_algorithm: Option<String>,
+    pub pinned_fingerprint: Option<String>,
 }
 
 impl SynchronizationMutationDto {
@@ -662,15 +677,19 @@ impl SynchronizationMutationDto {
     /// The data as a finished record stored it.
     pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
         let text = |key: &str| stored.get(key)?.as_str().map(str::to_owned);
+        let optional = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
         Some(Self {
             host: text("host")?,
             port: u16::try_from(stored.get("port")?.as_u64()?).ok()?,
-            algorithm: text("algorithm")?,
+            presented_algorithm: text("presented_algorithm")?,
             presented_fingerprint: text("presented_fingerprint")?,
-            expected_fingerprint: match stored.get("expected_fingerprint")? {
-                serde_json::Value::Null => None,
-                value => Some(value.as_str()?.to_owned()),
-            },
+            pinned_algorithm: optional("pinned_algorithm")?,
+            pinned_fingerprint: optional("pinned_fingerprint")?,
         })
     }
 }

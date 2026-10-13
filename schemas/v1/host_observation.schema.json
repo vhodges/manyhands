@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 host observation",
-  "description": "The data of a host observe envelope, the read that connects to a host: the key the host presented, and the pin the host has. The host is one the repository's publication remote names, for fetching or for pushing. Nothing is pinned by the read, whatever the host presents. A host that has no pin, and one that presents another key than its pin, are reported as successes: pinned_fingerprint is null for the first and differs from fingerprint for the second.",
+  "description": "The data of a host observe envelope, the read that connects to a host: the key the host presented, and the pin the host has. The host is one the repository's publication remote names, for fetching or for pushing. Nothing is pinned by the read, whatever the host presents. A host that has no pin, and one that presents another key than its pin, are reported as successes: pinned_fingerprint is null for the first and differs from presented_fingerprint for the second. One vocabulary names a host's keys in every shape of the mutation boundary: presented_algorithm and presented_fingerprint are the key the host presented when it was observed; pinned_algorithm and pinned_fingerprint are the pin stored for the host now; algorithm and fingerprint are the key a host approve or host replace request names.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,8 +9,8 @@
     "port",
     "fetch",
     "push",
-    "algorithm",
-    "fingerprint",
+    "presented_algorithm",
+    "presented_fingerprint",
     "pinned_algorithm",
     "pinned_fingerprint",
     "reapproval_required"
@@ -31,11 +31,11 @@
       "description": "Whether the publication remote is pushed to this host.",
       "type": "boolean"
     },
-    "algorithm": {
-      "description": "The algorithm of the key the host presented. With fingerprint it is what host approve and host replace are given.",
+    "presented_algorithm": {
+      "description": "The algorithm of the key the host presented. With presented_fingerprint it is what host approve and host replace are given as algorithm and fingerprint.",
       "type": "string"
     },
-    "fingerprint": {
+    "presented_fingerprint": {
       "description": "The fingerprint of the key the host presented: SHA256: and the digest of the public key, as a pin holds it.",
       "type": "string"
     },

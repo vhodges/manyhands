@@ -439,7 +439,7 @@ fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
         return None;
     };
     let authority = error.authority.as_ref()?;
-    let (presented, expected) = match &error.kind {
+    let (presented, pinned) = match &error.kind {
         SshTransportErrorKind::HostApprovalRequired { presented } => (presented, None),
         SshTransportErrorKind::HostReplacementRequired {
             expected,
@@ -472,9 +472,10 @@ fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
         SynchronizationMutationDto {
             host: authority.host.clone(),
             port: authority.port,
-            algorithm: presented.algorithm.clone(),
+            presented_algorithm: presented.algorithm.clone(),
             presented_fingerprint: presented.sha256.clone(),
-            expected_fingerprint: expected.map(|expected| expected.sha256.clone()),
+            pinned_algorithm: pinned.map(|pinned| pinned.algorithm.clone()),
+            pinned_fingerprint: pinned.map(|pinned| pinned.sha256.clone()),
         },
     ))
 }

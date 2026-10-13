@@ -2,13 +2,13 @@
   "code": "ok",
   "command": "host observe",
   "data": {
-    "algorithm": "ssh-ed25519",
     "fetch": true,
-    "fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
     "host": "git.example.invalid",
     "pinned_algorithm": "ssh-ed25519",
     "pinned_fingerprint": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbA",
     "port": 2222,
+    "presented_algorithm": "ssh-ed25519",
+    "presented_fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
     "push": false,
     "reapproval_required": false
   },
