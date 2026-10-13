@@ -1251,6 +1251,15 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
                 assert_eq!(envelope["effects"]["commit_oid"], commit, "{what}");
                 assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
                 assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
+                // What is owed needs no input: the operation is resumed.
+                assert_eq!(
+                    envelope["recovery"][0]["action"], "operation.resume",
+                    "{what}"
+                );
+                assert_eq!(
+                    envelope["recovery"][0]["operation_id"], envelope["operation_id"],
+                    "{what}"
+                );
             }
             other => panic!("neither a result nor busy: {other}: {what}"),
         }
@@ -1351,6 +1360,12 @@ fn a_retry_completes_a_save_whose_process_was_killed_at_each_fault_point() {
             // It is made old here: a test does not wait.
             assert!(committed, "{what}");
             assert_eq!(retry.outcome, Outcome::Partial, "{what}");
+            assert_eq!(
+                retry.recovery[0].action.as_str(),
+                "operation.resume",
+                "{what}"
+            );
+            assert_eq!(retry.recovery[0].operation_id, retry.operation_id, "{what}");
             assert_eq!(
                 retry.effects.commit_oid,
                 world.branch_tip(TICKET_A).map(|tip| tip.to_string()),

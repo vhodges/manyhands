@@ -1033,6 +1033,39 @@ mod boundary {
     }
 
     #[test]
+    fn a_stale_copy_in_an_unrelated_context_does_not_refuse_a_repair() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        // Another item's context, cut from primary, in which someone has
+        // made the file at the path a conforming document of some ID. It
+        // is no item of that context: the context is another item's.
+        let created = shelf.execute(
+            REQUEST_2,
+            shelf.document_create(mutation::DOCUMENT_NEW, mutation::DOCUMENT_NEW_PATH),
+        );
+        assert_eq!(created.code, ResultCode::Ok);
+        let stale = items::document_source("01ARZ3NDEKTSV4RRFFQ69G5FM8", "Stale", "");
+        items::write(&shelf.worktree(mutation::DOCUMENT_NEW), MARKER_PATH, &stale);
+        let source = document(ADOPTED);
+
+        let done = shelf.repair(REQUEST_1, || shelf.document_repair(MARKER_PATH, &source));
+
+        assert_eq!(done.code, ResultCode::Ok);
+        assert_eq!(repair_data(&done).id, ADOPTED);
+        assert_eq!(
+            shelf.context(ADOPTED, MARKER_PATH).as_deref(),
+            Some(source.as_bytes())
+        );
+        // The other context is as it was left.
+        assert_eq!(
+            shelf
+                .context(mutation::DOCUMENT_NEW, MARKER_PATH)
+                .as_deref(),
+            Some(stale.as_bytes())
+        );
+    }
+
+    #[test]
     fn an_id_held_where_only_the_domain_looked_is_ambiguous_at_the_preview() {
         git_home::isolated();
         let shelf = Shelf::new();

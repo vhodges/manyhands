@@ -368,13 +368,18 @@ pub(crate) fn held_anywhere(
         || (worktree.is_dir() && held_elsewhere(&worktree, path, id, root)?))
 }
 
-/// Whether some item's editing context holds, at `path`, a conforming
-/// item under another ID than `id`: the file was repaired before, and
-/// has its identity there. The contexts are the worktrees Git has
+/// Whether some item's editing context holds, at `path`, its own item
+/// under another ID than `id`: the file was repaired before, and has
+/// its identity there. The contexts are the worktrees Git has
 /// registered under an item's ID, and each file is read as it is on
 /// disk, so a repair is seen whether or not the index has seen it: one
 /// whose hand-off is owed, and one that was abandoned after it
 /// committed.
+///
+/// A context counts only for its own item, the one whose ID names it,
+/// as the index counts it. Every context holds a copy of every other
+/// file, and a copy that someone made conforming in a context that is
+/// another item's is no item of anything.
 pub(crate) fn repaired_under_another_id(
     root: &Path,
     path: &Path,
@@ -386,7 +391,7 @@ pub(crate) fn repaired_under_another_id(
     Ok(worktrees
         .iter()
         .flatten()
-        .filter(|name| name.parse::<ItemId>().is_ok())
+        .filter(|name| name.parse::<ItemId>().is_ok_and(|own| own != *id))
         .any(|name| {
             let worktree = root.join(".manyhands/worktrees").join(name);
             // A worktree that is not there, or a path in it that cannot
@@ -397,10 +402,13 @@ pub(crate) fn repaired_under_another_id(
             file.as_deref()
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .and_then(|source| canonical::parse_item(path, source).ok())
-                .is_some_and(|item| match item {
-                    CanonicalItem::Document(document) => document.id != *id,
-                    CanonicalItem::Ticket(ticket) => ticket.id != *id,
-                    CanonicalItem::Comment(comment) => comment.id != *id,
+                .is_some_and(|item| {
+                    let held = match &item {
+                        CanonicalItem::Document(document) => &document.id,
+                        CanonicalItem::Ticket(ticket) => &ticket.id,
+                        CanonicalItem::Comment(comment) => &comment.id,
+                    };
+                    held.to_string() == name
                 })
         }))
 }

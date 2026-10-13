@@ -59,6 +59,9 @@ fn a_save_beside_a_live_index_owner(id: &str, save: impl Fn(&World, &str) -> Mut
     assert_eq!(beside.code, ResultCode::DiscoveryPending);
     assert_eq!(beside.operation_id.as_deref(), Some(operation.as_str()));
     assert_eq!(beside.effects.commit_oid, pending.effects.commit_oid);
+    // What is owed needs no input: the operation is resumed.
+    assert_eq!(beside.recovery[0].action.as_str(), "operation.resume");
+    assert_eq!(beside.recovery[0].operation_id, beside.operation_id);
     assert_eq!(row(), claimed);
     assert_eq!(world.branch_commits(id), 1);
     assert_eq!(
