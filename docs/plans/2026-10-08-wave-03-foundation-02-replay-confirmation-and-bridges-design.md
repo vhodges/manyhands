@@ -45,10 +45,7 @@ sequence of events, whatever mechanism produces it.
 The document was brought up to date again on 2026-10-12, after Tasks 8 to
 14 and 12A bound every existing mutation the design names, confirmation,
 progress, cancellation, `operation abandon` and `operation resume`. What it
-says of those is what the code does. The six commands of the bridges
-(`repo identity-set`, `host approve`, `host replace`, `folder create`,
-`document repair` and `ticket repair`), `observe_host` and folder listing
-are not built; what the document says of them is still the plan.
+says of those is what the code does.
 
 It was brought up to date once more on 2026-10-12, after Tasks 14B and
 14C. Task 14B consolidated the mutation boundary and changed no
@@ -59,6 +56,18 @@ by an action, a re-entered ticket write fails closed, a settlement that
 did not apply is reported as unsettled, and three discovery effects say
 what became of the hand-off. The questions the product owner answered
 that day are decided rules in the body, and are no longer listed as open.
+
+It was brought up to date a third time on 2026-10-13, after Task 14D,
+Tasks 15 to 18, the contract-completeness pass of Task 19 and the fix pass
+that followed the four whole-Cycle reviews. Task 14D gave `key import`,
+`key select` and `key clear` an operation and a recorded change a retry
+answers from. Tasks 15 to 18 built the bridges: `repo identity-set`,
+`host observe`, `host approve`, `host replace`, `folder create` with the
+folder list, and `document repair` and `ticket repair`. All thirty commands
+are bound, and nothing in the document is a plan any longer: what it says
+of every command is what the code does. Where the built contract departs
+from an RFC by a decision already made, the departure is listed once, under
+[Departures from the RFCs](#departures-from-the-rfcs).
 
 Terms used below:
 
@@ -91,7 +100,7 @@ provisional
 
 | Area | What exists | What F2 must add |
 | --- | --- | --- |
-| Operation identity | `OperationId`, a ULID the caller generates. Three journals in the one SQLite file: `operation_records` (local lifecycle), `remote_operation_records` (reservations and synchronization) and `key_material_operations`. Key registry and polling-policy changes have no operation ID. | A request ID and its mapping to operation IDs. Nothing stores a request ID, an input digest or a result today. |
+| Operation identity | `OperationId`, a ULID the caller generates. Three journals in the one SQLite file: `operation_records` (local lifecycle), `remote_operation_records` (reservations and synchronization) and `key_material_operations`. Key registry and polling-policy changes have no operation ID. | A request ID and its mapping to operation IDs. Nothing stores a request ID, an input digest or a result today. F2 also gives a key import, a selection and a clearing an operation ID, recorded with the change; see [Records](#records). A key removal and a polling-policy change still have none. |
 | Replay | Repeating a call with the same operation ID makes the function reconcile from Git, the file system and its journal row. The journal matches root, action and a target string. | Input matching. A save's target string covers the item and paths, not the title, body or metadata, so a reused operation ID with a different body is not detected. |
 | Journal exclusion | `begin_or_reconcile` refuses a new operation with `RecoveryRequired` while any other row for the repository is not completed. | Nothing. See [The Journal Defect](#the-journal-defect): ordinary rejections left such a row until the fix of 2026-10-10. |
 | Expected observations | `ExpectedPathObservation`, `Missing` or the BLAKE3 of the file bytes, on the three save requests. `expected_source` on a document save is optional. | The F1 token (`v1:` plus a digest of branch, path and bytes) is a different digest and nothing converts between them. No token exists for an absent path or for repository-level state. |
@@ -102,7 +111,7 @@ provisional
 | Results | `Envelope` has constructors for reads only, and a code determines its outcome. `ReadError` maps every mutation-only error kind to `internal_error`. Seventeen result codes and three recovery actions are registered. | Mutation envelopes, codes for every mutation outcome, and the mutation recovery actions. |
 | Identity | Written only inside `enable`, whenever the request supplies one. `create_and_enable` without a supplied identity returns `IdentityRequired` before any effect and never reads global configuration. | A standalone setter; initials. |
 | Host trust | Pins are written only by `finalize_host_trust`, after an authenticated connection, from `verify_ssh_transport`, a poll or a sync. `verify_ssh_transport` connects with the selected key, checks the host, lists the advertisement, fetches nothing and updates no ref. A publication remote has a fetch endpoint and a push endpoint, which may differ. | A request-bound approve and replace over `verify_ssh_transport`, and a way to learn the fingerprint a host presents. |
-| Folders | No folder concept. Discovery collects `.md` files; an empty directory is not indexed. Directories are created as a side effect of a document save through a no-follow walk. Discovery fails a whole context past 16 levels or 1,024 entries under `docs/`. | Folder creation and, if approved, folder listing. |
+| Folders | No folder concept. Discovery collects `.md` files; an empty directory is not indexed. Directories are created as a side effect of a document save through a no-follow walk. Discovery fails a whole context past 16 levels or 1,024 entries under `docs/`. | Folder creation and folder listing. |
 | Repair | None. A marker-only file has no ID, so no authoring context can be named for it, and `prepare_context` with `Edit` requires the ID to exist on primary. | A repair operation and context intent. |
 | Relationships | `slug`, `parent` and `deps` live in a ticket's unknown metadata and are read as a view. The serializer emits unknown keys first, then the defined ones. `TicketGraph` detects cycles from index rows and does no I/O. No code generates a short code or reads initials or a prefix. | Writers, the canonical form, the write-time cycle check, generation and assignment. |
 | Comment author | `created_by` is read from unknown metadata on the read side. `submit_comment` treats an existing comment file with any unknown metadata as occupied. | A real field, written at creation. |
@@ -112,8 +121,8 @@ Three facts shape the design more than the rest:
 1. **The index database is a cache, and it holds more than the index.** A
    corrupt file is renamed and recreated. With it go the repository
    registrations, all three journals, the shared-key registry and selection,
-   and the host pins. Whatever F2 stores there can vanish, and after a loss
-   the repository is not even registered.
+   the recorded key registry changes, and the host pins. Whatever F2 stores
+   there can vanish, and after a loss the repository is not even registered.
 2. **No lock survives between two calls.** The repository lease has a 250 ms
    wait and is held only inside one domain call. A preview and its
    confirmation are two calls, so a confirmation can bind what was observed
@@ -254,7 +263,7 @@ Decision 2 covers these cases.
 src/results.rs                      + mutation constructors, codes, actions
 src/canonical.rs                    + relationship writers, short codes,
                                       initials, comment `created_by`
-src/repository/mutation/           built so far
+src/repository/mutation/
     mod.rs        public surface: MutationCall, Mutation, the clock,
                   show_request, journal_row, the test hooks
     command.rs    Command: the closed set of bound commands, their
@@ -289,25 +298,41 @@ src/repository/mutation/           built so far
     bind/key.rs          the six key commands
     bind/repo.rs         repo create, repo enable
     bind/repo_remove.rs  repo remove
+    bind/repo_identity.rs  repo identity-set
     bind/abandon.rs      operation abandon
     bind/sync.rs         item sync, repo sync
     bind/resume.rs       operation resume
-src/repository/mutation/           planned, with the tasks that need them
-    mod.rs        observe_host
-    bind/         identity-set (in repo.rs), host, folder, repair
+    bind/host.rs         host approve, host replace, and observe_host
+    bind/folder.rs       folder create
+    bind/repair.rs       document repair, ticket repair
 src/repository/bridges/
     abandon.rs    abandon_operation and the read a preview of it uses
-    identity.rs   planned: set_local_identity
-    folder.rs     planned: create_folder
-    repair.rs     planned: repair_item and the Repair context intent
+    identity.rs   set_local_identity and the one write of .git/config
+                  under Git's own lock
+    folder.rs     create_folder, DocumentFolderPath and the rules for a
+                  folder's name
+    repair.rs     repair_item, the rules of a repair and the scans for
+                  who holds an ID or a path
 src/repository/{recovery,remote/state,keys/registry}.rs
                                     + a lookup of one operation by ID in
                                       each journal
 src/repository/recovery.rs          + LocalStep: the steps the local
-                                      journal records, as one closed enum
+                                      journal records, as one closed enum;
+                                      the repair_item action; the one
+                                      question of what stands in the way
+                                      of a new local operation
+src/repository/keys/registry.rs     + key_registry_changes and the three
+                                      registry functions that record a
+                                      change under an operation ID
+src/repository/discovery.rs         + folders recorded by the walk that
+                                      collects documents
 tests/support/conformance.rs        the rules every bound command owes the
                                     boundary, run over one row per command
-src/repository/read/items.rs        + observe_path
+tests/support/                      mutation_golden.rs (the registered
+                                    golden cases), git_home.rs (a Git
+                                    home of the test process's own),
+                                    repair.rs (the repair fixture)
+src/repository/read/items.rs        + observe_path, list_document_folders
 src/repository/read/graph.rs        visibility widened for the cycle check
 schemas/v1/                         new and extended schemas
 tests/fixtures/mutation_v1/         golden envelopes and previews
@@ -333,7 +358,7 @@ pub struct MutationCall {
 }
 
 impl RepositoryService {
-    pub fn prepare(&self, mutation: &Mutation) -> Envelope<PreviewDto>;
+    pub fn prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto>;
 
     pub fn execute<P: SessionCredentialProvider>(
         &self,
@@ -345,9 +370,12 @@ impl RepositoryService {
 
     pub fn show_request(&self, request_id: RequestId) -> Envelope<RequestDto>;
     pub fn cancel_request(&self, request_id: RequestId) -> Envelope<CancelDto>;
-    // Planned, with host approval:
-    pub fn observe_host<P: SessionCredentialProvider>(/* repository,
-        credentials */) -> Envelope<HostObservationDto>;
+    pub fn observe_host<P: SessionCredentialProvider>(
+        &self,
+        root: &Path,
+        authority: Option<&SshAuthority>,
+        credentials: &mut SessionCredentials<P>,
+    ) -> Envelope<HostObservationDto>;
 }
 ```
 
@@ -359,7 +387,9 @@ is the one place a published command name is written; everything that
 depends on which command a request is of is a `match` on it with no
 wildcard arm.
 `show_request` is `request show`, `cancel_request` is `request cancel`
-and `observe_host`, which is not built yet, is `host inspect`.
+and `observe_host` is `host observe`. F1's read of the stored pins,
+`inspect_host`, keeps the name `host inspect`; the two give different data
+and a command name tells them apart.
 `operation resume` is not a function of its own: it is the mutation
 `Mutation::OperationResume`, run through `execute` like any other, so it
 has a request ID, a record and a replay; see [Resuming](#resuming). Every
@@ -377,8 +407,10 @@ state, and the confirmation ID it returns is how a caller refers to it.
 its command, when it was accepted and finished, its operations with the
 journal each is in, and its stored result if finished (outcome, code,
 message, effects and data). The list of operations is empty for a request
-of a command that has no operation: a change to the key registry, an
-abandon and a resume. Nothing is observed again; the read does not say
+of a command that has no operation: `key remove`, `repo identity-set`,
+`host approve`, `host replace`, an abandon and a resume. For `key import`,
+`key select` and `key clear` it holds one operation, of the key journal's
+family. Nothing is observed again; the read does not say
 what Git or a journal holds now. Its scope names the repository only, and
 none for an application-level request. A request ID no record holds is
 `request_not_found`. The CLI RFC tells a client that lost its output to
@@ -397,19 +429,19 @@ named below.
 | `repo create` | `create_and_enable`; `enable` on a retry | Required | Identity, prefix; absent-root binding. |
 | `repo enable` | `enable` | Required | Identity, prefix. |
 | `repo remove` | `remove_registration` | Required | |
-| `repo identity-set` | new `set_local_identity` | Required | Name, email, optional initials. |
+| `repo identity-set` | new `set_local_identity` | Required | Name, email, and initials left, cleared or set. No operation. |
 | `remote add` | `add_remote` | No | |
 | `remote remove` | `remove_remote` | Required | Preview shows publication and polling effects. |
 | `remote select` | `set_publication_remote` | No | |
 | `key generate` | `generate_shared_key` | No | Digest covers label and protection mode, never the passphrase. |
-| `key import` | `register_shared_key` | No | |
-| `key select`, `key clear` | `select_shared_key`, `clear_shared_key_selection` | No | |
-| `key remove` | `unregister_shared_key` | No | |
+| `key import` | `register_shared_key_under` | No | The `_under` forms record the change against the request's operation ID in the transaction that makes it. |
+| `key select`, `key clear` | `select_shared_key_under`, `clear_shared_key_selection_under` | No | As above. |
+| `key remove` | `unregister_shared_key` | No | No operation. |
 | `key delete` | `review_generated_key_deletion`, `delete_generated_key` | Required | The persisted preview wraps the existing review. |
-| `host approve`, `host replace` | `verify_ssh_transport` | Required | |
-| `folder create` | new `create_folder` | No | |
+| `host approve`, `host replace` | `verify_ssh_transport` | Required | The authority, and the algorithm and fingerprint of the key to pin; a replacement also names the old fingerprint. No operation. |
+| `folder create` | new `create_folder` | No | Its operation is the refresh that lists the folder. |
 | `document create`, `document save`, `document move` | `save_document` | No | Source observation required for save and move. |
-| `document repair`, `ticket repair` | new `repair_item` | Required | |
+| `document repair`, `ticket repair` | new `repair_item` | Required | The path, its observation token and the corrected source. |
 | `ticket create`, `ticket save` | `save_ticket_with` | No | Relationships; short code on create. |
 | `ticket slug-assign` | `save_ticket_with` | No | |
 | `item sync`, `repo sync` | `synchronize_remote_observed`, the new sibling of `synchronize_remote` | No | `repo sync` synchronizes the primary branch; `item sync` takes an item's kind and ID and synchronizes its editing branch. Clean synchronization only: the bindings set the sibling's refuse-divergence setting, so a divergent remote is `merge_required` and nothing is merged (decision 12). |
@@ -421,10 +453,7 @@ That is twenty-eight baseline commands, `operation abandon` and
 `operation resume`. The saves prepare their editing context themselves,
 under the same operation ID; a binding makes one domain call.
 
-Twenty-four of the thirty are built: every row above except
-`repo identity-set`, `host approve`, `host replace`, `folder create`,
-`document repair` and `ticket repair`, which belong to the bridges of
-Part C.
+All thirty are built.
 
 Not bound in F2, with the owner:
 
@@ -483,6 +512,20 @@ target:
 - `remote add`: `location`, unredacted; it is stored nowhere else.
   `remote select`: `name`, null when the selection is cleared.
 - `key generate`: the label and whether protection was asked for.
+- `key import`: `label`, `private_key_path` and `public_key_path`, the
+  last absent when none is given. The paths are the caller's text. This is
+  the one place a path outside a repository reaches a stored digest; see
+  the known limits.
+- `repo identity-set`: `name`, `email` and `initials`. Initials left as
+  they are, cleared and set are absent, null and text, so each is a
+  different request. It has no target.
+- `host approve` and `host replace`: `algorithm`, `fingerprint` and
+  `old_fingerprint`, the last absent for an approval. The target is the
+  authority as the caller wrote it, `host:port`, so `LocalHost` and
+  `localhost` name one pin and are two requests.
+- `folder create`: `path`, which is also its target.
+- `document repair` and `ticket repair`: `observation` and `source`. The
+  target is the path; the item's ID is read from the source.
 - The synchronizations, `operation abandon` and `operation resume` have no
   field: the command, the repository and the target say everything. The
   target of `item sync` is the item's kind and ID, such as `ticket/<id>`,
@@ -551,15 +594,21 @@ name that is no bound command's gives no effects on a mismatch, and
 `internal_error` on a replay whose record has stored data.
 
 `result_data` holds the finished envelope's `data` as JSON: identifiers,
-paths, fingerprints, states and, for the identity commands, the name and
-email that were set. No binding's data carries a body or source.
+paths, fingerprints, states and, for `repo identity-set`, the name, email
+and initials the local configuration holds once the request is done. No
+binding's data carries a body or source.
 `expected_digest` is the digest of a canonical file's bytes as they were
 before the request; the index RFC's "target observations". For
 `remote select` it is the digest of the configuration file. For
 `key select`, `key clear` and `key import` it is a digest of the setting
 the request acts on, as the first call observed it: the selected key, or
 whether the source is registered and under which key. It holds no path,
-label, fingerprint or key material.
+label, fingerprint or key material. The key registry compares it itself,
+in the transaction of the change, and only when the request's operation
+has recorded nothing; see "Key registry changes" below. `expected_digest`
+is a plain digest and is not salted. `repo identity-set`, `host approve`
+and `host replace` record none: what they observed is on the confirmation
+the record holds.
 
 **Access.** The boundary reads and writes these tables in short transactions
 under the existing cache guard, and releases the guard before it runs a
@@ -579,6 +628,62 @@ observe an identity; for the other confirmed commands the second half is
 a constant.
 
 **Retention.** Nothing prunes these tables in F2; see decision 8.
+
+**Key registry changes.** A fourth table belongs to the key registry and
+not to the boundary. It is created beside the key journal's table, by the
+same migration, and an existing database gains it empty when it is opened.
+
+```text
+key_registry_changes
+    operation_id            TEXT PRIMARY KEY
+    action                  'import', 'select' or 'clear'
+    key_id                  the key acted on; null for a clearing
+    label, public_key_fingerprint
+                            what the result gives of the key; null for a
+                            clearing
+    changed                 1 for a change, 0 for a no-op
+    recorded_at
+```
+
+`key import`, `key select` and `key clear` are accepted with an operation
+of the key journal's family. The boundary calls
+`register_shared_key_under`, `select_shared_key_under` and
+`clear_shared_key_selection_under`, each of which works in one immediate
+transaction:
+
+1. If a row is recorded against the operation ID, it returns that row and
+   changes nothing.
+2. Otherwise, when the caller hands it the setting it expects, it compares.
+   A setting that is neither as expected nor already as the request asks
+   has moved, and nothing is changed or recorded.
+3. Otherwise it makes the change and inserts the row, also for a no-op.
+
+A first call hands over no expectation: it observed the setting a moment
+before. A retry reads the row first and, when there is one, finishes the
+request with it and makes no domain call: the same key ID, `ok` or
+`already_applied` as recorded. With no row it makes the call with the
+record's `expected_digest`. A moved setting is `external_change`, final.
+
+The table holds no path, no key material and nothing made from a
+passphrase. The label is the caller's text, which the result returns too.
+Nothing prunes it. The public functions `register_shared_key`,
+`select_shared_key` and `clear_shared_key_selection` keep their signatures
+and record nothing: only a request through the boundary leaves a row.
+
+A recorded change is finished in the transaction that writes it and is
+never pending. Its operation ID is in the request's results and in
+`request show`. `operation list` does not list it and `operation show`
+answers `operation_not_found` for it, since showing it would need a new
+published operation action; `operation abandon` refuses it with
+`invalid_input`, as any ID of the key journal, and `operation resume`
+answers `already_applied`, as for a completed key generation. No result
+offers `operation.resume` or `operation.abandon` for it. That
+`operation show` does not find it is a known limit the product owner
+confirmed on 2026-10-12.
+
+A record of one of the three commands that an earlier build accepted holds
+no operation. It is entered as it was accepted: no operation, a null
+`operation_id`, and the change made under the compare alone.
 
 ### Required outcomes
 
@@ -742,8 +847,12 @@ request the record holds.
   by no effect: the journal row says whether one was made with work
   remaining, and the result is then `partial` with every effect
   `not_requested`. A synchronization reports the push its row says the
-  remote holds. A refresh, a rebuild, a registration removal and a request
-  with no operation report nothing.
+  remote holds. A repair is read as an item write, in the context its
+  recorded position names. A refresh, a rebuild, a registration removal
+  and a request with no operation report nothing, with one exception: an
+  accepted host approval whose host no longer shows what its preview
+  showed is taken as a change made with work remaining, and the result
+  is `partial`; see [Host approval](#host-approval).
 
 **A replay** returns the stored result and makes no domain call. The
 envelope is rebuilt from the record: the command, the stored outcome, code,
@@ -900,10 +1009,12 @@ Four rules hold for every row of the table.
 - **Every record change is conditional on the attempt.** `finish_request`
   and `delete_request` change the record only if it is still `accepted`
   with this call's `attempt`. A call never settles a record another call
-  has since entered. Such a call says so where the record is still
-  `accepted`: its result is what it found or did, unchanged, and offers
-  `request.retry` first. Where the other call has finished or deleted the
-  record, nothing is offered for that.
+  has since entered. Such a call says so wherever a record still exists,
+  `accepted` or finished by the other call: its result is what it found
+  or did, unchanged, and offers `request.retry` first, so that the caller
+  reads the answer the record holds, which can differ from this call's
+  own. Where the other call has deleted the record, nothing is offered
+  for that.
 - **A failed journal lookup leaves the record as it is.** After a first
   call's domain error the effects are then read as if the row were in
   flight. On a retry, before any domain call, the result is the read's
@@ -936,7 +1047,7 @@ The function is told the command, the repository the result names, the
 request ID, the operation ID, whether the settlement left the record
 `accepted` (standing `Owed`, `Unconfirmed`, `NotRun` with a row, or
 `Stopped` with a row in flight or unread), and whether a finish or delete
-of the record did not apply while it is still `accepted`. Four steps
+of the record did not apply while a record of the request still exists. Four steps
 follow it. A result that says a host is not trusted, and whose data names
 the host, is given `host.approve` or `host.replace` first. An
 `operation.resume` is kept only where a resume would take the operation
@@ -946,22 +1057,59 @@ pending local operation stands in the way. The same file decides all of
 it: `outcome::offered` from the answer and `RepositoryService::offering`
 from what the journal holds once the call is over; the executor decides
 none of it. The table under [Result codes](#result-codes) gives the
-action for each code. A record that stays `accepted` because a record read
-or an entry of it failed carries only the failed read's own action, if it
-has one. One left `accepted` because its finish or delete did not apply is
-offered `request.retry`, first, whatever else the code offers.
+action for each code. No result is given as final while a record of its
+request is unsettled. A call that cannot enter its accepted record
+answers as for a record left `accepted`, so its code's rule offers the
+same request. A call that cannot release its record to run as new, and
+one whose finish or delete did not apply while a record of the request
+still stands, a record another call finished included, is offered
+`request.retry`, first, whatever else the code offers. The call's answer
+is not compared with the stored one: a call beside another that finished
+the record always offers `request.retry`, also where the two answers are
+the same, and the retry is then harmless.
+
+**A caller should take `request.retry` automatically.** A `busy` answer,
+and a `partial` answer that offers `request.retry`, are not the request's
+last word, and sending the same request again is always safe. Two callers
+that race, such as an agent and a person acting at once, can each be
+answered `busy` part-way: one shape is `partial` with the commit named
+and `discovery: pending`, when the index hand-off was busy after the
+commit; the other is `partial` with `write: written`,
+`checkpoint: pending` and no commit, when the other caller held the lease
+between the write and the commit and then made the commit itself. Both
+are true, and the retry answers `ok`. The product owner accepted this on
+2026-10-12 on the understanding that a front end retries without asking.
 
 A command with no journal is a single step that either happened or did
 not, and its request is accepted with no operation: its record holds none
-and its results carry a null `operation_id`. `key import`, `key select`,
-`key clear` and `key remove` are built this way, and so are
-`operation abandon` and `operation resume`, whose operation is another
-request's. Nothing is ever in flight under such a request, so a stop
-deletes its record, and a re-run is idempotent. The exceptions are stops
-whose binding asks for the record to be kept: an abandon that found a
-call at work and answered `busy`, and a call that could not read what it
-needed. Identity, host approval
-and folder creation are to bind the same way.
+and its results carry a null `operation_id`. `key remove`,
+`repo identity-set`, `host approve` and `host replace` are built this
+way, and so are `operation abandon` and `operation resume`, whose
+operation is another request's. Nothing is ever in flight under such a
+request, so a stop of the call that accepted it deletes its record, and a
+re-run is idempotent. The exceptions are stops whose binding asks for the
+record to be kept:
+
+- an abandon that found a call at work and answered `busy`;
+- a call that could not read what it needed;
+- a retry of `repo identity-set`, `host approve` or `host replace` that
+  fails. Only the call that accepted the request releases it on a
+  failure; a later call that fails leaves the record `accepted` and
+  offers `request.retry`. A deleted record is what would turn a transient
+  failure into a write over a later choice. `external_change` and
+  `host_mismatch` release the record at any attempt: nothing was written
+  and the same request does not get past either;
+- a host approval that stored the pin and then failed; see
+  [Host approval](#host-approval).
+
+`key import`, `key select` and `key clear` have an operation and follow
+the same rule for a failure: a first call that is refused with nothing
+recorded deletes its record, and a retry that fails with nothing recorded
+leaves it `accepted` and offers `request.retry`. A refusal that will never
+change, such as `key_not_found` for a key removed since, therefore holds
+its record for as long as the request is retried; the way out is a new
+request ID. `folder create` has an operation too, the refresh's, and a
+retry of it that stops with no row keeps its record in the same way.
 
 Losing a record is always safe. If a record is deleted or never written and
 the work was in fact done, the next attempt is treated as new and is
@@ -977,7 +1125,10 @@ reports what it did and changes nothing. The second settles the record from
 the evidence read around its own domain call, which sees the first caller's
 commit. Or the second finds the lease held and returns `busy`; its record
 stays `accepted` when the first call's journal row already exists. The
-first known limit below covers the case where it does not.
+first known limit below covers the case where it does not. Or the second
+arrives while the first is indexing after its commit: it leaves the row
+as it is and answers `discovery_pending` with the commit; see the
+liveness rule under [Abandoning An Operation](#abandoning-an-operation).
 
 If a rejected first attempt created an editing context before it was
 rejected, the context stays. The item's observation token names its branch,
@@ -1136,8 +1287,9 @@ and calls the binding for steps 4 to 8, in this order.
    so the same request sent once more cannot run as new over the later
    choice. Every other binding answers `SaysNothing`: its
    completed row has no checkpoint step whatever it did, as for an index
-   refresh, `remote add`, a key command, a synchronization, a confirmed
-   command, an abandon or a resume. Its record is not released, and the
+   refresh, `remote add`, a key command, a synchronization, a folder
+   creation, a confirmed command (a repair among them, although it is an
+   authoring write), an abandon or a resume. Its record is not released, and the
    row goes on to the binding's `reenter` like any other final row.
    Releasing it would run completed work again after lost output and send
    a confirmed command back through its confirmation. What each such
@@ -1246,8 +1398,7 @@ commit that is a candidate and lands between it and the call can still be
 reported as this one's.
 
 What each domain operation does when called again with the same operation
-ID, and what the binding built for it does on a retry. The last row is
-still the plan.
+ID, and what the binding built for it does on a retry.
 
 | Operation | On replay after completing | Binding |
 | --- | --- | --- |
@@ -1263,8 +1414,12 @@ still the plan.
 | `delete_generated_key` | Returns already deleted. After an interruption it completes under the same operation ID with a fresh review; a missing file is skipped. | With the row completed, calls it with no review: `already_applied`. With the row pending, calls it with a fresh review and compares nothing. With no row, observes again and compares with the preview. |
 | `synchronize_remote_observed` | Replays its recorded outcome, doing the index hand-off the row still owes; says of a cancelled row that it was. | Every re-entry makes the domain call, except for a fenced row. A result is `cancelled` only when the row's phase is cancelled. A call of the synchronization's own request (`run`, `rerun`) that ends with an error while the operation's row has completed leaves the record `accepted`, standing `Unconfirmed`, and offers `request.retry`; its answer says `discovery: current` when the row owes no work; the next call replays the row, `ok` with the published commit, stored and given again identically. A first call that comes back fenced after a retry finished the operation offers `request.retry`, then `repo.inspect`. `operation resume` taking up a synchronization is unchanged. |
 | `synchronize_remote_observed`, interrupted | Returns recovery required unless `restart` is set. | Sets `restart` on every re-entry. A restart asks the remote what it holds before it pushes anything, and fences any executor still running under that ID, which is Wave 02's own takeover and pushes nothing twice. |
-| Key registry changes | No operation ID; idempotent. | Run again, but only while the setting stands where the request can still act on it. The record holds a digest of the setting as the first call observed it. A retry makes the change when the setting is still as it was then, or already as the request asks; a setting that is neither was changed by someone since, and the retry is `external_change`, final, with nothing changed. A setting changed and put back reads as unmoved; see the known limits. |
-| Identity, host approval, folders | No operation ID; idempotent. | Planned: runs again; reports a no-op if the state is already as requested. |
+| `register_shared_key_under`, `select_shared_key_under`, `clear_shared_key_selection_under` | Returns the change recorded against the operation ID and changes nothing. | `SaysNothing`. A retry that finds a recorded change answers the first call's result from it, with no domain call. With nothing recorded the request never ran: the domain is called with the digest of the setting as the first call observed it, and makes the change when the setting is still as it was then, or already as the request asks; a setting that is neither was changed by someone since, and the retry is `external_change`, final, with nothing changed. A retry that fails with nothing recorded keeps its record. |
+| `unregister_shared_key` | No operation ID. A key's ID is a new ULID for each registration and is never registered again, so a removal that finds the key gone has nothing to do and nothing it could undo. | Run again: `already_applied` when the key is gone. |
+| `set_local_identity` | No operation ID. Equal values are a no-op. | Entered again through `confirm::reenter`, which asks the configuration: it holds what the request asks, so the request is finished as a no-op, `already_applied`, whoever wrote it; it holds what was previewed, so the domain is called; anything else is `external_change`, the record is released and `request.prepare` is offered. A retry that fails keeps its record. |
+| `verify_ssh_transport` with an approval | No operation ID. An approval of the key the host is already pinned to changes nothing. | Entered again through `confirm::reenter`, which asks the pin store: the host is pinned to the key the request names, so the request is finished as a no-op with no connection; the pin and the remote are what was previewed, so the host is connected to; anything else is `external_change` with no connection, and the record is released. A retry that fails keeps its record. |
+| `create_folder` | A directory that is there is found, not made, and the refresh is taken up under the same ID. | `SaysNothing`. A completed refresh row is the request's own work: `already_applied` with `discovery: current`, answered from the row with no domain call, so a folder removed since is not made again and a file put in its place is not `occupied_path`. With no row or a pending one the domain is called again. A retry that stops with no row keeps its record. |
+| `repair_item` | As a save: no change when the context holds the source committed; writes and commits what remains; runs the hand-off if owed. | Confirmed, `SaysNothing`, entered again through `confirm::reenter` with a save's evidence; see [Repair and adoption](#repair-and-adoption). |
 
 ### What changed from the proposal, and known limits
 
@@ -1294,7 +1449,7 @@ the rows of that table from the top.
 | A retry that stops before its domain call | Settled like any stop: deleted when nothing is in flight. | Decided in the build: the retry could not resolve the repository, and deleting the record would lose the report of a commit an earlier attempt made. | Standing `NotRun`: deleted only when no attempt had started; left `accepted` otherwise, also when the row has completed. |
 | `partial` after an error | `write: written`, `checkpoint: pending` when the file in the worktree is what the request intended. | A save that would have changed nothing also has such a file. | The file must also differ from what it was before the request. |
 | `discovery` on an uncommitted write | The proposal names only `write` and `checkpoint`. | Ruling: discovery is work the retry still owes. | `discovery: pending` alongside `written` and `checkpoint: pending`. |
-| `request.retry` | The recovery table lists it for named codes only. | Ruling: the same request is what finishes a record left `accepted`. `external_change` on an item write stays without an action, as the table says. | Offered on any result whose record the settlement decided to leave `accepted`, unless the code has an action of its own or is `external_change`. A record that stays `accepted` because a record read or change failed is not offered it. |
+| `request.retry` | The recovery table lists it for named codes only. | Ruling: the same request is what finishes a record left `accepted`. `external_change` on an item write stays without an action, as the table says. | Offered on any result whose record the settlement decided to leave `accepted`, unless the code has an action of its own or is `external_change`. A result whose record is unsettled, because a record read or change failed or did not apply, is offered it first. |
 | The short code on a create's retry | Composed again, as on the first attempt. | A create writes its file and dies. The initials change to something no short code can be composed from. The retry is `initials_required`. Row 10. | `resume` passes the short code the file holds and composes one only when the file holds none. |
 | The journal lookup | Absent, pending with its step, or completed. | Ruling in Task 6: a completed or cancelled remote row that still owes its index hand-off or a reconciliation must not release its record, and settling must know which way a row ended. | A typed `JournalRow` with `kind` and `owes_work` as separate facts. |
 | The lookup loop | Not said. | Decided in the build: a call can lose the insert race, and a re-entry can release its record. | At most three looks, then `busy`. |
@@ -1308,7 +1463,7 @@ The places below were changed while Tasks 8 to 14 and 12A were built.
 | `index rebuild` on an unavailable index | Runs without a record. | A rebuild that ran unrecorded and was killed left a pending row whose only exit was deleting the database by hand, against the Cycle's exit criterion 3. Confirmed by the product owner on 2026-10-11. | The boundary restores the index first and records the rebuild before its operation begins. No request runs without a record. |
 | `observe_path` | A token for any repository-relative path. | Ruling, confirmed by the product owner: a digest of any file under `.git/` serves no command. Its command name is `path observe`. | The paths `show_path` reads, and no others. |
 | `ticket slug-assign` as a new request | `slug_already_assigned` for a ticket with any slug. | Ruling, confirmed by the product owner: once the record is gone, a no-op is the truthful answer to a retry of an assignment that succeeded. | `already_applied` when the ticket holds exactly the slug this request would compose and the file is committed. |
-| A request with no operation | Every accepted record holds one operation. | The key registry commands, an abandon and a resume have no journal row of their own. | A request may be accepted with no operation; its results carry a null `operation_id`. |
+| A request with no operation | Every accepted record holds one operation. | A key removal, an abandon, a resume, `repo identity-set` and the two host commands have no journal row of their own. | A request may be accepted with no operation; its results carry a null `operation_id`. |
 | A retry of a key generation that finds no row | Settled like any stop: the record is deleted. | Two calls of one `key generate` at once could each make a key. | On a retry, an error with no row leaves the record `accepted`. |
 | The observation of a confirmed command | One digest. | A stepped retry of `repo create` could commit under an identity the preview never showed. | Two digests, of the state and of the identity. The identity is compared on a retry until the step `initialization_committed` is recorded. |
 | `external_change` on a confirmed command whose record stays `accepted` | `request.prepare`. | A new preview is a dead end while the request's own pending row refuses a new request. | `repo.inspect`, `operation.resume` for each other pending local operation a resume would take up now, and `operation.abandon`. A key deletion refused for a key file that is not the one Manyhands wrote offers no action. |
@@ -1331,17 +1486,40 @@ rulings are dated 2026-10-12.
 | Place | The design's rule | What showed it wrong, or the ruling | The rule as built |
 | --- | --- | --- | --- |
 | A repository that was never enabled | An unregistered repository is `repository_not_registered`, offering `index.rebuild`, which registers it. | Ruling: reject a repository that was never enabled, and do not enable it automatically. | `repository_not_enabled`, no action, and a rebuild refuses it; see [Result codes](#result-codes). A registered repository keeps the answers it had. |
-| A settings command retried late | `key select`, `key clear`, `key import` and `remote select` are made again over whatever someone else changed since. | A retry could put an older choice over a later one. Ruling: refuse a late retry. | `external_change`, final, when the setting is neither as the first call observed it nor as the request asks. The record holds the observation in `expected_digest`. |
+| A settings command retried late | `key select`, `key clear`, `key import` and `remote select` are made again over whatever someone else changed since. | A retry could put an older choice over a later one. Ruling: refuse a late retry. | `external_change`, final, when the setting is neither as the first call observed it nor as the request asks. The record holds the observation in `expected_digest`. For the three key commands the compare is made only when the request's operation recorded nothing. |
 | A retried ticket write whose relationship check cannot be read | The retry goes on. | Another request may have closed a cycle since the first call, and the domain checks none. | The retry stops with the read's code and `request.retry`; the record stays `accepted`. |
 | A settlement that did not apply | The caller gets the result, final by its code. | A finish or delete that did not apply leaves the record `accepted`, and the result looked like the request's last word. | The result offers `request.retry`, first. |
 | The discovery effect of `remote add`, `remote remove` and a kept synchronization answer | `not_requested` for every refusal or error; `pending` for a kept answer of a published synchronization. | An error after the remote changed owes the hand-off, a retry under a pending row ran it, and a completed row that owes nothing had run it. | `pending` after the change, `current` after the hand-off ran. |
 | One owner of each rule the bindings share | Not said. | Ruling: consolidate the boundary first, then bind Part C. | One writer of a finished result (`RepositoryService::finish`), one function that enters a confirmed command again (`confirm::reenter`), recovery actions decided in `outcome.rs`, and the local journal's steps as one enum. The behaviour is unchanged. |
 
-**Known limits.** Each is behavior of the code as it stands after Task 14.
-The first group was recorded at the design checkpoint that followed Task
-7 and holds for every authoring write. The groups after it were recorded
-while Tasks 8 to 14 and 12A were built. Four limits rest on defects in
-code that predates this Cycle; each names its ticket.
+The places below were changed in Tasks 14D to 19 and in the fix pass that
+followed the whole-Cycle reviews. The product owner's rulings are dated
+2026-10-12 and 2026-10-13.
+
+| Place | The design's rule | What showed it wrong, or the ruling | The rule as built |
+| --- | --- | --- | --- |
+| Evidence of a key registry change | None: `key import`, `key select` and `key clear` have no operation. | A lost-result import followed by a removal registered the source again, and a setting changed and put back was changed again by a late retry. Ruling: record each change now. | The table `key_registry_changes`, written in the transaction of the change; a retry answers from the row. |
+| A retry of a no-journal command that fails | A stop deletes the record. | A deleted record turned a transient failure into a write over a later choice, and orphaned a first call still running. | Only the call that accepted the request releases it; a later call that fails keeps the record and offers `request.retry`. |
+| The identity write | Each key is written in turn; a failure restores the file's bytes. | The restore was a rename outside Git's lock and could erase another process's change. | One write under `.git/config.lock`, renamed over the file; nothing is restored. |
+| What an identity may hold | An email holds an `@`. | Values Git strips or no commit can carry were accepted, and later saves failed. | Validation by round trip through Git. |
+| A linked worktree root given to `repo identity-set` | `invalid_path`. | Every other command answers `not_repository_root`; one situation has one code. | `not_repository_root`. |
+| Input of `host approve` and `host replace` | The authority and the fingerprint. | The approval compares a whole key identity; a fingerprint alone would need a second connection. | The algorithm as well. |
+| The observation's command name | `host inspect`, shared with F1's pin read. | Two closed shapes under one name could not be told apart. | `host observe`. |
+| Names of a host's keys | Three names for the pin and two meanings of `presented_fingerprint`. | Product owner, 2026-10-13: unify the names now. | `presented_*`, `pinned_*`, and `fingerprint` with `algorithm` for the key a request names. |
+| A host approval that fails after the pin is stored | Not considered. | The answer said nothing was written. | `partial`, the record kept, `request.retry`; the retry is a no-op. |
+| `folder create` on a folder that is there | A no-op. | One path for first calls and retries, and the folder is listed after any success. Approved by the product owner on 2026-10-13. | A no-op that still runs the refresh and reports `discovery: current`. |
+| A folder creation whose refresh fails | `partial` with `index.refresh`. | A pending refresh row would refuse every other refresh. | The row is closed as rejected and the record finished. |
+| A folder path that is not valid as one | `invalid_input`. | `document create` answers `invalid_path` for the same thing. | `invalid_path`; `invalid_input` is kept for the limits of discovery. |
+| A second repair of one path under another ID | Not said. | Two items for one file is the confusion a repair exists to remove. Approved by the product owner on 2026-10-13. | `not_repairable`. |
+| How long a repair compares its preview | Until a step is recorded. | Making the context changes nothing a preview observes. | Until the write step is recorded. |
+| A second live call of a request whose first call is indexing | The second records its steps and takes the row. | The first call was fenced and answered `recovery_required` for a request whose record finished `ok`. | The row is left alone and the second call answers index-pending. Approved by the product owner on 2026-10-13, with the three-second consequence listed in the known limits. |
+| The message of `repository_not_registered` | "The repository is not enabled in Manyhands." | It sat beside `repository_not_enabled`. Product owner, 2026-10-12. | "The repository is not registered with Manyhands." |
+
+**Known limits.** Each is behavior of the code as it stands. The first
+group was recorded at the design checkpoint that followed Task 7 and
+holds for every authoring write. The groups after it were recorded while
+the later tasks were built. Several limits rest on defects in code that
+predates this Cycle; each names its ticket.
 
 - **A second attempt can release the record before the first attempt's
   journal row exists.** Between acceptance and the insert of the journal
@@ -1411,6 +1589,23 @@ code that predates this Cycle; each names its ticket.
   current, complete index in every index-backed read, the relationship
   check included. It is accepted because detecting it is a product
   decision outside this Cycle.
+- **A retry within about three seconds of a crash while indexing is
+  `discovery_pending`.** A save or a repair, like every operation the
+  liveness rule covers, leaves a pending row with a live index-owner
+  heartbeat alone, and a process killed while it indexes
+  leaves a heartbeat that stays fresh for three seconds; nothing tells it
+  from a call at work. The retry is `partial` with the commit reported and
+  offers `operation.resume`, which inside the window answers `busy` with
+  `request.retry`. A later retry, once the heartbeat is old, takes the
+  hand-off up and completes. Approved by the product owner on 2026-10-13:
+  the answer is true, and a caller retries a `partial` answer anyway.
+- **The liveness check and the steps it protects are not one
+  transaction.** A refresh that borrows the operation ID can claim the row
+  between them; the owner is then fenced by the row's epoch and writes
+  nothing more.
+- **Two racing callers can each be answered `busy` part-way,** in the two
+  `partial` shapes described under Settling. Seen on Windows more than
+  elsewhere. No effect is repeated and the retry answers `ok`.
 
 *Documents, moves and short-code assignment.*
 
@@ -1506,6 +1701,13 @@ code that predates this Cycle; each names its ticket.
   lookup each.
 - **A registration whose directory is gone cannot be removed.** Ticket
   `01M4R19P943QZKHHKRXV2D2TP2`.
+- **A stored problem whose path holds a backslash makes the index
+  unavailable on Unix.** A file or link under `docs/` named with a
+  backslash, such as `docs/a\b.md`, stores such a problem, and every
+  refresh, rebuild and snapshot then fails with `index_unavailable`. It
+  is a defect of the existing library, pinned by an existing test:
+  ticket `01M4TFGHPG98GCM6TX3B56HJAB`. Folder discovery stores no such
+  path; see the folder limits.
 - **`repo remove` drops the repository's whole local journal,** the rows
   of other requests included. An old `remote remove` request whose record
   is still `accepted` can then run again on an identical remote that was
@@ -1531,21 +1733,39 @@ code that predates this Cycle; each names its ticket.
 - **The key store is not part of a request's identity.** A retry of a
   generation against another key store is `internal_error`, `partial`,
   with the record kept and nothing created.
-- **`key import`, `key select` and `key clear` leave no operation
-  evidence.** They have no operation, the key journal records only
-  generations and deletions, and once an imported key is removed no table
-  holds the ID the import registered. A late retry can therefore compare
-  only the setting with the digest the first call observed. It refuses,
-  as `external_change`, a setting that is neither as it was nor as the
-  request asks, but it cannot tell a request that never ran from one that
-  ran and was undone. A lost-result import followed by a removal of that
-  key registers the source again under a new ID, and a setting changed
-  and put back, such as a selection moved to another key and back, or a
-  key selected again after a clearing, is changed again by the late
-  retry. The compare and the change are two transactions, so a change that
-  lands between them is overwritten. A table that records each registry
-  change against its operation ID would close all three; it is an index
-  schema change, and is the first of the open questions.
+- **After the cache is lost, a retried `key import` names a new key.**
+  The recorded changes, the request records and the registry are one
+  file and go together. The retry is a new request against an empty
+  registry: it registers its source once, under a new ID, so there is one
+  registration and never two, but the retry does not name the key the
+  first call registered. A retried selection is then `key_not_found` and
+  a retried clearing a no-op.
+- **A record of `key import`, `key select` or `key clear` that an earlier
+  build accepted** has no operation. If its result is lost again, its
+  retry has only the compare with the first call's observation, and a
+  setting changed and put back is changed again. This holds for such a
+  record alone.
+- **`operation show` does not find the operation ID of a recorded key
+  registry change.** A result names an ID the operation read cannot show;
+  `request show` does list it. Showing it needs a new value of the
+  published operation actions. Confirmed by the product owner on
+  2026-10-12.
+- **A refusal on a retry that will never change holds its record.** A
+  retried selection whose key was removed is `key_not_found` on every
+  send, with the record `accepted` and `request.retry` offered each time.
+  The way out is a new request ID. `key remove` still deletes its record
+  on a failed retry.
+- **A first call of a key registry change makes no compare.** Between its
+  `prepare` and its domain call another actor's change is overwritten.
+- **The path of an imported private key is hashed into a stored digest.**
+  `key import` feeds the caller's key paths to the intent digest, which
+  is salted with the request ID held in the same row. While the key is
+  registered this adds nothing, since the registry holds the path. After
+  `key remove` the registry row is gone and the request record stays, so
+  someone who holds the database can test a guessed path with one hash.
+  It is the one exception to the rule that no private absolute path
+  reaches a digest, and is of the same kind as the body digest under
+  [Risks](#risks).
 - **A late `remote select` is refused for any change to the configuration
   file,** not only to the selection: a commit to another key of the file
   since acceptance gives `external_change`, final.
@@ -1594,15 +1814,186 @@ code that predates this Cycle; each names its ticket.
 - **The end-state check reads the configuration file in the worktree,**
   committed or not.
 - **The observation digest is not salted, and it hashes the identity's
-  name and email and a remote's raw location.** Two previews of the same
-  state hold the same digest, and the confirmation row holds a hash of a
-  location that may contain a credential.
+  name and email, a remote's raw location, the two key file paths and the
+  label of a `key delete`, and the locations a `host approve` or
+  `host replace` connects to for fetching and for pushing.** Two previews
+  of the same state hold the same digest, and the confirmation row holds
+  a hash of a location that may contain a credential.
+- **The preview of `key delete` publishes two absolute paths under the
+  user's key store.** It is the one envelope that does, on purpose: the
+  command must name the files it will delete.
 - **`execute` asks for the confirmation before it validates the input,**
   and `prepare` for a command that needs no confirmation returns an empty
   scope, because the input is not read.
 - **Only tests tie a command to its preview schema.** The preview's
-  `details` is one of five shapes, each with its own schema file, and the
-  schema checker has no way to say which shape a command gives.
+  `details` is one of eight shapes, each with its own schema file, and the
+  schema checker has no way to say which shape a command gives. The
+  preview's wrapper is restated in each of those files with nothing tying
+  the copies; a shared reference would change every preview schema.
+  `request.schema.json` repeats the outcome and code lists.
+  `recovery_action.schema.json` does not say that `operation.resume`
+  takes its root from the scope.
+
+*Local identity.*
+
+- **A configuration changed and put back as previewed.** A request writes
+  its identity and loses its result; someone sets the identity back to
+  exactly what was previewed; a late retry finds the previewed state and
+  writes again. The consented digest cannot tell that from a request that
+  never wrote. Closing it needs a marker that survives with the Git
+  write, which nothing here has.
+- **A stale `config.lock` is `busy` for as long as it is there.** It is
+  never removed and has no age rule, as in Git itself. A process killed
+  while it writes can leave one; the user removes it by hand. The `busy`
+  message does not name the file.
+- **A killed write can leave a scratch directory.** A `0700` directory
+  `manyhands-identity-*` holding a copy of the configuration can remain in
+  the Git directory, and one holding a name and an email in the system's
+  temporary directory. Nothing removes them.
+- **A program that ignores `config.lock`** and writes between the last
+  byte compare and the rename is overwritten. The window is a few
+  instructions.
+- **Under the lock an `includeIf` is not evaluated;** the read before the
+  lock, through the repository, does evaluate it.
+- **`extensions.worktreeConfig` is not read.** Manyhands reads and writes
+  the repository's local level; where a `config.worktree` holds an
+  identity, Git commits as that one.
+- **A trailing full stop in a name** is kept by Manyhands' commits and
+  dropped by the `git` binary, so a commit made by hand carries `Jr` where
+  Manyhands' own carry `Jr.`.
+- **The file's mode is kept on Unix only.**
+- **Enabling a repository still restores `.git/config` from a snapshot
+  outside Git's lock,** and can erase another process's change to it. It
+  is existing behavior that the identity write no longer shares: ticket
+  `01M4SDB38H9JTG77VMC9102W2F`. `add_remote` and a remote's removal answer
+  `internal_error` on a `config.lock` someone else left.
+- **`initials_required` offers `repo.identity_set`, which asks for a name
+  and an email as well.** A user whose identity is global and who lacks
+  only initials must write the name and email locally to set them; the
+  preview shows it.
+
+*Host approval.*
+
+- **A pin changed and put back as previewed.** A late retry then connects,
+  and pins only if the host still presents the key the request names.
+- **`host_mismatch` for a replacement is inferred.** The domain refuses
+  the write without the key it saw, and the binding concludes that the
+  host presented its pin when neither the pin nor the reapproval marker
+  moved between its two reads. Two edges remain: a host that presents two
+  keys in one connection, and a pin changed and put back between the
+  reads. Closing them needs the domain to report the key it saw.
+- **The message of `host_replacement_required` is not true of the
+  `prepare` refusal.** It reads "The host's key differs from the approved
+  one and must be replaced.", and a `prepare` saw no key of the host:
+  the host is pinned to another key than the one the request names.
+  There is one message for each code. The alternatives are to reword it
+  to cover both, such as "The host is pinned to another key; its pin
+  must be replaced.", or to accept it.
+- **F1's pin read names the stored pin `algorithm` and `fingerprint`.**
+  `host_pin`, the data of `host inspect` and of the pin list, is
+  unchanged, and in this Cycle's vocabulary those two names are only the
+  key a request names, a stored pin being `pinned_*`. Three options: 1.
+  leave it, as built: `host_pin` is a shape of one thing, a pin, so the
+  plain names are not ambiguous inside it, the vocabulary is stated as
+  the mutation boundary's, and a front end gives `host inspect`'s
+  `fingerprint` to `host replace` as `old_fingerprint`; 2. rename F1's
+  fields to `pinned_*`, which is one vocabulary everywhere and breaks the
+  F1 read contract and its goldens; 3. add `pinned_*` beside the old
+  names and deprecate the old, which breaks nothing and leaves two names
+  for one thing until the old go.
+- **The transport's own types keep their names.** `HostApproval` and the
+  transport's replacement error say `expected` and `presented`, and
+  `HostApproval::presented` is the key the request names, the meaning the
+  published vocabulary takes from the word. They are not published.
+- **A changed-input result of an accepted host approval is `partial` for
+  a pin another actor stored,** or for a remote someone pointed
+  elsewhere, as for the request's own pin.
+- **A `partial` approval may name a pin another actor stored.** If someone
+  else pinned the same key while this call was failing for another
+  reason, the answer says this request left it. The state it describes is
+  true; the attribution may not be.
+- **An `execute` for a host the remote no longer names** answers
+  `already_applied` when the host is pinned to the named key, where
+  `prepare` answers `invalid_input`.
+- **Without the transport started, `observe_host` is `internal_error`.**
+  That is the existing mapping for a front end that did not start it.
+- **A non-interactive caller with a protected key cannot approve a host;**
+  the CLI RFC accepts that limit for all protected-key automation.
+
+*Folders.*
+
+- **Unicode normalization is not checked.** A name with a letter that can
+  be written composed or decomposed is one name on macOS and two on Linux
+  and Windows. On macOS a name in another normalization than an existing
+  folder's answers `ok` with nothing made; on Linux it makes a second
+  directory. Checking it needs a normalization dependency.
+- **Windows 8.3 short names other than `git~1` are accepted,** so
+  `docs/LONGFO~1` can name an existing longer folder there.
+- **A path too long for the file system fails part-way:**
+  `internal_error`, `partial` when a parent was made, with the parents
+  left. No rule can be the same everywhere, since the limit depends on
+  where the repository is.
+- **Case is folded with Rust's own tables,** which differ from NTFS's and
+  APFS's in rare code points.
+- **The non-Unix directory walk checks a parent and creates in two
+  steps,** as it already does for saves. A parent swapped for a junction
+  between them is followed.
+- **An empty folder does not survive a clone.** Git does not track an
+  empty directory and nothing is written into one.
+- **Folder names are stricter than document paths.** A document can be
+  saved under a directory `folder create` would refuse.
+- **A folder that is already there can be refused or `partial`,** because
+  a no-op still runs its refresh: `recovery_required` behind a pending
+  operation, `discovery_pending` when the refresh fails.
+- **Abandoning a folder creation's pending refresh row** reports what a
+  refresh leaves, which is nothing. The directory the request made is not
+  mentioned and is left.
+- **A directory whose name holds a backslash or is not UTF-8 is not
+  listed,** and the folder list and the document list are then not
+  `complete`.
+
+*Repair.*
+
+- **A ticket whose broken field is a closure field cannot be repaired.**
+  Closure is compared by the YAML values as written, so a ticket whose
+  `closed_at` or `closed_by` is itself what is wrong, or that has one
+  without the other, has no source that both carries the file's values and
+  conforms. The same instant written another way is `invalid_input`.
+- **A valid ID copied into several nonconforming files makes none of them
+  repairable.** Each is `identity_ambiguous`. The way out is to edit one
+  by hand on primary.
+- **A context that holds stale bytes at the path stops every repair of
+  it.** When an abandoned repair left its context and the file was then
+  changed and committed on primary, the context holds neither primary's
+  file nor the source. The repair is `external_change` and offers
+  nothing, since no new preview can succeed; the user removes the item's
+  worktree and branch with Git.
+- **A worktree removed by hand is not seen by the context scan.** The
+  scan for a path repaired under another ID reads the worktrees Git has
+  registered under an item ID and the index. An item moved inside its
+  context, or a context whose worktree was removed by hand, lets a second
+  ID in.
+- **A second repair made before the first is indexed** is not seen by
+  the index either; the first's pending row then refuses the second with
+  `recovery_required` at execution.
+- **A re-entry that is refused after a write whose step was lost leaves
+  the file uncommitted.** In a context that was reused, a write that died
+  before its step was recorded leaves a row with no step; a refusal on
+  re-entry closes that row with the written file left in the context, as
+  a save behaves. Ticket `01M4PB7YZMBFAFFM94AZY08HWS` is the same defect.
+- **The case rule has no Unicode normalization** and is not exercised on
+  a file system that folds case: a path must name its file by the names
+  its directories list, compared with Rust's lower-case and upper-case
+  forms.
+- **Every canonical file is read to ask who holds an ID,** at the
+  preview, at `prepare`, on re-entry and in the domain.
+- **What counts as a canonical source for that scan is wider than what
+  the worktree collector indexes.**
+- **`scope.item_id` of a refusal for an ambiguous identity is the ID the
+  source carries,** which is another item's.
+- **A repaired document is listed twice, and comments stay blocked,**
+  until the repair's context is merged; see
+  [Repair and adoption](#repair-and-adoption).
 
 *Abandoning.*
 
@@ -1672,37 +2063,22 @@ code that predates this Cycle; each names its ticket.
 
 Each of these is built one way and has not been confirmed. The current
 behavior is stated first, then the alternative. The product owner decided
-the earlier questions on 2026-10-12; their rules are in the sections that
-describe them.
+the earlier questions on 2026-10-12 and 2026-10-13, the table of key
+registry changes and the message of `repository_not_registered` among
+them; their rules are in the sections that describe them.
 
-1. **Should a new index table record each key registry change against its
-   operation ID?** Today `key import`, `key select` and `key clear` leave
-   no operation evidence, so a lost-result import followed by a removal of
-   that key registers it again under a new ID, and a setting changed and
-   put back is changed again by a late retry; see the known limits. The
-   table would hold the operation ID, the action and the key, written in
-   the transaction of the registry change, so a retry answers from it. It
-   would also make the compare atomic. It is an index schema change, with
-   a migration and three changed signatures in `keys/registry.rs`. The
-   alternatives are to do it now, to do it later under a ticket, or to
-   keep it as a known limit.
-2. **Is `merge_required` the right code when the remote has only moved
+1. **Is `merge_required` the right code when the remote has only moved
    ahead after a lost push?** Today that case is `merge_required`,
    reported with `published` and the commit once the push endpoint shows
    it holds a descendant, although nothing needs merging: the local
    branch needs a fast-forward this operation cannot make. The
    alternative is a dedicated code, which is a contract addition.
-3. **Should `operation resume` and `operation abandon` require a root for
+2. **Should `operation resume` and `operation abandon` require a root for
    a key operation?** Today both inputs require one. A key operation
    belongs to no repository: a resume finds it whatever root is named,
    and `repo.inspect` on its result names the caller's root; an abandon
    refuses it with `invalid_input` whatever root is named. The
    alternative is an optional root.
-4. **Should the message of `repository_not_registered` change?** It still
-   reads "The repository is not enabled in Manyhands.", which now sits
-   beside `repository_not_enabled`. The alternative is to say that the
-   repository is not registered on this machine. The message is part of
-   the published contract.
 
 **What the next binding must do.** Nothing is left to decide before it.
 Task 7c made the structural changes the checkpoint asked for: the ticket
@@ -1718,18 +2094,27 @@ does not compile until `bind::recorded_effects`,
 implements `ended_without_checkpoint`; and moves each of its codes that
 the recovery tables give an action to its own arm of `outcome::recovery`.
 A confirmed command also answers `as_confirmed`, which does not compile
-without it, and supplies the probes of `confirm::reenter`. Every bound
-command has a row in the conformance table, whose home is named in
-`HOMES`; the table runs over each command the four rules every command owes
+without it, and supplies the probes of `confirm::reenter`. A command
+whose failed hand-off leaves nothing pending, as `folder create`'s does,
+answers `Command::hands_off_to_any_refresh`, which decides both the action
+of its `discovery_pending` and whether a replay of its result is given
+actions again. Every bound command has a row in the conformance table,
+whose home is named in `HOMES`, one of four test targets; the table runs
+over each command the rules every command owes
 the boundary: a finished request is answered again with its stored result
 and nothing of its record changes; the same request ID with changed input
 is `request_mismatch` and the finished record stays as it is; a refused
 request leaves no record; and a command that needs confirmation is refused
 without one as `confirmation_required`, any other command is refused with
-one as `not_confirmable`, either way leaving no record. The table does not
+one as `not_confirmable`, either way leaving no record. Those four do not
 reach a stale preview of a confirmed command, since an unknown
-confirmation is refused before the binding is asked; each new confirmed
-command adds a row for that.
+confirmation is refused before the binding is asked. A fifth rule does:
+every confirmed command has a row whose preview is made stale, so that
+the binding's own compare answers `external_change`, and a confirmed
+command without such a row fails the table. A row supplies the change
+itself, as its fixture's way to alter what its preview showed, and keeps
+the input it began with, so that the request is still its
+confirmation's.
 
 ### After the cache is lost
 
@@ -1759,9 +2144,18 @@ A retry then arrives at a repository that is not registered.
 | A synchronization | Local and tracking refs. | Whatever a fresh synchronization finds: already current, or the remaining push. |
 | Anything needing confirmation | The confirmation is gone. | `confirmation_not_found`; a new preview is required. |
 | Key generation | The earlier key file belongs to no registration. | A new key is generated, as the domain does today. The earlier file is left where it is and can be imported. F2 adopts nothing. |
+| `key import` | An empty registry. | The source is registered once, under a new key ID; see the known limits. A retried `key select` is `key_not_found` and a retried `key clear` a no-op. |
+| `repo identity-set` | The confirmation is gone. An identity is set on a repository that need not be registered, so nothing else of it is lost. | `confirmation_not_found` with `request.prepare`, and nothing is written. A new preview of an identity that was written is a no-op with no confirmation. |
+| `host approve`, `host replace` | The confirmation and the pins are gone. | `confirmation_not_found`, before anything is observed or connected to. A new preview is `repository_not_registered` with `index.rebuild` until the repository is registered again. Then a preview of an approval shows the host with no pin, and a `host replace` is `invalid_input`: the pin it would replace went with the cache. |
+| `folder create` | The directory is there. | `repository_not_registered` with `index.rebuild` first, and no record. Once the repository is registered again, a no-op that runs its refresh: `already_applied`, `discovery: current`, with nothing made and no row left pending. |
+| A repair | The confirmation is gone; the item's context holds the corrected source. | `confirmation_not_found`. With the source committed there, the new preview is a no-op. With it written and not committed, a new preview is given and the new request commits it, in the same context and under the same ID. |
 
 No retry in this table writes content the first attempt did not intend, and
 none reports a commit it cannot find.
+
+Where no evidence proves a replay safe, three RFCs ask for
+`recovery_required`. The table answers more exactly than that; see
+[Departures from the RFCs](#departures-from-the-rfcs).
 
 Every row is built. A synchronization retried after the cache is lost is
 blocked in turn by each piece that went with it (the registration, the
@@ -1852,12 +2246,12 @@ digest stored in the confirmation; `execute` observes again and compares.
 | `repo enable` | The checked-out branch and its commit, or that the branch is unborn; a clean, unconflicted worktree; no Manyhands configuration yet. On a repository that is already enabled, `prepare` returns a no-op and no confirmation; a supplied prefix that differs from the stored one is `invalid_input`, since nothing would write it. |
 | Both | The effective identity and its source, when none is supplied. |
 | `repo remove` | The registration: its row and the time it was made, to the second. |
-| `repo identity-set` | Planned: the current local name, email and initials. |
+| `repo identity-set` | The local name, email and initials as the repository's own configuration holds them. The effective identity is shown in the preview and is no part of the digest: the command neither acts on it nor changes it. |
 | `remote remove` | Whether the remote is configured; its fetch and push locations; whether it is selected for publication; its own refspecs; whether it has tracking references, references or configuration entries that are not its own, and branch upstreams; the names of sibling remotes and every other remote's fetch refspecs; the polling policy and the remote polling observes. Removing the selected publication remote is refused by the domain; `prepare` returns `publication_remote_in_use` and no confirmation. |
 | `key delete` | For a key that can be deleted: its registration as the existing preflight reports it, and whether each of its two files is present. Otherwise which refusal stands. Changes to the key files themselves are caught by the existing review at execution. |
 | `operation abandon` | How the row stands, and for a pending row its state and step. |
-| `host approve`, `host replace` | The publication remote's endpoint for the authority; the current pin for it, or that there is none. |
-| `document repair`, `ticket repair` | The file's token; that the corrected ID is not held by another item. |
+| `host approve`, `host replace` | The publication remote's name and the location each direction connects to; the pin stored for the authority, or that there is none. The reapproval marker is shown and is no part of the digest. |
+| `document repair`, `ticket repair` | The path and the file's token; whether the file is committed on primary; whether the corrected ID is held by something else; whether an item is already at the path under another ID. The item's own context is not in the digest, because the request's own work changes it; `prepare` asks it directly. |
 
 ## Two-Phase Confirmation
 
@@ -1879,8 +2273,16 @@ lease, so nothing waits on a preview that is outstanding. It does not
 create a directory, initialize a repository, register anything, write Git
 configuration or contact a network. Its envelope names no request. A
 command whose end state already holds is a no-op, `already_applied`, and
-gets no confirmation. A rejection carries the code's own recovery action,
-never `request.retry`.
+gets no confirmation. A rejection keeps a recovery action that the binding
+or a failed read suggested, as `execute` does: a path that lies below a
+repository's root is refused with the `repo.inspect` of that root which
+its read suggested. Otherwise it carries the code's own action. It never
+offers `request.retry`.
+
+The envelope's data is `PrepareDataDto`: a preview, or, for one refusal,
+the data of a host whose pin must be replaced. On the wire a `prepare`
+envelope's `data` is a preview or null except for that refusal; see
+[Host approval](#host-approval).
 
 The preview effects, and when each is listed:
 
@@ -1892,8 +2294,12 @@ The preview effects, and when each is listed:
 | `repo remove` | `registration_removed`, `index_dropped`, `operation_records_dropped`, `remote_state_dropped`. |
 | `key delete` | `private_key_file_deleted` and `public_key_file_deleted`, each when the file is there; `key_unregistered`. |
 | `operation abandon` | `operation_closed`; `request_released` when an unfinished request holds the operation. |
+| `repo identity-set` | `identity_written`, also when only the initials change. |
+| `host approve` | `host_pinned`. |
+| `host replace` | `host_pin_replaced`. |
+| `document repair`, `ticket repair` | `context_created` when the item has no editing context; `id_adopted` when the file has no valid ID and the source assigns one; `source_written` whenever the context will hold the source, also when an earlier request wrote it; `checkpoint_committed`. |
 
-`details` is one of five shapes:
+`details` is one of eight shapes:
 
 - **Repository** (`repo create`, `repo enable`): the root, the primary
   branch, the identity that will author the initialization commit (name,
@@ -1906,9 +2312,22 @@ The preview effects, and when each is listed:
 - **Repository removal:** the registered root, when it was registered, and
   `files_changed` and `git_state_changed`, both always false.
 - **Key deletion:** the key's ID, label and fingerprint, and the paths of
-  the two files that will be deleted. No key material.
+  the two files that will be deleted. No key material. These are the only
+  absolute paths under the user's key store that any envelope holds.
 - **Operation abandon:** see
   [Abandoning An Operation](#abandoning-an-operation).
+- **Identity** (`repo identity-set`): the root; the `name`, `email` and
+  `initials` the local configuration will hold; `current`, the local
+  values now; and `effective`, the whole identity shape with its sources.
+  Initials cleared and initials left alone are told apart by comparing
+  `initials` with `current.initials`.
+- **Host** (`host approve`, `host replace`): the root; `host` and `port`;
+  `fetch` and `push`, which say what the publication remote uses the host
+  for; `algorithm` and `fingerprint`, the key the request names;
+  `pinned_algorithm` and `pinned_fingerprint`, the pin stored now, or
+  null; and `reapproval_required`.
+- **Repair** (`document repair`, `ticket repair`): `root`, `path`, `id`,
+  `adoption`, and `primary_changed`, which is always false.
 
 `execute` checks a first call's confirmation in this order, before it
 validates the input:
@@ -2003,12 +2422,17 @@ request's own pending row is in the way, offers `repo.inspect` and
 `operation.abandon` and never `request.prepare`: a new preview could not
 be used while that row refuses every other request.
 
-The confirmed commands with no journal that are still to be bound
-(`repo identity-set`, `host approve`, `host replace`) are to compare
-again whenever their end state does not hold. If a process was killed
-partway through one, its own partial change makes the comparison fail
-with `external_change`. A new preview, which shows the state as it now
-is, and a new request complete it.
+The confirmed commands with no journal (`repo identity-set`,
+`host approve`, `host replace`) compare again whenever their end state
+does not hold, on every re-entry, since no step is ever recorded for
+them. Each also compares once more where it writes: the identity under
+Git's configuration lock, the pin in the transaction that stores it.
+Nothing of either is ever partly done. An identity write is one rename or
+none, so a killed process leaves the file as it was, and possibly a stale
+lock, which is `busy`. A pin is stored in one transaction. The two host
+commands also answer the end state on a first call, in `prepare`, before
+the boundary compares digests: a host already pinned to the key the
+request names is a no-op.
 
 `prepare` for a command that needs no confirmation returns
 `not_confirmable`.
@@ -2057,7 +2481,8 @@ The result's data says where the deletion stands: `prepared`,
 read's outcome follows from its code; a mutation's does not.
 
 A mutation envelope may carry `data` on any outcome: the members of a
-rejected cycle, the fingerprints of a host that needs approval, what a
+rejected cycle, the presented key and the pin of a host that needs
+approval, the key a host presented in place of the one approved, what a
 half-finished key deletion left. The contract test for mutations asserts
 what each command's data holds per outcome, in place of the read rule that
 data is present exactly on success.
@@ -2065,9 +2490,14 @@ data is present exactly on success.
 `request_id` is the caller's request ID for `execute`, a resume included,
 and null for `prepare`, `show_request`, `cancel_request` and
 `observe_host`. `operation_id` is the request's own operation and is null
-for a request that has none: a key registry change, an abandon and a
-resume, whose named operation is their target. A key command's results
-name no repository, item, branch or worktree. A synchronization's scope
+for a request that has none: a key removal, `repo identity-set`,
+`host approve`, `host replace`, and an abandon and a resume, whose named
+operation is their target. It is set on every result given after
+acceptance of a request that has an operation, a refusal included. A key
+command's results name no repository, item, branch or worktree. A host
+command, an observation of a host, `repo identity-set` and
+`folder create` name the repository only. A repair names the
+item, and its branch and worktree once the request is accepted. A synchronization's scope
 names the repository and the branch it synchronizes, and the item for
 `item sync`; `scope.remote` is null on every synchronization result,
 because a replayed or refused result is built without the remote's name.
@@ -2101,11 +2531,12 @@ change neither.
 
 | Command | What it reports |
 | --- | --- |
-| Item saves, repair | `write`, `checkpoint`, `discovery`. A save that changes nothing reports `unchanged`, `unchanged` and `not_requested`. |
+| Item saves, repair | `write`, `checkpoint`, `discovery`. A save that changes nothing reports `unchanged`, `unchanged` and `not_requested`. A repair's write and commit are made in the item's editing context and never on primary. |
 | Synchronization | `publication`, `discovery`; `commit_oid` is the published commit. A push this request made is `published` with the commit. A remote that already held the commit is `current`, names no commit, and the result is a no-op, `already_applied`. A synchronization that stopped reports `publication: pending` until its own evidence shows the remote took a push; that includes a push whose result was lost, which is `transport_unavailable`, an error and not `partial`. When the index hand-off is owed the code is `discovery_pending` with `discovery: pending`. A move of the local branch is not an effect. |
 | `repo create`, `repo enable` | `write` (the configuration file), `checkpoint` (the initialization commit), `discovery`. |
 | `remote select` | `write`, `checkpoint`, `discovery`, as it commits the configuration file. |
-| `index refresh`, `index rebuild`, `folder create` | `discovery` only. A failed refresh or rebuild has made no durable effect: it is an error with its code, not `partial`, and its record stays `accepted` while its journal row is pending. |
+| `index refresh`, `index rebuild` | `discovery` only. A failed refresh or rebuild has made no durable effect: it is an error with its code, not `partial`, and its record stays `accepted` while its journal row is pending. |
+| `folder create` | `discovery` only: `current` for a folder made and for one that was there, since both run the refresh. A refresh that fails after the folder is there is `partial` with `discovery_pending` and `discovery: pending`; its row is closed, so the record is finished, and it stays `accepted` only when the row could not be closed. A failure that left directories and never reached the refresh is `partial` too. |
 | `remote add`, `remote remove` | `discovery` only, because the remote change itself is in `data`. It is `current` when the operation changed the remote and ended, also when that is answered from a completed row, and for `already_applied` under a row that was pending, where the hand-off ran. It is `pending` when the code is `discovery_pending`, and for an error after the remote changed with the operation not ended, which is `partial` with `request.retry`. It is `not_requested` for any other `already_applied` and for every other refusal or error. `write`, `checkpoint` and `publication` are `not_requested`. |
 | Identity, keys, host trust, registration removal | Every effect `not_requested`. What changed is in `data`, and `outcome` distinguishes `success` from `noop`. |
 
@@ -2119,18 +2550,48 @@ As built, a binding says so with one flag on its answer: the request made
 a durable change that no effect shows. The outcome is derived from the
 code, the effects and that flag in one function, and a failure after such
 a change is `partial`. It is set for a remote added or removed with work
-remaining, a key file written by a generation that has not ended, and a
-key file removed by a deletion that has not ended.
+remaining, a key file written by a generation that has not ended, a key
+file removed by a deletion that has not ended, a pin stored by a
+verification that then failed, and directories a folder creation made
+before it failed.
 
-The data each built command family carries: a document or ticket write,
-the item's ID and the path written, and for a ticket its short code and
-the relationship targets nothing holds; a remote command, the remote's
-name and its location redacted; a key command, the key's ID,
-label and fingerprint and where a generation or deletion stands;
-`operation abandon`, what the operation left; a synchronization, only the
-host and fingerprints of a host that is not trusted. `repo create`,
-`repo enable`, `repo remove`, the index commands and a resume of a
-hand-off carry none.
+The data each command family carries:
+
+- a document or ticket write: the item's ID and the path written, and for
+  a ticket its short code and the relationship targets nothing holds;
+- a repair: the item's ID, the path, and `adopted`, whether the ID was
+  assigned by this repair;
+- a remote command: the remote's name and its location redacted;
+- a key command: the key's ID, label and fingerprint and where a
+  generation or deletion stands;
+- `operation abandon`: what the operation left;
+- `repo identity-set`: the `name`, `email` and `initials` the local
+  configuration holds once the request is done;
+- `host approve` and `host replace`: `host`, `port`, the `algorithm` and
+  `fingerprint` of the key the request names, and `presented_algorithm`
+  and `presented_fingerprint`, which are set on `host_mismatch` to the key
+  the host presented and are null otherwise. The data is carried on
+  `success`, `noop`, `host_mismatch` and a `partial` result;
+- a synchronization, and a resume that takes one up: data only when a
+  host is not trusted. It is then `host`, `port`, `presented_algorithm`
+  and `presented_fingerprint`, the key the host presented, and
+  `pinned_algorithm` and `pinned_fingerprint`, the pin stored for the
+  host, or null when there is none;
+- `repo create`, `repo enable`, `repo remove`, the index commands,
+  `folder create` and a resume of a hand-off: none.
+
+**One vocabulary for a host's keys.** Every shape that carries a host key
+uses the same three pairs of names. `presented_algorithm` and
+`presented_fingerprint` are the key the host presented when it was
+observed, always and only that. `pinned_algorithm` and
+`pinned_fingerprint` are the pin stored for the host now. `algorithm` and
+`fingerprint`, unqualified, are only the key a `host approve` or
+`host replace` request names: its input, and the echo of that input in
+its preview and its result. A caller copies `presented_*` from a
+synchronization's data or from an observation into the `algorithm` and
+`fingerprint` of `host approve`, and reads `presented_*` back from any
+result with the same meaning. F1's `host_pin` shape, the data of
+`host inspect`, is not changed.
 
 ### Result codes
 
@@ -2153,9 +2614,20 @@ which the initialization commit exists and the registry write failed. A
 passphrase prompt the user dismissed is `unlock_required`: the action did
 not happen and needs an unlock.
 
+Every code of the registry has a producer. Four are returned by no
+mutation: `invalid_id`, `public_key_unavailable` and
+`authority_not_found` are given by F1's reads only, and
+`request_not_found` by `request show` and `request cancel`.
+`path_not_found`, an F1 code, is also a repair's.
+`remote_unavailable` is published and mapped, and no
+test fixture produces it: the transport gives it only when Git reports
+the remote as not found, and the test server closes the connection for a
+path it does not serve, which is `transport_unavailable`.
+
 **`repository_not_registered` and `repository_not_enabled`.** F1's
 `repository_not_registered` says the index does not know the repository
-on this machine. It is the answer for an unregistered repository that was
+on this machine; its message is "The repository is not registered with
+Manyhands." It is the answer for an unregistered repository that was
 enabled once, such as one whose index was lost, and it offers
 `index.rebuild`, which registers the repository again.
 `repository_not_enabled` is the answer for an unregistered repository that
@@ -2193,8 +2665,13 @@ added later fails to compile until it is given a code. No mapping calls
 caller map to `internal_error`. Some codes need the binding's context and
 are set by the binding: `host_mismatch`, `slug_already_assigned`, the
 confirmation and request codes, `identity_required` for `remote select`,
-`ok` for a key the request's own operation already created, and
-`cancelled` for a synchronization whose row says it was cancelled.
+`ok` for a key the request's own operation already created,
+`cancelled` for a synchronization whose row says it was cancelled,
+`repository_not_enabled`, `host_replacement_required` for a `prepare` of
+`host approve` on a host that has another pin, `discovery_pending` for a
+folder creation whose refresh did not complete, and `not_repairable`,
+`identity_ambiguous` and `path_not_found` where the repair binding
+refuses before the domain is called.
 
 The repository error kinds whose code is not obvious from the name:
 
@@ -2216,6 +2693,10 @@ The repository error kinds whose code is not obvious from the name:
 | `RecoveryRequired`, `RollbackIncomplete`, `MismatchedAuthoringContext` | `recovery_required` |
 | `OperationMismatch` | `internal_error`: the boundary allocates operation IDs, so a mismatch is its own fault |
 | `OperationAbandoned` | `external_change`: the request's operation was abandoned under it |
+| `NotRepairable` | `not_repairable` |
+| `AmbiguousIdentity` | `identity_ambiguous` |
+| `InvalidItemSource` | `invalid_input`: the corrected source is not a conforming item of its kind at its path, or its closure fields are not the file's |
+| `RepositoryBusy` | `busy`. From `set_local_identity` it covers the repository lease and Git's `config.lock` |
 | `Io`, `Sqlite`, `Git`, `InjectedFailure` | `internal_error` |
 
 The table test in `outcome_tests.rs` is the complete mapping for all four
@@ -2259,45 +2740,47 @@ leave the request's record `accepted`; see Settling.
 | Codes | Recovery action offered | Otherwise |
 | --- | --- | --- |
 | `confirmation_required`, `confirmation_expired`, `confirmation_not_found` | `request.prepare` | |
-| `external_change` on a confirmed command, with no record left | `request.prepare` | What was previewed is no longer what is there; a new preview shows what is. Not offered when a key deletion is refused for a key file that is not the one Manyhands wrote (`external_change` from `SourceChanged`): no new preview clears that, on a first call, on a retry with no row, or when the deletion itself refuses. A registration that differs from the preview still offers it. |
-| `external_change` on a confirmed command, left `accepted` | `repo.inspect` | The request's own pending operation refuses every other request, a new one with a new preview among them. With what was previewed put back, the same request goes on. No action is offered when the result names no repository, as for an interrupted key deletion. |
+| `external_change` on a confirmed command, with no record left | `request.prepare` | What was previewed is no longer what is there; a new preview shows what is. Not offered when a key deletion is refused for a key file that is not the one Manyhands wrote (`external_change` from `SourceChanged`): no new preview clears that, on a first call, on a retry with no row, or when the deletion itself refuses. A registration that differs from the preview still offers it. Not offered either when a repair is refused because the item's context holds, at the path, neither primary's file nor the source nor a conforming item: every new preview would be refused the same way, so the result offers nothing; see the known limits. |
+| `external_change` on a confirmed command, left `accepted` | `repo.inspect` | The request's own pending operation refuses every other request, a new one with a new preview among them. With what was previewed put back, the same request goes on. No action is offered when the result names no repository, as for an interrupted key deletion. One exception: a `host approve` or `host replace` that stored the pin and then failed with this code offers `request.retry` instead, because the same request is known to end as a no-op. |
 | `external_change` on any other command | none | Read the item again and submit a new request. A synchronization left `accepted` is offered `request.retry` by the synchronization rule below. |
-| `discovery_pending` | `operation.resume` naming the operation, where a resume would take it up; otherwise `request.retry` | `index.refresh` for `folder create` is the plan for that binding. |
+| `discovery_pending` | `operation.resume` naming the operation, where a resume would take it up; otherwise `request.retry` | |
+| `discovery_pending` from `folder create` | `index.refresh` with the root; `request.retry` instead while the record is left `accepted` | The failed refresh's row is closed as rejected, so nothing is pending and any refresh lists the folder. The record stays `accepted` only when the row could not be closed, or when another call is at work under it. A replay of the finished result offers `index.refresh` again. |
 | `registration_pending` | `request.retry` | |
-| `poll_yielding`, `remote_unavailable`, `transport_unavailable`, `busy` | `request.retry` | Offered whether or not a record was left. |
-| `identity_required`, `initials_required` | `repo.identity_set`, except for `repo create` | For `repo create` there is no repository yet to set an identity on: resubmit with an identity. For initials, or resubmit with initials. `repo identity-set` itself is not bound yet. |
-| `host_approval_required` | `host.approve`, then `request.retry` when left `accepted` | `data` holds the host and the presented fingerprint. `host approve` itself is not bound yet. |
-| `host_replacement_required` | `host.replace`, then `request.retry` when left `accepted` | `data` holds both fingerprints. |
+| `poll_yielding`, `remote_unavailable`, `transport_unavailable`, `busy` | `request.retry` | Offered whether or not a record was left. `busy` from `repo identity-set` covers the repository lease and Git's configuration lock. |
+| `identity_required`, `initials_required` | `repo.identity_set`, except for `repo create` | For `repo create` there is no repository yet to set an identity on: resubmit with an identity. For initials, or resubmit with initials. `repo identity-set` takes a name and an email as well as initials, so a user whose identity is global and who lacks only initials writes the name and email locally too. |
+| `host_approval_required` | `host.approve`, then `request.retry` when left `accepted` | `data` holds the host and the presented key. |
+| `host_replacement_required` | `host.replace`, then `request.retry` when left `accepted` | `data` holds the host, the presented key and the pin. A `prepare` of `host approve` on a host that has another pin gives the same code and the same action, with `authority` and `root`. Its data is another shape, `host_replacement`: the host, the key the request names and the pin, with no `presented_*`, since a `prepare` connects to nothing. |
 | `recovery_required`, on a result that names a repository | `repo.inspect` | |
 | `recovery_required`, on a result that names no repository | `request.retry` when left `accepted`; otherwise none | A key generation that was interrupted is continued by the same request. For a key whose material is pending no action is offered; see the known limits. |
 | `invalid_slug_configuration`, `invalid_configuration` | `repo.inspect` | |
-| `repository_not_registered`, `index_unavailable` | `index.rebuild` with the root | Not offered on a result that names no repository: the action requires a root. |
+| `repository_not_registered`, `index_unavailable` | `index.rebuild` with the root | Not offered on a result that names no repository: the action requires a root. Such a result, which only a key command gives, offers `request.retry` when its record is left `accepted` and nothing otherwise. A failed `host observe` offers `index.rebuild` as every read and mutation does. |
 | `repository_not_enabled` | none | The repository was never enabled; enabling it is a new request. A rebuild would register nothing. |
 | `original_request_required` | `request.retry`, naming the request that began the operation | Given only by `operation resume`, and only when an unfinished record holds the operation. The resume itself is never offered again. |
 | `operation_not_found` | none | |
 | `merge_required`, `remote_branch_deleted` from a synchronization | `request.cancel` naming the request, while the reservation is the request's own and its record is left `accepted`; otherwise none | The same request cannot get past either: the operation recorded the branch as it was, and refuses it once history is merged or rebased; a branch deleted at the remote stays deleted. `request.retry` is not offered. Taking `request.cancel` cancels the request; one more call of the same request then answers `cancelled` and frees the reservation, and a new request goes on. Nothing is pushed. The reservation is read when the result is given: where it is another operation's, or cannot be read, the action is not offered. A replay and a preview offer none. |
 | Any other code from a synchronization left `accepted` (`push_rejected`, `no_selected_key`, `key_rejected`, `unlock_required`, `unlock_failed`, `external_change`, `recovery_required` and the rest) | `request.retry` first, then whatever the code offers | The synchronization rule: a synchronization that stopped with its record left `accepted` holds the reservation, and the same request is what takes it up again. See open case 3. |
-| `request_mismatch`, `confirmation_mismatch`, `confirmation_used` | none | A caller error; use a new request ID or a new preview. |
+| `request_mismatch`, `confirmation_mismatch`, `confirmation_used` | none | A caller error; use a new request ID or a new preview. This holds also for a `request_mismatch` that is `partial`, which is one of the two exceptions to the rule that a partial result carries a recovery action: the changed input is refused, and the original request, which this caller may not hold, is what goes on. The other is a key generation whose files were retained for inspection, which is final. |
+| `host_mismatch` | none | `data` holds the key the host presented. Whether to trust that key is a new preview with a new input; the same input previewed again would be refused again. The record is released at any attempt. |
+| `not_repairable`, `identity_ambiguous`, `path_not_found` | none of their own; `request.retry` when left `accepted` | Nothing in this contract resolves them: the user edits the file, or the duplicate, by hand. A recovery action a read suggested is kept. |
 | `publication_remote_required`, `publication_remote_in_use`, `ticket_closed`, `slug_already_assigned`, `remote_name_conflict`, `invalid_remote`, the key codes outside a synchronization, and the Input codes not named above | none, unless left `accepted` | The code and message say what is missing. Actions for these belong with the commands that resolve them and are added when a front end needs them. |
-| Any code with no action of its own, `external_change` excepted, on a result left `accepted` | `request.retry`, naming the request | The same request finishes the work. Not offered when the record stays `accepted` only because a record read or change failed. |
+| Any code with no action of its own, `external_change` excepted, on a result left `accepted` | `request.retry`, naming the request | The same request finishes the work. |
 | Any failure that left the request's record `accepted` with the request's own local operation pending, whatever its code | `repo.inspect` if not already offered, then `operation.abandon` naming that operation, after every other action | The same request may still finish the work; where it cannot, this is the way out, and the result is where the caller learns the operation ID. This includes `discovery_pending` and `registration_pending`, where the abandon keeps the commit; the product owner confirmed on 2026-10-12 that it is offered there, after the forward action. |
 | `recovery_required`, or `external_change` on a confirmed command, that already offers `repo.inspect` | `operation.resume` for each pending local operation of the repository that is not the request's own and that a resume would take up now, before `repo.inspect`; `operation.abandon` for each pending local operation, oldest first, after it | The request that owns an operation is not offered its resume here. The same list is made for `prepare` and for a result given again from a record, as true when it is read. The abandons are offered whatever caused the result: a pending local operation does refuse the repository's other operations, and the preview of the abandon says what it is. |
 
 `operation.abandon` is offered under either of the last two rows only for
 an operation nothing is seen against abandoning; see
 [Abandoning An Operation](#abandoning-an-operation). The codes
-`invalid_id`, `path_not_found`, `public_key_unavailable`,
-`authority_not_found`, `not_repairable`, `identity_ambiguous` and
-`host_mismatch` are returned only by commands not yet bound. Until the
-task that binds each decides its action, they follow the rule for a code
-with no action of its own.
+`invalid_id`, `public_key_unavailable` and `authority_not_found` are
+returned by F1's reads only, and no mutation's result has to decide an
+action for them.
 
 A result replayed from a finished record carries no stored action. Two
 kinds of action are made again when it is read: the action its code has,
-for a finished synchronization or a finished resume, so that a
-`recovery_required` with its push not confirmed offers `repo.inspect`
-each time it is given; and `operation.resume` and `operation.abandon`, which name what is
-pending when the result is read.
+for a finished synchronization, a finished resume or a finished
+`folder create`, so that a `recovery_required` with its push not
+confirmed offers `repo.inspect`, and a folder's `discovery_pending`
+offers `index.refresh`, each time it is given; and `operation.resume` and
+`operation.abandon`, which name what is pending when the result is read.
 
 ### Recovery actions
 
@@ -2315,7 +2798,13 @@ Added to the closed registry:
 | `host.replace` | `root`, `authority` |
 
 `operation.resume` registers no argument keys, matching the CLI RFC's
-example. `RecoveryAction` gains a constructor that sets `operation_id`.
+example, so a caller takes the root for it from `scope.repository`,
+while `operation.abandon` carries its root in `arguments`.
+`RecoveryAction` gains a constructor that sets `operation_id`.
+`host.approve` and `host.replace` carry no key: the caller takes the key
+to name from the `presented_*` fields of the result's data.
+`index.refresh`, an F1 action, is now offered by a mutation too: a
+`folder create` whose refresh did not complete.
 
 ### Resuming
 
@@ -2434,8 +2923,10 @@ nothing more by that call; the panic is caught and the request runs on.
   send it again.
 - Immediately before each domain call, first or repeated, the command's own
   stage is sent: `indexing` for `index refresh` and `index rebuild`,
-  `connecting` for the two synchronizations, `observing` for
-  `operation resume`, and `writing` for every other command.
+  `connecting` for the two synchronizations and for `host approve` and
+  `host replace`, `observing` for `operation resume`, and `writing` for
+  every other command, `repo identity-set`, `folder create` and the
+  repairs among them.
 - A synchronization sends one stage at each of its seven safe points:
 
   | Safe point | Stage |
@@ -2692,6 +3183,25 @@ work under it.
   a rebuild, whose heartbeat is not older than three seconds is live.
   When a rebuild ends with its row still pending, it sets the heartbeat
   to a stale time, so its own result can offer the abandon at once.
+- **A second live call of the same request leaves a live row alone.**
+  Nothing serializes two calls of one request ID once both have entered.
+  A call that finds its own operation's row pending under a live
+  index-owner heartbeat does not record a step on it, which would take it
+  out of `indexing` and let the row be claimed from under the call at
+  work. It leaves the row's state, step and heartbeat as they are and
+  answers index-pending: `discovery_pending`, with the request's commit,
+  where it made one, read from Git as on any re-entry, and the record
+  kept. One shared
+  check, `RepositoryService::is_being_indexed`, gives the rule to
+  `save_document`, `save_ticket`, `repair_item`, `add_remote`,
+  `remove_remote`, `set_publication_remote`, `enable` and
+  `submit_comment`; a `create_and_enable` that is taken up again goes
+  through `enable`. Nothing is written. The first call is therefore
+  never answered `recovery_required` for a request whose record finishes
+  `ok`. `create_folder` guards the close of its refresh row the same way:
+  a row with a fresh heartbeat is not closed, and the request stays
+  `accepted` and offers `request.retry`. A process that died while
+  indexing looks live for three seconds; see the known limits.
 - Three short windows have neither a lease nor a heartbeat: a creation
   between dropping its leases and going on as an enablement, a
   synchronization between binding its hand-off row and refreshing, and an
@@ -2712,13 +3222,107 @@ cannot be named and is not offered.
 
 `set_local_identity` writes `user.name` and `user.email`, and optionally
 `manyhands.initials`, to the repository's local Git configuration under the
-repository lease. It never writes global configuration. If a later key fails
-to write, it restores the configuration file's bytes, as enablement does. It
-works on any non-bare repository root, enabled or not, and is idempotent:
-equal values are a no-op. It has no journal row.
+repository lease. It never writes global configuration. It works on any
+non-bare repository root, enabled or not, and is idempotent: equal values
+are a no-op. It has no journal row, and a pending local operation does not
+refuse it: an operation that stopped for want of an identity is what this
+command unblocks. Only the lease does.
 
-Its preview shows the values to be written, the current local values and the
-effective identity with its source.
+**Input.** `repo identity-set` takes the root, a name, an email and what
+to do with the initials: leave them, clear them or set them. Initials are
+stored in lower case, so setting `QA7` over `qa7` is a no-op. A root that
+is a linked worktree's, or a directory below the repository's root, is
+`not_repository_root`, as for every other command: a worktree shares the
+configuration of the repository that owns it, which is named by its own
+root. The binding decides this before the domain operation, which has no
+error kind for it and by itself answers `invalid_path`. A bare repository and a path that is
+no repository are `bare_repository` and `not_repository` at `prepare`.
+
+**Validation.** A name or an email is `invalid_input` unless all of these
+hold:
+
+- it is not empty, holds no control character, and has no white space at
+  either end, a no-break space included;
+- an email holds an `@`;
+- Git accepts the pair as a signature and returns both unchanged;
+- written to a scratch Git configuration file and read back, it is equal.
+
+The round trip is what refuses a value Git would strip or that no commit
+can carry, such as `Ada <ops>`, `;`, or a name ending in `, : ; " \ '`.
+The control-character rule stands beside it because an embedded newline
+does round-trip. Initials are two or three ASCII letters or digits.
+Validation writes nothing under a repository or a home: its scratch file
+is in a `0700` directory of the call's own in the system's temporary
+directory, removed with it.
+
+**One value for each key.** A `user.name`, `user.email` or
+`manyhands.initials` that is said twice in the repository's own
+configuration, or that an included file holds, is refused as
+`recovery_required` with `repo.inspect`, at `prepare` and at `execute`,
+whichever keys the request would write. What the configuration holds is
+then not one value, and the no-op and stale-preview rules compare values;
+nothing the command can write puts it right, so the user edits the file.
+An included file that says nothing of the identity is no obstacle.
+
+**The write** is one atomic replacement under Git's own lock protocol.
+Nothing is ever restored, so nothing of another process can be erased and
+a partial write cannot exist.
+
+1. Under the repository lease, the configuration file's real path is
+   resolved, so a `.git/config` that is a symbolic link is followed: the
+   lock is beside its target and the target is what is replaced, and the
+   link stays a link. A link that names nothing is `recovery_required`. A
+   repository with no configuration file is treated as having an empty
+   one and is given one.
+2. `config.lock` is created beside the file, exclusively. If it exists
+   the call is `busy` with `request.retry`, and the lock that was there is
+   left as it is, however old. On Unix the lock is given the file's mode.
+3. Under the lock, the file is read. Its keys are checked again for the
+   one-value rule, and the identity it holds is compared with what the
+   caller observed. If they differ, the call is `external_change` and
+   nothing is written. This is the compare of the previewed values, and
+   it is made here and nowhere earlier in the domain call.
+4. The file is copied to a scratch file in a `0700` directory
+   `manyhands-identity-*` in the same Git directory, so that an include
+   with a relative path resolves from the copy as from the file. Git sets
+   the keys in the copy. Git cannot edit the lock file in place: it would
+   replace the held lock with a file of its own making, once for each
+   key.
+5. The copy is read back through Git. What it holds is what the result
+   reports, and it must equal what was asked.
+6. The copy's bytes are written to `config.lock` and synced. Immediately
+   before the rename the configuration file's bytes are compared with
+   what was read at step 3, so a program that ignores the lock is caught
+   too: `external_change`. Then the lock is renamed over the file.
+7. On any failure the lock and the scratch directory are removed and the
+   file is as it was.
+
+A change to another key that someone makes after the preview is kept. A
+change Git makes while the lock is held is refused by Git and not lost.
+
+**Preview and consent.** The preview shows the values the local
+configuration will hold, the local values now, and the effective identity
+with its sources. Its one effect is `identity_written`. A request whose
+values the configuration already holds is a no-op, `already_applied`, and
+gets no confirmation. The confirmation covers the local values only; a
+global identity that changes after the preview does not make the request
+`external_change`.
+
+**Retries.** The command has no operation and no `expected_digest`: no
+SQLite transaction can hold a write to Git configuration, so a row
+written before or after it would have a window in which it says the wrong
+thing. A retry asks the configuration itself, through `confirm::reenter`:
+it holds what the request asks, and the request is finished as a no-op;
+it holds what was previewed, and the domain is called; anything else is
+`external_change`, with the record released and `request.prepare`
+offered. A first call that fails releases its record; a retry that fails
+keeps it and offers `request.retry`. `busy` for a locked configuration
+follows the same rule. A re-entry that cannot read the configuration
+keeps its record, also when the root has gone or become bare.
+
+**Result.** The data is the name, email and initials the local
+configuration holds once the request is done. Every effect is
+`not_requested`.
 
 For `repo create` and `repo enable`, the preview always shows the primary
 branch, the identity that will author the initialization commit and where it
@@ -2737,42 +3341,147 @@ already say so.
   configuration. The preview says so. This is decision 7.
 - With none at all: `identity_required` before any effect.
 
-`IdentityDto` gains `initials` and `initials_source`.
+`IdentityDto` gains `initials` and `initials_source`. The source is one of
+`repository`, for a configured `manyhands.initials`; `derived`, from the
+effective name; and `none`. A configured value that is not valid initials
+reads as `none` with `initials` null, and nothing is derived in its place:
+that is what composing a short code does, which answers
+`initials_required`.
 
 ### Host approval
 
 A host is identified by its authority, the lower-cased host and port.
 
-**Learning what a host presents.** The CLI RFC gives `host inspect` a
-repository "for an observation", and nothing in the baseline lets C2 or D1
-see a fingerprint before a synchronization fails. `observe_host` calls
-`verify_ssh_transport` with no approval. For an unknown or changed host that
-returns the presented key and pins nothing; for a trusted one it reports the
-pin. It is a network read with no request ID. It needs the selected key, as
-the verification does.
+**Learning what a host presents: `host observe`.** The CLI RFC gives
+`host inspect` a repository "for an observation", and nothing in the
+baseline lets C2 or D1 see a fingerprint before a synchronization fails.
+`observe_host` takes the root, an optional authority and the credentials.
+The authority is a host the publication remote names; with none given it
+is the host the remote is fetched from. It calls `verify_ssh_transport`
+with no approval, in the direction the remote uses the host for, and a
+host the remote uses for both is connected to as for fetching. It is a
+network read with no request ID, it pins nothing, and it needs the
+selected key, as the verification does.
+
+Its data, `HostObservationDto`, holds `host` and `port`; `fetch` and
+`push`; `presented_algorithm` and `presented_fingerprint`, the key the
+host presented; `pinned_algorithm` and `pinned_fingerprint`, the pin
+stored for the host, or null; and `reapproval_required`. A host with no
+pin and a host whose key changed are successes; the data says which. The
+presented key is what a caller hands to `host approve` or `host replace`
+as `algorithm` and `fingerprint`.
+
+The envelope's command is `host observe`. F1's `inspect_host`, which
+reads the stored pins and connects to nothing, stays `host inspect` with
+the `host_pin` data; a consumer tells the two by the command. A failed
+observation keeps the recovery action its own read suggested and
+otherwise the code's own, decided in `outcome.rs`
+(`offered_by_observation`) with no command's rule applied, so its
+`external_change` offers no `request.prepare`:
+`repository_not_registered` and `index_unavailable` offer `index.rebuild`
+with the root, and a code whose action is `repo.inspect` offers that. An authority the remote does not name is `invalid_input`
+and opens no connection. Without a publication remote it is
+`publication_remote_required`. Its other failures are the codes of
+resolving the root, `invalid_configuration`, the transport's codes and
+`external_change`.
 
 **Approving.** The approvable host is one the selected publication remote
 names, for fetching or for pushing; those are the only hosts the
-verification connects to. `prepare` is local. It takes the authority and the
-fingerprint the caller was shown, and for a replacement the old fingerprint.
-It checks that the authority is the publication remote's and which direction
-it serves, that the old fingerprint equals the current pin, and returns the
-preview. It opens no connection.
+verification connects to. The input of `host approve` is the root, the
+authority, and the `algorithm` and `fingerprint` of the key to pin; `host
+replace` also takes `old_fingerprint`. The algorithm is in the input
+because an approval compares a whole key identity, and with a fingerprint
+alone the binding would have to connect once to learn the algorithm and
+again to approve.
 
-`execute` builds the `HostApproval` value and calls `verify_ssh_transport`
-for that direction. That function authenticates with the selected key,
-compares the presented host key with the approved one, and writes the pin
-only if they match. It fetches nothing and updates no ref.
+`prepare` is local and opens no connection. In order:
 
-- If the host presents a different key, the domain reports that approval or
-  replacement is still required, with the key actually presented. The
-  binding compares that with the approved one and returns `host_mismatch`
-  with the presented fingerprint. No pin changes.
+- An authority that is not the publication remote's is `invalid_input`.
+  The host is compared in lower case and the port must be the remote's,
+  with 22 for a remote that names none. A trailing dot, a user, a path,
+  `host:port` written in the host, brackets and a leading space are all
+  `invalid_input`. An IPv6 address is accepted as the remote writes it or
+  written out in full.
+- A host already pinned to the key the request names is a no-op,
+  `already_applied`, with no confirmation. This is answered before the
+  boundary compares digests, on a first call too, so that a call that
+  stored the pin and lost its record is not refused as stale.
+- `host approve` on a host that has another pin is
+  `host_replacement_required`, with the `host.replace` action that code
+  carries from a synchronization, whose arguments are `authority` and
+  `root` and no key. Its data is not a synchronization's. It is a shape
+  of its own, `host_replacement`: `host`, `port`, the `algorithm` and
+  `fingerprint` the request names, and `pinned_algorithm` and
+  `pinned_fingerprint`, all set. It has no `presented_*`, since a
+  `prepare` connects to nothing and saw no key of the host. The caller
+  forms the `host replace` from it: `pinned_fingerprint` is the
+  `old_fingerprint`. This is the one `prepare` refusal that carries
+  data.
+- `host replace` on a host with no pin, or with an old fingerprint that
+  is not the pin's, is `invalid_input`.
+- Otherwise the preview is given, with the effect `host_pinned` or
+  `host_pin_replaced`.
+
+`execute` builds the `HostApproval` value, whose expected pin is the pin
+the call saw and whose presented key is the key the request names, and
+calls `verify_ssh_transport` for the host's direction. That function
+authenticates with the selected key, compares the presented host key with
+the approved one, and writes the pin only if they match, in one
+transaction that also refuses a pin that moved after the call read it.
+It fetches nothing, pushes nothing and updates no ref.
+`finalize_host_trust` remains the only code that writes a pin; F2 adds no
+pin writer. The request has no operation, and its stage is `connecting`.
+
+- If the host presents a key that is neither its pin nor the approved
+  one, the domain reports that approval or replacement is still required,
+  with the key presented. The binding returns `host_mismatch` with that
+  key in `presented_*`. No pin changes.
+- If a replacement names a key the host does not present, and the host
+  presents its pin, the domain authenticates and then refuses the write
+  as a change of host trust, without the key it saw. The binding reads
+  the pin and the reapproval marker again. Where neither moved, the host
+  presented its pin, and the result is `host_mismatch` with the pin as
+  `presented_*`. Where either moved, or where the connection reached
+  another host than the one the request names because the remote was
+  pointed elsewhere in the meantime, the result is `external_change` and
+  names no key.
+- `host_mismatch` and `external_change` release the record at any
+  attempt and offer nothing and `request.prepare` respectively.
 - If the key needs unlocking and the provider cannot supply a passphrase,
-  the result is `unlock_required`. A non-interactive caller with a protected
-  key therefore cannot approve a host; the CLI RFC accepts that limit for
-  all protected-key automation.
-- Approving a host already pinned to the same key is a no-op.
+  the result is `unlock_required`.
+- A connection that drops before the host's advertisement stores nothing.
+- Every transport code a synchronization can give, a host approval can
+  give.
+
+**A call that fails after the pin was stored.** The verification stores
+the pin and then still reads the advertisement and rechecks the selection
+and the endpoints, and any of those can fail. So after every answer that
+is not final, the binding reads the pin store once more. Where the host
+is pinned to the key the request names, the answer keeps the code of what
+stopped the call and is made truthful: the outcome is `partial`, the data
+is the host and the key with `presented_*` null, the record is kept, and
+`request.retry` is offered whatever the code offers of its own. The retry
+finds its end state and is `already_applied`, with no connection. Where
+the pin store cannot be read, the answer stands as it was.
+
+A request ID reused with changed input while a host approval's record is
+`accepted` is `request_mismatch`, and `partial` whenever the host no
+longer shows what the request's preview showed. The commands have no
+operation, so no row says an attempt ran; what says nothing was done is
+that the host still reads as the digest on the record's confirmation
+holds it. Anything else is taken as a change made: another pin, a remote
+that no longer names the host, or a pin store or a confirmation that
+cannot be read. This cannot tell the request's own pin from one another
+actor stored while the record was accepted.
+
+**Retries.** The pin store is the evidence, with the consent's
+observation digest. On re-entry `confirm::reenter` asks: the host is
+pinned to the key the request names, so the request is finished as a
+no-op with no connection, whoever wrote the pin; the pin and the remote
+are what was previewed, so the host is connected to; anything else is
+`external_change` with the record released, `request.prepare` and no
+connection. A first call that fails with no pin stored releases its
+record; a retry that fails keeps it.
 
 Requiring the selected key to authenticate is stricter than the
 authentication RFC, which asks only that "the presented key is observed
@@ -2781,18 +3490,118 @@ writer. This is decision 6.
 
 ### Folder creation
 
-`create_folder` creates one directory under `docs/` in the primary worktree.
-It uses the existing no-follow directory walk, so it cannot be led outside
-`docs/` through a symbolic link. It creates no file, no commit and no
-journal row. Git does not track an empty directory, so the worktree stays
-clean.
+`create_folder` creates one directory under `docs/` in the primary
+worktree, with the directories above it that are missing, and then
+refreshes the index so that the folder is listed. It creates no file and
+no commit. Git does not track an empty directory, so the worktree stays
+clean, every reference is as it was, and an empty folder does not survive
+a clone: it exists on this machine until a document is saved in it.
 
-Before creating anything it checks, and rejects with `invalid_input`, a path
-that would exceed discovery's limits: 16 levels, or 1,024 entries under
-`docs/`. Past either limit discovery fails for the whole worktree and every
-save stops, so a folder must not be the thing that crosses it. Open ticket
-`01M4EHGE9TMR99VYZC184J9XEC` covers those limits themselves. It also checks
-what is at the path: a directory is a no-op, a file is `occupied_path`.
+The request has one operation and one journal row, the refresh's, under
+the request's operation ID. No row is made for the directory, no journal
+action or step was added, and the row is a `refresh` row. The command
+needs no confirmation, its stage is `writing`, and it carries no data.
+
+**The path.** `DocumentFolderPath::parse` is the one constructor. It
+reads no file system, and its rules are the same on every platform, so a
+path made on one is not a different folder on another. A path that is not
+valid as a folder path is `invalid_path`, as a document path that is not
+valid for its kind is for `document create`. Refused:
+
+- a path that does not begin with exactly `docs/`, compared with case, or
+  that is `docs` itself;
+- an absolute path: a leading `/` or `\`, a UNC path, a drive prefix;
+- an empty segment, and a `.` or `..` segment;
+- a name holding `\ : * ? " < > |` or any control character: Windows
+  separators, drive and alternate-data-stream colons, and characters NTFS
+  refuses;
+- a name holding one of the code points HFS+ ignores when it compares
+  names, U+200C to U+200F, U+202A to U+202E, U+206A to U+206F and U+FEFF,
+  with which `.g‌it` would be `.git` there;
+- a name ending in a full stop or a space, which Windows drops;
+- a Windows device name, `CON`, `PRN`, `AUX`, `NUL`, `COM0` to `COM9`,
+  `LPT0` to `LPT9`, `CONIN$` and `CONOUT$`, in any case and with any
+  extension;
+- `.git` in any case, and `git~1`, its NTFS short name;
+- a name over 255 bytes of UTF-8.
+
+A path that would cross a limit of discovery is `invalid_input`: more
+than 16 names below `docs`, or existing entries plus the directories to
+make that come to more than 1,024 under `docs/`. Past either limit
+discovery fails for the whole worktree and every save stops, so a folder
+must not be the thing that crosses it. The entries are counted as the
+refresh's own walk counts them. Open ticket `01M4EHGE9TMR99VYZC184J9XEC`
+covers those limits themselves.
+
+`prepare` reads only the path's text and resolves the repository. Every
+check that needs the file system is the domain's, under the repository
+lease, so a request the domain refuses was accepted first: its record is
+deleted and its envelope names an operation ID.
+
+**What the domain does**, under the lease, in order:
+
+1. It checks the registration, and refuses before anything is made on
+   what its refresh would be refused on: a pending local operation, or a
+   remote operation's reservation. The result is `recovery_required`
+   with `repo.inspect`; no refresh is offered, since one would be
+   refused. This is one question, `recovery::require_refresh_can_begin`,
+   shared with every operation that begins a row. A folder that is
+   already there is refused the same way.
+2. It observes the path, segment by segment, each looked up in its
+   parent's own listing. An entry of exactly the name is used. With no
+   such entry, one that differs only by case is `occupied_path`, on Linux
+   as on Windows and macOS: otherwise `docs/reports` would be a second
+   directory on Linux and `docs/Reports` itself elsewhere. A file at the
+   path is `occupied_path`. A symbolic link anywhere in the path, inside
+   or outside the repository, as a parent or as the folder itself,
+   dangling or not, is `invalid_path`; so is a junction on Windows.
+3. It checks the limits.
+4. It marks the registration stale, before any directory is made. A call
+   that cannot write the mark makes nothing.
+5. It makes the directories through the existing no-follow walk, which
+   opens each directory without following a link, so a link the
+   observation missed is still refused.
+6. It runs `refresh_repository` under the request's operation ID.
+
+A directory that is there is a no-op, `already_applied`, and is still
+refreshed: `discovery: current`. That keeps one path for first calls and
+retries, and means that after any `success` or `noop` the list holds the
+folder, so a folder made by hand is put in the index by asking for it.
+The cost is that a no-op takes a refresh, leaves a completed `refresh`
+row, and can be refused or left `partial` as a creation can. The product
+owner approved it on 2026-10-13.
+
+**A refresh that does not complete.** The folder is there and the index
+is behind: the result is `partial`, `discovery_pending`, with
+`discovery: pending`. The domain closes the refresh's row as rejected, so
+nothing is left pending and no other refresh is refused, the registration
+stays stale, and the record is finished. The action is `index.refresh`
+with the root, and a replay of the stored result offers it again. Two
+cases keep the record `accepted` and offer `request.retry` instead: the
+row could not be closed, and the row has a fresh heartbeat, which means
+another call of the same request is at work under it and its row must not
+be closed from under it. A failure that left directories and did not
+reach the refresh is `partial` with the code of what stopped it.
+
+**Retries.**
+
+| What the earlier call left | What the retry does |
+| --- | --- |
+| A finished record | Replays the stored result. Nothing is looked at or made, also when the folder was since replaced by a file. |
+| An accepted record whose refresh row completed | `already_applied`, `discovery: current`, answered from the row with no domain call and no second refresh. A folder removed since is not made again. |
+| An accepted record with no row, or a pending row | The domain is called again. It finds the directory and takes the refresh up under the same ID. |
+| An accepted record whose row was closed as rejected | The domain is called again and the refresh is tried again; `discovery_pending` again if it fails. |
+
+A directory is never what occupies a path, so no retry answers
+`occupied_path` for a directory its own first call made. A retry that
+stops with no row, such as one that finds the lease held while the first
+call is still making directories, keeps its record.
+
+A call that died while refreshing leaves a pending `refresh` row. The
+operation list and `operation show` give it as a refresh;
+`operation resume` answers `original_request_required` naming the folder
+request; `operation abandon` closes it and releases the request, and
+leaves the directory.
 
 The CLI RFC also lets a folder be created "in the selected item's context
 when organizing an existing item". A document move already creates the
@@ -2800,40 +3609,80 @@ directories it needs, so F2 does not add that form.
 
 **Listing.** F1's Cycle document says "F2 owns folder creation and its
 listing", while the Wave's F2 scope names only creation, and F1's later
-ruling is that a read never lists a directory. A created empty folder is
-therefore invisible to every read unless the indexer records folders.
-Decision 4 recommends that it does:
+ruling is that a read never lists a directory. A created empty folder
+would therefore be invisible to every read. So the indexer records
+folders, as decision 4 recommended:
 
-- Refresh and rebuild record each directory under `docs/` on primary in a
-  new `discovered_folders` table, with whether it is empty. Adding the table
-  marks repositories stale until refreshed, as F1's migrations did.
-- A new read, `list_document_folders`, returns them as a list with
-  `complete`.
-- `folder create` then runs the ordinary refresh and reports `discovery`. If
-  the refresh fails the result is `partial` with `discovery_pending` and the
-  `index.refresh` action.
+- The walk that collects documents also records every directory under
+  `docs/` that it listed, with whether the listing gave any entry.
+  Refresh and rebuild write them to the table `discovered_folders` in the
+  transaction that stores the context:
+
+  ```text
+  discovered_folders
+      id
+      context_id   the context, deleted with it
+      path         unique within the context
+      is_empty     0 or 1
+  ```
+
+  Adding the table marks every registration stale once, until refreshed,
+  as F1's migrations did. A folder change between a refresh's two
+  observations is a change like any other, and the refresh is tried
+  again.
+- The folders are those of the primary worktree. An item worktree's
+  `docs/` is not listed.
+- `empty` means the listing gave no entry at all. A folder that holds
+  only a folder, a file that is no document, or a link is not empty.
+- A new read, `list_document_folders`, returns
+  `{ items: [{ path, empty }], complete, index }` from the index alone.
+  The library fixes no command name for it; the golden uses
+  `folder list`.
+- `complete` is false when a directory under `docs/` could not be
+  opened, lies below the sixteenth level, was not reached before the
+  entry limit, or has a name the list cannot carry: one that is not UTF-8
+  or holds a backslash. Such a directory is left out, still read for
+  documents, and recorded as a problem at the nearest directory above it
+  whose path can be stored, passing over one whose own name ends in
+  `.md`. The document list of such a repository is not `complete`
+  either. A `.git` directory is never listed and does not make the list
+  incomplete.
 
 ### Repair and adoption
 
 `repair_item` replaces a nonconforming file with a corrected complete source,
 in an editing context, through the ordinary checkpoint.
 
-Inputs: the exact path, its observation token, and the corrected source. The
-corrected source must be a conforming document or ticket for that path. Its
-`id` is the item's identity from then on. The file must be committed on
-primary.
+Inputs of `document repair` and `ticket repair`: the root, the exact
+path, its observation token, and the corrected source. The path must be
+written as a plain relative path and must be the canonical place of the
+command's kind. The file is found by the names its directories list, so a
+path that names its file only by another case of a name finds nothing.
+The corrected source must be a conforming document or ticket for that
+path. Its `id` is the item's identity from then on. The file must be
+committed on primary. The source is written byte for byte and is not
+serialized again; a later save serializes it as it does any file.
 
 - **Adoption.** If the current file has no valid ID, the corrected source's
   ID is being assigned. The caller obtains it from `id new` and puts it in
   the source. The preview states the adoption and the ID. Because the ID is
   part of the confirmed input, the confirmation, the retry and any partial
   replay all use the same one; nothing in the library generates or
-  regenerates it. That is what "stable ID allocation" means here.
+  regenerates it. That is what "stable ID allocation" means here. The
+  editing context is named by the ID, so the same source gives the same
+  context on every call.
 - **Existing identity.** If the current file has a valid ID, the corrected
   source must keep it. If not: `not_repairable`.
-- **Ambiguous identity.** If the corrected ID already belongs to another item
-  the index knows, or the path carries a duplicate-ID problem, the result is
-  `identity_ambiguous`. Nothing is written and no context is created.
+- **Ambiguous identity.** If the corrected ID is held by something else,
+  or the index holds a duplicate-ID problem for the path, the result is
+  `identity_ambiguous`. Nothing is written and no context is created. The
+  ID is held by something else when an item of the index that is not this
+  path's has it, or when another file holds it on primary's worktree, in
+  the commit the context is cut from or stands at, or in the context
+  itself. A file holds an ID as the item it parses as or, when it is no
+  item, as the valid `id` of its front matter. The index alone is not
+  asked, because it lists two files of one ID as a problem and neither as
+  an item.
 - **Tickets.** A ticket's path contains its ID. Repair applies only when the
   corrected ID equals the directory name. A ticket directory that is not a
   ULID is `not_repairable` and stays visible as a problem.
@@ -2841,16 +3690,110 @@ primary.
   `closed_by`, the corrected source must carry the same values; if it has
   neither, the corrected source must have neither. Repair cannot close or
   reopen a ticket. If the current front matter cannot be parsed at all, a
-  corrected source with closure fields is `invalid_input`.
-- **Not repairable here:** a managed file outside its canonical path and a
-  kind that does not match its path. These stay as problems.
+  corrected source with closure fields is `invalid_input`. The values are
+  compared as the YAML writes them, with null as absent.
+- **Not repairable here,** all `not_repairable`: a path that is no
+  canonical place of the command's kind, such as `notes/x.md` or a ticket
+  path given to `document repair`; a file that is a conforming item
+  already; a file whose `manyhands_kind` names another valid kind than
+  its path's, while one that names no kind at all is a broken field and
+  is repaired; a document's path at which an item already exists under
+  another ID, which is an earlier repair, whether the index lists it or
+  only a registered item context holds it as its own item; and a context
+  that already holds another conforming item at the path. These stay as
+  problems. That a second repair of one path under another ID is refused
+  was approved by the product owner on 2026-10-13: two items for one file
+  is the confusion a repair exists to remove. A user who wants to adopt
+  again under a new ID first removes the earlier context.
 
-The domain function needs a third context intent, `Repair`. `Create` requires
-the destination to be absent and `Edit` requires the ID to exist on primary;
-a nonconforming file is neither. `Repair` creates the context from primary,
-checks the file against the expectation, writes the corrected source and
-checkpoints it with the ordinary subject for its kind. Its journal action is
-`repair_item`, which joins the published operation-action list.
+**The checks and their order.** `prepare` on the service validates the
+input alone, resolves the root, reads primary's file, makes the checks,
+and then asks the item's context. The first that fails answers:
+
+| Refused at `prepare` | Code |
+| --- | --- |
+| A path not written as a plain relative one | `invalid_path` |
+| A path that is no canonical place of the command's kind; a ticket directory that is no ULID | `not_repairable` |
+| A source that does not parse as an item of that kind at the path | `invalid_input` |
+| A `ticket repair` source that is a conforming ticket of another ID than the directory's | `not_repairable` |
+| Nothing at the path, or a path that names its file only by another case of a name | `path_not_found` |
+| A file reached through a symbolic link | `invalid_path` |
+| A token that is not the file's | `external_change` |
+| The index holds a duplicate-ID problem for the path | `identity_ambiguous` |
+| The file is a conforming item already; it names another valid kind than its path's; it holds a valid ID the source does not keep | `not_repairable` |
+| A ticket source whose closure fields are not the file's, or are present where the file has none or its front matter cannot be read | `invalid_input` |
+| The corrected ID is held by something else | `identity_ambiguous` |
+| An item is at the path under another ID | `not_repairable` |
+| The file is not the blob at primary's head | `worktree_not_clean` |
+| The item's context holds the source committed at its tip | `already_applied`, a no-op, with no confirmation |
+| The item's context holds another conforming item at the path | `not_repairable` |
+| The item's context holds anything else at the path but primary's file or the source | `external_change`, offering nothing |
+
+The last row offers nothing because no new preview can succeed while the
+context holds those bytes; see the known limits.
+
+**The preview.** Its effects, in order, are `context_created` when the
+item has no context, `id_adopted` on an adoption, `source_written` and
+`checkpoint_committed`. Its details are `root`, `path`, `id`, `adoption`
+and `primary_changed`, which is always false: primary is never written.
+The observation digest covers the path, the file's token, whether the
+file is committed on primary, whether the corrected ID is held by
+something else, and whether an item is at the path under another ID. A
+first call's `prepare` makes none of the checks the digest covers: it
+observes, and the boundary's compare answers a stale preview
+`external_change`. A confirmation presented once the item's context has
+moved on is answered by the context: a context that holds the source
+committed is a no-op with no record, and the confirmation is not used.
+
+**The domain function** needs a third context intent, `Repair`. `Create`
+requires the destination to be absent and `Edit` requires the ID to exist
+on primary; a nonconforming file is neither. Under the repository lease
+and one row of the local journal, `repair_item` asks the rules of
+primary's file, which must digest to the expectation; asks who holds the
+ID, before any context is made; makes or reuses the editing context of
+the ID the source carries; writes the source there; checkpoints it with
+the ordinary subject for its kind; and hands off to indexing as a save
+does. Its checks are made for as long as no write step is recorded on its
+row, so a repair left with nothing done is asked the rules again when it
+is entered again, and a refusal then closes its row. Its journal action
+is `repair_item`, which joins the published operation-action list. The
+steps are the existing ones of an authoring write; none was added. Three
+error kinds carry its refusals: `NotRepairable`, `AmbiguousIdentity` and
+`InvalidItemSource`.
+
+**The binding** is one for both commands. Its domain call, effects and
+commit evidence are those of an authoring save. Its result data is the
+item's ID, the path, and `adopted`. A pending operation on the repository
+is not looked for at `prepare`; the execution answers `recovery_required`
+as for every other binding.
+
+**Re-entry.** A repair is a confirmed command, entered again through
+`confirm::reenter`, and answers `SaysNothing` for a row that ended
+without its checkpoint.
+
+| The row before the call | What happens |
+| --- | --- |
+| Absent | The evidence is read; the state is observed again and compared; then the domain call. |
+| Pending, with no step or a step of making the context (`branch_observed`, `worktree_observed`) | The same. Making a context changes nothing a preview observes, so the compare is still made. This is longer than for the other confirmed commands, which stop comparing at the first recorded step. |
+| Pending, at `authoring_destination_observed` or later | No compare. The domain call completes the repair whatever primary holds by then. |
+| Completed and checkpointed, with the request's own commit in range | Finished with that commit and no domain call. |
+| Completed and checkpointed, with no own commit | The domain call, which finds nothing to do, as a save's does. |
+| Completed and not checkpointed | A refusal that was lost. The record is released: `busy` when nothing has changed, `external_change` or the standing refusal otherwise. |
+| Any commit from elsewhere to the path in range | `external_change`, no domain call. |
+| Pending under a live index-owner heartbeat | The row is left as it is: `discovery_pending`, the record kept. See Liveness. |
+
+**Resume and abandon.** A resume of a repair that wrote and did not
+commit is `original_request_required`, naming the repair's request; a
+resume of one that owes only its hand-off brings the index up to date. An
+abandon's preview and result give the action `repair_item`, the item's
+ID, its worktree and the one path that differs. The written file is left,
+and a commit the repair made is kept. The freed request ID, sent again
+with a new preview, commits the file under the same item ID.
+
+**After the cache is lost** a new preview is given of a repair whose
+context holds the corrected source uncommitted, and the new request
+commits it. The domain accepts, for a new operation, a context that
+already holds the source it is asked to write.
 
 Two consequences until the repaired item's context is merged, which needs
 promotion or closure from later Cycles:
@@ -3038,22 +3981,53 @@ produces. Per-command input schemas belong to the CLI Cycles, which define
 the input files.
 
 - Extended: `envelope` (result codes), `recovery_action` (the new actions),
-  `identity` (initials), `operation` (the `repair_item` action).
-- New and built: `preview`, `preview_effect` and a schema for each shape
-  of a preview's details; `request` and `request_operation`;
-  `progress_event`; `cancel`; `path_observation`; `relationship_check`;
-  and one mutation-data schema per command family: `document_mutation`,
+  `identity` (`initials` and `initials_source`, both required),
+  `operation` (the `repair_item` action).
+- New: `preview`, which is the repository shape of `repo create` and
+  `repo enable`, and a schema for each other shape of a preview's
+  details: `remote_removal_preview`, `repository_removal_preview`,
+  `key_deletion_preview`, `operation_abandon_preview`,
+  `identity_preview`, `host_preview` and `repair_preview`;
+  `preview_effect`, extended for the host commands and again for repair;
+  `request` and `request_operation`; `progress_event`; `cancel`;
+  `path_observation`; `relationship_check`; `host_observation`, the data
+  of `host observe`; `host_replacement`, the data of the one `prepare`
+  refusal that carries any; `document_folder` and `document_folder_list`; and
+  one mutation-data schema per command family: `document_mutation`,
   `ticket_mutation`, `remote_mutation`, `key_mutation`,
-  `operation_mutation` and `synchronization_mutation`.
-- New and planned, with the bridges: `host_observation`,
-  `document_folder`, `document_folder_list`.
+  `operation_mutation`, `synchronization_mutation`, `identity_mutation`,
+  `host_mutation` and `repair_mutation`.
+- The enumerations `repair_item` joins are in `operation`,
+  `operation_mutation` and `operation_abandon_preview`. Every `enum` of a
+  schema is tied to a closed list in Rust by a test. Four published
+  strings are closed sets in Rust and free strings in the schemas:
+  `command`, and the `state`, `step` and `algorithm` of the shapes that
+  carry them.
 - Goldens live in `tests/fixtures/mutation_v1/`, produced by the library from
   real repositories and compared byte for byte, with the same placeholder
   and sentinel rules as `read_v1`. Golden progress events live in
-  `tests/fixtures/progress_v1/`. There is one per bound command, and one
-  per result code that a fixture can produce. The codes that need a fault no
-  fixture can inject are pinned by the mapping table test instead; the plan
-  lists which.
+  `tests/fixtures/progress_v1/`. The fixture directories are exactly the
+  registered cases, in both directions.
+- Completeness is held by tests in `mutation_contract`: every bound
+  command has a golden; every schema is reachable from a published root
+  and no reference dangles; every data root describes the data of some
+  golden and every golden's data has one root; and every result code has
+  a golden, and a mutation golden, or stands in an explicit list with its
+  reason. `CODES_NO_FIXTURE_CAN_PRODUCE` has one entry,
+  `remote_unavailable`. `CODES_NO_MUTATION_GOLDEN_HAS` has five:
+  `remote_unavailable`, which no fixture can produce; `invalid_id`,
+  `public_key_unavailable` and `authority_not_found`, each a read's code
+  that no command of `execute` or `prepare` returns; and
+  `repository_inaccessible`, which a mutation returns where Git or a file
+  cannot be opened for a reason other than what is at the path, a state
+  no fixture holds on every platform. A golden may also be of one of
+  three commands `execute` does not bind: `request show`,
+  `request cancel` and `host observe`.
+- A golden of a command can be of a refusal. `item sync`, `repo sync`,
+  `host approve` and `host replace` have no golden of a request that did
+  its work: each needs a server, and its envelope is checked against its
+  schema in the live SSH cases instead. A golden that holds the test
+  server's port holds 0.
 
 All additions are within version 1 under the compatibility rule: new fields,
 new enumeration values, new codes. No outcome or effect value changes.
@@ -3066,6 +4040,31 @@ Three F1 tests assume reads and are adjusted: the one asserting that the
 actions reads suggest are the whole registry, the one asserting that a
 code's outcome follows its class, and the helper asserting that data is
 present exactly on success.
+
+### Departures from the RFCs
+
+Each of these is decided, here or in the Cycle document, and the RFC text
+is unchanged. A later Cycle that reads the RFC alone would expect the
+other answer.
+
+| RFC sentence | As built | Decided |
+| --- | --- | --- |
+| CLI: `host approve`, `host replace`: "Input exact authority and presented fingerprint". | The input carries the key's algorithm as well as its fingerprint, and so do the preview, the result, the observation and a synchronization's data. `old_fingerprint` has no algorithm; the comparison with the pin does not need one. A CLI that takes a fingerprint alone can call `host observe` first. | Task 16; [Host approval](#host-approval). |
+| Authentication: an approval is persisted after "the presented key is observed again". | The selected key must also authenticate. | Decision 6. |
+| CLI, index and Git workflow: after cache loss, when evidence cannot prove a replay safe, "return `recovery_required`". | `repository_not_registered` first. Then `external_change` for intended content that is written and not committed, `confirmation_not_found` for a confirmed command, and `already_applied` for content that is committed. Each says more exactly what the caller does next. | The Cycle document's cache-loss row; [After the cache is lost](#after-the-cache-is-lost). |
+| CLI: the free-form objects are "the envelope's `data`, `unknown_metadata` and a recovery action's `arguments`". | A fourth: `result.data` of a request, in `request show`. | Task 6. |
+| CLI: `operation show` "finds any stored operation, finished or not". | The operation ID a key import, selection or clearing names is `operation_not_found`. | Product owner, 2026-10-12. |
+| CLI: `operation_id` is "null when no operation began". | It is set on every result given after acceptance of a request that has an operation, a refusal included. | With the row above. |
+| CLI: `remote remove`: "show publication/polling effects". | Removing the publication remote is refused, `publication_remote_in_use`, so `publication_affected` is always false in a preview that is given. | [Observations](#observations). |
+| CLI: "A linked worktree maps to its repository's common Git identity". | Every mutation refuses a linked worktree root, `not_repository_root`. | [What `execute` does](#what-execute-does). |
+| Relationships: the input and configuration key `ticket_slug_prefix`. | The preview's field is `slug_prefix`. | Not decided anywhere; recorded here. |
+| CLI: `folder create` "in the selected item's context when organizing an existing item". | Primary only. | [Folder creation](#folder-creation). |
+
+One departure is from the Cycle document and not from an RFC. Its
+contract item 10 says a partial result comes with a recovery action. Two
+partial results carry none: a `request_mismatch` against a request that
+made an effect, and a key generation retained for inspection; see
+[Result codes](#result-codes).
 
 ## Changes To Existing Code
 
@@ -3115,8 +4114,10 @@ F1 changed no existing public function. F2 changes these:
      synchronizes.
    - No reservation is given, and no synchronization replayed or reported
      complete, under an operation ID whose local row was abandoned.
-7. Refresh and rebuild record folders, if decision 4 is as recommended. The
-   new table marks repositories stale once.
+7. Refresh and rebuild record folders. The walk that collects documents
+   returns the directories it listed, a refresh compares folders between
+   its two observations, and the new table `discovered_folders` marks
+   repositories stale once.
 8. Each of the three journals gained a lookup of one operation by ID:
    `recovery::lookup_operation` for the local journal,
    `remote::state::lookup_operation` for the remote one and
@@ -3130,12 +4131,16 @@ F1 changed no existing public function. F2 changes these:
    `Absent`; a remote row that was interrupted or failed reads `Pending`.
    `RepositoryService::journal_row` chooses the lookup by journal family.
    See Settling.
-9. Public enums gain variants: `ContextIntent::Repair`, the `repair_item`
-   action, new `RepositoryOperation` variants. Exhaustive matches on them
-   inside the crate are extended.
+9. Public enums gain variants: `ContextIntent::Repair`; the
+   `RepositoryOperation` variants `RepairItem`, `SetLocalIdentity`,
+   `CreateFolder` and `AbandonOperation`; the `RepositoryErrorKind`
+   variants `NotRepairable`, `AmbiguousIdentity`, `InvalidItemSource` and
+   `OperationAbandoned`; and the operation action `repair_item`, which is
+   the thirteenth local action. Exhaustive matches on them inside the
+   crate are extended.
 10. `IdentityDto` and its schema and golden gain the initials fields.
-11. The index gains the three request tables and, with item 7, the folder
-    table.
+11. The index gains the three request tables, the folder table of item 7,
+    and `key_registry_changes` in the key registry.
 12. Changes the design did not list, made while Tasks 8 to 14 and 12A
     were built.
     - The local journal (`src/repository/recovery.rs`) knows the
@@ -3185,6 +4190,48 @@ F1 changed no existing public function. F2 changes these:
       of the key phase parser `parse_phase`
       (`src/repository/keys/generation.rs`) was widened within the
       repository module.
+14. Changes made while Tasks 14C to 19 and the fix pass were built.
+    - **An operation leaves a row that is being indexed alone.**
+      `save_document`, `save_ticket`, `add_remote`, `remove_remote`,
+      `set_publication_remote`, `enable` (and so a `create_and_enable`
+      that is taken up again, which goes through it) and
+      `submit_comment` return their index-pending outcome straight after
+      they begin, with no step recorded, when their row is pending under
+      a live index-owner heartbeat. One check,
+      `RepositoryService::is_being_indexed`, is shared with
+      `repair_item`. This changes what an existing function does: a
+      second live call no longer takes the row from the first, and a
+      retry within about three seconds of a crash while indexing is
+      answered index-pending.
+    - The key registry (`src/repository/keys/registry.rs`) gains the
+      `_under` forms of its three changing functions and the table they
+      write. The public functions keep their signatures. The digest of a
+      setting, `keys::observed_setting`, is the registry's.
+    - `recovery::in_the_way` is the one question of what refuses a new
+      local operation: a remote reservation and an incompatible pending
+      row. `begin_or_reconcile` asks it where it read the reservation
+      before, so the order of its refusals is unchanged, and
+      `recovery::require_refresh_can_begin` asks it for a folder
+      creation.
+    - Discovery leaves a directory the folder list cannot carry out of
+      the index and records a problem for it, so the document list of a
+      repository that has one is not `complete`, where it was.
+    - The message of `repository_not_registered` is "The repository is
+      not registered with Manyhands." The message of
+      `not_repository_root` is "That path is inside a repository but is
+      not a root this command takes.", which is true when a mutation
+      gives it for a linked worktree root; a read's golden holds it too.
+    - `canonical::front_matter` is new, within the crate. Visibility
+      only: `read::credentials::stored_authority`, and the two fields of
+      `HostTrustSnapshot`, are readable within the repository module.
+    - Test-only failure points: `BeforeRequestRelationshipCheck`,
+      `BeforeRequestSettlementWrite`, `BeforeKeyRegistryChange`,
+      `AfterLocalIdentityName`, `AfterFolderCreation` and
+      `BeforeFolderRefreshClose`; a hook that runs while the identity
+      write holds Git's lock, `set_local_identity_lock_hook_for_testing`;
+      and a transport checkpoint, `HostTrustFinalized`, immediately after
+      the pin is stored. The SSH test server counts every socket it
+      accepts.
 
 ## Alternatives Rejected
 
@@ -3237,11 +4284,11 @@ F1 changed no existing public function. F2 changes these:
 
 | Risk | Control |
 | --- | --- |
-| The Cycle is large: the boundary, twenty-nine bindings, four new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
+| The Cycle is large: the boundary, thirty bindings, four new domain operations and the relationship writers. | Three parts with a review checkpoint after each. Decision 1 offers the split. |
 | A binding maps a partial outcome to a clean success. | Exhaustive matches; one rule for outcome and class; a test per binding family that injects a failure after the authoritative step. |
 | A retry reports a commit that is not this request's. | The commit must be a candidate: in the range since the position recorded at acceptance, a change of the request's path to the intended content, made from the state the request expected when that state was committed at acceptance, for a request that had something to commit at acceptance. It must also either have appeared during this call, or lie in a range the recorded commit bounds while the journal row read before the call shows an earlier attempt may have committed (pending, or final and checkpointed). The oldest such commit is reported; otherwise none is. A retry whose earlier attempt ended before its checkpoint is released and run as new, where the binding says such an attempt committed nothing. A failure to read Git reports nothing and leaves the record `accepted`. An identical commit made outside the library while the request's row is pending can still be reported as the request's; the content on disk is then what the request intended. |
 | Settlement deletes or finishes a record another call is using. | Every record change is conditional on the record still being `accepted` with the call's own attempt number, which each call that enters raises. A retry does delete, when it releases a record whose earlier attempt did nothing or stops with nothing in flight, and only under that condition. |
-| A body's digest lets someone with the database test guesses of a short body. | Required by the CLI RFC. Digests are salted per record, so equal bodies do not collide. The database already sits beside the repository it describes. |
+| A body's digest lets someone with the database test guesses of a short body. | Required by the CLI RFC. The intent digest is salted per record, so equal bodies do not collide there. The salt covers the intent digest only: `expected_digest` is the plain digest of a file's bytes, so the record of one save holds the unsalted digest of exactly the file the save before it wrote, and the observation digest of a confirmation is not salted either. The database already sits beside the repository it describes. |
 | Request records grow without bound. | Small rows; rejected requests leave none; decision 8. |
 | A preview is treated as a reservation. | The design never holds a lock for one; `execute` observes again and the domain operation checks under its lease. |
 | Host approval becomes a way to pin without authenticating. | The only production pin writer remains `finalize_host_trust`. A hidden testing writer exists today and stays out of the boundary. |
@@ -3260,23 +4307,28 @@ fixture's `World` builder moves from one test file to shared test support.
 New test targets: `mutation_replay`, `mutation_confirmation`,
 `mutation_contract`, `mutation_bridges`, `mutation_relationships`, and, on
 the SSH harness, `mutation_remote`. They run without the `desktop` feature.
-All but `mutation_bridges`, which comes with the bridges, exist and are in
-the native workflow's test list. `journal_rejection` is in that list too and runs
-on the five native targets, where it has passed. The native workflow takes
-long to give feedback; shortening it is ticket `01M4R1K5VRSRXFM58VQCTQ9F3W`.
+All six exist and are in the native workflow's test list.
+`journal_rejection` is in that list too and runs on the five native
+targets, where it has passed. Every test of `mutation_bridges` begins by
+sending Git's system, global, XDG and program-data configuration levels to
+a directory of the test process's own, and a test that writes
+configuration outside its repository runs in a child process. The native
+workflow takes long to give feedback; shortening it is ticket
+`01M4R1K5VRSRXFM58VQCTQ9F3W`.
 
 The scenarios the Wave's exit evidence names, and where each is proven:
 
 | Evidence | Fixture |
 | --- | --- |
-| Stale preview rejection | `repo enable` and `document repair`, with the repository changed between preview and confirmation. |
+| Stale preview rejection | `repo enable` and `document repair`, with the repository changed between preview and confirmation. Every confirmed command has a stale-preview row of its own in the conformance table. |
 | Changed-input rejection | A ticket save and a synchronization, each retried with one field changed. |
 | Accepted-consent retry | `repo enable` and `repo create`, each interrupted after the commit; the retry after a simulated hour completes without a new preview. |
 | Lost output reconciliation | A save whose result is discarded, with and without another save in between; a synchronization whose push is accepted and whose result is lost. Each retry returns the same effects and makes no second commit or push. |
-| Cache-loss recovery | The database is deleted between attempt and retry, for a create, a save, a save that died before its checkpoint, a synchronization and a confirmed command; each after the repository is registered again. |
-| No duplicate effects | Commit counts, ref values and file contents compared before and after every retry. |
-| Cancellation at safe points | Before acceptance; at a held synchronization safe point through the token and through `cancel_request` from a second thread; after the outcome is classified. |
-| Each bridge | Expected observation, retry, changed input and an injected failure for identity, host approval, folder creation and repair. |
+| Cache-loss recovery | The database is deleted between attempt and retry, for a create, a save, a save that died before its checkpoint, a synchronization, a confirmed command, a key import, a repair, `repo identity-set`, `host approve` and `host replace`, and `folder create`; each after the repository is registered again. The bridges' cases are in `tests/mutation_bridges/cache_loss.rs`, beside the other tests that keep to a Git home of their own; the host case is local and stops where a connection would begin. |
+| No duplicate effects | Commit counts, ref values and file contents compared before and after every retry. Four fault points on a save's path are driven through the boundary; the commit count is taken on the item's branch. |
+| Cancellation at safe points | Before acceptance; at a held synchronization safe point through the token and through `cancel_request` from a second thread; after the outcome is classified, through `cancel_request` and through the token: a token cancelled once the push has returned does not unsay the publication. |
+| Each bridge | Expected observation, retry, changed input and an injected failure for identity, host approval, folder creation and repair. For identity the injected failure leaves the configuration untouched; nothing is restored. |
+| A second live call | A row another call is indexing under is left as it is, for each operation the liveness rule covers. |
 | Host approval publishes nothing | Server-side push count and every local ref compared before and after. |
 | Ambiguous identity stays non-editable | Repair with an ID another item holds: no write, no context, no branch. |
 | Short-code vectors and invariance | Golden vectors; a slug compared before and after a rename, an identity change and a prefix change. |
