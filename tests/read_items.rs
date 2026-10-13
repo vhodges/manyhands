@@ -5082,6 +5082,46 @@ fn a_directory_whose_name_the_list_cannot_carry_is_left_out_and_the_list_is_not_
     assert_git_transport_uninitialized();
 }
 
+// The same under a directory whose own name ends in `.md`: the list takes a
+// problem at such a path for one about a file, which hides no folder, so
+// the problem is not said there. Unix only, as the test above is.
+#[cfg(unix)]
+#[test]
+fn a_directory_the_list_cannot_carry_under_one_named_as_a_file_leaves_the_list_incomplete() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    let names: &[&[u8]] = if cfg!(target_os = "linux") {
+        &[b"we\\ird", b"not-utf8-\xff"]
+    } else {
+        &[b"we\\ird"]
+    };
+    for name in names {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        let odd = root
+            .join("docs/notes.md/inner.md")
+            .join(OsStr::from_bytes(name));
+        fs::create_dir_all(&odd).unwrap();
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+
+        let list = enabled.service.list_document_folders(&repo).unwrap();
+
+        assert_eq!(
+            folders(&list),
+            [("docs/notes.md", false), ("docs/notes.md/inner.md", false)],
+            "{name:?}"
+        );
+        assert!(!list.complete, "{name:?}");
+
+        // Once it is gone the list is whole again.
+        fs::remove_dir_all(&odd).unwrap();
+        refresh_completely(&enabled.service, root);
+        let list = enabled.service.list_document_folders(&repo).unwrap();
+        assert!(list.complete, "{name:?}");
+    }
+    assert_git_transport_uninitialized();
+}
+
 // A row that no refresh stores is not repaired or skipped. A refresh
 // stores no path with a backslash on any platform: on Windows none can
 // be made, and elsewhere such a directory is left out.

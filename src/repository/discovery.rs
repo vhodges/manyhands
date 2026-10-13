@@ -1099,12 +1099,17 @@ fn collect_documents(
                     }
                 }
                 // Said at the nearest directory above it whose own path
-                // can be stored: a problem is stored by its path too.
+                // can be stored: a problem is stored by its path too. A
+                // directory named as a Markdown file is passed over: a
+                // read of the list takes a problem at such a path for
+                // one about a file, which hides no folder.
                 None => {
                     let above = directory
                         .ancestors()
                         .skip(1)
-                        .find(|above| folder_path(root, above).is_some())
+                        .find(|above| {
+                            folder_path(root, above).is_some_and(|path| !path.ends_with(".md"))
+                        })
                         .unwrap_or(&docs);
                     problems.push(source_problem(
                         above,
