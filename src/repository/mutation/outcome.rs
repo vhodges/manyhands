@@ -540,6 +540,22 @@ pub(crate) fn same_request(request_id: RequestId) -> RecoveryAction {
     original_request(request_id.to_string())
 }
 
+/// The action a path below a repository's root is answered with: to
+/// inspect the root the path lies in, which the action names. A read
+/// that resolves such a path suggests the same; this is for a binding
+/// that finds it without that read.
+pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
+    crate::results::absolute_path_string(root)
+        .map(|root| {
+            RecoveryAction::new(
+                RecoveryActionKind::RepoInspect,
+                [(ROOT_ARGUMENT, root.into())],
+            )
+        })
+        .into_iter()
+        .collect()
+}
+
 /// What a result names, for the actions it offers.
 pub(crate) struct Named<'a> {
     pub(crate) code: ResultCode,

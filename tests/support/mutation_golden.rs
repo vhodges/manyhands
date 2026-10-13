@@ -123,6 +123,7 @@ pub const CASES: &[&str] = &[
     "repo_enable_wrong_branch",
     "repo_identity_set",
     "repo_identity_set_external_change",
+    "repo_identity_set_not_repository_root",
     "repo_identity_set_preview",
     "repo_identity_set_preview_noop",
     "repo_remove",

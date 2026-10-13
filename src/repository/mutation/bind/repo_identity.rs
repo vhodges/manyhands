@@ -140,28 +140,37 @@ fn data(local: LocalIdentity) -> MutationDataDto {
     })
 }
 
+/// A path that is inside a repository and is not that repository's own
+/// root.
+enum Inside {
+    /// A directory below a working directory, which is named.
+    Below(PathBuf),
+    /// The root of a linked worktree, which shares the configuration of
+    /// the repository that owns it.
+    LinkedWorktree,
+}
+
 /// Whether `root` is inside a repository and is not that repository's
-/// own root: a directory below the root, or the root of a linked
-/// worktree, which shares the configuration of the repository that owns
-/// it. Every command answers such a path `not_repository_root`; the
-/// domain operation, which is given a root and no more, calls both an
-/// invalid path. What cannot be read here is left to the domain to
+/// own root. Every command answers such a path `not_repository_root`;
+/// the domain operation, which is given a root and no more, calls both
+/// an invalid path. What cannot be read here is left to the domain to
 /// refuse as what it is.
-fn is_inside_and_not_the_root(root: &Path) -> bool {
-    let Ok(selected) = std::fs::canonicalize(root) else {
-        return false;
-    };
-    let Ok(repository) = git2::Repository::discover(&selected) else {
-        return false;
-    };
+fn inside_and_not_the_root(root: &Path) -> Option<Inside> {
+    let selected = std::fs::canonicalize(root).ok()?;
+    let repository = git2::Repository::discover(&selected).ok()?;
     if repository.is_bare() {
-        return false;
+        return None;
     }
-    repository.is_worktree()
-        || repository
-            .workdir()
-            .and_then(|directory| std::fs::canonicalize(directory).ok())
-            .is_some_and(|directory| directory != selected)
+    let directory = repository
+        .workdir()
+        .and_then(|directory| std::fs::canonicalize(directory).ok())?;
+    if directory != selected {
+        Some(Inside::Below(directory))
+    } else if repository.is_worktree() {
+        Some(Inside::LinkedWorktree)
+    } else {
+        None
+    }
 }
 
 impl RepoIdentityBinding {
@@ -172,8 +181,20 @@ impl RepoIdentityBinding {
     /// a read that failed.
     fn observe(&self) -> Result<Observed, Answer> {
         let asked = ValidIdentity::of(&self.name, &self.email, &self.initials).map_err(refused)?;
-        if is_inside_and_not_the_root(&self.root) {
-            return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+        // As every other command answers it: a path below a root is
+        // offered the inspection of the root it lies in, and a linked
+        // worktree's root is offered nothing.
+        match inside_and_not_the_root(&self.root) {
+            Some(Inside::Below(directory)) => {
+                return Err(Answer {
+                    recovery: super::super::outcome::inspect_the_root_it_lies_in(&directory),
+                    ..Answer::stopped(ResultCode::NotRepositoryRoot)
+                });
+            }
+            Some(Inside::LinkedWorktree) => {
+                return Err(Answer::stopped(ResultCode::NotRepositoryRoot));
+            }
+            None => {}
         }
         let (repository, root) = identity_repository(&self.root).map_err(refused)?;
         // A key that is there twice, or in an included file, is refused

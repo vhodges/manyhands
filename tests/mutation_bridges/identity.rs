@@ -686,11 +686,19 @@ mod boundary {
         // A linked worktree's root, and a directory below the root: as
         // for every other command, a path inside a repository that is
         // not the repository's own root.
-        assert_eq!(code(&linked), ResultCode::NotRepositoryRoot);
+        // A path below the root is offered the inspection of the root
+        // it lies in, and a linked worktree's root nothing, as by every
+        // other command.
+        let at_the_worktree = desk.prepare(&set(&linked));
+        assert_eq!(at_the_worktree.code, ResultCode::NotRepositoryRoot);
+        assert!(at_the_worktree.recovery.is_empty());
         fs::create_dir(plain.root.join("below")).unwrap();
+        let below = desk.prepare(&set(&plain.root.join("below")));
+        assert_eq!(below.code, ResultCode::NotRepositoryRoot);
+        assert_eq!(recovery_actions(&below), ["repo.inspect"]);
         assert_eq!(
-            code(&plain.root.join("below")),
-            ResultCode::NotRepositoryRoot
+            below.recovery[0].arguments["root"].as_str(),
+            plain.root.canonicalize().unwrap().to_str()
         );
         assert_eq!(desk.confirmation_rows(), 0);
 
@@ -1180,6 +1188,23 @@ mod boundary {
         let done = desk.execute(REQUEST_1, &stale, request());
         assert_set(&done, Some("ae"));
         assert_golden("repo_identity_set", &plain.root, IDENTITY_SCHEMA, &done);
+
+        // A path below the root: the root it lies in is what to inspect.
+        fs::create_dir(plain.root.join("below")).unwrap();
+        let below = desk
+            .service
+            .prepare(&Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                root: plain.root.join("below"),
+                ..input(&plain.root, InitialsChange::Unchanged)
+            }))
+            .previewed();
+        assert_eq!(below.code, ResultCode::NotRepositoryRoot);
+        assert_golden(
+            "repo_identity_set_not_repository_root",
+            &plain.root,
+            IDENTITY_PREVIEW_SCHEMA,
+            &below,
+        );
 
         let noop = desk.service.prepare(&request()).previewed();
         assert_eq!(noop.outcome, Outcome::Noop);
