@@ -806,16 +806,6 @@ fn publication_remote_outcomes(outcome: &PublicationRemoteOutcome) -> usize {
     }
 }
 
-fn enable_outcomes(outcome: &EnableRepositoryOutcome) -> usize {
-    match outcome {
-        EnableRepositoryOutcome::Enabled { .. }
-        | EnableRepositoryOutcome::AlreadyEnabled
-        | EnableRepositoryOutcome::IdentityRequired
-        | EnableRepositoryOutcome::IndexPending(_)
-        | EnableRepositoryOutcome::RegistrationPending { .. } => 5,
-    }
-}
-
 fn remove_registration_outcomes(outcome: &RemoveRegistrationOutcome) -> usize {
     match outcome {
         RemoveRegistrationOutcome::Removed | RemoveRegistrationOutcome::NotRegistered => 2,
@@ -889,7 +879,6 @@ fn save_outcomes(outcome: &SaveOutcome) -> usize {
 #[test]
 fn every_domain_outcome_has_its_code() {
     use ResultCode as Code;
-    use unbound::*;
     let commit_oid = oid(1);
     let root = || std::path::PathBuf::from("/repository");
 
@@ -1026,31 +1015,6 @@ fn every_domain_outcome_has_its_code() {
     for (outcome, code) in saves {
         assert_eq!(SaveReport::of(outcome).result(Some(commit_oid)).0, code);
     }
-
-    assert_outcomes(
-        "EnableRepositoryOutcome",
-        vec![
-            (EnableRepositoryOutcome::Enabled { commit_oid }, Code::Ok),
-            (
-                EnableRepositoryOutcome::AlreadyEnabled,
-                Code::AlreadyApplied,
-            ),
-            (
-                EnableRepositoryOutcome::IdentityRequired,
-                Code::IdentityRequired,
-            ),
-            (
-                EnableRepositoryOutcome::IndexPending(IndexPending::new(commit_oid)),
-                Code::DiscoveryPending,
-            ),
-            (
-                EnableRepositoryOutcome::RegistrationPending { commit_oid },
-                Code::RegistrationPending,
-            ),
-        ],
-        enable_outcomes,
-        enable_outcome_code,
-    );
 
     assert_outcomes(
         "RemoveRegistrationOutcome",

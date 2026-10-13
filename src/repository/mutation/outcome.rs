@@ -13,10 +13,10 @@ use crate::results::{
 
 use super::{
     super::{
-        EnableRepositoryOutcome, GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationId,
-        PublicationRemoteOutcome, PublishPendingReason, RefreshOutcome, RemoteOutcome,
-        RemoveRegistrationOutcome, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-        SaveOutcome, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+        GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationId, PublicationRemoteOutcome,
+        PublishPendingReason, RefreshOutcome, RemoteOutcome, RemoveRegistrationOutcome,
+        RepositoryErrorKind, RepositoryOperation, RepositoryService, SaveOutcome,
+        SynchronizationError, SynchronizationOutcome, SynchronizationResult,
         UnregisterSharedKeyOutcome,
         bridges::abandon::stale_heartbeat,
         keys::{
@@ -327,25 +327,6 @@ pub(crate) fn key_deletion_preflight_code(preflight: &GeneratedKeyDeletionPrefli
         GeneratedKeyDeletionPreflight::NotRegistered => ResultCode::KeyNotFound,
         GeneratedKeyDeletionPreflight::ImportedKey => ResultCode::KeyNotDeletable,
         GeneratedKeyDeletionPreflight::SelectedKeyMustBeCleared => ResultCode::SelectedKeyInUse,
-    }
-}
-
-/// The codes of the outcomes of the commands that are not bound yet. Each
-/// is a `match` with no wildcard arm, as every mapping here is.
-#[cfg_attr(not(test), expect(dead_code))]
-pub(crate) mod unbound {
-    use super::*;
-
-    pub(crate) fn enable_outcome_code(outcome: &EnableRepositoryOutcome) -> ResultCode {
-        match outcome {
-            EnableRepositoryOutcome::Enabled { commit_oid: _ } => ResultCode::Ok,
-            EnableRepositoryOutcome::AlreadyEnabled => ResultCode::AlreadyApplied,
-            EnableRepositoryOutcome::IdentityRequired => ResultCode::IdentityRequired,
-            EnableRepositoryOutcome::IndexPending(_) => ResultCode::DiscoveryPending,
-            EnableRepositoryOutcome::RegistrationPending { commit_oid: _ } => {
-                ResultCode::RegistrationPending
-            }
-        }
     }
 }
 
@@ -922,11 +903,10 @@ fn recovery(
         | ResultCode::UnlockFailed
         | ResultCode::HostApprovalRequired
         | ResultCode::HostReplacementRequired
-        // Not decided: the codes only a command that is not bound yet
-        // returns. They share the arm above so that the match is complete,
-        // and for no other reason: the design's recovery table gives
-        // several of them an action, and the task that binds the command
-        // moves its codes to an arm of their own.
+        // Codes no command of `execute` or `prepare` returns: the first
+        // three are a read's, and the fourth is of `request show` and
+        // `request cancel`, which offer nothing. They share the arm
+        // above so that the match is complete, and for no other reason.
         | ResultCode::InvalidId
         | ResultCode::PublicKeyUnavailable
         | ResultCode::AuthorityNotFound
