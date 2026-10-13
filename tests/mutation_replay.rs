@@ -28,11 +28,10 @@ use serde_json::json;
 mod support;
 
 use support::{
-    golden::{self, ContractCase},
+    golden::ContractCase,
     items, mutation,
     operations::{self, OPERATION_A, OPERATION_B, OPERATION_C},
     records::*,
-    schema,
 };
 
 const REQUEST_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FQ0";
@@ -2090,29 +2089,6 @@ fn show_request_reports_an_unavailable_or_unreadable_database() {
     let envelope = world.service.show_request(request_id(REQUEST_A));
     assert_eq!(envelope.code, ResultCode::InternalError);
     assert_eq!(envelope.data, None);
-}
-
-#[test]
-fn the_mutation_goldens_are_exactly_the_registered_cases() {
-    let mut fixtures: Vec<_> = std::fs::read_dir(mutation::fixture_directory())
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect();
-    fixtures.sort();
-    let mut cases: Vec<_> = mutation::CASES
-        .iter()
-        .map(|case| format!("{case}.json"))
-        .collect();
-    cases.sort();
-    assert_eq!(fixtures, cases);
-
-    for case in mutation::CASES {
-        let path = mutation::fixture_directory().join(format!("{case}.json"));
-        let text = std::fs::read_to_string(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(golden::render(&value, &[]), text, "{path:?}");
-        schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
-    }
 }
 
 #[path = "mutation_replay/execute.rs"]

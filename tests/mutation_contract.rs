@@ -2,6 +2,8 @@
 //! schema, its data schema and its golden fixture under
 //! `tests/fixtures/mutation_v1`.
 
+use std::{collections::BTreeSet, fs, path::Path};
+
 use manyhands::{
     repository::{
         AuthoringKind, CommitIdentity, DocumentSaveInput, FailurePoint, IndexRebuildInput,
@@ -9,23 +11,27 @@ use manyhands::{
         KeyRemoveInput, KeySelectInput, Mutation, MutationDataDto, OperationAbandonInput,
         OperationId, OperationResumeInput, RelationshipWrite, RemoteAddInput, RemoteRemoveInput,
         RemoteSelectInput, RepoCreateInput, RepoRemoveInput, RepoSyncInput, SharedKeyId,
-        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput,
+        TicketCreateInput, TicketSaveInput, TicketSlugAssignInput, request_store,
     },
     results::{Envelope, Outcome, ResultCode},
 };
+use serde_json::Value;
 
 mod support;
 
 use support::{
     FailOnce,
     confirmation::Unregistered,
-    golden::ContractCase,
+    golden::{self, ContractCase},
     items::TICKET_A,
     mutation::{
         self, BODY, DOCUMENT, DOCUMENT_MOVED_PATH, DOCUMENT_NEW, DOCUMENT_NEW_PATH, DOCUMENT_PATH,
         KeyWorld, REQUEST_1, REQUEST_2, SENTINELS, TICKET_NEW, TITLE, World,
     },
+    schema,
 };
+
+const PROGRESS_SCHEMA: &str = "progress_event.schema.json";
 
 const TICKET_SCHEMA: &str = "ticket_mutation.schema.json";
 const DOCUMENT_SCHEMA: &str = "document_mutation.schema.json";
@@ -1259,5 +1265,252 @@ fn a_key_delete_and_its_preview_match_their_schemas_and_goldens() {
         "key_delete",
         KEY_SCHEMA,
         serde_json::to_value(&deleted).unwrap(),
+    );
+}
+
+// Completeness: what the contract owes as a whole, whatever any one command
+// does. Each rule reads the registered lists and the files themselves, so a
+// command, a schema, a fixture or a code that is added without its part of
+// the contract fails here.
+
+const MUTATION_GOLDENS: &str = "mutation_v1";
+
+fn file_names(directory: &Path) -> Vec<String> {
+    let mut names: Vec<_> = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+fn read_json(path: &Path) -> Value {
+    let text =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// What a set of fixtures and its registered cases differ by: a file no
+/// case registers, and a case with no file.
+fn fixture_differences(directory: &Path, cases: &[&str]) -> Vec<String> {
+    let files: BTreeSet<String> = file_names(directory).into_iter().collect();
+    let cases: BTreeSet<String> = cases.iter().map(|case| format!("{case}.json")).collect();
+    let unregistered = files
+        .difference(&cases)
+        .map(|file| format!("{file}: a fixture no case registers"));
+    let missing = cases
+        .difference(&files)
+        .map(|file| format!("{file}: a registered case with no fixture"));
+    unregistered.chain(missing).collect()
+}
+
+#[test]
+fn the_fixture_directories_are_exactly_the_registered_cases() {
+    assert_eq!(
+        fixture_differences(&mutation::fixture_directory(), mutation::CASES),
+        [""; 0],
+        "{MUTATION_GOLDENS}"
+    );
+    assert_eq!(
+        fixture_differences(
+            &mutation::progress_fixture_directory(),
+            mutation::PROGRESS_CASES
+        ),
+        [""; 0],
+        "progress_v1"
+    );
+
+    // Each is what the contract check would write, and what the published
+    // schema describes: a fixture edited by hand fails here.
+    for case in mutation::CASES {
+        let path = mutation::fixture_directory().join(format!("{case}.json"));
+        let text = fs::read_to_string(&path).unwrap();
+        let value = read_json(&path);
+        assert_eq!(golden::render(&value, &[]), text, "{path:?}");
+        schema::check_published(golden::ENVELOPE_SCHEMA, &value).unwrap();
+    }
+    for case in mutation::PROGRESS_CASES {
+        let path = mutation::progress_fixture(case);
+        let text = fs::read_to_string(&path).unwrap();
+        let value = read_json(&path);
+        assert_eq!(golden::render(&value, &[]), text, "{path:?}");
+        let events = value.as_array().unwrap();
+        assert!(!events.is_empty(), "{path:?}");
+        for event in events {
+            schema::check_published(PROGRESS_SCHEMA, event).unwrap();
+        }
+    }
+}
+
+/// The commands a golden of the mutation boundary may be of that `execute`
+/// does not bind, each with what answers it.
+const UNBOUND_COMMANDS: [(&str, &str); 3] = [
+    (
+        "request show",
+        "a read of the request store, which says what a request did",
+    ),
+    (
+        "request cancel",
+        "a signal to a running request, which records nothing of its own",
+    ),
+    (
+        "host inspect",
+        "the observation of a host's key, which host approve consents to",
+    ),
+];
+
+/// What the commands of the goldens and the commands the boundary answers
+/// differ by.
+fn command_differences(bound: &[&str], golden_commands: &BTreeSet<String>) -> Vec<String> {
+    let without = bound
+        .iter()
+        .filter(|command| !golden_commands.contains(**command))
+        .map(|command| format!("{command}: a bound command with no golden"));
+    let unknown = golden_commands
+        .iter()
+        .filter(|command| {
+            !bound.contains(&command.as_str())
+                && !UNBOUND_COMMANDS
+                    .iter()
+                    .any(|(unbound, _)| unbound == command)
+        })
+        .map(|command| format!("{command}: a golden of a command the boundary does not answer"));
+    let stale = UNBOUND_COMMANDS
+        .iter()
+        .filter(|(unbound, _)| bound.contains(unbound) || !golden_commands.contains(*unbound))
+        .map(|(unbound, _)| format!("{unbound}: listed as unbound, and is bound or has no golden"));
+    without.chain(unknown).chain(stale).collect()
+}
+
+#[test]
+fn every_bound_command_has_a_golden() {
+    let golden_commands: BTreeSet<String> = mutation::CASES
+        .iter()
+        .map(|case| {
+            let path = mutation::fixture_directory().join(format!("{case}.json"));
+            read_json(&path)["command"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    let bound = request_store::bound_commands();
+
+    assert_eq!(command_differences(&bound, &golden_commands), [""; 0]);
+}
+
+/// The schemas that describe the `data` of an answer: a read's, a
+/// command's, a preview's. With the envelope and the progress event they are
+/// the roots the contract publishes; every other schema is a part of one.
+const DATA_ROOTS: [&str; 43] = [
+    "cancel.schema.json",
+    "comment_list.schema.json",
+    "cycle_list.schema.json",
+    "dependency_tree.schema.json",
+    "document_folder_list.schema.json",
+    "document_mutation.schema.json",
+    "host_mutation.schema.json",
+    "host_observation.schema.json",
+    "host_pin.schema.json",
+    "host_pin_list.schema.json",
+    "host_preview.schema.json",
+    "identity.schema.json",
+    "identity_mutation.schema.json",
+    "identity_preview.schema.json",
+    "index_status.schema.json",
+    "item.schema.json",
+    "item_list.schema.json",
+    "key.schema.json",
+    "key_deletion_preview.schema.json",
+    "key_list.schema.json",
+    "key_mutation.schema.json",
+    "new_id.schema.json",
+    "operation.schema.json",
+    "operation_abandon_preview.schema.json",
+    "operation_list.schema.json",
+    "operation_mutation.schema.json",
+    "path_observation.schema.json",
+    "plan.schema.json",
+    "polling_status.schema.json",
+    "preview.schema.json",
+    "public_key.schema.json",
+    "relationship_check.schema.json",
+    "remote_list.schema.json",
+    "remote_mutation.schema.json",
+    "remote_removal_preview.schema.json",
+    "repair_mutation.schema.json",
+    "repair_preview.schema.json",
+    "repository_inspection.schema.json",
+    "repository_list.schema.json",
+    "repository_removal_preview.schema.json",
+    "request.schema.json",
+    "synchronization_mutation.schema.json",
+    "ticket_mutation.schema.json",
+];
+
+/// The roots that describe no `data`: every envelope, and every event a
+/// command reports while it runs.
+const OTHER_ROOTS: [&str; 2] = [golden::ENVELOPE_SCHEMA, PROGRESS_SCHEMA];
+
+/// Adds the files `schema` refers to.
+fn references(schema: &Value, found: &mut BTreeSet<String>) {
+    match schema {
+        Value::Object(object) => {
+            for (keyword, value) in object {
+                match value.as_str() {
+                    Some(file) if keyword == "$ref" => {
+                        found.insert(file.to_owned());
+                    }
+                    _ => references(value, found),
+                }
+            }
+        }
+        Value::Array(values) => values.iter().for_each(|value| references(value, found)),
+        _ => {}
+    }
+}
+
+/// What is wrong with the schema files of `directory`, given its roots: a
+/// root that is not there, a reference to a file that is not there, and a
+/// file no root reaches.
+fn schema_differences(directory: &Path, roots: &[&str]) -> Vec<String> {
+    let files: BTreeSet<String> = file_names(directory).into_iter().collect();
+    let mut problems = Vec::new();
+    let mut reached = BTreeSet::new();
+    let mut pending: Vec<String> = Vec::new();
+    for root in roots {
+        if files.contains(*root) {
+            pending.push((*root).to_owned());
+        } else {
+            problems.push(format!("{root}: a root that is not published"));
+        }
+    }
+    while let Some(file) = pending.pop() {
+        if !reached.insert(file.clone()) {
+            continue;
+        }
+        let mut referred = BTreeSet::new();
+        references(&read_json(&directory.join(&file)), &mut referred);
+        for target in referred {
+            if files.contains(&target) {
+                pending.push(target);
+            } else {
+                problems.push(format!(
+                    "{file}: refers to {target}, which is not published"
+                ));
+            }
+        }
+    }
+    problems.extend(
+        files
+            .difference(&reached)
+            .map(|file| format!("{file}: no root reaches it")),
+    );
+    problems
+}
+
+#[test]
+fn every_schema_is_reachable_from_a_published_root() {
+    let roots: Vec<&str> = DATA_ROOTS.into_iter().chain(OTHER_ROOTS).collect();
+    assert_eq!(
+        schema_differences(&schema::schema_directory(), &roots),
+        [""; 0]
     );
 }

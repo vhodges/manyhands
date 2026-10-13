@@ -26,6 +26,7 @@ pub mod git_home;
 pub mod golden;
 pub mod items;
 pub mod mutation;
+pub mod mutation_golden;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;

@@ -3,7 +3,7 @@
 //! `request cancel` does for a request that has no safe point. A
 //! synchronization's own are in the test target `mutation_remote`.
 
-use std::{fs, path::PathBuf};
+use std::fs;
 
 use manyhands::{
     repository::{
@@ -15,7 +15,6 @@ use manyhands::{
     },
     results::{Effects, Envelope, Outcome, ResultCode},
 };
-use serde_json::Value;
 
 use crate::support::{
     FailOnce,
@@ -75,15 +74,10 @@ fn assert_events_are_of(events: &[ProgressEvent], envelope: &Envelope<MutationDa
     }
 }
 
-fn progress_fixture(name: &str) -> PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/progress_v1")
-        .join(format!("{name}.json"))
-}
-
 /// Compares the events of one call with their golden fixture, as
 /// `mutation::assert_contract` compares an envelope: the fixture is the
-/// array of events under `tests/fixtures/progress_v1`.
+/// array of events under `tests/fixtures/progress_v1`, and its name is one
+/// of `mutation::PROGRESS_CASES`.
 fn assert_progress_golden(name: &str, world: &World, events: &[ProgressEvent]) {
     let value = serde_json::to_value(events).unwrap();
     let root = world.root.to_str().unwrap();
@@ -96,7 +90,7 @@ fn assert_progress_golden(name: &str, world: &World, events: &[ProgressEvent]) {
         placeholders.push((operation.as_str(), "<operation>"));
     }
     let actual = golden::render(&value, &placeholders);
-    let path = progress_fixture(name);
+    let path = mutation::progress_fixture(name);
     if golden::update_requested(
         std::env::var_os(golden::UPDATE_VARIABLE).as_deref(),
         std::env::var_os("CI").as_deref(),
@@ -395,16 +389,4 @@ fn a_cancellation_asked_of_an_accepted_synchronization_is_requested_and_not_ackn
     // Asked again, it is the same.
     assert_eq!(cancel(&world, REQUEST_1).data, envelope.data);
     assert_eq!(world.record(REQUEST_1).unwrap(), record);
-}
-
-#[test]
-fn the_progress_goldens_match_the_published_schema() {
-    for name in ["ticket_create", "index_refresh"] {
-        let text = fs::read_to_string(progress_fixture(name)).unwrap();
-        let value: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(golden::render(&value, &[]), text, "{name}");
-        for event in value.as_array().unwrap() {
-            schema::check_published(PROGRESS_SCHEMA, event).unwrap();
-        }
-    }
 }
