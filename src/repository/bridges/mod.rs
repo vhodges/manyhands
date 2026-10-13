@@ -4,3 +4,4 @@
 pub(super) mod abandon;
 pub(super) mod folder;
 pub(super) mod identity;
+pub(super) mod repair;

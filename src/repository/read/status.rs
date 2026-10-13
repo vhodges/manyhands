@@ -79,6 +79,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "save_document" => Some(OperationAction::SaveDocument),
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),
+        "repair_item" => Some(OperationAction::RepairItem),
         _ => None,
     }
 }

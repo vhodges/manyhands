@@ -374,6 +374,36 @@ fn named(directory: &Path, name: &str) -> std::io::Result<Named> {
     })
 }
 
+/// Whether `path`, written with forward slashes, names a file under
+/// `root` by the names its directories list: every segment but the last
+/// a directory, the last a file, none of them a link, and none of them
+/// there only under another case of the name.
+///
+/// A file system that folds case opens `docs/Notes/a.md` for
+/// `docs/notes/a.md`. A write under the first name would put a second
+/// path in a commit beside the first, so a caller that is to write where
+/// it read asks this of the path it was given, and gets the same answer
+/// on every platform.
+pub(crate) fn is_listed_file(root: &Path, path: &str) -> std::io::Result<bool> {
+    let mut directory = root.to_owned();
+    let mut segments = path.split('/').peekable();
+    while let Some(name) = segments.next() {
+        let last = segments.peek().is_none();
+        match named(&directory, name)? {
+            Named::Directory if !last => directory.push(name),
+            Named::Other if last => return Ok(true),
+            Named::Directory
+            | Named::Other
+            | Named::Link
+            | Named::InAnotherCase
+            | Named::Missing => {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// What the path's directories are, before anything is made.
 enum Observed {
     /// Every one is there.
@@ -622,7 +652,9 @@ enum Made {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocumentFolderPath, DocumentFolderPathProblem as Problem};
+    use std::fs;
+
+    use super::{DocumentFolderPath, DocumentFolderPathProblem as Problem, is_listed_file};
 
     fn problem(path: &str) -> Option<Problem> {
         DocumentFolderPath::parse(path).err()
@@ -657,6 +689,56 @@ mod tests {
         assert!(DocumentFolderPath::parse(&sixteen).is_ok());
         let longest = format!("docs/{}", "n".repeat(255));
         assert!(DocumentFolderPath::parse(&longest).is_ok());
+    }
+
+    #[test]
+    fn a_file_is_listed_only_under_the_names_its_directories_give_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("docs/notes")).unwrap();
+        fs::write(root.join("docs/notes/marker.md"), "text").unwrap();
+
+        assert!(is_listed_file(root, "docs/notes/marker.md").unwrap());
+        // Another case of a directory's name or of the file's: a file
+        // system that folds case would open the file all the same.
+        for path in [
+            "docs/Notes/marker.md",
+            "Docs/notes/marker.md",
+            "docs/notes/Marker.md",
+            "docs/notes/MARKER.MD",
+        ] {
+            assert!(!is_listed_file(root, path).unwrap(), "{path}");
+        }
+        // Nothing there, a directory where the file is to be, and a
+        // file where a directory is to be.
+        for path in [
+            "docs/notes/absent.md",
+            "docs/absent/marker.md",
+            "docs/notes",
+            "docs/notes/marker.md/more.md",
+        ] {
+            assert!(!is_listed_file(root, path).unwrap(), "{path}");
+        }
+    }
+
+    /// Unix only: a symbolic link is made.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_reached_through_a_link_is_not_listed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("docs/notes")).unwrap();
+        fs::write(root.join("docs/notes/marker.md"), "text").unwrap();
+        std::os::unix::fs::symlink(root.join("docs/notes"), root.join("docs/linked")).unwrap();
+        std::os::unix::fs::symlink(
+            root.join("docs/notes/marker.md"),
+            root.join("docs/notes/link.md"),
+        )
+        .unwrap();
+
+        assert!(!is_listed_file(root, "docs/linked/marker.md").unwrap());
+        assert!(!is_listed_file(root, "docs/notes/link.md").unwrap());
+        assert!(is_listed_file(root, "docs/notes/marker.md").unwrap());
     }
 
     #[test]

@@ -950,7 +950,7 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_abandon_preview.schema.json",
             "details.action",
-            OperationAction::ALL[..12]
+            OperationAction::ALL[..13]
                 .iter()
                 .map(|action| action.as_str())
                 .collect(),
@@ -958,7 +958,7 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_mutation.schema.json",
             "action",
-            OperationAction::ALL[..12]
+            OperationAction::ALL[..13]
                 .iter()
                 .map(|action| action.as_str())
                 .collect(),

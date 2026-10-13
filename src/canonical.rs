@@ -514,6 +514,18 @@ pub fn parse_item(path: &Path, source: &str) -> Result<CanonicalItem, Validation
     Ok(item)
 }
 
+/// The front matter of `source` as a mapping, read without asking that the
+/// file be a conforming item: what a repair reads of a file that is not
+/// one. `None` when there is no front matter between its delimiters, or
+/// what is there is not a YAML mapping. No field is validated.
+pub fn front_matter(source: &str) -> Option<Mapping> {
+    let (front_matter, _) = split_front_matter(Path::new(""), source).ok()?;
+    serde_yaml::from_str::<Value>(front_matter)
+        .ok()?
+        .as_mapping()
+        .cloned()
+}
+
 pub fn validate_context(sources: impl IntoIterator<Item = (PathBuf, String)>) -> ValidatedContext {
     let mut problems = Vec::new();
     let mut candidates = Vec::new();

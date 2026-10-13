@@ -37,6 +37,7 @@
         "save_document",
         "save_ticket",
         "submit_comment",
+        "repair_item",
         null
       ]
     },

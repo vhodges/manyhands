@@ -1419,6 +1419,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::SaveDocument => "save_document",
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
+        RepositoryOperation::RepairItem => "repair_item",
         _ => "other",
     }
 }
@@ -1437,6 +1438,7 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "save_document" => Some(RepositoryOperation::SaveDocument),
         "save_ticket" => Some(RepositoryOperation::SaveTicket),
         "submit_comment" => Some(RepositoryOperation::SubmitComment),
+        "repair_item" => Some(RepositoryOperation::RepairItem),
         _ => None,
     }
 }

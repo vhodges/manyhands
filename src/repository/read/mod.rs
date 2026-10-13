@@ -300,7 +300,11 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         | RepositoryErrorKind::InvalidIdentity
         | RepositoryErrorKind::MissingAuthoringTarget
         | RepositoryErrorKind::OccupiedItemPath
-        | RepositoryErrorKind::MismatchedAuthoringContext => ResultCode::InternalError,
+        | RepositoryErrorKind::MismatchedAuthoringContext
+        // What a repair is refused for. No read repairs.
+        | RepositoryErrorKind::NotRepairable
+        | RepositoryErrorKind::AmbiguousIdentity
+        | RepositoryErrorKind::InvalidItemSource => ResultCode::InternalError,
         // Configuration and remote changes.
         RepositoryErrorKind::InvalidConfiguration
         | RepositoryErrorKind::InvalidPublicationRemote

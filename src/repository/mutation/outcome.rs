@@ -67,6 +67,10 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         RepositoryErrorKind::InvalidIdentity => ResultCode::InvalidInput,
         RepositoryErrorKind::MissingAuthoringTarget => ResultCode::ItemNotFound,
         RepositoryErrorKind::OccupiedItemPath => ResultCode::OccupiedPath,
+        // What `repair_item` refuses a repair for.
+        RepositoryErrorKind::NotRepairable => ResultCode::NotRepairable,
+        RepositoryErrorKind::AmbiguousIdentity => ResultCode::IdentityAmbiguous,
+        RepositoryErrorKind::InvalidItemSource => ResultCode::InvalidInput,
         // The boundary allocates operation IDs, so a mismatch is its own
         // fault.
         RepositoryErrorKind::OperationMismatch => ResultCode::InternalError,
@@ -839,6 +843,18 @@ fn recovery(
         // request has used. The caller uses a new preview.
         | ResultCode::ConfirmationMismatch
         | ResultCode::ConfirmationUsed
+        // What a repair is refused for. A file or a path a repair is
+        // not made of stays a visible problem, and no command of this
+        // contract moves or rewrites it. An identity that is ambiguous
+        // is the user's to settle: which file is to keep the ID, or
+        // which other ID the corrected source is to carry. Neither is
+        // answered by an action. Nor is a path a repair finds no file
+        // at: the caller reads the list of nonconforming entries again.
+        // A read that found the index behind suggests its refresh
+        // itself, and that suggestion is kept.
+        | ResultCode::NotRepairable
+        | ResultCode::IdentityAmbiguous
+        | ResultCode::PathNotFound
         // The publication remote is not removed while it is selected:
         // the selection is cleared first, which is the caller's to do.
         | ResultCode::PublicationRemoteInUse
@@ -874,12 +890,9 @@ fn recovery(
         // several of them an action, and the task that binds the command
         // moves its codes to an arm of their own.
         | ResultCode::InvalidId
-        | ResultCode::PathNotFound
         | ResultCode::PublicKeyUnavailable
         | ResultCode::AuthorityNotFound
-        | ResultCode::RequestNotFound
-        | ResultCode::NotRepairable
-        | ResultCode::IdentityAmbiguous => {
+        | ResultCode::RequestNotFound => {
             if retry {
                 retry_request()
             } else {

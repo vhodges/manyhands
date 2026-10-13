@@ -743,9 +743,11 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation does. The local store records the first twelve,
+    /// What an operation does. The local store records the first thirteen,
     /// the remote store the next five and the key-material store the last
     /// two; a local synchronization is reported under its remote name.
+    /// `repair_item` is a repair of a nonconforming file: the corrected
+    /// source written and committed in the editing context of its item.
     OperationAction {
         CreateAndEnable => "create_and_enable",
         Enable => "enable",
@@ -759,6 +761,7 @@ contract_enum!(
         SaveDocument => "save_document",
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",
+        RepairItem => "repair_item",
         Poll => "poll",
         SynchronizeContext => "synchronize_context",
         SynchronizePrimary => "synchronize_primary",

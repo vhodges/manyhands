@@ -51,6 +51,7 @@ pub use bridges::folder::{
 pub use bridges::identity::{
     InitialsChange, LocalIdentity, SetLocalIdentityOutcome, SetLocalIdentityRequest,
 };
+pub use bridges::repair::RepairItemRequest;
 use coordination::{
     BootstrapLease, CacheReadGuard, CacheWriteGuard, RepositoryLease, bootstrap_lease,
     cache_read_guard, cache_write_guard, leases_are_free, repository_lease,
@@ -193,6 +194,30 @@ fn apply_ticket_write_options(unknown: &mut serde_yaml::Mapping, options: Ticket
             "deps".into(),
             serde_yaml::Value::Sequence(dependencies.into_iter().map(Into::into).collect()),
         );
+    }
+}
+
+/// The error of a save that was given the intent of a repair: a repair is
+/// made by `repair_item`, which takes a corrected source and no draft.
+fn repair_intent_error(operation: RepositoryOperation, root: &Path) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(root.to_owned()),
+        RepositoryErrorKind::OperationMismatch,
+        "a repair is made by repair_item, not by a save",
+    )
+}
+
+/// Refuses a save that was given the intent of a repair, before its
+/// operation begins.
+fn refuse_repair_intent(
+    intent: ContextIntent,
+    operation: RepositoryOperation,
+    root: &Path,
+) -> Result<(), RepositoryError> {
+    match intent {
+        ContextIntent::Create | ContextIntent::Edit => Ok(()),
+        ContextIntent::Repair => Err(repair_intent_error(operation, root)),
     }
 }
 
@@ -471,6 +496,11 @@ pub enum AuthoringKind {
 pub enum ContextIntent {
     Create,
     Edit,
+    /// The context of a nonconforming file that `repair_item` corrects.
+    /// The item's ID need not be absent from primary, as a creation
+    /// requires, nor be an item's there, as an edit requires: the file
+    /// that will hold it is on primary and is not yet an item.
+    Repair,
 }
 
 #[derive(Clone)]
@@ -920,6 +950,7 @@ pub enum RepositoryOperation {
     AbandonOperation,
     SetLocalIdentity,
     CreateFolder,
+    RepairItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -958,6 +989,18 @@ pub enum RepositoryErrorKind {
     MissingAuthoringTarget,
     OccupiedItemPath,
     MismatchedAuthoringContext,
+    /// A repair was asked of a path, or of a file, that `repair_item`
+    /// does not repair: a path that is no canonical place of the item's
+    /// kind, a file that is a conforming item already, one whose kind is
+    /// another's, or one that holds a valid ID the corrected source does
+    /// not keep.
+    NotRepairable,
+    /// The ID a repair would give its item is held by another item, or
+    /// the file is one of several that hold one ID.
+    AmbiguousIdentity,
+    /// The corrected source of a repair is not a conforming item of its
+    /// path, or changes a ticket's closure fields.
+    InvalidItemSource,
     RollbackIncomplete,
     Io,
     Sqlite,
@@ -1794,6 +1837,7 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveDocument;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
+        refuse_repair_intent(request.target.intent, operation, &root)?;
         let source_target_path = request.source_path.clone().unwrap_or_default();
         let paths = [
             source_target_path.as_path(),
@@ -1919,6 +1963,10 @@ impl RepositoryService {
                         RepositoryErrorKind::MissingAuthoringTarget,
                         "editing a document requires its source path",
                     ));
+                }
+                // Refused before the operation began.
+                (ContextIntent::Repair, _) => {
+                    return Err(repair_intent_error(operation, &context.root));
                 }
                 (ContextIntent::Edit, Some(source)) => {
                     let expected_source =
@@ -2204,6 +2252,7 @@ impl RepositoryService {
         let operation = RepositoryOperation::SaveTicket;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
+        refuse_repair_intent(request.target.intent, operation, &root)?;
         self.reject_pending_synchronization_target(
             &root,
             &request.target.kind,
@@ -2365,6 +2414,10 @@ impl RepositoryService {
                     ticket.body = request.draft.body;
                     apply_ticket_write_options(&mut ticket.unknown, options);
                     ticket
+                }
+                // Refused before the operation began.
+                ContextIntent::Repair => {
+                    return Err(repair_intent_error(operation, &context.root));
                 }
             };
             let serialized =

@@ -337,6 +337,9 @@ impl TicketBinding {
                     unknown,
                 }
             }
+            // No ticket binding is made with it: a repair has a binding
+            // of its own, and a source in place of a draft.
+            ContextIntent::Repair => return false,
         };
         intended == *file
     }
@@ -737,6 +740,8 @@ impl save::Save for TicketBinding {
                     .unwrap_or_default();
                 self.check_relationships(service, &repository, current, Checking::Reentry)?;
             }
+            // No ticket binding is made with it; see `holds`.
+            ContextIntent::Repair => return Err(Answer::stopped(ResultCode::InternalError)),
         }
         Ok(())
     }
