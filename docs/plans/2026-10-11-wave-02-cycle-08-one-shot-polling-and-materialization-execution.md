@@ -10,6 +10,88 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 4 Blocked Before Production — 2026-10-13T19:53:29Z
+
+Fresh implementer assigned **Task 4 only**, inline, no subagents, in the assigned
+ticket worktree and branch. Verified clean base
+`34b97c178a48b39b6ae32e30de52ff5722d1dd06`. Controller's resume preflight and
+approved Task 0 gate are trusted; no repeated fetch/rebase or characterization.
+Current AGENTS, approved design/implementation plan, ledger, ticket, poll tests,
+synchronization helpers and discovery rule were inspected before production work.
+
+### Prior Task 3 Reviews Accepted
+
+Controller reports cumulative Task 3 approval after the atomic-absence guard fix,
+through this Task 4 base, for range
+`6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a..34b97c178a48b39b6ae32e30de52ff5722d1dd06`:
+
+- Spec `ses_ec9b35ee6ffeBdb0HkkfCCp9R4`: approved cumulative corrected work.
+- Quality `ses_ec9b0a1d9ffeWP162PBxjUK6l4`: approved cumulative corrected work;
+  previous Important atomic-absence blocker resolved.
+- Ticket's prior Task 3 review checkboxes now reflect that controller report.
+- **Deferred Task 2 minor remains explicit for final Cycle review:** direct-SQL
+  poll-kind immutability regression suggested by quality review
+  `ses_ec9e9909cffeS4kt0Z0ENmyjss`. It was not addressed in this blocked task.
+
+### Meaningful RED And Confirmed Contract Contradiction
+
+Before any production code or visibility change, added temporary test
+`repository::remote::poll::tests::rejected_executable_item_tree_is_not_active_in_existing_discovery`
+to `src/repository/remote/poll_tests.rs`. It tests the required two-way discovery
+agreement against existing discovery, without needing a new poll placeholder:
+
+1. Initialize a real local repository with initial branch `main` and explicit
+   fixture signature (`Test`, `test@example.invalid`, timestamp 0).
+2. Build the document blob and nested Git trees in memory. Source is
+   `---\nmanyhands_managed: true\nmanyhands_kind: document\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Fixture document\n---\n`.
+   Insert it at `docs/document.md` with mode **100755**, assert that stored mode,
+   and create the fixture commit on HEAD.
+3. Create branch `manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAV` at that commit,
+   then a registered worktree named `01ARZ3NDEKTSV4RRFFQ69G5FAV` at the exact
+   `.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV` path with
+   `WorktreeAddOptions::reference`. Verify checked-out document bytes.
+4. Write root `.manyhands/config.toml` with
+   `format_version = 1\nprimary_branch = "main"\n`.
+5. Call existing `discovery::observe_root`; assert `active_contexts.is_empty()`
+   because the approved poll rule rejects executable item entries.
+
+`devenv shell -- cargo test --locked --lib remote::poll` exited **101**:
+**8 passed, 1 failed, 523 filtered, 0 ignored**. Failure was the final assertion,
+not setup or compilation: **"executable item rejected by the approved poll rule
+was accepted as an active context"**. The real Git tree/worktree was created
+successfully. No transport, fake, sleep, developer key or global Git mutation.
+
+Source explains the mismatch: `discovery.rs::collect_source` accepts regular
+files without excluding executable permissions; `collect_authoring_item_sources`
+and `authoring_item_matches` then accept this valid document. The item-only
+predicate has no file-mode input. In contrast, design Local Stage/Conformity
+requires regular **non-executable** sources, and Task 4 explicitly requires every
+rejected tree checked out as a worktree to be **not active** in existing discovery.
+Task 4 also limits shared helpers/rules to visibility widening with unchanged
+bodies and synchronization contracts. These requirements cannot all hold for
+the reproduced executable tree. This is not an amendment to D1–D4 or Task 0.
+
+### Stop And Handoff
+
+Stopped for owner amendment as explicitly instructed. No Task 4 production API,
+classification, fast-forward, helper visibility or later-task work was implemented.
+The temporary probe was removed with a patch after recording RED;
+`git diff --exit-code -- src tests Cargo.toml Cargo.lock devenv.lock` confirms
+the Rust/tests/dependency tree remains byte-for-byte at the reviewed Task 4 base.
+The probe is reproducible from the steps above; it is not committed as a failing
+permanent test or weakened to green. No Task 4 GREEN or full Rust gate is claimed;
+this is a bookkeeping-only blocker checkpoint, not a Rust submission.
+
+Task 4 remains unticked and blocked, ticket open. Required owner amendment must
+reconcile executable-tree rejection and two-way discovery agreement with the
+visibility-only restriction before implementation resumes. Native evidence and
+the deferred Task 2 minor remain open. Canonical Node-generated comment
+`01M4VD7G36JQ3T0D3VXEX7YDTQ` records prior approvals and the blocker.
+
+Only this ledger, the existing open ticket and that comment belong to the local
+blocker checkpoint. Its exact head is returned after committing; the prescribed
+feature commit is not appropriate because no Task 4 feature was delivered.
+
 ## Planning Authorization And Preflight — 2026-10-11
 
 The owner asked for the Wave 02 Cycle 08 Cycle document, design and detailed
