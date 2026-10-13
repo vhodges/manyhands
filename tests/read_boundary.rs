@@ -508,6 +508,8 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
         1_000,
     );
     items::create_document_context(&enabled.service, root, items::DOCUMENT_B, "docs/b.md");
+    // A folder, which the folder list answers with from the index.
+    std::fs::create_dir_all(root.join("docs/folder")).unwrap();
     items::write(
         root,
         "docs/marker.md",
@@ -567,6 +569,11 @@ fn every_item_read(
     let ticket = items::ticket_path(items::TICKET_A);
     let outcome = |result: Result<(), ReadError>| result.map_err(|error| error.code());
     vec![
+        outcome(
+            service
+                .list_document_folders(repo)
+                .map(|list| assert_eq!(list.items.len(), 1)),
+        ),
         outcome(service.list_documents(repo).map(drop)),
         outcome(
             service
@@ -749,6 +756,7 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
     assert_eq!(
         outcomes,
         [
+            Ok(()),
             Ok(()),
             Ok(()),
             Ok(()),

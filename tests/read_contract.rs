@@ -1132,6 +1132,35 @@ fn document_list_matches_its_schema_and_golden() {
 }
 
 #[test]
+fn document_folder_list_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    // `docs/notes` holds a document. These hold nothing, and a folder.
+    fs::create_dir_all(fixture.root.join("docs/empty")).unwrap();
+    fs::create_dir_all(fixture.root.join("docs/outer/inner")).unwrap();
+    items::refresh_completely(&enabled.service, &fixture.root);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    let envelope = Envelope::read_success("folder list", repo.scope(), list.clone());
+
+    assert_eq!(list.items.len(), 4);
+    let mut placeholders = vec![(repo.root().to_str().unwrap(), "<repository>")];
+    if let Some(refreshed_at) = &list.index.refreshed_at {
+        placeholders.push((refreshed_at, "<refreshed-at>"));
+    }
+    golden::assert_contract(
+        &ContractCase {
+            name: "document_folder_list",
+            data_schema: Some("document_folder_list.schema.json"),
+            placeholders: &placeholders,
+            sentinels: &[enabled.data_directory.path().to_str().unwrap()],
+        },
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn document_show_matches_its_schema_and_golden() {
     let (fixture, enabled) = items::contract_repository();
     let repo = enabled.service.resolve_repository(&fixture.root).unwrap();

@@ -48,16 +48,17 @@ pub(crate) use credentials::stored_authority;
 pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
     ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,
-    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, HostPinDto,
-    HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexProblemDto, IndexState,
-    IndexStateDto, IndexStatusDto, IndexStatusState, InitialsSource, ItemContextDto,
-    ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership,
-    KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto, OperationAction, OperationDto,
-    OperationFamily, OperationListDto, OperationNextAction, OperationOwner, PathObservationDto,
-    PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto, ProblemDto, PublicKeyDto,
-    ReadinessDto, ReadinessReasonCode, ReadinessReasonDto, ReadinessState, RelationshipCheckDto,
-    RelationshipRejectionDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
-    RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
+    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderDto,
+    DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
+    IdentitySource, IndexProblemDto, IndexState, IndexStateDto, IndexStatusDto, IndexStatusState,
+    InitialsSource, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto,
+    KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto,
+    OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+    OperationOwner, PathObservationDto, PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto,
+    ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto,
+    ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, RemoteDto, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode,
+    UnplannableReasonDto, UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{is_plain_relative, observe_in_context};

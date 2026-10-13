@@ -4795,3 +4795,331 @@ fn a_refresh_that_stops_at_its_entry_limit_leaves_the_lists_incomplete() {
     assert!(enabled.service.list_documents(&repo).unwrap().complete);
     assert_git_transport_uninitialized();
 }
+
+/// The `(path, empty)` of every folder a list holds, in its order.
+fn folders(list: &manyhands::repository::DocumentFolderListDto) -> Vec<(&str, bool)> {
+    list.items
+        .iter()
+        .map(|folder| (folder.path.as_str(), folder.empty))
+        .collect()
+}
+
+#[test]
+fn the_folder_list_is_every_directory_under_docs_with_whether_it_is_empty() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    // Nothing has been stored yet, and there is no `docs` either.
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(folders(&list), []);
+    assert!(list.complete);
+
+    write(root, "docs/top.md", &document_source(DOCUMENT_A, "A", ""));
+    write(
+        root,
+        "docs/full/b.md",
+        &document_source(DOCUMENT_B, "B", ""),
+    );
+    fs::create_dir_all(root.join("docs/empty")).unwrap();
+    fs::create_dir_all(root.join("docs/full/inner")).unwrap();
+    // A file that is no document is something in the folder all the same.
+    write(root, "docs/other/notes.txt", "plain\n");
+    // A folder that holds only a folder is not empty.
+    fs::create_dir_all(root.join("docs/outer/leaf")).unwrap();
+    // Not under `docs`.
+    fs::create_dir_all(root.join("elsewhere/inner")).unwrap();
+    refresh_completely(&enabled.service, root);
+
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(
+        folders(&list),
+        [
+            ("docs/empty", true),
+            ("docs/full", false),
+            ("docs/full/inner", true),
+            ("docs/other", false),
+            ("docs/outer", false),
+            ("docs/outer/leaf", true),
+        ]
+    );
+    assert!(list.complete);
+    assert_eq!(list.index.state, IndexState::Current);
+    // The list is of the primary worktree: an item worktree is a whole
+    // checkout with a `docs` of its own, and none of it is listed.
+    create_document_context(&enabled.service, root, DOCUMENT_C, "docs/drafts/c.md");
+    fs::create_dir_all(context_worktree(root, DOCUMENT_C).join("docs/only-there")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert!(
+        folders(&list)
+            .iter()
+            .all(|(path, _)| !path.contains("only-there") && !path.contains("drafts")),
+        "{list:?}"
+    );
+    assert_git_transport_uninitialized();
+}
+
+// A read never lists a directory: what the list holds is what the last
+// refresh stored, whatever is on disk now.
+#[test]
+fn the_folder_list_is_answered_from_the_index_and_says_when_that_is_stale() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    fs::create_dir_all(root.join("docs/kept")).unwrap();
+    fs::create_dir_all(root.join("docs/removed")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let stored = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(
+        folders(&stored),
+        [("docs/kept", true), ("docs/removed", true)]
+    );
+
+    // The repository moves on: a folder is made, one is removed and one is
+    // no longer empty.
+    fs::create_dir_all(root.join("docs/later")).unwrap();
+    fs::remove_dir(root.join("docs/removed")).unwrap();
+    fs::write(root.join("docs/kept/notes.txt"), "plain\n").unwrap();
+    assert!(enabled.service.list_document_folders(&repo).unwrap() == stored);
+
+    // A refresh that must be tried again leaves the index stale. The list
+    // is still what the index has, and says so.
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    let document = root.join("docs/a.md");
+    enabled
+        .service
+        .set_observation_hook_for_testing(move || fs::write(document, "plain\n").unwrap());
+    let retried = support::operation_id();
+    assert!(matches!(
+        refresh_as(&enabled.service, root, retried),
+        RefreshOutcome::RetryRequired { .. }
+    ));
+    let stale = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(stale.index.state, IndexState::Stale);
+    assert_eq!(stale.index.refreshed_at, stored.index.refreshed_at);
+    assert_eq!(folders(&stale), folders(&stored));
+
+    // A refresh that did not complete is taken up under its own ID.
+    assert!(matches!(
+        refresh_as(&enabled.service, root, retried),
+        RefreshOutcome::Refreshed { .. }
+    ));
+    let current = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(current.index.state, IndexState::Current);
+    assert_eq!(
+        folders(&current),
+        [("docs/kept", false), ("docs/later", true)]
+    );
+    assert_git_transport_uninitialized();
+}
+
+// A folder that appears while a refresh observes is a change like any
+// other: the refresh stores nothing of a context it saw two ways.
+#[test]
+fn a_folder_made_while_a_refresh_observes_makes_the_refresh_try_again() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    fs::create_dir_all(root.join("docs/first")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+
+    let second = root.join("docs/second");
+    enabled
+        .service
+        .set_observation_hook_for_testing(move || fs::create_dir_all(second).unwrap());
+    assert!(matches!(
+        refresh(&enabled.service, root),
+        RefreshOutcome::RetryRequired { .. }
+    ));
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(folders(&list), [("docs/first", true)]);
+    assert_git_transport_uninitialized();
+}
+
+// Discovery reads at most 1,024 entries under `docs` and goes sixteen
+// directories deep. Past either it stops, stores where, and the list
+// says it is not whole.
+#[test]
+fn the_folder_list_is_not_complete_when_discovery_met_a_limit() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    fs::create_dir_all(root.join("docs/a")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    assert!(
+        enabled
+            .service
+            .list_document_folders(&repo)
+            .unwrap()
+            .complete
+    );
+
+    // The entry limit.
+    fs::create_dir_all(root.join("docs/many")).unwrap();
+    for entry in 0..1025 {
+        fs::write(root.join(format!("docs/many/{entry:04}.txt")), "").unwrap();
+    }
+    refresh_completely(&enabled.service, root);
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert!(!list.complete);
+    assert_eq!(list.index.state, IndexState::Current);
+    // What was listed before the limit is there, and the folder the
+    // limit was met in is known to hold something.
+    assert!(folders(&list).contains(&("docs/many", false)), "{list:?}");
+    fs::remove_dir_all(root.join("docs/many")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert!(list.complete);
+    assert_eq!(folders(&list), [("docs/a", true)]);
+
+    // The depth limit: sixteen levels are listed, a seventeenth is not.
+    let levels: Vec<String> = (1..=17).map(|level| format!("l{level:02}")).collect();
+    fs::create_dir_all(root.join("docs").join(levels.join("/"))).unwrap();
+    refresh_completely(&enabled.service, root);
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    assert!(!list.complete);
+    let sixteen = format!("docs/{}", levels[..16].join("/"));
+    let seventeen = format!("docs/{}", levels.join("/"));
+    assert!(
+        folders(&list).contains(&(sixteen.as_str(), false)),
+        "{list:?}"
+    );
+    assert!(
+        list.items.iter().all(|folder| folder.path != seventeen),
+        "{list:?}"
+    );
+
+    // A problem that hides no folder of the primary worktree leaves the
+    // list whole: one file, and anything in an item worktree.
+    fs::remove_dir_all(root.join("docs/l01")).unwrap();
+    refresh_completely(&enabled.service, root);
+    assert!(
+        enabled
+            .service
+            .list_document_folders(&repo)
+            .unwrap()
+            .complete
+    );
+    insert_problem(enabled.data_directory.path(), "docs/a/x.md", "source");
+    insert_problem(
+        enabled.data_directory.path(),
+        ".manyhands/worktrees",
+        "source",
+    );
+    insert_problem(enabled.data_directory.path(), "docs/a", "context");
+    assert!(
+        enabled
+            .service
+            .list_document_folders(&repo)
+            .unwrap()
+            .complete
+    );
+    insert_problem(enabled.data_directory.path(), "docs/a", "source");
+    assert!(
+        !enabled
+            .service
+            .list_document_folders(&repo)
+            .unwrap()
+            .complete
+    );
+    assert_git_transport_uninitialized();
+}
+
+// A row that is not what a refresh stores is not repaired or skipped.
+#[test]
+fn a_stored_folder_that_is_not_under_docs_fails_the_read() {
+    for path in ["notes", "docs", "docs/../etc", "/etc", "docs//a", "docs\\a"] {
+        let (fixture, enabled) = enabled();
+        let root = &fixture.root;
+        fs::create_dir_all(root.join("docs/a")).unwrap();
+        refresh_completely(&enabled.service, root);
+        let repo = enabled.service.resolve_repository(root).unwrap();
+        index(enabled.data_directory.path())
+            .execute("UPDATE discovered_folders SET path = ?1", [path])
+            .unwrap();
+        let error = enabled.service.list_document_folders(&repo).unwrap_err();
+        assert_eq!(error.code(), ResultCode::InternalError, "{path}");
+        let text = serde_json::to_string(&error.to_envelope::<Value>("folder list")).unwrap();
+        assert!(!text.contains("etc"), "{text}");
+    }
+    assert_git_transport_uninitialized();
+}
+
+// An index from the build before folders were recorded has no table for
+// them. Opening it adds the table and marks every registration stale, as
+// the migrations of the item reads did.
+#[test]
+fn an_index_from_before_folders_lists_none_and_says_it_is_stale_until_refreshed() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(root, "docs/a.md", &document_source(DOCUMENT_A, "A", ""));
+    fs::create_dir_all(root.join("docs/folder")).unwrap();
+    refresh_completely(&enabled.service, root);
+    let support::EnabledRepository {
+        service,
+        data_directory,
+    } = enabled;
+    let repo = service.resolve_repository(root).unwrap();
+    let current = service.list_document_folders(&repo).unwrap();
+    assert_eq!(current.index.state, IndexState::Current);
+    assert_eq!(folders(&current), [("docs/folder", true)]);
+    drop(service);
+    index(data_directory.path())
+        .execute_batch("DROP TABLE discovered_folders")
+        .unwrap();
+    assert_eq!(refresh_required(data_directory.path()), [false]);
+
+    let service = RepositoryService::open_at(data_directory.path()).unwrap();
+
+    assert_eq!(refresh_required(data_directory.path()), [true]);
+    let repo = service.resolve_repository(root).unwrap();
+    let migrated = service.list_document_folders(&repo).unwrap();
+    assert_eq!(folders(&migrated), []);
+    assert_eq!(migrated.index.state, IndexState::Stale);
+    assert_eq!(migrated.index.refreshed_at, current.index.refreshed_at);
+    // What the index held is still listed, and says the same.
+    let documents = service.list_documents(&repo).unwrap();
+    assert_eq!(ids(&documents), [Some(DOCUMENT_A)]);
+    assert_eq!(documents.index.state, IndexState::Stale);
+
+    refresh_completely(&service, root);
+    let refreshed = service.list_document_folders(&repo).unwrap();
+    assert_eq!(refreshed.index.state, IndexState::Current);
+    assert_eq!(folders(&refreshed), [("docs/folder", true)]);
+    // A rebuild stores them as a refresh does.
+    fs::create_dir_all(root.join("docs/rebuilt/inner")).unwrap();
+    rebuild(&service, root);
+    let rebuilt = service.list_document_folders(&repo).unwrap();
+    assert_eq!(rebuilt.index.state, IndexState::Current);
+    assert_eq!(
+        folders(&rebuilt),
+        [
+            ("docs/folder", true),
+            ("docs/rebuilt", false),
+            ("docs/rebuilt/inner", true)
+        ]
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn the_folder_list_of_a_registration_that_is_gone_or_degraded_fails_as_every_list_does() {
+    let never = never_refreshed_repository();
+    let repo = never
+        .service
+        .resolve_repository(&never.fixture.root)
+        .unwrap();
+    let list = never.service.list_document_folders(&repo).unwrap();
+    assert_eq!(folders(&list), []);
+    assert_eq!(list.index.state, IndexState::NeverRefreshed);
+
+    let (fixture, enabled) = enabled();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let (_directory, degraded) = degraded_service(enabled);
+    assert_eq!(
+        degraded.list_document_folders(&repo).unwrap_err().code(),
+        ResultCode::IndexUnavailable
+    );
+    assert_git_transport_uninitialized();
+}

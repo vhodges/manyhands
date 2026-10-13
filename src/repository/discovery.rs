@@ -60,8 +60,30 @@ pub(super) struct RootObservation {
     pub(super) sources: Vec<(PathBuf, String)>,
     pub(super) validation: canonical::ValidatedContext,
     pub(super) items: Vec<ObservedItem>,
+    /// Every directory under `docs/` of this worktree that the
+    /// observation listed, in path order; see `ObservedFolder`.
+    pub(super) folders: Vec<ObservedFolder>,
     pub(super) problems: Vec<RootObservationProblem>,
     pub(super) active_contexts: Vec<ActiveContextObservation>,
+}
+
+/// A directory under `docs/` that an observation listed.
+///
+/// `path` is relative to the worktree, begins with `docs/` and is
+/// written with forward slashes on every platform. `empty` says the
+/// listing gave no entry of any kind: no file, no directory and no link.
+///
+/// A directory is here only when it was listed. One the observation did
+/// not read is left out, and a problem at `docs` or under it says the
+/// observation was not whole: a directory that could not be opened, one
+/// below the depth the observation goes to, and every directory it had
+/// not reached when it met its limit on entries. A directory named
+/// `.git` is never listed, as it is never read for documents. Nor is one
+/// whose name is not UTF-8: the index stores paths as text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ObservedFolder {
+    pub(super) path: String,
+    pub(super) empty: bool,
 }
 
 #[derive(Debug)]
@@ -298,7 +320,8 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         }
     };
     let mut sources = Vec::new();
-    collect_root_sources(root, &mut sources, &mut problems);
+    let mut folders = Vec::new();
+    collect_root_sources(root, &mut sources, &mut folders, &mut problems);
     let mut validation = canonical::validate_context(sources.clone());
     let mut items = observe_items(repository, root, &sources, &validation);
     let active_contexts = match configuration {
@@ -327,6 +350,7 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         sources,
         validation,
         items,
+        folders,
         problems,
         active_contexts,
     }
@@ -907,7 +931,7 @@ fn collect_authoring_item_sources(
             // bounded by the whole-tree limits: a document beyond them is not
             // found, and the context is rejected as missing its item.
             let mut documents = Vec::new();
-            collect_documents(root, &mut documents, &mut Vec::new());
+            collect_documents(root, &mut documents, &mut Vec::new(), &mut Vec::new());
             documents.retain(|(path, source)| {
                 canonical::parse_item(path, source)
                     .is_ok_and(|item| canonical_item_id(&item) == item_id)
@@ -928,9 +952,10 @@ fn collect_authoring_item_sources(
 fn collect_root_sources(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
+    folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
-    collect_documents(root, sources, problems);
+    collect_documents(root, sources, folders, problems);
     collect_tickets(root, sources, problems);
     collect_comments(root, sources, problems);
     collect_managed_out_of_path_sources(root, sources, problems);
@@ -945,8 +970,11 @@ fn collect_managed_out_of_path_sources(
     let mut directories = vec![(root.to_owned(), 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
-        let (directory_entries, overflowed) =
-            read_marker_directory(&directory, &mut entries, problems);
+        let DirectoryListing {
+            entries: directory_entries,
+            overflowed,
+            empty: _,
+        } = read_marker_directory(&directory, &mut entries, problems);
         for entry in directory_entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
@@ -1034,9 +1062,14 @@ fn yaml_declares_managed_marker(front_matter: &str) -> bool {
         == Some(true)
 }
 
+/// Collects the documents under `docs/`, and with them every directory
+/// there that was listed; see `ObservedFolder`. The one walk gives both,
+/// so a folder is in the index exactly when the refresh that stored the
+/// documents saw it.
 fn collect_documents(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
+    folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
     let docs = root.join("docs");
@@ -1046,8 +1079,18 @@ fn collect_documents(
     let mut directories = vec![(docs, 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
-        let (directory_entries, overflowed) =
-            read_document_directory(&directory, &mut entries, problems);
+        let DirectoryListing {
+            entries: directory_entries,
+            overflowed,
+            empty,
+        } = read_document_directory(&directory, &mut entries, problems);
+        // `docs` itself is no folder under `docs/`.
+        if depth > 0
+            && let Some(empty) = empty
+            && let Some(path) = folder_path(root, &directory)
+        {
+            folders.push(ObservedFolder { path, empty });
+        }
         for entry in directory_entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
@@ -1079,9 +1122,22 @@ fn collect_documents(
             }
         }
         if overflowed {
-            return;
+            break;
         }
     }
+    folders.sort_by(|left, right| left.path.cmp(&right.path));
+}
+
+/// A directory's path as the index stores it: relative to the worktree,
+/// its native components joined with forward slashes. `None` for one
+/// that is not under `root` or has a component that is not UTF-8.
+fn folder_path(root: &Path, directory: &Path) -> Option<String> {
+    let relative = directory.strip_prefix(root).ok()?;
+    let components = relative
+        .iter()
+        .map(OsStr::to_str)
+        .collect::<Option<Vec<_>>>()?;
+    Some(components.join("/"))
 }
 
 fn collect_tickets(
@@ -1245,11 +1301,23 @@ fn directory_exists(path: &Path, problems: &mut Vec<RootObservationProblem>) -> 
     }
 }
 
+/// What listing one directory of a bounded walk gave.
+struct DirectoryListing {
+    /// The entries that were read, in name order.
+    entries: Vec<fs::DirEntry>,
+    /// The walk's limit on entries was met in this directory: the walk
+    /// ends here.
+    overflowed: bool,
+    /// Whether the directory holds nothing at all. `None` when it could
+    /// not be opened, so nothing is known of what it holds.
+    empty: Option<bool>,
+}
+
 fn read_document_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
-) -> (Vec<fs::DirEntry>, bool) {
+) -> DirectoryListing {
     let mut directory = match fs::read_dir(path) {
         Ok(directory) => directory,
         Err(error) => {
@@ -1257,15 +1325,23 @@ fn read_document_directory(
                 path,
                 format!("the directory cannot be read: {error}"),
             ));
-            return (Vec::new(), false);
+            return DirectoryListing {
+                entries: Vec::new(),
+                overflowed: false,
+                empty: None,
+            };
         }
     };
     let mut collected = Vec::new();
     let mut overflowed = false;
+    // An entry that could not be read, or that met the limit, is an
+    // entry all the same.
+    let mut empty = true;
     loop {
         let Some(entry) = directory.next() else {
             break;
         };
+        empty = false;
         if *entries >= MAX_DOCUMENT_DIRECTORY_ENTRIES {
             problems.push(source_problem(
                 path,
@@ -1284,14 +1360,18 @@ fn read_document_directory(
         }
     }
     collected.sort_by_key(|entry| entry.file_name());
-    (collected, overflowed)
+    DirectoryListing {
+        entries: collected,
+        overflowed,
+        empty: Some(empty),
+    }
 }
 
 fn read_marker_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
-) -> (Vec<fs::DirEntry>, bool) {
+) -> DirectoryListing {
     read_document_directory(path, entries, problems)
 }
 
@@ -1588,7 +1668,15 @@ const ITEM_READ_COLUMNS: [(&str, &str, &str); 4] = [
 /// text from the file. Both go when their item row goes, and an item row
 /// goes when its context is replaced, so neither outlives nor precedes the
 /// items of a context.
-const ITEM_READ_OBJECTS: [(&str, &str, &str); 4] = [
+///
+/// A folder is a directory under `docs/` of the primary worktree, as the
+/// refresh or rebuild that stored its context listed it; see
+/// `ObservedFolder`. Its rows go when its context row goes, as an item's
+/// do, so the folders of a context are always those of the observation
+/// that stored the context. An index from before the table holds no
+/// folder for any registration, and is marked stale for it as for the
+/// rest: it would otherwise report that a repository has no folders.
+const ITEM_READ_OBJECTS: [(&str, &str, &str); 5] = [
     (
         "table",
         "item_edges",
@@ -1619,6 +1707,17 @@ const ITEM_READ_OBJECTS: [(&str, &str, &str); 4] = [
         "index",
         "item_problems_item_id_idx",
         "CREATE INDEX item_problems_item_id_idx ON item_problems(item_id)",
+    ),
+    (
+        "table",
+        "discovered_folders",
+        "CREATE TABLE discovered_folders (
+            id INTEGER PRIMARY KEY,
+            context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            is_empty INTEGER NOT NULL CHECK (is_empty IN (0, 1)),
+            UNIQUE (context_id, path)
+        )",
     ),
 ];
 
@@ -1933,6 +2032,99 @@ mod tests {
             })
             .unwrap();
         assert_eq!(refreshed_at, 7);
+    }
+
+    // An index written by the build before folders were recorded: it has
+    // every other table and column, a registration that needs no refresh
+    // and a context with an item.
+    #[test]
+    fn an_index_from_before_folders_gains_the_table_and_is_marked_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required, refreshed_at)
+                 VALUES (1, '/repository', 1, 'accessible', 0, 7);
+                 INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required, refreshed_at)
+                 VALUES (2, '/other', 1, 'accessible', 0, 9);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO discovered_items
+                    (context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+                 VALUES (1, '01ARZ3NDEKTSV4RRFFQ69G5FAV', 'document', 'docs/a.md', 'A', 0, 'git');
+                 DROP TABLE discovered_folders;",
+            )
+            .unwrap();
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 0);
+        assert_eq!(missing_item_read_schema(&connection).unwrap().len(), 1);
+        let marks = |connection: &Connection| -> Vec<bool> {
+            connection
+                .prepare("SELECT refresh_required FROM repositories ORDER BY id")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(marks(&connection), [false, false]);
+        drop(connection);
+
+        // Opening the index is what migrates it.
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 1);
+        assert_eq!(
+            column_names(&connection, "discovered_folders"),
+            ["id", "context_id", "path", "is_empty"]
+        );
+        // Every registration is stale until it is refreshed: none has a
+        // folder stored.
+        assert_eq!(marks(&connection), [true, true]);
+        // What the index held is kept.
+        let kept: (i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM contexts), (SELECT COUNT(*) FROM discovered_items),
+                        (SELECT refreshed_at FROM repositories WHERE id = 1)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (1, 1, 7));
+
+        // The table takes a folder of a context, refuses one of none and
+        // one stored twice, and lets its rows go with their context.
+        connection
+            .execute_batch(
+                "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/a', 1)",
+            )
+            .unwrap();
+        for refused in [
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/a', 0)",
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (9, 'docs/b', 0)",
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/b', 2)",
+        ] {
+            assert!(connection.execute_batch(refused).is_err(), "{refused}");
+        }
+        connection
+            .execute_batch("DELETE FROM contexts WHERE id = 1")
+            .unwrap();
+        let left: i64 = connection
+            .query_row("SELECT COUNT(*) FROM discovered_folders", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(left, 0);
+
+        // A second opening adds nothing and marks nothing.
+        connection
+            .execute_batch("UPDATE repositories SET refresh_required = 0")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 1);
+        assert_eq!(marks(&connection), [false, false]);
     }
 
     #[test]
@@ -2436,12 +2628,30 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, source).unwrap();
         }
+        // A folder two levels down, made with native separators as well.
+        fs::create_dir_all(directory.path().join("docs").join("nested").join("inner")).unwrap();
         let mut sources = Vec::new();
+        let mut folders = Vec::new();
         let mut problems = Vec::new();
 
-        collect_root_sources(directory.path(), &mut sources, &mut problems);
+        collect_root_sources(directory.path(), &mut sources, &mut folders, &mut problems);
 
         assert!(problems.is_empty());
+        // A folder's path is written with forward slashes on every
+        // platform, as an item's is.
+        assert_eq!(
+            folders,
+            [
+                ObservedFolder {
+                    path: "docs/nested".to_owned(),
+                    empty: false
+                },
+                ObservedFolder {
+                    path: "docs/nested/inner".to_owned(),
+                    empty: true
+                },
+            ]
+        );
         assert_eq!(sources.len(), fixtures.len());
         for (expected, _) in fixtures {
             assert!(
@@ -2468,7 +2678,12 @@ mod tests {
         let mut sources = Vec::new();
         let mut problems = Vec::new();
 
-        collect_root_sources(directory.path(), &mut sources, &mut problems);
+        collect_root_sources(
+            directory.path(),
+            &mut sources,
+            &mut Vec::new(),
+            &mut problems,
+        );
 
         assert!(problems.is_empty());
         assert_eq!(sources.len(), 1);

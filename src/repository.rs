@@ -5498,6 +5498,7 @@ fn changed_contexts(
         || before.head.branch != after.head.branch
         || before.configuration_source != after.configuration_source
         || before.sources != after.sources
+        || before.folders != after.folders
         || format!(
             "{:?}{:?}{:?}{:?}",
             before.context, before.items, before.problems, before.validation
@@ -5622,6 +5623,12 @@ fn persist_context_refresh(
             context,
             head,
             items,
+            // Folders are those of the primary worktree only.
+            folders: if context.worktree == root {
+                &root_observation.folders
+            } else {
+                &[]
+            },
             problems,
             validation_problems: validation,
         },
@@ -5868,6 +5875,7 @@ fn persist_observation(
             context: &observation.context,
             head: &observation.head,
             items: &observation.items,
+            folders: &observation.folders,
             problems: &observation.problems,
             validation_problems: &observation.validation.problems,
         },
@@ -5881,6 +5889,7 @@ fn persist_observation(
                 context: &active.context,
                 head: &active.head,
                 items: &active.items,
+                folders: &[],
                 problems: &active.problems,
                 validation_problems: &active.validation.problems,
             },
@@ -5894,6 +5903,9 @@ struct PersistedContext<'a> {
     context: &'a discovery::RootContextObservation,
     head: &'a discovery::RootHeadObservation,
     items: &'a [ObservedItem],
+    /// The directories under `docs/` that the observation listed: those
+    /// of the primary worktree, and none for any other context.
+    folders: &'a [discovery::ObservedFolder],
     problems: &'a [RootObservationProblem],
     validation_problems: &'a [canonical::ValidationProblem],
 }
@@ -5918,6 +5930,16 @@ fn persist_context(
         let item_row = transaction.last_insert_rowid();
         persist_relationships(transaction, item_row, &item.relationships, root)?;
         persist_comments(transaction, item_row, &item.comments, None, root)?;
+    }
+    // Nothing is deleted here: the folders of the context's earlier
+    // observation went with its row when it was deleted to be replaced.
+    for folder in observed.folders {
+        transaction
+            .execute(
+                "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (?1, ?2, ?3)",
+                params![context_id, folder.path, folder.empty],
+            )
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
     let observed_at = OffsetDateTime::now_utc().unix_timestamp();
     for problem in observed.problems {

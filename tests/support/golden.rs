@@ -25,6 +25,7 @@ pub const ENVELOPE_SCHEMA: &str = "envelope.schema.json";
 /// so the directory holds exactly the envelopes some test still produces.
 pub const CASES: &[&str] = &[
     "comment_list",
+    "document_folder_list",
     "document_list",
     "document_show",
     "document_show_nonconforming",

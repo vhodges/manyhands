@@ -16,10 +16,10 @@ use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use super::{
-    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
-    IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto,
-    PathObservationDto, ProblemDto, ReadError, ReadinessState, RelationshipCheckDto,
-    RelationshipRejectionDto, ResolvedRepository,
+    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, DocumentFolderDto,
+    DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
+    ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto, ReadError, ReadinessState,
+    RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
     graph::{TicketGraph, TicketNode},
     index_state, root_action,
 };
@@ -882,6 +882,56 @@ pub(super) fn is_completely_observed(kind: ItemDtoKind, problems: &[StoredProble
     })
 }
 
+/// Whether the last refresh listed every directory under `docs` of the
+/// primary worktree, whose path in the index is `root`, as far as the
+/// index says. It is the document half of `is_completely_observed`, for
+/// the one context folders are stored for: a problem in an item worktree,
+/// or at the directory that holds them, hides no folder.
+fn folders_are_completely_observed(root: &str, problems: &[StoredProblem]) -> bool {
+    !problems.iter().any(|problem| {
+        let path = Path::new(&problem.path);
+        let is_file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".md"));
+        problem.code == ProblemCode::SourceUnreadable
+            && problem.context.worktree == root
+            && (path == Path::new(DOCUMENTS_DIRECTORY)
+                || (path.starts_with(DOCUMENTS_DIRECTORY) && !is_file))
+    })
+}
+
+/// The folders the index holds for the primary worktree, in path order.
+/// A row whose path is not one under `docs/` is not what a refresh
+/// stores, and fails the read.
+fn stored_folders(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    root: &str,
+) -> Result<Vec<DocumentFolderDto>, ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT discovered_folders.path, discovered_folders.is_empty
+           FROM discovered_folders
+           JOIN contexts ON contexts.id = discovered_folders.context_id
+          WHERE contexts.repository_id = ?1 AND contexts.worktree_path = ?2
+          ORDER BY discovered_folders.path ASC, discovered_folders.id ASC",
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![repo.registration_id(), root], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(path, empty)| {
+            if path.starts_with(DOCUMENT_PREFIX) && is_plain_relative(&path) {
+                Ok(DocumentFolderDto { path, empty })
+            } else {
+                Err(invalid_stored_data())
+            }
+        })
+        .collect()
+}
+
 pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     ProblemDto {
         code,
@@ -1611,6 +1661,29 @@ impl RepositoryService {
     /// repository that is. No file is opened.
     pub fn list_documents(&self, repo: &ResolvedRepository) -> Result<ItemListDto, ReadError> {
         self.list_items(repo, ItemDtoKind::Document, None)
+    }
+
+    /// Every directory under `docs/` in the primary worktree, ordered by
+    /// path, with whether it is empty.
+    ///
+    /// The list is what the index holds; `index` says how far behind the
+    /// repository that is. No directory is listed and no file is opened:
+    /// a folder made since the last refresh is not here until the next.
+    pub fn list_document_folders(
+        &self,
+        repo: &ResolvedRepository,
+    ) -> Result<DocumentFolderListDto, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            let (index, _) = stored_index_state(connection, repo)?;
+            let root = repo.root().to_str().ok_or_else(invalid_stored_data)?;
+            let problems = stored_problems(connection, repo)?;
+            Ok(DocumentFolderListDto {
+                items: stored_folders(connection, repo, root)?,
+                complete: folders_are_completely_observed(root, &problems),
+                index,
+            })
+        })
+        .map_err(|error| repo.failure(error))
     }
 
     /// The tickets `filter` matches, ordered by content-change time, latest

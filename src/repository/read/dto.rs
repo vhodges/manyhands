@@ -383,6 +383,36 @@ pub struct ItemListDto {
     pub index: IndexStateDto,
 }
 
+/// The folders under `docs/` in the primary worktree, ordered by path.
+///
+/// The list is what the last refresh or rebuild stored, and nothing else:
+/// no directory is listed to answer it. `index` says how far behind the
+/// repository that is. A folder made or removed since, by Manyhands or by
+/// anything else, is here or missing accordingly until the next refresh.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentFolderListDto {
+    pub items: Vec<DocumentFolderDto>,
+    /// False when the last refresh could not read, or stopped part of the
+    /// way through, `docs` or a directory under it in the primary
+    /// worktree: one it could not open, one deeper than it goes, a
+    /// symbolic link, or the place where it met its limit on entries.
+    /// Folders may then be missing, and `index.state` can still be
+    /// `current`: a refresh stops at the same place again.
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// One directory under `docs/`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentFolderDto {
+    /// Relative to the repository root, beginning with `docs/`, written
+    /// with forward slashes on every platform.
+    pub path: String,
+    /// The refresh found nothing in the directory: no file, whether a
+    /// document or not, no directory and no link.
+    pub empty: bool,
+}
+
 /// A document or a ticket, or a file where one should be.
 ///
 /// A nonconforming entry has no `id` and no metadata; its `path`, `context`
