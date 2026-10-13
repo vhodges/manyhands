@@ -30,7 +30,9 @@
 //!   `identity_ambiguous`;
 //! - a file that is a conforming item already, one that names another
 //!   kind than its path's, and one that holds a valid ID the source does
-//!   not keep, `not_repairable`;
+//!   not keep, `not_repairable`; so is a document's path at which the
+//!   index holds an item under another ID, in any context: an earlier
+//!   repair gave the file its identity there;
 //! - a ticket's source that does not carry the file's closure fields as
 //!   they are, or has any where the file has none or cannot be read,
 //!   `invalid_input`;
@@ -38,13 +40,15 @@
 //!
 //! A repair whose end state holds, the item's context holding the source
 //! committed at its branch tip, is a no-op and gets no confirmation. A
-//! context that holds anything at the path but the file or the source is
-//! `external_change`.
+//! context that holds another conforming item at the path is
+//! `not_repairable`, since a save edits it, and one that holds anything
+//! else but the file or the source is `external_change`.
 //!
 //! **What the confirmation is for.** The observation digest covers the
 //! file's token, that the file is committed on primary, and that the
-//! corrected ID is no other item's. Nothing a repair does changes any of
-//! the three, so a request that is entered again compares them for as
+//! corrected ID is held by nothing else, and that no item is at the path
+//! under another ID. Nothing a repair does changes any of
+//! these, so a request that is entered again compares them for as
 //! long as its operation has not recorded its write.
 //!
 //! **Re-entry** is `confirm::reenter`, with the evidence of an authoring
@@ -201,6 +205,10 @@ struct Observed {
     /// The corrected ID is held by something that is not this path's
     /// file: an item the index holds, or a file on primary.
     held: bool,
+    /// The index holds an item at the path, in some context, under
+    /// another ID than the corrected one: the file was repaired before,
+    /// and has its identity there.
+    occupied: bool,
     /// The file is the blob at primary's head.
     committed: bool,
 }
@@ -217,6 +225,9 @@ enum Context {
     /// The corrected source, committed at the branch tip: the repair's
     /// end state.
     Repaired,
+    /// Another conforming item: the file was repaired, or made, and
+    /// has been saved since. A save edits it; a repair does not.
+    Item,
     /// Anything else.
     Other,
 }
@@ -356,7 +367,23 @@ impl RepairBinding {
             Err(error) => return Err(read(error)),
         } || held_elsewhere(root, Path::new(path), id, root)
             .map_err(|error| self.about(super::refused(error)))?;
+        // A document's path is no part of its identity, so the index is
+        // asked whether one is at this path already under another ID. A
+        // ticket's path holds its ID.
+        let occupied = match self.kind {
+            AuthoringKind::Document => service
+                .list_documents(repository)
+                .map_err(read)?
+                .items
+                .iter()
+                .any(|item| {
+                    item.path == path
+                        && item.id.as_ref().is_some_and(|held| *held != id.to_string())
+                }),
+            AuthoringKind::Ticket => false,
+        };
         Ok(Observed {
+            occupied,
             duplicate: shown
                 .problems
                 .iter()
@@ -379,6 +406,7 @@ impl RepairBinding {
             // A problem of the file as it is: the token covers the file.
             duplicate: _,
             held,
+            occupied,
             committed,
         } = observed;
         let flag = |value: bool| if value { "yes" } else { "no" };
@@ -390,6 +418,7 @@ impl RepairBinding {
                 .text("token", token)
                 .text("committed", flag(*committed))
                 .text("held", flag(*held))
+                .text("occupied", flag(*occupied))
                 .finish(),
         )
     }
@@ -407,6 +436,9 @@ impl RepairBinding {
             .map_err(|refusal| self.stopped(refusal_code(refusal)))?;
         if observed.held {
             return Err(self.stopped(ResultCode::IdentityAmbiguous));
+        }
+        if observed.occupied {
+            return Err(self.stopped(ResultCode::NotRepairable));
         }
         if !observed.committed {
             return Err(self.stopped(ResultCode::WorktreeNotClean));
@@ -433,6 +465,13 @@ impl RepairBinding {
                 }
             }
             Ok(Some(bytes)) if bytes == current => Context::Untouched,
+            Ok(Some(bytes))
+                if std::str::from_utf8(&bytes).is_ok_and(|text| {
+                    crate::canonical::parse_item(Path::new(path), text).is_ok()
+                }) =>
+            {
+                Context::Item
+            }
             Ok(Some(_) | None) | Err(_) => Context::Other,
         }
     }
@@ -444,6 +483,9 @@ impl RepairBinding {
         match context {
             Context::Absent | Context::Untouched | Context::Written => None,
             Context::Repaired => Some(self.already_applied()),
+            // No new preview could be given of it: the item is edited by
+            // a save.
+            Context::Item => Some(self.stopped(ResultCode::NotRepairable)),
             // The context's file is neither the file the token is of nor
             // the corrected source.
             Context::Other => Some(self.stopped(ResultCode::ExternalChange)),
@@ -803,6 +845,7 @@ impl Confirmed for RepairBinding {
             .map_err(|answer| stop(self, answer))?;
         match self.context(repository.root(), &path, &id, &observed.bytes) {
             Context::Repaired => Ok(Seen::EndState(self.already_applied())),
+            Context::Item => Err(stop(self, Answer::stopped(ResultCode::NotRepairable))),
             Context::Other => Err(stop(self, Answer::stopped(ResultCode::ExternalChange))),
             Context::Absent | Context::Untouched | Context::Written => Ok(Seen::State {
                 found: self.digest(&path, &observed),

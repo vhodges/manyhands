@@ -22,7 +22,7 @@
       "$ref": "scope.schema.json"
     },
     "effects": {
-      "description": "What the command will do, in the order it does it: context_created when the item has no editing context, id_adopted when the file holds no valid ID, then source_written and checkpoint_committed.",
+      "description": "What the command will do, in the order it does it: context_created when the item has no editing context, id_adopted when the file holds no valid ID, then source_written and checkpoint_committed. source_written is listed whenever the context will hold the source once the command is done, also when an earlier request that stopped part of the way has written it there already and this one only commits it.",
       "type": "array",
       "items": {
         "$ref": "preview_effect.schema.json"

@@ -151,6 +151,13 @@ mod domain {
                 RepositoryErrorKind::AmbiguousIdentity,
             ),
             (
+                "an ID a nonconforming file holds",
+                doc,
+                MARKER_PATH,
+                document(UNTITLED),
+                RepositoryErrorKind::AmbiguousIdentity,
+            ),
+            (
                 "a file that holds another valid ID",
                 doc,
                 UNTITLED_PATH,
@@ -256,6 +263,124 @@ mod domain {
         assert_eq!(shelf.context(mutation::DOCUMENT_NEW, MARKER_PATH), held);
         assert_eq!(held, Some(shelf.primary(MARKER_PATH)));
         assert_eq!(shelf.branch_tip(mutation::DOCUMENT_NEW), tip);
+        assert_eq!(shelf.pending_journal_rows(), 0);
+    }
+
+    #[test]
+    fn an_id_committed_at_head_and_gone_from_the_worktree_is_ambiguous_and_no_context_is_made() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        // The document is committed on primary and deleted there, not
+        // committed: the worktree no longer shows who holds its ID, and
+        // the commit a context is cut from does.
+        std::fs::remove_file(shelf.root.join(mutation::DOCUMENT_PATH)).unwrap();
+
+        let refused = shelf.service.repair_item(request(
+            &shelf,
+            AuthoringKind::Document,
+            MARKER_PATH,
+            &document(mutation::DOCUMENT),
+        ));
+
+        assert_eq!(kind_of(refused), RepositoryErrorKind::AmbiguousIdentity);
+        assert!(shelf.contexts().is_empty());
+        assert!(shelf.item_branches().is_empty());
+        assert_eq!(shelf.pending_journal_rows(), 0);
+    }
+
+    #[test]
+    fn an_id_held_at_the_tip_of_its_branch_is_ambiguous_and_no_worktree_is_added() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        // The item's branch is there with no worktree, and its tip holds
+        // a document of the ID that primary does not have.
+        let branch = World::document_branch(ADOPTED);
+        let repository = git2::Repository::open(&shelf.root).unwrap();
+        let head = repository.head().unwrap().peel_to_commit().unwrap();
+        let content = items::document_source(ADOPTED, "Elsewhere", "");
+        let mut index = git2::Index::new().unwrap();
+        index.read_tree(&head.tree().unwrap()).unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: repository.blob(content.as_bytes()).unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: b"docs/elsewhere.md".to_vec(),
+            })
+            .unwrap();
+        let tree = repository
+            .find_tree(index.write_tree_to(&repository).unwrap())
+            .unwrap();
+        let signature = git2::Signature::new(
+            "Someone Else",
+            "someone-else@example.invalid",
+            &git2::Time::new(items::COMMITTED_AT + 60, 0),
+        )
+        .unwrap();
+        let tip = repository
+            .commit(
+                Some(&format!("refs/heads/{branch}")),
+                &signature,
+                &signature,
+                "by hand",
+                &tree,
+                &[&head],
+            )
+            .unwrap();
+
+        let refused = shelf.service.repair_item(request(
+            &shelf,
+            AuthoringKind::Document,
+            MARKER_PATH,
+            &document(ADOPTED),
+        ));
+
+        assert_eq!(kind_of(refused), RepositoryErrorKind::AmbiguousIdentity);
+        assert!(shelf.contexts().is_empty());
+        assert_eq!(shelf.item_branches(), [branch]);
+        assert_eq!(shelf.branch_tip(ADOPTED), Some(tip));
+        assert_eq!(shelf.pending_journal_rows(), 0);
+    }
+
+    #[test]
+    fn a_repair_left_with_nothing_done_is_asked_the_rules_again_and_a_refusal_closes_its_row() {
+        git_home::isolated();
+        let shelf = Shelf::failing_once_at(FailurePoint::BeforeContextBranchCreation);
+        let request = request(
+            &shelf,
+            AuthoringKind::Document,
+            MARKER_PATH,
+            &document(ADOPTED),
+        );
+        let stopped = shelf.service.repair_item(request.clone());
+        assert_eq!(kind_of(stopped), RepositoryErrorKind::InjectedFailure);
+        // The row is pending, with no step and nothing made.
+        assert_eq!(shelf.pending_journal_rows(), 1);
+        assert!(shelf.contexts().is_empty());
+        assert!(shelf.item_branches().is_empty());
+
+        // Before the operation is entered again, another file takes
+        // the ID. It is not committed, so no context would hold it.
+        items::write(
+            &shelf.root,
+            "docs/late.md",
+            &items::document_source(ADOPTED, "Late", ""),
+        );
+        let refused = shelf.service.repair_item(request);
+
+        assert_eq!(kind_of(refused), RepositoryErrorKind::AmbiguousIdentity);
+        assert!(shelf.contexts().is_empty());
+        assert!(shelf.item_branches().is_empty());
+        // The refusal wrote nothing, and its row does not stand in the
+        // way of the repository's other operations.
         assert_eq!(shelf.pending_journal_rows(), 0);
     }
 
@@ -758,7 +883,7 @@ mod boundary {
         git_home::isolated();
         let shelf = Shelf::new();
         // A source whose ID another item holds: a document, a ticket.
-        for held in [mutation::DOCUMENT, items::TICKET_A, DUPLICATE] {
+        for held in [mutation::DOCUMENT, items::TICKET_A, DUPLICATE, UNTITLED] {
             assert_not_previewed(
                 &shelf,
                 &shelf.document_repair(MARKER_PATH, &document(held)),
@@ -830,6 +955,132 @@ mod boundary {
         // A new preview says what stands in the way.
         let again = shelf.prepare(&repair());
         assert_eq!(again.code, ResultCode::IdentityAmbiguous);
+    }
+
+    #[test]
+    fn a_path_a_repair_has_given_an_id_is_not_repaired_under_another() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        let first = document(ADOPTED);
+        let done = shelf.repair(REQUEST_1, || shelf.document_repair(MARKER_PATH, &first));
+        assert_eq!(done.code, ResultCode::Ok);
+        let rows = shelf.journal_rows();
+        let confirmations = shelf.confirmation_rows();
+
+        // The file on primary is as it was, and still no item there;
+        // the item it has become is in its context, under its ID.
+        let refused = shelf.prepare(&shelf.document_repair(MARKER_PATH, &document(UNHELD)));
+
+        assert_eq!(refused.code, ResultCode::NotRepairable);
+        assert!(refused.data.is_none());
+        assert!(recovery_actions_of(&refused).is_empty());
+        assert_eq!(shelf.contexts(), [ADOPTED]);
+        assert_eq!(shelf.item_branches(), [World::document_branch(ADOPTED)]);
+        assert_eq!(shelf.journal_rows(), rows);
+        assert_eq!(shelf.confirmation_rows(), confirmations);
+    }
+
+    #[test]
+    fn a_second_repair_of_a_path_made_after_the_preview_is_an_external_change() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        let token = shelf.path_token(MARKER_PATH);
+        let repair = |id: &str| shelf.document_repair_with(MARKER_PATH, &token, &document(id));
+        // Two previews of one file, each of another ID, while it has none.
+        let (one, _) = shelf.preview(&repair(ADOPTED));
+        let (other, _) = shelf.preview(&repair(UNHELD));
+        let done = shelf.confirmed(REQUEST_1, &one, repair(ADOPTED));
+        assert_eq!(done.code, ResultCode::Ok);
+        let rows = shelf.journal_rows();
+
+        let refused = shelf.confirmed(REQUEST_2, &other, repair(UNHELD));
+
+        assert_eq!(refused.code, ResultCode::ExternalChange);
+        assert_eq!(recovery_actions(&refused), ["request.prepare"]);
+        assert!(shelf.record(REQUEST_2).is_none());
+        assert_eq!(shelf.contexts(), [ADOPTED]);
+        assert_eq!(shelf.item_branches(), [World::document_branch(ADOPTED)]);
+        assert_eq!(shelf.journal_rows(), rows);
+        // The new preview says why.
+        assert_eq!(
+            shelf.prepare(&repair(UNHELD)).code,
+            ResultCode::NotRepairable
+        );
+    }
+
+    #[test]
+    fn a_repaired_item_is_not_repaired_again_with_another_source() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        let first = document(ADOPTED);
+        let done = shelf.repair(REQUEST_1, || shelf.document_repair(MARKER_PATH, &first));
+        assert_eq!(done.code, ResultCode::Ok);
+
+        // The same ID with another body: the context holds a conforming
+        // item, which a save edits. No new preview could be given.
+        let again = shelf.prepare(&shelf.document_repair(MARKER_PATH, &format!("{first}More.\n")));
+
+        assert_eq!(again.code, ResultCode::NotRepairable);
+        assert!(again.data.is_none());
+        assert!(recovery_actions_of(&again).is_empty());
+        assert_eq!(
+            shelf.context(ADOPTED, MARKER_PATH).as_deref(),
+            Some(first.as_bytes())
+        );
+        assert_eq!(shelf.branch_commits(ADOPTED), 1);
+    }
+
+    #[test]
+    fn a_confirmation_presented_once_its_item_s_context_has_moved_on_is_answered_by_the_context() {
+        git_home::isolated();
+        let shelf = Shelf::new();
+        let source = document(ADOPTED);
+        let token = shelf.path_token(MARKER_PATH);
+        let repair = || shelf.document_repair_with(MARKER_PATH, &token, &source);
+        // Two previews of the same repair.
+        let (first, _) = shelf.preview(&repair());
+        let (second, _) = shelf.preview(&repair());
+        let done = shelf.confirmed(REQUEST_1, &first, repair());
+        assert_eq!(done.code, ResultCode::Ok);
+        let rows = shelf.journal_rows();
+        let held = || {
+            shelf.count(
+                "SELECT COUNT(*) FROM confirmation_records \
+                  WHERE accepted_by_request IS NOT NULL",
+            )
+        };
+        assert_eq!(held(), 1);
+
+        // The repair is made: the second confirmation's request is a
+        // no-op, is not recorded, and uses nothing up.
+        let applied = shelf.confirmed(REQUEST_2, &second, repair());
+        assert_eq!(applied.code, ResultCode::AlreadyApplied);
+        assert_eq!(applied.outcome, Outcome::Noop);
+        assert_eq!(repair_data(&applied).id, ADOPTED);
+        assert!(shelf.record(REQUEST_2).is_none());
+        assert_eq!(held(), 1);
+
+        // The context's file is scribbled over, and is neither the file
+        // the preview was of nor the source.
+        let scribble = "---\nmanyhands_managed: true\n---\nScribble.\n";
+        items::write(&shelf.worktree(ADOPTED), MARKER_PATH, scribble);
+        let changed = shelf.confirmed(REQUEST_2, &second, repair());
+        assert_eq!(changed.code, ResultCode::ExternalChange);
+        assert!(shelf.record(REQUEST_2).is_none());
+
+        // It holds another conforming document of the ID, committed by
+        // hand: an item, which is not repaired.
+        shelf.commit_in_context(
+            ADOPTED,
+            MARKER_PATH,
+            &items::document_source(ADOPTED, "By hand", ""),
+        );
+        let item = shelf.confirmed(REQUEST_2, &second, repair());
+        assert_eq!(item.code, ResultCode::NotRepairable);
+        assert!(recovery_actions(&item).is_empty());
+        assert!(shelf.record(REQUEST_2).is_none());
+        assert_eq!(held(), 1);
+        assert_eq!(shelf.journal_rows(), rows);
     }
 
     #[test]
@@ -1278,43 +1529,216 @@ mod boundary {
     #[test]
     fn a_repair_whose_refusal_was_lost_is_released_and_says_what_is_true_now() {
         git_home::isolated();
-        let mut shelf = Shelf::failing_once_at(FailurePoint::BeforeRequestDomainCall);
+        let mut shelf = Shelf::new();
         let source = document(ADOPTED);
         let token = shelf.path_token(MARKER_PATH);
         let repair = |shelf: &Shelf| shelf.document_repair_with(MARKER_PATH, &token, &source);
         let (confirmation, _) = shelf.preview(&repair(&shelf));
-        let died = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
-        assert_eq!(died.code, ResultCode::InternalError);
-        // The row of an operation that ended before its checkpoint,
-        // having written nothing: one that stopped for want of an
-        // identity leaves this, and its answer was lost.
-        let operation = shelf.record(REQUEST_1).unwrap().operations[0]
-            .operation_id
-            .to_string();
-        support::operations::insert_local(
-            shelf.data.path(),
-            Some(&operation),
-            "repair_item",
-            "completed",
-            Some("worktree_observed"),
+        // The repository has no identity to commit as: this target's Git
+        // home holds none, and the repository's own is taken away.
+        let identity = |shelf: &Shelf, set: bool| {
+            let mut local = git2::Repository::open(&shelf.root)
+                .unwrap()
+                .config()
+                .unwrap()
+                .open_level(git2::ConfigLevel::Local)
+                .unwrap();
+            for (key, value) in [
+                ("user.name", "Manyhands Test"),
+                ("user.email", "manyhands-test@example.invalid"),
+            ] {
+                if set {
+                    local.set_str(key, value).unwrap();
+                } else {
+                    local.remove(key).unwrap();
+                }
+            }
+        };
+        identity(&shelf, false);
+        shelf.world.service = support::FailOnce::at(FailurePoint::BeforeRequestSettlement)
+            .open_service(shelf.world.data.path());
+
+        // The repair stops for want of an identity, having made its
+        // context and written nothing, and the call dies before it says
+        // so.
+        let lost = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
+        assert_eq!(lost.code, ResultCode::InternalError);
+        assert_eq!(
+            shelf.record(REQUEST_1).unwrap().state,
+            RequestState::Accepted
         );
+        assert_eq!(shelf.contexts(), [ADOPTED]);
+        assert_eq!(shelf.branch_commits(ADOPTED), 0);
+        assert_eq!(
+            shelf.context(ADOPTED, MARKER_PATH),
+            Some(shelf.primary(MARKER_PATH))
+        );
+        // Its row completed before any checkpoint.
+        assert_eq!(
+            shelf.count(
+                "SELECT COUNT(*) FROM operation_records \
+                  WHERE action = 'repair_item' AND state = 'completed' \
+                    AND completed_step = 'worktree_observed'"
+            ),
+            1
+        );
+        let operation = lost_operation(&shelf);
         shelf.reopen();
 
-        // Nothing has changed and nothing is in the way: the request
-        // did not run, and can be sent again.
+        // Nothing has changed and nothing the request can see is in the
+        // way: it did not run, and can be sent again. Its record is
+        // released, and its confirmation with it.
         let released = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
 
         assert_eq!(released.code, ResultCode::Busy);
         assert_eq!(recovery_actions(&released), ["request.retry"]);
         assert!(shelf.record(REQUEST_1).is_none());
-        assert!(shelf.contexts().is_empty());
+        assert_eq!(shelf.branch_commits(ADOPTED), 0);
 
-        // Sent again it is a new request, under a new operation, and its
-        // confirmation is its own to use again.
+        // Sent again it is a new request, and says what stopped the
+        // first: there is no identity.
+        let unidentified = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
+        assert_eq!(unidentified.code, ResultCode::IdentityRequired);
+        assert_eq!(recovery_actions(&unidentified), ["repo.identity_set"]);
+        assert!(shelf.record(REQUEST_1).is_none());
+
+        // With one, the same confirmation runs, under a new operation.
+        identity(&shelf, true);
         let done = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
         assert_eq!(done.code, ResultCode::Ok);
         assert_ne!(done.operation_id.as_deref(), Some(operation.as_str()));
+        assert_eq!(shelf.contexts(), [ADOPTED]);
         assert_eq!(shelf.branch_commits(ADOPTED), 1);
+    }
+
+    /// The operation of the one repair the journal holds.
+    fn lost_operation(shelf: &Shelf) -> String {
+        items::index(shelf.data.path())
+            .query_row(
+                "SELECT operation_ulid FROM operation_records WHERE action = 'repair_item'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn an_abandoned_repair_that_had_committed_keeps_its_commit() {
+        git_home::isolated();
+        let mut shelf = Shelf::failing_once_at(FailurePoint::BeforeIndexTransactionCommit);
+        let source = document(ADOPTED);
+        let pending = shelf.repair(REQUEST_1, || shelf.document_repair(MARKER_PATH, &source));
+        assert_eq!(pending.code, ResultCode::DiscoveryPending);
+        let tip = shelf.branch_tip(ADOPTED);
+        let operation = OperationId::parse(pending.operation_id.as_deref().unwrap()).unwrap();
+        shelf.reopen();
+        let abandon = || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: shelf.root.clone(),
+                operation_id: operation,
+            })
+        };
+
+        let (confirmation, preview) = shelf.preview(&abandon());
+
+        // The repair passed its checkpoint: nothing of its worktree
+        // differs from its branch, and the commit is there.
+        let PreviewDetailsDto::OperationAbandon(details) = &preview.details else {
+            panic!("not the preview of an abandon");
+        };
+        let worktree = format!(".manyhands/worktrees/{ADOPTED}");
+        assert_eq!(details.action, Some(OperationAction::RepairItem));
+        assert_eq!(details.item_id.as_deref(), Some(ADOPTED));
+        assert_eq!(details.worktree.as_deref(), Some(worktree.as_str()));
+        assert_eq!(details.paths, Vec::<String>::new());
+        assert!(details.paths_complete);
+        assert!(details.committed);
+        assert_eq!(details.request_id.as_deref(), Some(REQUEST_1));
+
+        let abandoned = shelf.confirmed(REQUEST_2, &confirmation, abandon());
+
+        assert_eq!(abandoned.code, ResultCode::Ok);
+        let data = mutation::operation_data(&abandoned);
+        assert_eq!(data.action, Some(OperationAction::RepairItem));
+        assert!(data.committed);
+        assert_eq!(data.paths, Vec::<String>::new());
+        assert_eq!(data.released_request_id.as_deref(), Some(REQUEST_1));
+        // The commit is kept, and the source with it.
+        assert_eq!(shelf.branch_tip(ADOPTED), tip);
+        assert_eq!(shelf.branch_commits(ADOPTED), 1);
+        assert_eq!(
+            shelf.context(ADOPTED, MARKER_PATH).as_deref(),
+            Some(source.as_bytes())
+        );
+        assert_eq!(shelf.pending_journal_rows(), 0);
+        assert!(shelf.record(REQUEST_1).is_none());
+    }
+
+    // Two calls of one request can run at once: the boundary does not
+    // serialize them. The second raises the record's attempt and calls
+    // the domain under the same operation. As in the folder's test of
+    // the same rule, the first call is stood in for by its row: claimed
+    // for indexing, with a heartbeat that is fresh.
+    #[test]
+    fn a_repair_s_row_another_call_is_indexing_under_is_not_closed() {
+        git_home::isolated();
+        let mut shelf = Shelf::failing_once_at(FailurePoint::BeforeIndexTransactionCommit);
+        let source = document(ADOPTED);
+        let token = shelf.path_token(MARKER_PATH);
+        let repair = |shelf: &Shelf| shelf.document_repair_with(MARKER_PATH, &token, &source);
+        let (confirmation, _) = shelf.preview(&repair(&shelf));
+        let pending = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
+        assert_eq!(pending.code, ResultCode::DiscoveryPending);
+        let operation = pending.operation_id.clone().unwrap();
+        let index = items::index(shelf.data.path());
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        index
+            .execute(
+                "UPDATE operation_records SET state = 'indexing', observed_at = ?2
+                  WHERE operation_ulid = ?1",
+                rusqlite::params![operation, now + 60],
+            )
+            .unwrap();
+        let row = || -> (String, i64) {
+            index
+                .query_row(
+                    "SELECT state, observed_at FROM operation_records WHERE operation_ulid = ?1",
+                    [&operation],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        shelf.reopen();
+
+        let beside = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
+
+        // The commit is the request's; the index is the other call's to
+        // bring up to date, and its row is as it was.
+        assert_eq!(beside.code, ResultCode::DiscoveryPending);
+        assert_eq!(beside.operation_id.as_deref(), Some(operation.as_str()));
+        assert_eq!(row(), ("indexing".to_owned(), now + 60));
+        assert_eq!(shelf.branch_commits(ADOPTED), 1);
+        assert_eq!(
+            shelf.record(REQUEST_1).unwrap().state,
+            RequestState::Accepted
+        );
+
+        // The other call died: its heartbeat is old. The same request
+        // takes the hand-off up and finishes.
+        index
+            .execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE operation_ulid = ?1",
+                [&operation],
+            )
+            .unwrap();
+        let done = shelf.confirmed(REQUEST_1, &confirmation, repair(&shelf));
+        assert_eq!(done.code, ResultCode::Ok);
+        assert_eq!(row().0, "completed");
+        assert_eq!(shelf.branch_commits(ADOPTED), 1);
+        assert_eq!(
+            shelf.record(REQUEST_1).unwrap().state,
+            RequestState::Finished
+        );
     }
 
     /// A repair stopped after its write: its request and its operation.

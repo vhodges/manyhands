@@ -3087,6 +3087,11 @@ impl RepositoryService {
                     | RepositoryErrorKind::OccupiedItemPath
                     | RepositoryErrorKind::MismatchedAuthoringContext
                     | RepositoryErrorKind::InvalidIdentity
+                    // What a repair is refused for. Each is decided while
+                    // no call under the operation has recorded a write.
+                    | RepositoryErrorKind::NotRepairable
+                    | RepositoryErrorKind::AmbiguousIdentity
+                    | RepositoryErrorKind::InvalidItemSource
             )
         {
             return Ok(false);

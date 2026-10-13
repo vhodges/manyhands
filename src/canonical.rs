@@ -518,7 +518,7 @@ pub fn parse_item(path: &Path, source: &str) -> Result<CanonicalItem, Validation
 /// file be a conforming item: what a repair reads of a file that is not
 /// one. `None` when there is no front matter between its delimiters, or
 /// what is there is not a YAML mapping. No field is validated.
-pub fn front_matter(source: &str) -> Option<Mapping> {
+pub(crate) fn front_matter(source: &str) -> Option<Mapping> {
     let (front_matter, _) = split_front_matter(Path::new(""), source).ok()?;
     serde_yaml::from_str::<Value>(front_matter)
         .ok()?

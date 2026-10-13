@@ -322,6 +322,9 @@ impl Drop for Shelf {
         if !std::thread::panicking() {
             // The request tables and every journal.
             mutation::assert_request_stores_exclude(self.data.path(), &SENTINELS);
+            // And the local journal's rows once more, by the scan that
+            // reads each of their columns by name.
+            super::assert_operation_records_exclude(self.data.path(), &SENTINELS);
         }
     }
 }
