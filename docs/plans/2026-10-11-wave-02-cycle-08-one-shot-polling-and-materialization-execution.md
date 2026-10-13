@@ -10,6 +10,62 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 5 Independent Blocker Confirmation — 2026-10-13T23:46:53Z
+
+Controller conveys independent read-only review
+`ses_ec8580fb8ffeelwyx0FtUPwU2p`: **CONFIRMED written Task 5 inconsistency**.
+This is confirmation of the blocker, not approval of an exception. Verified
+clean assigned worktree/branch at checkpoint base
+`fe454477d16a86a338d75e8e9939205e56ff9612`; original Task 5 base remains
+`8cb5d777758287b200e09255dc1fa7f254fc4da3`. No fetch/rebase or Rust command.
+
+### Independent Source Evidence
+
+- Approved implementation plan
+  `2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-implementation.md`
+  (document ID `01M4NM26R0Q7ZXR0TDSPQB6H59`), line 49: **any scan** excluded
+  under the lease. Task 5 lines 352–355/392–395 require the existing validators,
+  five ordered steps under one lease acquisition, and Git-first reconciliation.
+- Approved design
+  `2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-design.md`
+  (document ID `01M4NM26Q2CZH0CGBT31QVZA0W`), lines 332–340: step 5 calls
+  unchanged `validate_context_worktree` under that lease before `complete`.
+- Approved Cycle
+  `wave-02-cycle-08-one-shot-polling-and-materialization.md`
+  (document ID `01M4NM26P51XW21SPJDF6RPYQ9`), line 182: **discovery scan**
+  wording; lines 168–171 put index-only refresh outside the lease.
+- RFC `docs/RFC/repository-index-persistence-and-refresh.md:146–153,162–174`:
+  **full read-only/full scans** outside the lease, with refs, worktrees and
+  canonical paths re-observed under it before local mutation/cache replacement.
+  The narrower Cycle/RFC wording suggests a narrower intention but does not
+  explicitly exempt Task 5 canonical validation from the plan's any-scan rule.
+- Source `src/repository.rs:8354,7976–7987,8136–8144,8175–8215,8226–8263,8290–8312`:
+  the unchanged validator unconditionally collects docs/tickets/comments,
+  recursively enumerates directories and reads contents. `require_target = false`
+  does not avoid collection. Traversal bounds do not create a policy exception.
+
+### Narrow Owner Proposal — UNAPPROVED
+
+Permit **only Task 5 materialization step 5** to perform the unchanged
+`validate_context_worktree` canonical collection under the **same single lease
+acquisition**, before recording `complete`. Discovery scans, index refresh,
+network calls and prompts remain outside the lease. This proposal authorizes
+no helper-body change, replacement validator or extra lease acquisition.
+
+This is a proposal for the owner, **not an accepted exception**. Approved
+Cycle/design/implementation plan are not amended. Accepted⇒active-only agreement,
+stricter non-executable poll conformity, unchanged discovery and D1–D4 remain.
+Task 2 direct-SQL poll-kind immutability regression remains explicitly deferred
+to final Cycle review. Prior Task 4 approvals remain recorded and trusted.
+
+Task 5 **blocked and unticked**, not review-ready; Task 6 not started; ticket
+open. This authorized local docs-only checkpoint changes the ledger and canonical
+Node-generated comment `01M4VTJW60QVE0460ZRYBWJQS2`. Whitespace, unchanged
+Rust/tests/dependencies/approved documents and scripts/show-ticket rendering are
+checked before staging intended files and committing. Exact checkpoint range
+starts `fe454477d16a86a338d75e8e9939205e56ff9612`; head returned after commit.
+No test execution or RED/GREEN claim. No subagents or outward/lifecycle action.
+
 ## Task 5 Pre-Implementation Scope Blocker — 2026-10-13T23:43:36Z
 
 Fresh implementer assigned **Task 5 only**, inline with no subagents. Verified
