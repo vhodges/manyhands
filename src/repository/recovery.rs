@@ -209,14 +209,25 @@ impl super::RepositoryService {
             RepositoryOperation::SubmitComment,
         )?;
         let connection = super::open_registry_read_only(&self.registry_path)?;
-        let row = connection.query_row("SELECT b.operation_ulid,b.synchronization_ulid,b.kind,b.item_ulid,b.comment_ulid,b.parent_ulid,b.pre_checkpoint_oid,b.checkpoint_oid,b.created_at,o.root_path,b.root_digest,o.target,o.action
+        let row = connection.query_row("SELECT b.operation_ulid,b.synchronization_ulid,b.kind,b.item_ulid,b.comment_ulid,b.parent_ulid,b.pre_checkpoint_oid,b.checkpoint_oid,b.created_at,o.root_path,b.root_digest,o.target,o.action,o.state,o.completed_step
             FROM comment_publication_bindings b JOIN operation_records o ON o.id=b.local_record_id WHERE b.operation_ulid=?1",
-            [id.to_string()], |r| Ok((decode_comment_binding(r)?, r.get::<_, String>(9)?,r.get::<_, Vec<u8>>(10)?,r.get::<_, String>(11)?,r.get::<_, String>(12)?))).optional().map_err(|_| super::comment_publication::recovery_error())?;
+            [id.to_string()], |r| Ok((decode_comment_binding(r)?, r.get::<_, String>(9)?,r.get::<_, Vec<u8>>(10)?,r.get::<_, String>(11)?,r.get::<_, String>(12)?,r.get::<_, String>(13)?,r.get::<_, Option<String>>(14)?))).optional().map_err(|_| super::comment_publication::recovery_error())?;
         match row {
-            Some((_, bound_root, _, _, _)) if Some(bound_root.as_str()) != root.to_str() => {
+            Some((_, bound_root, _, _, _, _, _)) if Some(bound_root.as_str()) != root.to_str() => {
                 Err(mismatch(RepositoryOperation::SubmitComment, root))
             }
-            Some((binding, bound_root, digest, target, action)) => {
+            // The binding of an abandoned submission is kept with its row
+            // and continues nothing: the ID is spent for its replay, its
+            // publication-only retry and its cancellation alike. Each of
+            // those reads the binding first and proves the checkpoint
+            // from Git, so none would otherwise come to the journal's
+            // own refusal.
+            Some((_, _, _, _, _, state, step))
+                if state == "completed" && is_abandoned_step(step.as_deref()) =>
+            {
+                Err(abandoned(RepositoryOperation::SubmitComment, root))
+            }
+            Some((binding, bound_root, digest, target, action, _, _)) => {
                 let expected = format!(
                     "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
                     super::authoring_kind_segment(&binding.kind),
@@ -1071,6 +1082,23 @@ pub(super) fn is_abandoned_step(step: Option<&str>) -> bool {
 pub(super) const NOT_ABANDONED: &str =
     "NOT (state = 'completed' AND completed_step IS 'abandoned')";
 
+/// Whether a row in `state` whose last step is `step` is one that is
+/// `completed` and has not ended: a comment that was committed while its
+/// repository had no registration, whose index hand-off waits for one.
+/// No synchronization is reserved while such a row stands, so whoever
+/// reads a row's state for itself asks this, as it asks
+/// `is_abandoned_step`, before it takes `completed` to mean that
+/// nothing is owed.
+pub(super) fn waits_for_registration(state: &str, step: Option<&str>) -> bool {
+    state == "completed" && listed(step) == Some(LocalStep::CommentRegistrationPending)
+}
+
+/// What a statement holds of a row that has not ended: it is not
+/// `completed`, or it is and waits for its registration; see
+/// `waits_for_registration`.
+const NOT_ENDED: &str =
+    "(state != 'completed' OR completed_step IS 'comment_registration_pending')";
+
 /// Fails with `OperationAbandoned` when the row `record_id` was closed
 /// as abandoned. A statement guarded by `NOT_ABANDONED` that changed no
 /// row asks this, and its caller stops there, having written nothing.
@@ -1121,7 +1149,9 @@ pub enum JournalRow {
     ///
     /// `owes_work` is set when the row has nevertheless left something to
     /// be done under its ID: a remote operation whose index hand-off is
-    /// pending or whose reconciliation is recorded as required. Such a
+    /// pending or whose reconciliation is recorded as required, or a
+    /// comment whose index hand-off waits for its repository's
+    /// registration. Such a
     /// row is in flight for settlement, exactly as a pending one is, and
     /// is still told apart from one: a cancelled row that owes work is
     /// `Final { kind: Cancelled, owes_work: true }`.
@@ -1355,14 +1385,22 @@ pub(super) fn lookup_operation(
     if !is_stored_name(&state) || step.as_deref().is_some_and(|step| !is_stored_name(step)) {
         return Err(ReadError::new(ResultCode::InternalError));
     }
+    let waits = waits_for_registration(&state, step.as_deref());
     let step = step.as_deref().map(RecordedStep::of);
     Ok(if state != "completed" {
         JournalRow::Pending(PendingOperation::Local { state, step })
+    } else if waits {
+        // Completed, with its commit made and its index hand-off owed.
+        JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: true,
+            checkpointed: true,
+        }
     } else if step.is_some_and(|step| step.is(LocalStep::Rejected) || step.is(LocalStep::Abandoned))
     {
         JournalRow::Absent
     } else {
-        // A local operation that completed owes nothing more.
+        // Any other local operation that completed owes nothing more.
         JournalRow::Final {
             kind: FinalKind::Completed,
             owes_work: false,
@@ -1431,7 +1469,7 @@ pub(super) enum LocalStanding {
 impl LocalRow {
     pub(super) fn standing(&self) -> LocalStanding {
         let step = listed(self.step.as_deref());
-        if self.state != "completed" {
+        if self.state != "completed" || waits_for_registration(&self.state, self.step.as_deref()) {
             LocalStanding::Pending
         } else if step == Some(LocalStep::Rejected) {
             LocalStanding::Rejected
@@ -1528,8 +1566,10 @@ pub(super) fn local_row(
 /// abandon. Returns whether a pending row was closed.
 pub(super) fn abandon_row(connection: &Connection, record_id: i64) -> rusqlite::Result<bool> {
     Ok(connection.execute(
-        "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
-          WHERE id = ?1 AND state != 'completed'",
+        &format!(
+            "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
+              WHERE id = ?1 AND {NOT_ENDED}"
+        ),
         params![record_id, LocalStep::Abandoned.as_str(), now()],
     )? == 1)
 }
@@ -1557,12 +1597,12 @@ pub(super) fn pending_rows(
     root_path: &str,
 ) -> rusqlite::Result<Vec<(String, LocalRow)>> {
     connection
-        .prepare(
+        .prepare(&format!(
             "SELECT operation_ulid, id, action, target, state, completed_step, observed_at
-               FROM operation_records
-              WHERE root_path = ?1 AND state != 'completed' AND operation_ulid IS NOT NULL
-              ORDER BY id",
-        )?
+                   FROM operation_records
+                  WHERE root_path = ?1 AND {NOT_ENDED} AND operation_ulid IS NOT NULL
+                  ORDER BY id"
+        ))?
         .query_map([root_path], |row| {
             Ok((
                 row.get(0)?,

@@ -4,13 +4,14 @@ use git2::{Config, Repository, Signature, Time, WorktreeAddOptions};
 #[cfg(unix)]
 use manyhands::repository::OwnedPathBoundary;
 use manyhands::repository::{
-    AuthoringKind, AuthoringTarget, CommentIndexingState, CommentPublicationState,
-    CommentSubmissionOutcome, ContextIntent, ContextProvisionOutcome, DocumentDraft,
-    EnableRepositoryOutcome, EnableRepositoryRequest, ExpectedPathObservation,
-    ExternalChangeExpectation, FailurePoint, LocalCheckpoint, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService, SaveDocumentRequest, SaveOutcome, SaveTicketRequest,
-    SubmitCommentRequest, TicketDraft,
+    AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, AuthoringKind,
+    AuthoringTarget, CommentIndexingState, CommentPublicationState, CommentSubmissionOutcome,
+    ContextIntent, ContextProvisionOutcome, DocumentDraft, EnableRepositoryOutcome,
+    EnableRepositoryRequest, ExpectedPathObservation, ExternalChangeExpectation, FailurePoint,
+    LocalCheckpoint, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+    SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
 };
+use manyhands::repository::{OperationNextAction, PendingStanding};
 
 mod support;
 use support::comment_publication::TestCommentSession;
@@ -4934,6 +4935,230 @@ fn a_comment_s_row_another_call_is_indexing_under_is_left_as_it_is() {
         }
     ));
     assert_eq!(owner.row().0, "completed");
+    assert_eq!(
+        support::head_commit(&Repository::open(&context.worktree).unwrap()),
+        Some(commit_oid)
+    );
+}
+
+/// A comment committed while its repository had no registration leaves a
+/// row that is `completed` and still owes its index hand-off: no
+/// synchronization is reserved until it is taken up. Every reader of the
+/// journal is told so. The operation list holds the row, an abandon finds
+/// it pending and closes it, and with it closed nothing is pending.
+#[test]
+fn a_comment_that_waits_for_its_registration_is_listed_and_can_be_abandoned() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let request = || {
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        )
+    };
+    enabled
+        .service
+        .remove_registration(manyhands::repository::RemoveRegistrationRequest {
+            root: fixture.root.clone(),
+            operation_id: support::operation_id(),
+        })
+        .unwrap();
+    let CommentSubmissionOutcome::Saved {
+        context,
+        checkpoint:
+            LocalCheckpoint::RefreshPending { commit_oid }
+            | LocalCheckpoint::Checkpointed { commit_oid },
+        indexing: CommentIndexingState {
+            local_pending: true,
+            ..
+        },
+        ..
+    } = enabled
+        .service
+        .submit_comment_with_test_session(request())
+        .unwrap()
+    else {
+        panic!("the comment is committed and its hand-off waits for the registration");
+    };
+    assert!(matches!(
+        enabled
+            .service
+            .enable(EnableRepositoryRequest {
+                root: fixture.root.clone(),
+                primary_branch: "main".to_owned(),
+                identity: None,
+                operation_id: support::operation_id(),
+            })
+            .unwrap(),
+        EnableRepositoryOutcome::AlreadyEnabled
+    ));
+    let waiting = PendingStanding {
+        state: "completed".to_owned(),
+        step: Some("comment_registration_pending".to_owned()),
+    };
+    let listed = || {
+        let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+        enabled
+            .service
+            .list_operations(&repo)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|operation| operation.operation_id == Some(operation_id.to_string()))
+    };
+
+    let operation = listed().expect("a row that owes its hand-off is listed");
+    assert_eq!(operation.state, waiting.state);
+    assert_eq!(operation.completed_step, waiting.step);
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+    let AbandonableOperation::Pending(remains) = enabled
+        .service
+        .abandonable_operation(&fixture.root, operation_id)
+        .unwrap()
+    else {
+        panic!("a row that owes its hand-off is pending for an abandon");
+    };
+    assert_eq!(remains.standing, waiting);
+    assert!(remains.committed);
+
+    let AbandonOperationOutcome::Abandoned(left) = enabled
+        .service
+        .abandon_operation(AbandonOperationRequest {
+            root: fixture.root.clone(),
+            operation_id,
+            expected: Some(waiting),
+        })
+        .unwrap()
+    else {
+        panic!("the row is closed");
+    };
+    assert_eq!(left, remains);
+    assert!(listed().is_none());
+    assert!(
+        enabled
+            .service
+            .recovery_inspection(&fixture.root)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        comment_error(enabled.service.submit_comment_with_test_session(request())).kind,
+        RepositoryErrorKind::OperationAbandoned
+    );
+    assert_eq!(
+        support::head_commit(&Repository::open(&context.worktree).unwrap()),
+        Some(commit_oid)
+    );
+}
+
+/// An abandoned operation's ID is spent, for a comment as for a save: its
+/// checkpoint stays where it is, and neither the submission sent again,
+/// its publication-only retry nor its cancellation takes the operation
+/// up. Each proves the checkpoint from Git before it asks the journal
+/// anything else, so each is told of the abandon where it reads the
+/// operation's binding.
+#[test]
+fn an_abandoned_comment_is_refused_by_its_replay_its_retry_and_its_cancellation() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let operation_id = support::new_operation_id();
+    let request = || {
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
+        .open_service(enabled.data_directory.path());
+    let CommentSubmissionOutcome::Saved {
+        checkpoint: LocalCheckpoint::Checkpointed { commit_oid },
+        indexing: CommentIndexingState {
+            local_pending: true,
+            ..
+        },
+        ..
+    } = failing.submit_comment_with_test_session(request()).unwrap()
+    else {
+        panic!("the comment is committed and its hand-off is owed");
+    };
+    assert!(matches!(
+        enabled
+            .service
+            .abandon_operation(AbandonOperationRequest {
+                root: fixture.root.clone(),
+                operation_id,
+                expected: None,
+            })
+            .unwrap(),
+        AbandonOperationOutcome::Abandoned(_)
+    ));
+    let row = || -> (String, Option<String>) {
+        support::items::index(enabled.data_directory.path())
+            .query_row(
+                "SELECT state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+                [operation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    };
+    let abandoned = ("completed".to_owned(), Some("abandoned".to_owned()));
+    assert_eq!(row(), abandoned);
+
+    assert_eq!(
+        comment_error(enabled.service.submit_comment_with_test_session(request())).kind,
+        RepositoryErrorKind::OperationAbandoned
+    );
+    assert_eq!(
+        comment_error(
+            enabled
+                .service
+                .retry_comment_publication_with_test_session(&fixture.root, operation_id)
+        )
+        .kind,
+        RepositoryErrorKind::OperationAbandoned
+    );
+    assert_eq!(
+        enabled
+            .service
+            .cancel_comment_publication(&fixture.root, operation_id)
+            .err()
+            .map(|error| error.kind),
+        Some(RepositoryErrorKind::OperationAbandoned)
+    );
+
+    assert_eq!(row(), abandoned);
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)

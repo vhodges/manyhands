@@ -19,7 +19,7 @@ use crate::{
     canonical::ItemId,
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
-        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
+        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId, recovery,
         remote::state::{self, StoredRemoteOperation},
     },
     results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
@@ -133,7 +133,10 @@ fn local_operations(
                 observed_at, target
            FROM operation_records
           WHERE root_path = ?1
-            AND ((?2 IS NULL AND state != 'completed') OR operation_ulid = ?2)
+            AND ((?2 IS NULL
+                  AND (state != 'completed'
+                       OR completed_step IS 'comment_registration_pending'))
+                 OR operation_ulid = ?2)
           ORDER BY id ASC",
     )?;
     let mut rows = statement.query(params![repo.root().to_str(), id])?;
@@ -164,7 +167,10 @@ fn local_operations(
             Some(_) => return Err(invalid_stored_data()),
             None => (action, item_id),
         };
-        let listed = state != LOCAL_COMPLETED;
+        // A comment committed with no registration is completed and
+        // still owes its index hand-off.
+        let listed = state != LOCAL_COMPLETED
+            || recovery::waits_for_registration(&state, completed_step.as_deref());
         operations.push(StoredOperation {
             listed,
             dto: OperationDto {
