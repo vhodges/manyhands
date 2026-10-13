@@ -279,15 +279,17 @@ fn begin_or_reconcile(
             return Err(super::remote::state::recovery_required());
         }
     }
-    // A context synchronization owns only its exact authoring kind/item. Other
-    // contexts may continue authoring; the matching context is rejected again
-    // before any owned write by RepositoryService's checkpoint guard.
-    let remote_active: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
-        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
-    if remote_active {
-        return Err(super::remote::state::recovery_required());
-    }
+    // Read here, where it always was, and acted on below: a row of the
+    // requested ID that is of another root or was abandoned is answered
+    // as that before a pending row of another operation is.
+    let pending = in_the_way(
+        &transaction,
+        root_path,
+        action,
+        &requested,
+        target,
+        tagged_local_binding,
+    )?;
     let existing = transaction
         .query_row(
             "SELECT id, root_path, action, target, state, completed_step FROM operation_records WHERE operation_ulid = ?1",
@@ -333,50 +335,9 @@ fn begin_or_reconcile(
         return Err(abandoned(operation, root));
     }
 
-    let pending = transaction
-        .prepare(
-            "SELECT id, operation_ulid, action, target FROM operation_records
-             WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
-        )
-        .and_then(|mut statement| {
-            statement
-                .query_map([root_path], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(RepositoryError::sqlite)?;
-    if !pending.is_empty() {
-        let mut matching = None;
-        for (id, existing_id, existing_action, existing_target) in pending {
-            let compatible = if tagged_local_binding {
-                existing_id.as_deref() == Some(&requested)
-                    && action == "refresh"
-                    && existing_action == action
-                    && existing_target.as_deref() == Some(target)
-            } else {
-                existing_id.as_deref() == Some(&requested)
-                    && (same_lifecycle_action(&existing_action, action)
-                        || action == "refresh" && existing_action != "refresh")
-                    && (action == "refresh" || existing_target.as_deref() == Some(target))
-                    || existing_id.is_none()
-                        && matches!(
-                            (existing_action.as_str(), action),
-                            ("refresh", "refresh") | ("rebuild", "rebuild")
-                        )
-            };
-            if compatible {
-                matching = Some(id);
-            } else {
-                return Err(recovery_required(operation, root));
-            }
-        }
-        if let Some(id) = matching {
+    match pending {
+        Pending::Another => return Err(recovery_required(operation, root)),
+        Pending::Own(id) => {
             transaction.commit().map_err(RepositoryError::sqlite)?;
             return Ok(RecoveryRecord {
                 id,
@@ -388,7 +349,7 @@ fn begin_or_reconcile(
                     .and_then(LocalStep::continued),
             });
         }
-        return Err(recovery_required(operation, root));
+        Pending::Nothing => {}
     }
     if let Some((id, _, _, _, _, completed_step)) = existing {
         // A refresh may borrow any operation ID; it must not erase the marker.
@@ -794,6 +755,120 @@ impl JournalRow {
             Self::Pending(_) => true,
             Self::Final { owes_work, .. } => *owes_work,
         }
+    }
+}
+
+/// What the local journal holds pending for a root, as a call that would
+/// begin or take up an operation there reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    /// No row is pending.
+    Nothing,
+    /// The pending rows are the call's own to take up: the row `id`.
+    Own(i64),
+    /// A row is pending that the call may not take up. Every other
+    /// operation on the root is refused until that one is.
+    Another,
+}
+
+/// What stands in the way of a call that would begin, or take up, the
+/// local operation `requested` of `action` and `target` on `root_path`.
+/// This is the one place that is decided: `begin_or_reconcile` asks it
+/// in its transaction, and a call that would change something before
+/// its operation begins asks it first, through `require_refresh_can_begin`.
+///
+/// `Err` when a remote operation of the repository holds its
+/// reservation. A context synchronization owns only its exact authoring
+/// kind and item: other contexts may go on authoring, and the matching
+/// context is rejected again before any owned write by
+/// `RepositoryService`'s checkpoint guard. Otherwise what the local
+/// journal holds pending.
+fn in_the_way(
+    connection: &Connection,
+    root_path: &str,
+    action: &str,
+    requested: &str,
+    target: &str,
+    tagged_local_binding: bool,
+) -> Result<Pending, RepositoryError> {
+    let remote_active: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')))",
+        rusqlite::params![root_path, target], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
+    if remote_active {
+        return Err(super::remote::state::recovery_required());
+    }
+    let pending = connection
+        .prepare(
+            "SELECT id, operation_ulid, action, target FROM operation_records
+             WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([root_path], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(RepositoryError::sqlite)?;
+    if pending.is_empty() {
+        return Ok(Pending::Nothing);
+    }
+    let mut matching = None;
+    for (id, existing_id, existing_action, existing_target) in pending {
+        let compatible = if tagged_local_binding {
+            existing_id.as_deref() == Some(requested)
+                && action == "refresh"
+                && existing_action == action
+                && existing_target.as_deref() == Some(target)
+        } else {
+            existing_id.as_deref() == Some(requested)
+                && (same_lifecycle_action(&existing_action, action)
+                    || action == "refresh" && existing_action != "refresh")
+                && (action == "refresh" || existing_target.as_deref() == Some(target))
+                || existing_id.is_none()
+                    && matches!(
+                        (existing_action.as_str(), action),
+                        ("refresh", "refresh") | ("rebuild", "rebuild")
+                    )
+        };
+        if compatible {
+            matching = Some(id);
+        } else {
+            return Ok(Pending::Another);
+        }
+    }
+    Ok(matching.map_or(Pending::Another, Pending::Own))
+}
+
+/// Refuses, with `RecoveryRequired`, a root on which a refresh under
+/// `operation_id` would be refused before it began: for a remote
+/// operation that holds its reservation, or for a pending local row the
+/// refresh may not take up. It is the same test the refresh then makes,
+/// for a call that would otherwise change something first and find the
+/// refresh refused after. Nothing is written.
+pub(super) fn require_refresh_can_begin(
+    connection: &Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+) -> Result<(), RepositoryError> {
+    let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
+    let refresh = action_name(RepositoryOperation::RefreshRepository);
+    match in_the_way(
+        connection,
+        root_path,
+        refresh,
+        &operation_id.to_string(),
+        "",
+        false,
+    )? {
+        Pending::Nothing | Pending::Own(_) => Ok(()),
+        Pending::Another => Err(recovery_required(operation, root)),
     }
 }
 

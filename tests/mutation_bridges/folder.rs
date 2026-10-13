@@ -8,8 +8,10 @@ use manyhands::{
     repository::{
         CancellationToken, CreateFolderOutcome, CreateFolderRequest, DocumentFolderPath,
         FailurePoint, FolderCreateInput, FolderDiscovery, IndexRefreshInput, IndexState, LeaseKind,
-        Mutation, MutationCall, MutationDataDto, OperationId, RepositoryErrorKind,
-        RepositoryService, RequestId, RequestState, keys::SessionCredentials,
+        Mutation, MutationCall, MutationDataDto, OperationAbandonInput, OperationAction,
+        OperationId, OperationResumeInput, RemoteOperationTarget, RemoteRefPlan,
+        RemoteReservationOutcome, RepositoryErrorKind, RepositoryService, RequestId, RequestState,
+        keys::SessionCredentials,
     },
     results::{DiscoveryEffect, Effects, Envelope, Outcome, ResultCode},
 };
@@ -24,6 +26,7 @@ use super::support::{
         self, Events, NoPassphrase, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_NEW, World,
         recovery_actions,
     },
+    operations,
 };
 
 fn create(world: &World, path: &str) -> Mutation {
@@ -255,6 +258,113 @@ mod domain {
         assert_eq!(
             again.unwrap(),
             CreateFolderOutcome::AlreadyPresent(FolderDiscovery::Current)
+        );
+    }
+
+    // The registration is marked stale before anything is made. A call
+    // that cannot write the mark makes nothing, for a folder that is
+    // missing and for one that is there.
+    #[test]
+    fn a_call_that_cannot_mark_the_index_stale_makes_nothing() {
+        git_home::isolated();
+        for present in [false, true] {
+            let world = failing_at(FailurePoint::BeforeRegistryWrite);
+            if present {
+                fs::create_dir(world.root.join("docs/a")).unwrap();
+            }
+            let attempt = request(&world, "docs/a/b");
+            let before = super::tree(&world.root);
+            let rows = journal(&world);
+
+            let failed = world.service.create_folder(attempt.clone()).unwrap_err();
+
+            assert_eq!(failed.error.kind, RepositoryErrorKind::InjectedFailure);
+            assert!(!failed.left_directories);
+            assert!(before == super::tree(&world.root));
+            assert_eq!(journal(&world), rows);
+            assert_eq!(listed(&world).1, IndexState::Current);
+            // The same call again makes it.
+            assert_eq!(
+                world.service.create_folder(attempt).unwrap(),
+                CreateFolderOutcome::Created(FolderDiscovery::Current)
+            );
+        }
+    }
+
+    // The mark is there from before the directory is: a call that dies
+    // once it has made the directory leaves an index that says it is
+    // behind.
+    #[test]
+    fn the_index_says_it_is_behind_from_before_the_directory_is_made() {
+        git_home::isolated();
+        let world = failing_at(FailurePoint::AfterFolderCreation);
+        assert_eq!(listed(&world).1, IndexState::Current);
+        let failed = world
+            .service
+            .create_folder(request(&world, "docs/a"))
+            .unwrap_err();
+        assert!(failed.left_directories);
+        assert_eq!(listed(&world), (vec![], IndexState::Stale));
+    }
+
+    // Two calls of one request can run at once: the boundary does not
+    // serialize them. One that finds the refresh's row claimed by a call
+    // whose heartbeat is fresh does not close the row under it.
+    #[test]
+    fn a_refresh_row_another_call_is_at_work_under_is_not_closed() {
+        git_home::isolated();
+        let world = World::new();
+        let attempt = request(&world, "docs/a");
+        let id = attempt.operation_id.to_string();
+        let index = items::index(world.data.path());
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // The row of a refresh under the same ID that another call has
+        // claimed and is indexing under, now.
+        index
+            .execute(
+                "INSERT INTO operation_records
+                    (repository_id, root_path, operation_ulid, action, target, state, observed_at)
+                 SELECT id, root_path, ?1, 'refresh', '', 'indexing', ?2 FROM repositories",
+                rusqlite::params![id, now + 60],
+            )
+            .unwrap();
+        let row = || -> (String, Option<String>) {
+            index
+                .query_row(
+                    "SELECT state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+                    [&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+
+        let beside = world.service.create_folder(attempt.clone()).unwrap();
+
+        // The directory is made; the index is the other call's to bring
+        // up to date, and its row is as it was.
+        assert_eq!(
+            beside,
+            CreateFolderOutcome::Created(FolderDiscovery::PendingUnderOperation)
+        );
+        assert!(world.root.join("docs/a").is_dir());
+        assert_eq!(row(), ("indexing".to_owned(), None));
+
+        // The other call died: its heartbeat is old. The row is taken
+        // up, and the refresh completes under it.
+        index
+            .execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE operation_ulid = ?1",
+                [&id],
+            )
+            .unwrap();
+        assert_eq!(
+            world.service.create_folder(attempt).unwrap(),
+            CreateFolderOutcome::AlreadyPresent(FolderDiscovery::Current)
+        );
+        assert_eq!(row().0, "completed");
+        assert_eq!(
+            listed(&world),
+            (vec![folder("docs/a", true)], IndexState::Current)
         );
     }
 
@@ -727,7 +837,10 @@ mod boundary {
     #[test]
     fn a_refresh_that_fails_for_a_folder_that_was_there_is_discovery_pending_too() {
         git_home::isolated();
-        let world = failing_at(FailurePoint::AfterIndexClaim);
+        // After the refresh has observed: it records that it failed,
+        // as every failure of a refresh but the death of its process
+        // does.
+        let world = failing_at(FailurePoint::AfterContextObservation);
         fs::create_dir(world.root.join("docs/by-hand")).unwrap();
 
         let pending = world.execute(REQUEST_1, create(&world, "docs/by-hand"));
@@ -949,6 +1062,254 @@ mod boundary {
         );
     }
 
+    // A synchronization that holds its reservation refuses every
+    // refresh, the folder's own among them. So the folder is not made:
+    // it would be there with an index that could not be told of it, and
+    // the refresh its result offered would be refused too.
+    #[test]
+    fn a_repository_a_synchronization_has_reserved_is_refused_before_anything_is_made() {
+        git_home::isolated();
+        let world = World::new();
+        operations::configure_remote(world.data.path());
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let reservation = match world
+            .service
+            .reserve_remote_operation(
+                &world.root,
+                OperationId::new(),
+                &RemoteOperationTarget::for_primary_synchronization(&plan),
+            )
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(reservation) => reservation,
+            other => panic!("no reservation: {other:?}"),
+        };
+        let before = super::tree(&world.root);
+        let rows = journal(&world);
+
+        let refused = world.execute(REQUEST_1, create(&world, "docs/a"));
+
+        assert_refused(&world, REQUEST_1, &refused, ResultCode::RecoveryRequired);
+        assert_eq!(refused.outcome, Outcome::Blocked);
+        assert!(before == super::tree(&world.root));
+        assert_eq!(journal(&world), rows);
+        assert_eq!(listed(&world).1, IndexState::Current);
+        // What is offered is to look at the repository, which shows the
+        // synchronization. No refresh is offered: one would be refused,
+        // as this request's own would have been.
+        assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+        let own = world.execute(REQUEST_2, refresh(&world));
+        assert_eq!(own.code, ResultCode::RecoveryRequired, "{own:?}");
+        let inspected = world.service.inspect_repository(&world.root);
+        assert!(inspected.is_ok(), "the action that is offered works");
+        // A folder that is there is refused the same way: the request
+        // would refresh.
+        fs::create_dir(world.root.join("docs/by-hand")).unwrap();
+        let found = world.execute(REQUEST_2, create(&world, "docs/by-hand"));
+        assert_refused(&world, REQUEST_2, &found, ResultCode::RecoveryRequired);
+
+        // Once the reservation is let go, the same request makes it.
+        drop(reservation);
+        items::index(world.data.path())
+            .execute_batch("UPDATE remote_operation_records SET phase = 'cancelled'")
+            .unwrap();
+        let made = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(made.code, ResultCode::Ok, "{made:?}");
+    }
+
+    // The folder's own refresh fails with no fault put in: the
+    // repository changes while it is observed, which is what a refresh
+    // most often stops for. The row it leaves, in the state `retry`, is
+    // closed, and a later refresh by any request lists the folder.
+    #[test]
+    fn a_refresh_that_must_be_tried_again_is_partial_and_a_later_refresh_lists_the_folder() {
+        git_home::isolated();
+        let world = World::new();
+        let changed = world.root.join("docs/guide.md");
+        world
+            .service
+            .set_observation_hook_for_testing(move || fs::write(changed, "plain\n").unwrap());
+
+        let pending = world.execute(REQUEST_1, create(&world, "docs/a"));
+
+        assert_eq!(
+            (pending.outcome, pending.code),
+            (Outcome::Partial, ResultCode::DiscoveryPending),
+            "{pending:?}"
+        );
+        assert_eq!(recovery_actions(&pending), ["index.refresh"]);
+        assert!(world.root.join("docs/a").is_dir());
+        assert_eq!(world.pending_journal_rows(), 0);
+        assert_eq!(
+            journal(&world).last().unwrap(),
+            &(
+                pending.operation_id.clone(),
+                "refresh".to_owned(),
+                "completed".to_owned(),
+                Some("rejected".to_owned())
+            )
+        );
+        assert_eq!(state(&world, REQUEST_1), Some(RequestState::Finished));
+        assert_eq!(listed(&world).1, IndexState::Stale);
+
+        let refreshed = world.execute(REQUEST_2, refresh(&world));
+        assert_eq!(refreshed.outcome, Outcome::Success, "{refreshed:?}");
+        assert_eq!(
+            listed(&world),
+            (vec![folder("docs/a", true)], IndexState::Current)
+        );
+    }
+
+    // The refresh fails, its row is closed, and the call's answer is
+    // lost before the record is settled. A refresh does not reopen a
+    // row that was closed, so the retry runs none: it answers what the
+    // lost answer said.
+    #[test]
+    fn a_retry_after_a_closed_refresh_and_a_lost_answer_is_discovery_pending_again() {
+        git_home::isolated();
+        let world = failing_at(FailurePoint::BeforeRequestSettlement);
+        let changed = world.root.join("docs/guide.md");
+        world
+            .service
+            .set_observation_hook_for_testing(move || fs::write(changed, "plain\n").unwrap());
+        let lost = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+        assert!(world.root.join("docs/a").is_dir());
+        assert_eq!(state(&world, REQUEST_1), Some(RequestState::Accepted));
+        assert_eq!(world.pending_journal_rows(), 0);
+        let rows = journal(&world);
+        assert_eq!(rows.last().unwrap().3.as_deref(), Some("rejected"));
+
+        let retried = world.execute(REQUEST_1, create(&world, "docs/a"));
+
+        assert_eq!(
+            (retried.outcome, retried.code),
+            (Outcome::Partial, ResultCode::DiscoveryPending),
+            "{retried:?}"
+        );
+        assert_eq!(retried.effects, discovery(DiscoveryEffect::Pending));
+        assert_eq!(recovery_actions(&retried), ["index.refresh"]);
+        assert_eq!(retried.operation_id, rows.last().unwrap().0);
+        // No refresh ran, and nothing was reopened.
+        assert_eq!(journal(&world), rows);
+        assert_eq!(state(&world, REQUEST_1), Some(RequestState::Finished));
+        assert_eq!(listed(&world), (vec![], IndexState::Stale));
+
+        let refreshed = world.execute(REQUEST_2, refresh(&world));
+        assert_eq!(refreshed.outcome, Outcome::Success, "{refreshed:?}");
+        assert_eq!(
+            listed(&world),
+            (vec![folder("docs/a", true)], IndexState::Current)
+        );
+    }
+
+    // A call that died while its refresh was indexing leaves that
+    // refresh's row pending under the request's operation. The row is a
+    // refresh's to everything that reads the journal.
+    #[test]
+    fn a_pending_refresh_row_of_a_folder_creation_is_listed_not_resumed_and_can_be_abandoned() {
+        git_home::isolated();
+        let world = failing_at(FailurePoint::BeforeFolderRefreshClose);
+        let changed = world.root.join("docs/guide.md");
+        world
+            .service
+            .set_observation_hook_for_testing(move || fs::write(changed, "plain\n").unwrap());
+        let pending = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(pending.code, ResultCode::DiscoveryPending);
+        let operation = pending.operation_id.clone().unwrap();
+        // As a call that died mid-refresh leaves it: indexing, with a
+        // heartbeat that is no longer anyone's.
+        items::index(world.data.path())
+            .execute(
+                "UPDATE operation_records SET state = 'indexing', observed_at = 0
+                  WHERE operation_ulid = ?1",
+                [&operation],
+            )
+            .unwrap();
+        let id = OperationId::parse(&operation).unwrap();
+
+        // The operation list and the read of one operation.
+        let list = world.service.list_operations(&world.resolved()).unwrap();
+        assert_eq!(list.items.len(), 1, "{list:?}");
+        let shown = world.service.show_operation(&world.resolved(), id).unwrap();
+        assert_eq!(list.items[0], shown);
+        assert_eq!(shown.operation_id.as_deref(), Some(operation.as_str()));
+        assert_eq!(shown.action, OperationAction::Refresh);
+        assert_eq!(shown.state, "indexing");
+
+        // A resume does not take it up: a refresh's row records no work
+        // of its own that only a hand-off is owed for. It names the
+        // request that does.
+        let resumed = world.execute(
+            REQUEST_2,
+            Mutation::OperationResume(OperationResumeInput {
+                root: world.root.clone(),
+                operation_id: id,
+            }),
+        );
+        assert_eq!(
+            resumed.code,
+            ResultCode::OriginalRequestRequired,
+            "{resumed:?}"
+        );
+        assert_eq!(recovery_actions(&resumed)[0], "request.retry");
+        assert_eq!(
+            resumed.recovery[0]
+                .arguments
+                .get("request_id")
+                .and_then(|id| id.as_str()),
+            Some(REQUEST_1)
+        );
+        assert!(world.root.join("docs/a").is_dir());
+        assert_eq!(world.pending_journal_rows(), 1);
+
+        // An abandon closes it. It says what a refresh leaves, which is
+        // no file: the directory is not canonical content and is not
+        // named. It is still there.
+        let abandon = || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: world.root.clone(),
+                operation_id: id,
+            })
+        };
+        let preview = world.service.prepare(&abandon());
+        assert_eq!(preview.code, ResultCode::Ok, "{preview:?}");
+        let confirmation = preview.data.unwrap().confirmation_id;
+        let abandoned =
+            mutation::execute_confirmed(&world.service, REQUEST_3, &confirmation, abandon());
+        assert_eq!(
+            (abandoned.outcome, abandoned.code),
+            (Outcome::Success, ResultCode::Ok),
+            "{abandoned:?}"
+        );
+        let data = mutation::operation_data(&abandoned);
+        assert_eq!(data.operation_id, operation);
+        assert_eq!(data.action, Some(OperationAction::Refresh));
+        assert_eq!(data.item_id, None);
+        assert_eq!(world.pending_journal_rows(), 0);
+        assert!(world.root.join("docs/a").is_dir());
+        // The request that began it went with it, and the index still
+        // says it is behind.
+        assert_eq!(world.record(REQUEST_1), None);
+        assert_eq!(listed(&world), (vec![], IndexState::Stale));
+        assert!(
+            world
+                .service
+                .list_operations(&world.resolved())
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        // The request sent again is a new one: it finds the directory
+        // and brings the index up to date.
+        let again = world.execute(REQUEST_1, create(&world, "docs/a"));
+        assert_eq!(again.code, ResultCode::AlreadyApplied, "{again:?}");
+        assert_eq!(
+            listed(&world),
+            (vec![folder("docs/a", true)], IndexState::Current)
+        );
+    }
+
     // A refresh that failed leaves its row pending, which refuses every
     // other refresh. A folder is not made into a repository whose index
     // could not then be told of it.
@@ -1021,8 +1382,7 @@ mod boundary {
         let world = World::new();
         let inside = world.root.join("docs");
         let refused = world.execute(REQUEST_1, create_at(&inside, "docs/a"));
-        assert_ne!(refused.outcome, Outcome::Success);
-        assert_eq!(world.record(REQUEST_1), None);
+        assert_refused(&world, REQUEST_1, &refused, ResultCode::NotRepositoryRoot);
         assert!(!inside.join("docs").exists());
     }
 

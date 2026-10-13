@@ -30,7 +30,18 @@
 //! refresh that follows, under the caller's operation ID. A refresh that
 //! does not bring the index up to date has its row closed, as that of a
 //! call that left nothing behind is, so that it does not stand in the
-//! way of the next refresh, and the registration is left marked stale.
+//! way of the next refresh. The registration is marked stale before
+//! anything is made, and stays so until a refresh completes.
+//!
+//! **Two calls under one operation ID.** The boundary does not keep two
+//! calls of one request from running at once: the second raises the
+//! record's attempt and goes on beside the first. Each takes the
+//! repository lease to make directories, so those are serialized. The
+//! refresh holds no lease while it observes, so one call can find the
+//! row claimed by the other. It does not close a row under a call that
+//! is at work: a row whose heartbeat is fresh is left as it is, as an
+//! abandon leaves it, and the call says the index is pending under the
+//! operation.
 
 use std::{
     fmt, fs,
@@ -42,9 +53,10 @@ use rusqlite::TransactionBehavior;
 use super::super::{
     FailurePoint, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES, OperationId,
     RefreshOutcome, RefreshRepositoryRequest, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService, cache_read_guard, cache_write_guard,
-    canonical_repository_root, discovery, ensure_safe_owned_parent, mark_document_refresh_required,
-    open_registry,
+    RepositoryOperation, RepositoryService,
+    bridges::abandon::stale_heartbeat,
+    cache_read_guard, cache_write_guard, canonical_repository_root, discovery,
+    ensure_safe_owned_parent, mark_document_refresh_required, open_registry,
     recovery::{self, LocalStanding},
     registered_repository_id, registry_root_key, repository_lease,
 };
@@ -260,9 +272,11 @@ pub enum FolderDiscovery {
     /// it is left pending under the operation ID: any refresh that
     /// completes brings the index up to date.
     Pending,
-    /// As `Pending`, except that the refresh's row could not be closed
-    /// and may be pending still: a call under the same operation ID
-    /// takes it up, and until one does it refuses every other refresh.
+    /// As `Pending`, except that the refresh's row was not closed and
+    /// may be pending still: it could not be written, or another call
+    /// under the same operation ID is at work under it. A call under
+    /// that ID takes it up, and until one does, or the call at work
+    /// completes it, it refuses every other refresh.
     PendingUnderOperation,
 }
 
@@ -364,7 +378,8 @@ fn named(directory: &Path, name: &str) -> std::io::Result<Named> {
 enum Observed {
     /// Every one is there.
     Present,
-    /// The first that is missing is `missing`, and `to_make` are.
+    /// `first` is the outermost that is missing, and `to_make` is how
+    /// many are, it and every one below it.
     Missing {
         first: PathBuf,
         to_make: usize,
@@ -411,10 +426,12 @@ impl RepositoryService {
     /// module's description.
     ///
     /// Refused, with nothing made: a path with a symbolic link in it,
-    /// `InvalidPath`; a repository with another operation pending,
-    /// `RecoveryRequired`; one that is not registered,
+    /// `InvalidPath`; a repository on which the refresh would be
+    /// refused, for another operation pending or a remote operation's
+    /// reservation, `RecoveryRequired`; one that is not registered,
     /// `RepositoryNotRegistered`; one whose lease is held,
-    /// `RepositoryBusy`.
+    /// `RepositoryBusy`; one whose registration could not be marked
+    /// stale, `RegistryRefreshPending`.
     pub fn create_folder(
         &self,
         request: CreateFolderRequest,
@@ -436,11 +453,9 @@ impl RepositoryService {
             Made::AlreadyPresent => false,
             Made::Refused(outcome) => return Ok(outcome),
         };
-        // From here the directory is there. Whatever becomes of the
-        // refresh, the index says it is behind until one completes. A
-        // mark that could not be written is not what stops the refresh:
-        // the answer says what became of that.
-        let _ = mark_document_refresh_required(&self.registry_path, &root, OPERATION);
+        // From here the directory is there, and the index has said it
+        // is behind since before it was: whatever becomes of the
+        // refresh, it says so until one completes.
         let discovery = self.refresh_for_folder(&root, operation_id);
         Ok(if created {
             CreateFolderOutcome::Created(discovery)
@@ -458,10 +473,22 @@ impl RepositoryService {
     ) -> Result<Made, CreateFolderError> {
         registered_repository_id(&self.registry_path, root, OPERATION)
             .map_err(CreateFolderError::before)?;
-        self.require_no_other_operation(root, operation_id)
+        self.require_refresh_can_begin(root, operation_id)
             .map_err(CreateFolderError::before)?;
+        // The mark is written before anything is made, and a call that
+        // cannot write it makes nothing: the index never says it is
+        // current while it lacks a folder this call made. A mark with
+        // no change behind it costs a refresh and misleads no one.
+        let mark = || {
+            self.check_failure(FailurePoint::BeforeRegistryWrite, OPERATION, root)
+                .and_then(|()| mark_document_refresh_required(&self.registry_path, root, OPERATION))
+                .map_err(CreateFolderError::before)
+        };
         let (first, to_make) = match observe(root, path).map_err(CreateFolderError::before)? {
-            Observed::Present => return Ok(Made::AlreadyPresent),
+            Observed::Present => {
+                mark()?;
+                return Ok(Made::AlreadyPresent);
+            }
             Observed::Occupied => return Ok(Made::Refused(CreateFolderOutcome::Occupied)),
             Observed::Missing { first, to_make } => (first, to_make),
         };
@@ -476,6 +503,7 @@ impl RepositoryService {
         if !within {
             return Ok(Made::Refused(CreateFolderOutcome::LimitExceeded));
         }
+        mark()?;
         // The walk makes the parent of the path it is given, so it is
         // given a name in the folder. Nothing is made at that name.
         let inside = Path::new(&path.as_string()).join("inside");
@@ -489,37 +517,20 @@ impl RepositoryService {
         Ok(Made::Created)
     }
 
-    /// Refuses a repository that has a pending local operation other
-    /// than the one `operation_id` names: the refresh that follows would
-    /// be refused for it, after the directory was made.
-    fn require_no_other_operation(
+    /// Refuses a repository on which the refresh that follows would be
+    /// refused before it began: the directory would be made, and the
+    /// index could not then be told of it. The test is the refresh's
+    /// own; see `recovery::require_refresh_can_begin`.
+    fn require_refresh_can_begin(
         &self,
         root: &Path,
         operation_id: OperationId,
     ) -> Result<(), RepositoryError> {
         let _cache_guard = cache_read_guard(&self.registry_path, root, OPERATION)?;
-        let root_path = registry_root_key(root, OPERATION)?;
         let connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(OPERATION, root))?;
-        let own = operation_id.to_string();
-        let other: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM operation_records
-                  WHERE root_path = ?1 AND state != 'completed'
-                    AND operation_ulid IS NOT ?2)",
-                [root_path, own.as_str()],
-                |row| row.get(0),
-            )
-            .map_err(|error| RepositoryError::sqlite(error).for_operation(OPERATION, root))?;
-        if other {
-            return Err(RepositoryError::new(
-                OPERATION,
-                Some(root.to_owned()),
-                RepositoryErrorKind::RecoveryRequired,
-                "an unresolved operation for this root must be resumed first",
-            ));
-        }
-        Ok(())
+        recovery::require_refresh_can_begin(&connection, root, OPERATION, operation_id)
+            .map_err(|error| error.for_operation(OPERATION, root))
     }
 
     /// Refreshes the index under `operation_id` and says whether it now
@@ -541,22 +552,21 @@ impl RepositoryService {
         }
         match self.close_refresh(root, operation_id) {
             // Another call under the same ID completed the refresh.
-            Ok(true) => FolderDiscovery::Current,
-            Ok(false) => FolderDiscovery::Pending,
-            // The row may still be pending: a call under the same ID is
-            // what takes it up.
-            Err(_) => FolderDiscovery::PendingUnderOperation,
+            Ok(Closed::Completed) => FolderDiscovery::Current,
+            Ok(Closed::NothingPending) => FolderDiscovery::Pending,
+            // The row is, or may be, pending still: a call under the
+            // same ID is what takes it up.
+            Ok(Closed::AtWork) | Err(_) => FolderDiscovery::PendingUnderOperation,
         }
     }
 
-    /// Closes the row a refresh under `operation_id` left pending.
-    /// `true` when the row has completed instead: the index was brought
-    /// up to date under the ID.
+    /// Closes the row a refresh under `operation_id` left pending, unless
+    /// a call is at work under it.
     fn close_refresh(
         &self,
         root: &Path,
         operation_id: OperationId,
-    ) -> Result<bool, RepositoryError> {
+    ) -> Result<Closed, RepositoryError> {
         self.check_failure(FailurePoint::BeforeFolderRefreshClose, OPERATION, root)?;
         let _cache_guard = cache_write_guard(&self.registry_path, root, OPERATION)?;
         let root_path = registry_root_key(root, OPERATION)?;
@@ -567,21 +577,40 @@ impl RepositoryService {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite)?;
         let row = recovery::local_row(&transaction, root_path, operation_id).map_err(sqlite)?;
-        let completed = match row {
-            None => false,
+        let closed = match row {
+            None => Closed::NothingPending,
             Some(row) => match row.standing() {
-                LocalStanding::Completed => true,
-                LocalStanding::Rejected | LocalStanding::Abandoned => false,
+                LocalStanding::Completed => Closed::Completed,
+                LocalStanding::Rejected | LocalStanding::Abandoned => Closed::NothingPending,
+                // An index owner whose heartbeat is fresh is at work,
+                // with no lease held: another call of the same request.
+                // Its row is not closed under it.
+                LocalStanding::Pending if row.has_live_heartbeat(stale_heartbeat()) => {
+                    Closed::AtWork
+                }
                 LocalStanding::Pending => {
                     recovery::discard_operation(&transaction, row.id)
                         .map_err(|error| error.for_operation(OPERATION, root))?;
-                    false
+                    Closed::NothingPending
                 }
             },
         };
         transaction.commit().map_err(sqlite)?;
-        Ok(completed)
+        Ok(closed)
     }
+}
+
+/// What `close_refresh` found of the refresh's row.
+enum Closed {
+    /// The row has completed: the index was brought up to date under
+    /// the ID, by another call.
+    Completed,
+    /// No row is pending under the ID: there was none, or it was closed
+    /// here or before.
+    NothingPending,
+    /// The row is pending and a call is at work under it. It was left
+    /// as it is.
+    AtWork,
 }
 
 /// What `make_directories` came to.

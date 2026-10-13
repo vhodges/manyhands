@@ -2,8 +2,7 @@
 //! and the refresh that puts it in the index. It needs no confirmation.
 //!
 //! It writes no canonical content and makes no commit, so it reports
-//! `discovery` and no other effect. A directory that was made is a
-//! durable change that no effect shows.
+//! `discovery` and no other effect.
 //!
 //! **Its operation is the refresh's.** Making the directory records
 //! nothing. The request's one operation is the refresh that follows,
@@ -15,9 +14,16 @@
 //!   is finished as a no-op, and nothing is looked at or made. Whether
 //!   that call made the directory or found it is not recorded, and
 //!   either way this one changes nothing;
-//! - it is pending, or there is none: the directory may or may not be
-//!   there, and the domain is called again. It makes what is missing,
-//!   finds what is there, and takes the refresh up under the same ID.
+//! - it is pending, or the journal reads as holding none: the directory
+//!   may or may not be there, and the domain is called again. It makes
+//!   what is missing and finds what is there. Then, by what the row is:
+//!   - pending, or truly none: the refresh is taken up, or begun, under
+//!     the same ID;
+//!   - closed as rejected, which reads as none: an earlier call's
+//!     refresh failed and its row was closed, and that call's answer
+//!     was lost. A refresh does not reopen a rejected row, so none is
+//!     run. The retry answers what the lost answer said:
+//!     `discovery_pending`, with `index.refresh`.
 //!
 //! So a retry never answers `occupied_path` for a directory an earlier
 //! call of the request made: a directory is never what occupies a path.
@@ -69,8 +75,9 @@ impl From<FolderCreateInput> for FolderCreateBinding {
 }
 
 /// The answer for a directory that is there, made or found, by what
-/// became of the refresh.
-fn there(code: ResultCode, discovery: FolderDiscovery, made: bool) -> (Answer, bool) {
+/// became of the refresh: `code` when the index holds it, and
+/// `discovery_pending` otherwise, which is `partial` by its own class.
+fn there(code: ResultCode, discovery: FolderDiscovery) -> (Answer, bool) {
     let (code, effect, settled) = match discovery {
         FolderDiscovery::Current => (code, DiscoveryEffect::Current, true),
         FolderDiscovery::Pending => (ResultCode::DiscoveryPending, DiscoveryEffect::Pending, true),
@@ -85,7 +92,6 @@ fn there(code: ResultCode, discovery: FolderDiscovery, made: bool) -> (Answer, b
             discovery: effect,
             ..Effects::not_requested()
         },
-        local_change: made,
         ..Answer::stopped(code)
     };
     (answer, settled)
@@ -121,10 +127,10 @@ impl FolderCreateBinding {
         };
         match result {
             Ok(CreateFolderOutcome::Created(discovery)) => {
-                Self::settled(there(ResultCode::Ok, discovery, true), stopped)
+                Self::settled(there(ResultCode::Ok, discovery), stopped)
             }
             Ok(CreateFolderOutcome::AlreadyPresent(discovery)) => {
-                Self::settled(there(ResultCode::AlreadyApplied, discovery, false), stopped)
+                Self::settled(there(ResultCode::AlreadyApplied, discovery), stopped)
             }
             Ok(CreateFolderOutcome::Occupied) => stopped(Answer::stopped(ResultCode::OccupiedPath)),
             Ok(CreateFolderOutcome::LimitExceeded) => {
@@ -238,7 +244,7 @@ impl Binding for FolderCreateBinding {
                 owes_work: false,
                 checkpointed: _,
             } => Err(Ran {
-                answer: there(ResultCode::AlreadyApplied, FolderDiscovery::Current, false).0,
+                answer: there(ResultCode::AlreadyApplied, FolderDiscovery::Current).0,
                 standing: Standing::Final,
             }),
             JournalRow::Absent | JournalRow::Pending(_) => Ok(Entered::Unfinished),
