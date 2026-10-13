@@ -8,6 +8,8 @@ mod production;
 pub use production::*;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/host.rs"]
+mod host;
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/schema.rs"]
@@ -32,7 +34,13 @@ fn main() {
         eprintln!("SSH synchronization initialization failed");
         std::process::exit(1);
     }
-    ssh_harness::run_with_output_privacy(CASES, OUTPUT_CONTROLS);
+    let cases: Vec<_> = CASES.iter().chain(host::CASES).copied().collect();
+    let controls: Vec<_> = OUTPUT_CONTROLS
+        .iter()
+        .chain(host::OUTPUT_CONTROLS)
+        .copied()
+        .collect();
+    ssh_harness::run_with_output_privacy(&cases, &controls);
 }
 
 const CASES: &[ssh_harness::Case] = &[
@@ -4338,10 +4346,14 @@ const CONFORMANCE: [conformance::Row; 2] = [
 ];
 
 fn every_command_of_this_target_keeps_the_rules_of_the_boundary() -> Result<(), FixtureError> {
-    conformance::run(
+    // The rows of the two commands that approve a host are driven by
+    // a case of their own, in `host`: each rule of each row builds a
+    // world with a server, and a case has a time it must end within.
+    conformance::run_part(
         conformance::Home::Remote,
         &request_store::bound_commands(),
         &CONFORMANCE,
+        &host::CONFORMANCE.map(|row| row.command),
     );
     Ok(())
 }

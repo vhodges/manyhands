@@ -47,7 +47,7 @@ pub enum Home {
 /// Where the row of every bound command is. `run` fails when this is
 /// not exactly the bound commands, so a command that is built and has
 /// no home here fails all four targets.
-pub const HOMES: [(&str, Home); 25] = [
+pub const HOMES: [(&str, Home); 27] = [
     ("document create", Home::Replay),
     ("document save", Home::Replay),
     ("document move", Home::Replay),
@@ -72,6 +72,8 @@ pub const HOMES: [(&str, Home); 25] = [
     ("operation abandon", Home::Confirmation),
     ("item sync", Home::Remote),
     ("repo sync", Home::Remote),
+    ("host approve", Home::Remote),
+    ("host replace", Home::Remote),
     ("repo identity-set", Home::Bridges),
 ];
 
@@ -309,6 +311,14 @@ fn message(panic: &(dyn std::any::Any + Send)) -> String {
 /// exactly the commands of this home, and when a rule does other than
 /// its row expects.
 pub fn run(home: Home, bound: &[&str], rows: &[Row]) {
+    run_part(home, bound, rows, &[]);
+}
+
+/// `run`, for a target whose fixtures are too slow to drive every row
+/// in one test: `rows` are some of the target's rows, and `elsewhere`
+/// names the commands whose rows another test of the target drives.
+/// Together they are to be exactly the commands of `home`.
+pub fn run_part(home: Home, bound: &[&str], rows: &[Row], elsewhere: &[&str]) {
     let mut homed: Vec<&str> = HOMES.iter().map(|(command, _)| *command).collect();
     homed.sort_unstable();
     let mut bound = bound.to_vec();
@@ -323,7 +333,11 @@ pub fn run(home: Home, bound: &[&str], rows: &[Row]) {
         .map(|(command, _)| *command)
         .collect();
     expected.sort_unstable();
-    let mut given: Vec<&str> = rows.iter().map(|row| row.command).collect();
+    let mut given: Vec<&str> = rows
+        .iter()
+        .map(|row| row.command)
+        .chain(elsewhere.iter().copied())
+        .collect();
     given.sort_unstable();
     assert_eq!(
         given, expected,

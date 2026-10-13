@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 host mutation data",
+  "description": "The data of a host approve or host replace envelope: the host and the key the request names. A pin that is stored is shown by no effect, so this and the outcome say what the request did: success for a pin that was stored, noop for a host already pinned to the key. A request stopped as host_mismatch carries it too, with the key the host presented instead; no pin has changed then. Any other request that is refused carries no data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "host",
+    "port",
+    "algorithm",
+    "fingerprint",
+    "presented_algorithm",
+    "presented_fingerprint"
+  ],
+  "properties": {
+    "host": {
+      "description": "The host, in lower case.",
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "algorithm": {
+      "description": "The algorithm of the key the request names.",
+      "type": "string"
+    },
+    "fingerprint": {
+      "description": "The fingerprint of the key the request names: SHA256: and the digest of the public key, as a pin holds it.",
+      "type": "string"
+    },
+    "presented_algorithm": {
+      "description": "The algorithm of the key the host presented, when that is not the key the request names. Null otherwise.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "presented_fingerprint": {
+      "description": "The fingerprint of the key the host presented, when that is not the key the request names. Null otherwise.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

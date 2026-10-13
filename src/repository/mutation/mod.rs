@@ -60,6 +60,7 @@ use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
     document::DocumentBinding,
+    host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
@@ -73,6 +74,7 @@ use bind::{
 pub use bind::{
     abandon::OperationAbandonInput,
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
+    host::{HostApproveInput, HostReplaceInput},
     index::{IndexRebuildInput, IndexRefreshInput},
     key::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
@@ -89,8 +91,9 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, DocumentMutationDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
-    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
+    CancelDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
+    IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto, KeyDeletionState,
+    KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
     OperationAbandonPreviewDto, OperationMutationDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
     PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
     RemoteRemovalPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
@@ -405,6 +408,8 @@ pub enum Mutation {
     RepoSync(RepoSyncInput),
     OperationResume(OperationResumeInput),
     RepoIdentitySet(RepoIdentitySetInput),
+    HostApprove(HostApproveInput),
+    HostReplace(HostReplaceInput),
 }
 
 impl Mutation {
@@ -440,6 +445,8 @@ impl Mutation {
             Self::RepoSync(_) => Command::RepoSync,
             Self::OperationResume(_) => Command::OperationResume,
             Self::RepoIdentitySet(_) => Command::RepoIdentitySet,
+            Self::HostApprove(_) => Command::HostApprove,
+            Self::HostReplace(_) => Command::HostReplace,
         }
     }
 
@@ -459,6 +466,8 @@ impl Mutation {
             Self::RepoIdentitySet(input) => {
                 Some(Box::new(RepoIdentityBinding::from(input.clone())))
             }
+            Self::HostApprove(input) => Some(Box::new(HostBinding::from(input.clone()))),
+            Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -507,6 +516,8 @@ impl Mutation {
             Self::RepoSync(input) => Box::new(SyncBinding::from(input)),
             Self::OperationResume(input) => Box::new(OperationResumeBinding::from(input)),
             Self::RepoIdentitySet(input) => Box::new(RepoIdentityBinding::from(input)),
+            Self::HostApprove(input) => Box::new(HostBinding::from(input)),
+            Self::HostReplace(input) => Box::new(HostBinding::from(input)),
         }
     }
 }

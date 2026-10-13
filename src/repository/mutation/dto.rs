@@ -114,6 +114,12 @@ contract_enum!(
     /// that began the operation, `request_released`, listed when there
     /// is one: that request's ID is then free. Neither touches a file
     /// under the repository's root or anything Git holds.
+    ///
+    /// `host_pinned` is a host that has no pin given one: the key the
+    /// request names, once the host is seen to present it.
+    /// `host_pin_replaced` is a host's pin changed to the key the
+    /// request names, likewise. Neither publishes or fetches anything,
+    /// and neither moves a reference.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -135,6 +141,8 @@ contract_enum!(
         KeyUnregistered => "key_unregistered",
         OperationClosed => "operation_closed",
         RequestReleased => "request_released",
+        HostPinned => "host_pinned",
+        HostPinReplaced => "host_pin_replaced",
     }
 );
 
@@ -192,6 +200,61 @@ pub enum PreviewDetailsDto {
     KeyDeletion(KeyDeletionPreviewDto),
     OperationAbandon(OperationAbandonPreviewDto),
     Identity(IdentityPreviewDto),
+    Host(HostPreviewDto),
+}
+
+/// What a preview of `host approve` or `host replace` shows: the host,
+/// what the publication remote uses it for, the key that will be pinned
+/// once the host is seen to present it, and the pin there is now. A
+/// fingerprint is `SHA256:` and the digest of the host's public key, as
+/// a pin's is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// The host, in lower case.
+    pub host: String,
+    pub port: u16,
+    /// Whether the publication remote is fetched from this host.
+    pub fetch: bool,
+    /// Whether the publication remote is pushed to this host.
+    pub push: bool,
+    /// The algorithm and the fingerprint of the key that will be pinned.
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// The pin the host has now, which the command replaces. Null for a
+    /// host that has none.
+    pub current_algorithm: Option<String>,
+    pub current_fingerprint: Option<String>,
+    /// The application-wide marker left when the pin registry was lost.
+    /// The command leaves it as it is.
+    pub reapproval_required: bool,
+}
+
+/// What `host inspect` reports of a host a repository's publication
+/// remote names, once it has connected to it: the key the host
+/// presented, and the pin the host has. Nothing is pinned by it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostObservationDto {
+    /// The host, in lower case.
+    pub host: String,
+    pub port: u16,
+    /// Whether the publication remote is fetched from this host.
+    pub fetch: bool,
+    /// Whether the publication remote is pushed to this host.
+    pub push: bool,
+    /// The algorithm and the fingerprint of the key the host presented:
+    /// what `host approve` and `host replace` are given.
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// The pin the host has. Null for a host that has none. A host that
+    /// presented its pin is trusted; one that presented another key has
+    /// changed, and `pinned_fingerprint` is what `host replace` is given
+    /// as the old fingerprint.
+    pub pinned_algorithm: Option<String>,
+    pub pinned_fingerprint: Option<String>,
+    /// The application-wide marker left when the pin registry was lost.
+    pub reapproval_required: bool,
 }
 
 /// What a repository's own Git configuration holds of an identity. A
@@ -358,6 +421,49 @@ pub enum MutationDataDto {
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
     Identity(IdentityMutationDto),
+    Host(HostMutationDto),
+}
+
+/// What `host approve` and `host replace` report: the host and the key
+/// the request names. A pin that is stored is shown by no effect, so
+/// this and the outcome say what the request did: `success` for a pin
+/// that was stored, `noop` for a host already pinned to the key. A
+/// request stopped as `host_mismatch` reports the key the host
+/// presented instead of it, and no pin has changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostMutationDto {
+    /// The host, in lower case.
+    pub host: String,
+    pub port: u16,
+    /// The algorithm and the fingerprint of the key the request names:
+    /// `SHA256:` and the digest of the public key.
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// The key the host presented, when it is not the one the request
+    /// names. Null otherwise.
+    pub presented_algorithm: Option<String>,
+    pub presented_fingerprint: Option<String>,
+}
+
+impl HostMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| stored.get(key)?.as_str().map(str::to_owned);
+        let optional = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        Some(Self {
+            host: text("host")?,
+            port: u16::try_from(stored.get("port")?.as_u64()?).ok()?,
+            algorithm: text("algorithm")?,
+            fingerprint: text("fingerprint")?,
+            presented_algorithm: optional("presented_algorithm")?,
+            presented_fingerprint: optional("presented_fingerprint")?,
+        })
+    }
 }
 
 /// What `repo identity-set` reports: the identity the repository's own
@@ -717,7 +823,10 @@ impl MutationDataDto {
             | Self::Remote(_)
             | Self::Key(_)
             | Self::Operation(_)
-            | Self::Identity(_) => None,
+            | Self::Identity(_)
+            // A host command is itself the approval: its results offer
+            // none.
+            | Self::Host(_) => None,
         }
     }
 
@@ -745,6 +854,9 @@ impl MutationDataDto {
             }
             Command::RepoIdentitySet => {
                 IdentityMutationDto::from_stored(stored).map(Self::Identity)
+            }
+            Command::HostApprove | Command::HostReplace => {
+                HostMutationDto::from_stored(stored).map(Self::Host)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for.

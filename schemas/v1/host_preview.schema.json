@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 host preview",
+  "description": "The data of a prepare envelope that gives a preview of host approve or host replace: the host, the key that will be pinned once the host is seen to present it, and the confirmation an execute of the same command, repository, host and input presents. The preview is made without a connection. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a host already pinned to the key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do: host_pinned for host approve, host_pin_replaced for host replace.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The host and the pin. The execute connects to the host, authenticates with the selected key, and pins the key only if the host presents it. It fetches nothing, pushes nothing and moves no reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "host",
+        "port",
+        "fetch",
+        "push",
+        "algorithm",
+        "fingerprint",
+        "current_algorithm",
+        "current_fingerprint",
+        "reapproval_required"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "host": {
+          "description": "The host, in lower case.",
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "fetch": {
+          "description": "Whether the publication remote is fetched from this host.",
+          "type": "boolean"
+        },
+        "push": {
+          "description": "Whether the publication remote is pushed to this host. The host is connected to as for fetching when both are true.",
+          "type": "boolean"
+        },
+        "algorithm": {
+          "description": "The algorithm of the key that will be pinned.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "The fingerprint of the key that will be pinned: SHA256: and the digest of the public key, as a pin holds it.",
+          "type": "string"
+        },
+        "current_algorithm": {
+          "description": "The algorithm of the key the host is pinned to now. Null for a host that has no pin.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_fingerprint": {
+          "description": "The fingerprint of the key the host is pinned to now. Null for a host that has no pin. With the remote this is what the confirmation is for: a request that finds another pin by the time it runs is external_change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reapproval_required": {
+          "description": "The application-wide marker left when the pin registry was lost. The command leaves it as it is.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

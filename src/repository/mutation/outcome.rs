@@ -97,7 +97,8 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
 /// The code a mutation reports for a failure of the SSH transport.
 ///
 /// `host_mismatch` is not here: it is what the binding of a host approval
-/// reports when the host presents another key than the one approved.
+/// reports when the host presents another key than the one approved; see
+/// `bind::host`.
 pub(crate) fn ssh_transport_error_code(kind: &SshTransportErrorKind) -> ResultCode {
     match kind {
         // The remote's location is not one the transport can use.
@@ -832,6 +833,12 @@ fn recovery(
         // A synchronization with nowhere to publish to: a publication
         // remote is selected first, which is the caller's to do.
         | ResultCode::PublicationRemoteRequired
+        // The host presented another key than the one a host approval
+        // names, and nothing was pinned. No action answers that: the
+        // result's data holds the key the host presented, and whether
+        // that key is to be trusted is the caller's to decide, with a
+        // new preview of it.
+        | ResultCode::HostMismatch
         // What stops a synchronization once it holds the reservation:
         // history to merge, a branch deleted or a push refused at the
         // remote, a key that is missing, refused or locked, a host that
@@ -860,8 +867,7 @@ fn recovery(
         | ResultCode::AuthorityNotFound
         | ResultCode::RequestNotFound
         | ResultCode::NotRepairable
-        | ResultCode::IdentityAmbiguous
-        | ResultCode::HostMismatch => {
+        | ResultCode::IdentityAmbiguous => {
             if retry {
                 retry_request()
             } else {

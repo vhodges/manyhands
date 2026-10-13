@@ -113,7 +113,7 @@ fn canonical_public_key(contents: &[u8]) -> Option<(String, String)> {
 
 /// The authority as a pin stores it: the host in lower case, an address in
 /// its canonical text. `None` when no pin can have this authority.
-fn stored_authority(authority: &SshAuthority) -> Option<SshAuthority> {
+pub(crate) fn stored_authority(authority: &SshAuthority) -> Option<SshAuthority> {
     // Neither character can be in a host, and either would move the text
     // after it out of the host's place in the location parsed below.
     if authority.host.contains(['/', '@']) {

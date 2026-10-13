@@ -733,6 +733,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 
@@ -746,6 +747,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 
@@ -863,6 +865,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 
@@ -876,6 +879,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 
@@ -889,6 +893,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Identity(_) => panic!("an identity's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 
@@ -902,6 +907,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::Host(_) => panic!("a host's data"),
     }
 }
 

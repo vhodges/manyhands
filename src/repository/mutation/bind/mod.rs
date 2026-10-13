@@ -33,6 +33,7 @@ use super::{
 
 pub(crate) mod abandon;
 pub(crate) mod document;
+pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod remote;
@@ -943,6 +944,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An identity has no operation either: this is not reached, and
         // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
+        // Nor has a host approval: this is not reached, and nothing is
+        // claimed. A pin is stored whole or not at all, and no effect
+        // shows it.
+        Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

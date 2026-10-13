@@ -33,6 +33,7 @@ use super::{
         SynchronizeRemoteRequest,
         keys::{SessionCredentialProvider, SessionCredentials},
         recovery::{FinalKind, JournalRow, PendingOperation},
+        transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
     },
     bind::{Accepted, Binding, sync},
     command::Command,
@@ -197,6 +198,17 @@ pub(crate) trait Session {
         settings: SynchronizationSettings,
         observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>>;
+
+    /// Connects to the host of the publication remote with the session's
+    /// credentials and sees the key it presents; see
+    /// `RepositoryService::verify_ssh_transport`. `None` when the
+    /// session has no credentials, or they are in use: nothing was
+    /// called.
+    fn verify_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -267,6 +279,15 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.synchronize_remote_observed(request, &mut credentials, settings, observer))
     }
+
+    fn verify_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.verify_ssh_transport(request, &mut credentials))
+    }
 }
 
 /// What `prepare` gives a binding in place of a call's session: a
@@ -288,6 +309,14 @@ impl Session for NoSession {
         _settings: SynchronizationSettings,
         _observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>> {
+        None
+    }
+
+    fn verify_transport(
+        &self,
+        _service: &RepositoryService,
+        _request: VerifySshTransportRequest,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }
 }

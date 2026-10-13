@@ -44,6 +44,7 @@ mod resolve;
 mod status;
 
 pub(crate) use admin::identity_dto;
+pub(crate) use credentials::stored_authority;
 pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
     ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,

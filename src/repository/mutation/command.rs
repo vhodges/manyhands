@@ -57,6 +57,8 @@ commands! {
     RepoSync => "repo sync",
     OperationResume => "operation resume",
     RepoIdentitySet => "repo identity-set",
+    HostApprove => "host approve",
+    HostReplace => "host replace",
 }
 
 impl Command {
@@ -117,6 +119,11 @@ impl Command {
             // operation ID and no row. What shows the work to be done
             // is the configuration itself.
             Self::RepoIdentitySet => false,
+            // A pin, written by the one transaction of the pin store that
+            // the verification of the host ends with, or not at all: no
+            // operation ID and no row. What shows the work to be done is
+            // the pin store itself.
+            Self::HostApprove | Self::HostReplace => false,
         }
     }
 
@@ -151,7 +158,9 @@ impl Command {
             | Self::ItemSync
             | Self::RepoSync
             | Self::OperationResume
-            | Self::RepoIdentitySet => false,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
         }
     }
 
@@ -185,7 +194,9 @@ impl Command {
             | Self::ItemSync
             | Self::RepoSync
             | Self::OperationResume
-            | Self::RepoIdentitySet => false,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
         }
     }
 
@@ -218,7 +229,9 @@ impl Command {
             | Self::ItemSync
             | Self::RepoSync
             | Self::OperationResume
-            | Self::RepoIdentitySet => false,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
         }
     }
 
@@ -253,7 +266,9 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete
             | Self::OperationAbandon
-            | Self::RepoIdentitySet => false,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -296,7 +311,9 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete
             | Self::OperationAbandon
-            | Self::RepoIdentitySet => false,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => false,
         }
     }
 
@@ -306,6 +323,9 @@ impl Command {
         match self {
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
             Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            // An approval connects to the host to see the key it
+            // presents, and does nothing else there.
+            Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
             // What a resume does first is look at the operation it
             // names. What it then does is that operation's to say.
             Self::OperationResume => ProgressStage::Observing,
@@ -345,7 +365,9 @@ impl Command {
             | Self::RepoRemove
             | Self::KeyDelete
             | Self::OperationAbandon
-            | Self::RepoIdentitySet => true,
+            | Self::RepoIdentitySet
+            | Self::HostApprove
+            | Self::HostReplace => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -404,6 +426,8 @@ mod tests {
         assert_eq!(Command::RepoSync.name(), "repo sync");
         assert_eq!(Command::OperationResume.name(), "operation resume");
         assert_eq!(Command::RepoIdentitySet.name(), "repo identity-set");
+        assert_eq!(Command::HostApprove.name(), "host approve");
+        assert_eq!(Command::HostReplace.name(), "host replace");
     }
 
     #[test]
@@ -457,6 +481,8 @@ mod tests {
                         | Command::KeyDelete
                         | Command::OperationAbandon
                         | Command::RepoIdentitySet
+                        | Command::HostApprove
+                        | Command::HostReplace
                 ),
                 "{command:?}"
             );
@@ -478,7 +504,12 @@ mod tests {
             let names_another_s = command == Command::OperationResume;
             // An identity is Git configuration, written under the
             // repository lease with no row.
-            let unjournaled = command == Command::RepoIdentitySet;
+            // So is a host's pin, written by the pin store's own
+            // transaction with no row.
+            let unjournaled = matches!(
+                command,
+                Command::RepoIdentitySet | Command::HostApprove | Command::HostReplace
+            );
             assert_eq!(
                 command.has_operation(),
                 !single_transaction && !names_another_s && !unjournaled,
