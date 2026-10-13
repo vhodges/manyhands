@@ -804,9 +804,12 @@ fn assert_golden(
         .iter()
         .map(|(found, placeholder)| (found.as_str(), *placeholder))
         .collect();
+    // An envelope names the root as the scope key holds it, which on
+    // macOS and Windows is not the path the fixture was made at.
+    let root = w.root.canonicalize().unwrap();
     mutation_golden::assert_contract_at(
         name,
-        w.root.to_str().unwrap(),
+        root.to_str().unwrap(),
         data_schema,
         &replaced,
         &value,
