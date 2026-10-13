@@ -2814,11 +2814,13 @@ fn a_call_whose_record_was_entered_again_and_left_accepted_tells_its_caller_to_s
     assert_eq!(retry.effects.commit_oid, Some(commit));
 }
 
-/// A call whose record another call finished meanwhile has nothing to
-/// send again for: the record is finished, and the same request gives
-/// its stored result.
+/// A call whose record another call finished meanwhile is not given as
+/// the request's last word: what it found need not be what the record
+/// stores. Here it found the save made and is a no-op without a commit,
+/// and the record holds the commit. It is told to send the request
+/// again, which reads the stored result.
 #[test]
-fn a_call_whose_record_another_call_finished_is_not_told_to_send_it_again() {
+fn a_call_whose_record_another_call_finished_is_told_to_send_it_again_for_the_stored_result() {
     let world = World::new();
     let token = world.token(TICKET_A);
     let (first, go) = first_call_held_before_the_domain(&world, &token);
@@ -2827,7 +2829,12 @@ fn a_call_whose_record_another_call_finished_is_not_told_to_send_it_again() {
     go.send(()).unwrap();
     let first = first.join().unwrap();
     assert_no_op_without_a_commit(&first, "the first call");
-    assert!(first.recovery.is_empty());
+    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    assert_eq!(first.recovery[0].arguments["request_id"], REQUEST_1);
+    assert_eq!(
+        world.execute(REQUEST_1, world.save(TICKET_A, &token)),
+        second
+    );
 }
 
 /// A resume that takes an operation up raises the attempt of the request
@@ -2878,4 +2885,40 @@ fn a_call_of_a_request_whose_attempt_a_resume_raised_tells_its_caller_to_send_it
     let retry = world.execute(REQUEST_1, world.save(TICKET_A, &token));
     assert_finished_with_its_commit(&world, REQUEST_1, &retry, 1, "the retry");
     assert_eq!(retry.effects.commit_oid, Some(commit));
+}
+
+/// A record that is accepted and cannot be entered: its operation is
+/// gone from the store. The call is refused before anything is read or
+/// run, and the record is still there, so the answer is not the
+/// request's last word and says so.
+#[test]
+fn a_call_that_cannot_enter_its_accepted_record_offers_the_same_request() {
+    let mut world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeRequestDomainCall).open_service(data)
+    });
+    let token = world.token(TICKET_A);
+    let died = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(died.code, ResultCode::InternalError);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    crate::support::items::index(world.data.path())
+        .execute("DELETE FROM request_operations", [])
+        .unwrap();
+    world.reopen();
+
+    let refused = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+
+    assert_eq!(
+        (refused.outcome, refused.code),
+        (Outcome::Error, ResultCode::InternalError)
+    );
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(refused.recovery[0].arguments["request_id"], REQUEST_1);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(world.branch_commits(TICKET_A), 0);
 }

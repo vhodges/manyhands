@@ -571,10 +571,11 @@ pub(crate) struct Named<'a> {
     pub(crate) operation_id: Option<OperationId>,
     /// Whether the request's record was left accepted.
     pub(crate) retry: bool,
-    /// Whether the call meant to finish or delete the request's record
-    /// and the record is still accepted: the write failed, or the
-    /// record was no longer this call's to settle. The result is then
-    /// not the request's last word, whatever its code.
+    /// Whether the call meant to finish or delete the request's record,
+    /// that did not apply, and a record still stands: the write failed,
+    /// or the record was no longer this call's to settle and is accepted
+    /// still or was finished by another call. The result is then not
+    /// the request's last word, whatever its code.
     pub(crate) unsettled: bool,
 }
 
@@ -593,9 +594,10 @@ pub(crate) struct Named<'a> {
 ///    that failed before it knew any names none. Then the actions are
 ///    the code's own, made with this result's root; see `recovery`.
 /// 3. A result whose record could not be settled offers the same
-///    request, first, with whatever the rules above gave it: the record
-///    is still accepted, and sending the request again is what finishes
-///    it. Nothing else of the result is changed for that.
+///    request, first, with whatever the rules above gave it: a record
+///    still stands, and sending the request again finishes it where it
+///    is accepted and reads its stored result where another call
+///    finished it. Nothing else of the result is changed for that.
 /// 4. A host that is not trusted is offered its approval first; see
 ///    `with_host_action`. `authority` is the host as the result's data
 ///    names it.

@@ -99,10 +99,15 @@ impl RepositoryService {
         let attempt = match self.enter_request(record.request_id) {
             Ok(Some(attempt)) => attempt,
             Ok(None) => return None,
-            Err(error) => return Some(Reply { binding, identity }.read_failure(&error)),
+            // The record is accepted and was not entered.
+            Err(error) => {
+                return Some(Reply { binding, identity }.not_entered(Answer::of_read(&error)));
+            }
         };
         let Some(accepted) = Accepted::of_record(record, attempt) else {
-            return Some(Reply { binding, identity }.stopped(ResultCode::InternalError));
+            return Some(
+                Reply { binding, identity }.not_entered(Answer::stopped(ResultCode::InternalError)),
+            );
         };
         // The row as it is before this call: its state afterwards proves
         // nothing about an earlier attempt.
@@ -144,7 +149,9 @@ impl RepositoryService {
             Some(None) => {
                 return match self.delete_request(accepted.request_id, accepted.attempt) {
                     Ok(_) => None,
-                    Err(error) => Some(Reply { binding, identity }.read_failure(&error)),
+                    Err(error) => {
+                        Some(Reply { binding, identity }.not_released(Answer::of_read(&error)))
+                    }
                 };
             }
             None => {}

@@ -90,12 +90,14 @@ impl RepositoryService {
         // the record was no longer this call's, because another call of
         // the request entered it or a resume took its operation up. The
         // envelope is still what this call found or did. It is not the
-        // request's last word while the record is accepted, and says so
-        // by offering the same request.
+        // request's last word while a record of the request stands, and
+        // says so by offering the same request: an accepted record is
+        // finished by it, and one another call finished holds a result
+        // that need not be this one, which it reads.
         let kept = match settlement {
             Settlement::Leave => Kept::Accepted,
             Settlement::Finish | Settlement::Delete => {
-                if !applied && self.still_accepted(accepted.request_id) {
+                if !applied && self.still_stands(accepted.request_id) {
                     Kept::Unsettled
                 } else {
                     Kept::No
@@ -105,16 +107,15 @@ impl RepositoryService {
         reply.envelope(answer, Some(accepted), kept)
     }
 
-    /// Whether the request's record is accepted now, after a settlement
-    /// of it that did not apply. Another call may have finished or
-    /// deleted it meanwhile: there is then nothing left to send the
-    /// request again for. A record that cannot be read is taken to be
-    /// accepted, as it was when this call last knew.
-    fn still_accepted(&self, request_id: RequestId) -> bool {
+    /// Whether a record of the request stands now, after a settlement
+    /// of it that did not apply: accepted still, or finished by another
+    /// call. Where another call deleted it there is nothing left to send
+    /// the request again for. A record that cannot be read is taken to
+    /// stand, as it did when this call last knew.
+    fn still_stands(&self, request_id: RequestId) -> bool {
         match self.request_record(request_id) {
             Ok(Some(record)) => match record.state {
-                RequestState::Accepted => true,
-                RequestState::Finished => false,
+                RequestState::Accepted | RequestState::Finished => true,
             },
             Ok(None) => false,
             Err(_) => true,

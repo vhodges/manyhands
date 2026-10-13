@@ -720,7 +720,10 @@ fn a_rebuild_killed_on_a_corrupt_database_after_its_row_began_is_finished_by_its
 /// Two calls of one request at once: the second runs the refresh to its
 /// end while the first is between its acceptance and its domain call.
 /// The first's own call then finds the row completed and is told the
-/// index is pending. Its request's work is done, and it says so.
+/// index is pending. Its request's work is done, and it says so. It
+/// could not finish the record, which the second had finished, so it
+/// also says to send the request again: that reads the stored result,
+/// which here is the same.
 #[test]
 fn a_refresh_that_a_call_beside_it_completed_is_answered_as_done() {
     let world = World::new();
@@ -733,7 +736,9 @@ fn a_refresh_that_a_call_beside_it_completed_is_answered_as_done() {
         );
         assert_eq!(beside.code, ResultCode::Ok);
     });
-    let first = world.execute(REQUEST_1, refresh(&world));
+    let mut first = world.execute(REQUEST_1, refresh(&world));
+    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    first.recovery.clear();
     assert_current(&world, "index refresh", &first);
     let record = world.record(REQUEST_1).expect("the record is kept");
     assert_eq!(record.state, RequestState::Finished);

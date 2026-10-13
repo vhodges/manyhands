@@ -75,16 +75,18 @@ impl RequestIdentity {
 /// for what the envelope offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kept {
-    /// The call leaves no record accepted: none was made, or it was
-    /// finished or deleted, by this call or by another.
+    /// The call leaves no record that says anything else than its
+    /// envelope: none was made, this call finished or deleted it, or
+    /// another call deleted it.
     No,
     /// The record was left accepted, as the call's standing asks: the
     /// same request continues the work.
     Accepted,
     /// The call meant to finish or delete the record, that did not
-    /// apply, and the record is still accepted. The result is what the
-    /// call found or did, and is not the request's last word: the same
-    /// request is to be sent again.
+    /// apply, and a record still stands: accepted, or finished by
+    /// another call with a result that need not be this one. The result
+    /// is what the call found or did, and is not the request's last
+    /// word: the same request is to be sent again.
     Unsettled,
 }
 
@@ -158,6 +160,19 @@ impl Reply<'_> {
             Some(data) => envelope.with_data(data),
             None => envelope,
         }
+    }
+
+    /// A call that found its request's record accepted and could not
+    /// enter it: nothing was read of the operation and nothing was run.
+    /// The record stands, so the same request is what goes on.
+    pub(super) fn not_entered(&self, answer: Answer) -> Envelope<MutationDataDto> {
+        self.envelope(answer, None, Kept::Accepted)
+    }
+
+    /// A call that meant to release its request's record, to run the
+    /// request as new, and could not: the record stands.
+    pub(super) fn not_released(&self, answer: Answer) -> Envelope<MutationDataDto> {
+        self.envelope(answer, None, Kept::Unsettled)
     }
 
     /// A request that stopped before it was accepted, having done nothing.

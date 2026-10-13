@@ -731,10 +731,16 @@ fn two_calls_of_one_generation_at_once_make_one_key() {
     let beside = run_beside(&world, |data| RepositoryService::open_at(data).unwrap());
 
     let first = world.execute(REQUEST_1, world.generate(LABEL, None));
-    let id = assert_generated(&world, &first);
+    let id = assert_names_the_generated_key(&world, &first);
     let beside = beside.lock().unwrap().take().expect("the second call ran");
     assert_eq!(assert_generated(&world, &beside), id);
     assert_eq!(beside.operation_id, first.operation_id);
+    // The first call could not finish the record: the second had entered
+    // it, and finished it with a result that need not be this one. What
+    // the first returns is therefore not given as the request's last
+    // word: the same request, sent again, reads the stored answer.
+    assert_eq!(recovery_actions(&first), ["request.retry"]);
+    assert!(recovery_actions(&beside).is_empty());
     assert_eq!(world.private_key_files(), [id.to_string()]);
     assert_eq!(world.key_operations(), 1);
     // The second call entered the record and settled it.
